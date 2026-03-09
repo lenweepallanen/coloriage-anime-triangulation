@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Project } from '../../types/project'
+import type { UploadHint } from '../../db/projectsStore'
 import TriangulationCanvas, { type EditorMode } from '../triangulation/TriangulationCanvas'
 import { useTriangulation } from '../triangulation/useTriangulation'
 import { generateAutoMesh } from '../../utils/autoMeshGenerator'
 
 interface Props {
   project: Project
-  onSave: (project: Project) => Promise<void>
+  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
 }
 
 export default function TriangulationStep({ project, onSave }: Props) {
@@ -76,15 +77,20 @@ export default function TriangulationStep({ project, onSave }: Props) {
 
   async function handleSave() {
     setSaving(true)
-    await onSave({
-      ...project,
-      mesh: {
-        contourPoints,
-        internalPoints,
-        triangles,
-        videoFramesMesh: project.mesh?.videoFramesMesh ?? null,
-      },
-    })
+    try {
+      await onSave({
+        ...project,
+        mesh: {
+          contourPoints,
+          internalPoints,
+          triangles,
+          videoFramesMesh: project.mesh?.videoFramesMesh ?? null,
+        },
+      })
+    } catch (err) {
+      console.error('Failed to save mesh:', err)
+      alert('Erreur lors de la sauvegarde du mesh : ' + (err instanceof Error ? err.message : err))
+    }
     setSaving(false)
   }
 

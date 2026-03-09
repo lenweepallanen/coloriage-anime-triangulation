@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import type { Project } from '../../types/project'
+import type { UploadHint } from '../../db/projectsStore'
 
 interface Props {
   project: Project
-  onSave: (project: Project) => Promise<void>
+  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
 }
 
 export default function ImportStep({ project, onSave }: Props) {
@@ -31,7 +32,12 @@ export default function ImportStep({ project, onSave }: Props) {
     const file = e.target.files?.[0]
     if (!file) return
     setSaving(true)
-    await onSave({ ...project, originalImageBlob: file })
+    try {
+      await onSave({ ...project, originalImageBlob: file }, ['image'])
+    } catch (err) {
+      console.error('Failed to save image:', err)
+      alert('Erreur lors de la sauvegarde de l\'image : ' + (err instanceof Error ? err.message : err))
+    }
     setSaving(false)
   }
 
@@ -39,7 +45,12 @@ export default function ImportStep({ project, onSave }: Props) {
     const file = e.target.files?.[0]
     if (!file) return
     setSaving(true)
-    await onSave({ ...project, videoBlob: file })
+    try {
+      await onSave({ ...project, videoBlob: file }, ['video'])
+    } catch (err) {
+      console.error('Failed to save video:', err)
+      alert('Erreur lors de la sauvegarde de la vidéo : ' + (err instanceof Error ? err.message : err))
+    }
     setSaving(false)
   }
 

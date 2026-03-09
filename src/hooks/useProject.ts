@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getProject, updateProject } from '../db/projectsStore'
+import { getProject, updateProject, type UploadHint } from '../db/projectsStore'
 import type { Project } from '../types/project'
 
 export function useProject(projectId: string) {
@@ -18,8 +18,8 @@ export function useProject(projectId: string) {
     return () => { cancelled = true }
   }, [projectId])
 
-  const save = useCallback(async (updated: Project) => {
-    await updateProject(updated)
+  const save = useCallback(async (updated: Project, uploadOnly?: UploadHint[]) => {
+    await updateProject(updated, uploadOnly)
     setProject(updated)
   }, [])
 

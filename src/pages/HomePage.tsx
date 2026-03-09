@@ -15,22 +15,37 @@ export default function HomePage() {
 
   async function loadProjects() {
     setLoading(true)
-    const all = await getAllProjects()
-    setProjects(all.sort((a, b) => b.createdAt - a.createdAt))
+    try {
+      const all = await getAllProjects()
+      setProjects(all.sort((a, b) => b.createdAt - a.createdAt))
+    } catch (err) {
+      console.error('Failed to load projects:', err)
+      alert('Erreur chargement : ' + (err instanceof Error ? err.message : err))
+    }
     setLoading(false)
   }
 
   async function handleCreate() {
     const name = newName.trim()
     if (!name) return
-    const project = await createProject(name)
-    setNewName('')
-    navigate(`/admin/${project.id}`)
+    try {
+      const project = await createProject(name)
+      setNewName('')
+      navigate(`/admin/${project.id}`)
+    } catch (err) {
+      console.error('Failed to create project:', err)
+      alert('Erreur création : ' + (err instanceof Error ? err.message : err))
+    }
   }
 
   async function handleDelete(id: string) {
-    await deleteProject(id)
-    await loadProjects()
+    try {
+      await deleteProject(id)
+      await loadProjects()
+    } catch (err) {
+      console.error('Failed to delete project:', err)
+      alert('Erreur suppression : ' + (err instanceof Error ? err.message : err))
+    }
   }
 
   if (loading) return <div className="loading">Chargement...</div>

@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { Project } from '../../types/project'
 import type { Point2D } from '../../types/project'
+import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
 import { precomputeOpticalFlow } from '../../utils/opticalFlowComputer'
 
 interface Props {
   project: Project
-  onSave: (project: Project) => Promise<void>
+  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
 }
 
 export default function OpticalFlowStep({ project, onSave }: Props) {
@@ -48,7 +49,7 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
           ...project.mesh,
           videoFramesMesh,
         },
-      })
+      }, ['videoFramesMesh'])
     } catch (err) {
       console.error('Optical flow computation failed:', err)
       setError(err instanceof Error ? err.message : 'Erreur inconnue')
