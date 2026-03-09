@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, Navigate } from 'react-router-dom'
+import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import ImportStep from '../components/admin/ImportStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
@@ -19,7 +19,12 @@ export default function AdminPage() {
 
   return (
     <div className="admin-page">
-      <h2>{project.name} — Administration</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h2>{project.name} — Administration</h2>
+        <Link to={`/scan/${project.id}`}>
+          <button>Tester le scan</button>
+        </Link>
+      </div>
 
       <nav className="admin-tabs">
         {STEPS.map(step => (
