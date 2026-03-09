@@ -1,0 +1,495 @@
+:root {
+  --color-primary: #4a90d9;
+  --color-danger: #d94a4a;
+  --color-bg: #f5f5f5;
+  --color-card: #ffffff;
+  --color-text: #333333;
+  --color-muted: #888888;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+/* Layout */
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background: var(--color-primary);
+  padding: 12px 24px;
+}
+
+.app-title {
+  color: white;
+  text-decoration: none;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.app-main {
+  flex: 1;
+  padding: 24px;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 48px;
+  color: var(--color-muted);
+}
+
+/* Buttons */
+button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.875rem;
+  background: var(--color-primary);
+  color: white;
+  transition: opacity 0.15s;
+}
+
+button:hover {
+  opacity: 0.85;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.btn-danger {
+  background: var(--color-danger);
+}
+
+/* Inputs */
+input[type="text"] {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+input[type="text"]:focus {
+  border-color: var(--color-primary);
+}
+
+/* Home page */
+.home-page {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.create-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.create-form input {
+  flex: 1;
+  max-width: 400px;
+}
+
+.empty-state {
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.project-card {
+  background: var(--color-card);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.project-thumb {
+  height: 160px;
+  background: #eee;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.project-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.no-thumb {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+}
+
+.project-info {
+  padding: 12px 16px 4px;
+}
+
+.project-info h3 {
+  font-size: 1rem;
+  margin-bottom: 2px;
+}
+
+.project-date {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+.project-actions {
+  padding: 8px 16px 12px;
+  display: flex;
+  gap: 8px;
+}
+
+/* Admin page */
+.admin-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid #ddd;
+  padding-bottom: 0;
+}
+
+.tab {
+  background: transparent;
+  color: var(--color-muted);
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: 8px 16px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+.tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  background: white;
+}
+
+.admin-content {
+  background: var(--color-card);
+  border-radius: var(--radius);
+  padding: 24px;
+  min-height: 400px;
+}
+
+.placeholder {
+  color: var(--color-muted);
+  text-align: center;
+  padding: 48px;
+  font-style: italic;
+}
+
+/* Import step */
+.import-step {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.import-section h3 {
+  margin-bottom: 8px;
+}
+
+.preview {
+  margin-top: 12px;
+  border: 1px solid #eee;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.import-status {
+  padding: 12px;
+  background: var(--color-bg);
+  border-radius: var(--radius);
+}
+
+/* Triangulation step */
+.triangulation-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.triangulation-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.triangulation-toolbar button.active {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 24px;
+  background: #ddd;
+  margin: 0 4px;
+}
+
+.toolbar-info {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  margin-left: auto;
+}
+
+.triangulation-help {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  padding: 4px 0;
+}
+
+.triangulation-canvas-container {
+  flex: 1;
+  min-height: 500px;
+  border: 1px solid #ddd;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #e8e8e8;
+}
+
+.triangulation-canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Marker step */
+.marker-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* PDF step */
+.pdf-step {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pdf-preview {
+  margin-top: 16px;
+}
+
+/* Optical flow step */
+.optical-flow-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.flow-status {
+  padding: 12px;
+  background: #e8f5e9;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  color: #2e7d32;
+}
+
+.progress-container {
+  margin-top: 8px;
+}
+
+.progress-label {
+  font-size: 0.875rem;
+  margin-bottom: 4px;
+  color: var(--color-muted);
+}
+
+.progress-bar {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 4px;
+  transition: width 0.2s;
+}
+
+.error-message {
+  padding: 12px;
+  background: #fce4ec;
+  border-radius: var(--radius);
+  color: #c62828;
+  font-size: 0.875rem;
+}
+
+/* Scan page */
+.scan-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Camera view */
+.camera-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.camera-container {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.camera-container video {
+  width: 100%;
+  display: block;
+}
+
+.camera-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.camera-status {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.camera-error {
+  text-align: center;
+  padding: 48px;
+}
+
+.manual-capture-btn {
+  background: #666;
+}
+
+/* Scan processing */
+.scan-processing {
+  text-align: center;
+  padding: 48px;
+}
+
+/* Scan preview */
+.scan-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Animation player */
+.animation-player {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 80px);
+}
+
+.animation-controls {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.animation-canvas {
+  flex: 1;
+  background: #111;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.animation-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .app-main {
+    padding: 12px;
+  }
+
+  .admin-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab {
+    white-space: nowrap;
+    font-size: 0.75rem;
+    padding: 6px 10px;
+  }
+
+  .project-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .triangulation-toolbar {
+    font-size: 0.75rem;
+  }
+
+  .triangulation-toolbar button {
+    font-size: 0.75rem;
+    padding: 6px 10px;
+  }
+
+  .triangulation-canvas-container {
+    min-height: 300px;
+  }
+
+  .animation-player {
+    height: calc(100vh - 60px);
+  }
+}
