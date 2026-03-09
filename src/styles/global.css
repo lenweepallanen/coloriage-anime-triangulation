@@ -355,6 +355,34 @@ input[type="text"]:focus {
   font-size: 0.875rem;
 }
 
+/* Flow preview */
+.flow-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flow-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flow-preview-canvas-container {
+  width: 100%;
+  height: 500px;
+  border: 1px solid #ddd;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #e8e8e8;
+}
+
+.flow-preview-canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /* Scan page */
 .scan-page {
   display: flex;
@@ -453,6 +481,311 @@ input[type="text"]:focus {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* ===== Camera Capture (production scan) ===== */
+.camera-capture {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: #111827;
+}
+
+.camera-square {
+  position: relative;
+  width: 100%;
+  max-width: 32rem;
+  background: #000;
+  overflow: hidden;
+  border-radius: var(--radius);
+  aspect-ratio: 1 / 1;
+}
+
+.camera-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.camera-guide-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.camera-status-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 12px;
+  font-size: 0.875rem;
+  color: white;
+  text-align: center;
+  font-weight: 500;
+}
+
+.camera-status-bar--success {
+  background: rgba(22, 163, 74, 0.8);
+}
+
+.camera-status-bar--warning {
+  background: rgba(249, 115, 22, 0.8);
+}
+
+.camera-status-bar--error {
+  background: rgba(220, 38, 38, 0.8);
+}
+
+.camera-status-bar--default {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.camera-flash {
+  position: absolute;
+  inset: 0;
+  background: white;
+  z-index: 50;
+  animation: flash-fade 200ms ease-out forwards;
+}
+
+.camera-progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.camera-progress-fill {
+  height: 100%;
+  background: #4ade80;
+  animation: progress-grow 1s linear forwards;
+}
+
+.camera-buttons {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.camera-buttons-row {
+  display: flex;
+  gap: 12px;
+}
+
+.camera-tips {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.875rem;
+  max-width: 24rem;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.camera-tips-title {
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+}
+
+.camera-error-box {
+  margin-top: 16px;
+  padding: 16px;
+  background: #ef4444;
+  color: white;
+  border-radius: var(--radius);
+  max-width: 28rem;
+}
+
+.btn-start-camera {
+  padding: 12px 24px;
+  background: #2563eb;
+  color: white;
+  border-radius: var(--radius);
+  font-weight: 500;
+  font-size: 1rem;
+}
+
+.btn-start-camera:hover {
+  background: #1d4ed8;
+}
+
+.btn-import {
+  padding: 12px 24px;
+  background: #4b5563;
+  color: white;
+  border-radius: var(--radius);
+  font-weight: 500;
+  font-size: 1rem;
+}
+
+.btn-import:hover {
+  background: #6b7280;
+}
+
+.btn-capture {
+  padding: 12px 32px;
+  background: #2563eb;
+  color: white;
+  border-radius: var(--radius);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.btn-capture:hover {
+  background: #1d4ed8;
+}
+
+.btn-capture--ready {
+  background: #16a34a;
+  outline: 2px solid #4ade80;
+  outline-offset: 2px;
+  transform: scale(1.05);
+}
+
+.btn-capture--ready:hover {
+  background: #15803d;
+}
+
+.btn-torch {
+  padding: 12px 16px;
+  background: #4b5563;
+  color: white;
+  border-radius: var(--radius);
+  font-weight: 500;
+  font-size: 1rem;
+}
+
+.btn-torch:hover {
+  background: #6b7280;
+}
+
+.btn-torch--on {
+  background: #facc15;
+  color: #713f12;
+}
+
+.btn-torch--on:hover {
+  background: #eab308;
+}
+
+.btn-cancel {
+  padding: 12px 16px;
+  background: #4b5563;
+  color: white;
+  border-radius: var(--radius);
+  font-weight: 500;
+  font-size: 1rem;
+}
+
+.btn-cancel:hover {
+  background: #374151;
+}
+
+/* ===== Corner Adjustment ===== */
+.corner-adjustment {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #111827;
+}
+
+.corner-adjustment-image-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  min-height: 0;
+}
+
+.corner-adjustment-photo {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1 / 1;
+}
+
+.corner-adjustment-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+}
+
+.corner-adjustment-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.corner-adjustment-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  padding: 16px 16px 24px;
+  flex-shrink: 0;
+}
+
+.btn-retake {
+  padding: 12px 20px;
+  background: #4b5563;
+  color: white;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.btn-retake:hover {
+  background: #6b7280;
+}
+
+.btn-auto-detect {
+  padding: 12px 20px;
+  background: transparent;
+  color: #60a5fa;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 500;
+  border: 1px solid #60a5fa;
+}
+
+.btn-auto-detect:hover {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.btn-validate {
+  padding: 12px 20px;
+  background: #22c55e;
+  color: white;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.btn-validate:hover {
+  background: #16a34a;
+}
+
+/* Keyframe animations */
+@keyframes flash-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes progress-grow {
+  from { width: 0%; }
+  to { width: 100%; }
 }
 
 /* Mobile responsive */

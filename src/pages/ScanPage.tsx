@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, Navigate } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
+import CornerAdjustment from '../components/scan/CornerAdjustment'
 import { useScanProcessor } from '../components/scan/ScanProcessor'
 import AnimationPlayer from '../components/scan/AnimationPlayer'
-import type { DetectedMarkers } from '../utils/markerDetector'
-import type { Project } from '../types/project'
+import type { Point2D, Project } from '../types/project'
 
 export default function ScanPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -33,10 +33,12 @@ export default function ScanPage() {
 }
 
 function ScanFlow({ project }: { project: Project }) {
-  type ScanStage = 'camera' | 'processing' | 'preview' | 'animation'
+  type ScanStage = 'camera' | 'adjust' | 'processing' | 'preview' | 'animation'
 
   const [stage, setStage] = useState<ScanStage>('camera')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null)
+  const [detectedCorners, setDetectedCorners] = useState<Point2D[] | null>(null)
   const processor = useScanProcessor(project)
 
   // Transition from processing to preview when rectified canvas is ready
@@ -49,16 +51,28 @@ function ScanFlow({ project }: { project: Project }) {
   }, [processor.rectifiedCanvas, processor.processing, stage])
 
   const onCameraCapture = useCallback(
-    async (canvas: HTMLCanvasElement, markers: DetectedMarkers) => {
-      setStage('processing')
-      await processor.handleCapture(canvas, markers)
+    (blob: Blob, corners: Point2D[] | null) => {
+      setCapturedBlob(blob)
+      setDetectedCorners(corners)
+      setStage('adjust')
     },
-    [processor]
+    []
+  )
+
+  const onCornersConfirmed = useCallback(
+    async (adjustedCorners: Point2D[]) => {
+      if (!capturedBlob) return
+      setStage('processing')
+      await processor.handleCapture(capturedBlob, adjustedCorners)
+    },
+    [capturedBlob, processor]
   )
 
   function handleRetake() {
     processor.reset()
     setPreviewUrl(null)
+    setCapturedBlob(null)
+    setDetectedCorners(null)
     setStage('camera')
   }
 
@@ -68,6 +82,15 @@ function ScanFlow({ project }: { project: Project }) {
 
       {stage === 'camera' && (
         <CameraView onCapture={onCameraCapture} />
+      )}
+
+      {stage === 'adjust' && capturedBlob && (
+        <CornerAdjustment
+          imageBlob={capturedBlob}
+          initialCorners={detectedCorners}
+          onConfirm={onCornersConfirmed}
+          onRetake={handleRetake}
+        />
       )}
 
       {stage === 'processing' && (

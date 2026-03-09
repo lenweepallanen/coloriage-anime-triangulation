@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import type { Project } from '../../types/project'
-import { loadOpenCV } from '../../utils/opencvLoader'
+import type { Point2D } from '../../types/project'
+import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
 import { precomputeOpticalFlow } from '../../utils/opticalFlowComputer'
 
 interface Props {
@@ -24,7 +25,8 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
     setError(null)
 
     try {
-      const cv = await loadOpenCV()
+      setProgress({ stage: 'Chargement OpenCV...', current: 0, total: 1 })
+      await loadOpenCVWorker()
 
       // Get image dimensions
       const imgDims = await getImageDimensions(project.originalImageBlob)
@@ -32,7 +34,7 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
       const allPoints = [...project.mesh.contourPoints, ...project.mesh.internalPoints]
 
       const { videoFramesMesh } = await precomputeOpticalFlow(
-        cv,
+        null,
         project.videoBlob,
         allPoints,
         imgDims.width,
@@ -78,10 +80,13 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
       </p>
 
       {hasFlow && (
-        <div className="flow-status">
-          Tracking déjà calculé ({project.mesh!.videoFramesMesh!.length} frames).
-          Vous pouvez recalculer si vous avez modifié le mesh.
-        </div>
+        <>
+          <div className="flow-status">
+            Tracking déjà calculé ({project.mesh!.videoFramesMesh!.length} frames).
+            Vous pouvez recalculer si vous avez modifié le mesh.
+          </div>
+          <FlowPreview project={project} />
+        </>
       )}
 
       <div className="triangulation-toolbar">
@@ -109,6 +114,172 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
           Erreur : {error}
         </div>
       )}
+    </div>
+  )
+}
+
+function FlowPreview({ project }: { project: Project }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [playing, setPlaying] = useState(true)
+  const [videoReady, setVideoReady] = useState(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const imgDimsRef = useRef<{ width: number; height: number } | null>(null)
+  const frameRef = useRef(0)
+  const animRef = useRef<number>(0)
+  const lastTimeRef = useRef(0)
+
+  const mesh = project.mesh!
+  const allPoints = [...mesh.contourPoints, ...mesh.internalPoints]
+  const videoFramesMesh = mesh.videoFramesMesh!
+  const totalFrames = videoFramesMesh.length
+  const fps = 24
+
+  // Load video + get image dimensions
+  useEffect(() => {
+    if (!project.videoBlob || !project.originalImageBlob) return
+
+    // Get image dimensions to compute coordinate mapping
+    const imgUrl = URL.createObjectURL(project.originalImageBlob)
+    const img = new Image()
+    img.onload = () => {
+      imgDimsRef.current = { width: img.naturalWidth, height: img.naturalHeight }
+      URL.revokeObjectURL(imgUrl)
+    }
+    img.src = imgUrl
+
+    // Load video
+    const vidUrl = URL.createObjectURL(project.videoBlob)
+    const video = document.createElement('video')
+    video.src = vidUrl
+    video.muted = true
+    video.playsInline = true
+    video.preload = 'auto'
+    video.onloadeddata = () => {
+      videoRef.current = video
+      setVideoReady(true)
+    }
+    video.load()
+
+    return () => {
+      video.pause()
+      URL.revokeObjectURL(vidUrl)
+    }
+  }, [project.videoBlob, project.originalImageBlob])
+
+  const drawFrame = useCallback((frameIndex: number) => {
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    const imgDims = imgDimsRef.current
+    if (!canvas || !video || !imgDims) return
+
+    const ctx = canvas.getContext('2d')!
+    const cw = canvas.width
+    const ch = canvas.height
+    if (cw === 0 || ch === 0) return
+
+    // Scale video to fit canvas
+    const scaleX = cw / video.videoWidth
+    const scaleY = ch / video.videoHeight
+    const vScale = Math.min(scaleX, scaleY) * 0.95
+    const vox = (cw - video.videoWidth * vScale) / 2
+    const voy = (ch - video.videoHeight * vScale) / 2
+
+    // Seek video to match frame
+    const targetTime = frameIndex / fps
+    if (Math.abs(video.currentTime - targetTime) > 0.02) {
+      video.currentTime = targetTime
+    }
+
+    ctx.clearRect(0, 0, cw, ch)
+    ctx.drawImage(video, vox, voy, video.videoWidth * vScale, video.videoHeight * vScale)
+
+    // Mesh points are in image coordinates — convert to canvas coordinates
+    // image coords → video coords → canvas coords
+    const imgToCanvasX = (ix: number) => (ix / imgDims.width) * video.videoWidth * vScale + vox
+    const imgToCanvasY = (iy: number) => (iy / imgDims.height) * video.videoHeight * vScale + voy
+
+    const points: Point2D[] = frameIndex === 0 ? allPoints : videoFramesMesh[frameIndex]
+
+    // Draw triangles
+    ctx.strokeStyle = 'rgba(0, 200, 100, 0.6)'
+    ctx.lineWidth = 1
+    for (const [a, b, c] of mesh.triangles) {
+      const pa = points[a], pb = points[b], pc = points[c]
+      ctx.beginPath()
+      ctx.moveTo(imgToCanvasX(pa.x), imgToCanvasY(pa.y))
+      ctx.lineTo(imgToCanvasX(pb.x), imgToCanvasY(pb.y))
+      ctx.lineTo(imgToCanvasX(pc.x), imgToCanvasY(pc.y))
+      ctx.closePath()
+      ctx.stroke()
+    }
+
+    // Draw points
+    ctx.fillStyle = 'rgba(255, 80, 80, 0.8)'
+    for (const p of points) {
+      ctx.beginPath()
+      ctx.arc(imgToCanvasX(p.x), imgToCanvasY(p.y), 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // Frame counter
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.fillRect(8, 8, 110, 24)
+    ctx.fillStyle = '#fff'
+    ctx.font = '12px monospace'
+    ctx.fillText(`Frame ${frameIndex + 1}/${totalFrames}`, 14, 24)
+  }, [allPoints, videoFramesMesh, mesh.triangles, totalFrames])
+
+  // Animation loop
+  useEffect(() => {
+    if (!videoReady) return
+
+    const frameDuration = 1000 / fps
+
+    function tick(time: number) {
+      if (playing) {
+        if (time - lastTimeRef.current >= frameDuration) {
+          lastTimeRef.current = time
+          frameRef.current = (frameRef.current + 1) % totalFrames
+        }
+      }
+      drawFrame(frameRef.current)
+      animRef.current = requestAnimationFrame(tick)
+    }
+
+    animRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(animRef.current)
+  }, [videoReady, playing, drawFrame, totalFrames])
+
+  // Resize canvas to container
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const container = canvas.parentElement
+    if (!container) return
+    const ro = new ResizeObserver(() => {
+      canvas.width = container.clientWidth
+      canvas.height = container.clientHeight
+    })
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div className="flow-preview">
+      <div className="flow-preview-toolbar">
+        <button onClick={() => setPlaying(p => !p)}>
+          {playing ? 'Pause' : 'Play'}
+        </button>
+        <button onClick={() => { frameRef.current = 0; lastTimeRef.current = 0 }}>
+          Rembobiner
+        </button>
+        <span style={{ fontSize: '0.75rem', color: '#888' }}>
+          Prévisualisation du tracking — {totalFrames} frames à 24 fps
+        </span>
+      </div>
+      <div className="flow-preview-canvas-container">
+        <canvas ref={canvasRef} />
+      </div>
     </div>
   )
 }

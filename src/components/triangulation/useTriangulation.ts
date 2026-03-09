@@ -104,6 +104,12 @@ export function useTriangulation(initial?: {
     [contourPoints.length]
   )
 
+  const loadAutoMesh = useCallback((contour: Point2D[], internal: Point2D[]) => {
+    setContourPoints(contour)
+    setInternalPoints(internal)
+    setContourClosed(true)
+  }, [])
+
   const clearAll = useCallback(() => {
     setContourPoints([])
     setInternalPoints([])
@@ -121,6 +127,7 @@ export function useTriangulation(initial?: {
     addInternalPoint,
     movePoint,
     deletePoint,
+    loadAutoMesh,
     clearAll,
   }
 }
