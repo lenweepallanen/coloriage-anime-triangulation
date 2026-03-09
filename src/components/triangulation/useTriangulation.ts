@@ -65,6 +65,14 @@ export function useTriangulation(initial?: {
     setContourPoints(prev => [...prev, p])
   }, [])
 
+  const insertContourPoint = useCallback((afterIndex: number, p: Point2D) => {
+    setContourPoints(prev => {
+      const next = [...prev]
+      next.splice(afterIndex + 1, 0, p)
+      return next
+    })
+  }, [])
+
   const closeContour = useCallback(() => {
     setContourClosed(true)
   }, [])
@@ -110,6 +118,48 @@ export function useTriangulation(initial?: {
     setContourClosed(true)
   }, [])
 
+  const resampleContour = useCallback((targetCount: number) => {
+    setContourPoints(prev => {
+      if (prev.length < 3 || targetCount < 3) return prev
+
+      // Compute cumulative arc lengths
+      const n = prev.length
+      const cumLen = [0]
+      for (let i = 1; i <= n; i++) {
+        const a = prev[i - 1]
+        const b = prev[i % n]
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy))
+      }
+      const totalLen = cumLen[n]
+      if (totalLen === 0) return prev
+
+      // Place targetCount points at equal arc-length intervals
+      const step = totalLen / targetCount
+      const result: Point2D[] = []
+      let segIdx = 0
+
+      for (let i = 0; i < targetCount; i++) {
+        const targetDist = i * step
+        while (segIdx < n - 1 && cumLen[segIdx + 1] < targetDist) {
+          segIdx++
+        }
+        const segStart = cumLen[segIdx]
+        const segEnd = cumLen[segIdx + 1]
+        const t = segEnd > segStart ? (targetDist - segStart) / (segEnd - segStart) : 0
+        const a = prev[segIdx]
+        const b = prev[(segIdx + 1) % n]
+        result.push({
+          x: a.x + t * (b.x - a.x),
+          y: a.y + t * (b.y - a.y),
+        })
+      }
+
+      return result
+    })
+  }, [])
+
   const clearAll = useCallback(() => {
     setContourPoints([])
     setInternalPoints([])
@@ -123,10 +173,12 @@ export function useTriangulation(initial?: {
     triangles,
     contourClosed,
     addContourPoint,
+    insertContourPoint,
     closeContour,
     addInternalPoint,
     movePoint,
     deletePoint,
+    resampleContour,
     loadAutoMesh,
     clearAll,
   }

@@ -25,10 +25,12 @@ export default function TriangulationStep({ project, onSave }: Props) {
     triangles,
     contourClosed,
     addContourPoint,
+    insertContourPoint,
     closeContour,
     addInternalPoint,
     movePoint,
     deletePoint,
+    resampleContour,
     loadAutoMesh,
     clearAll,
   } = useTriangulation(project.mesh ?? undefined)
@@ -108,7 +110,6 @@ export default function TriangulationStep({ project, onSave }: Props) {
         <button
           className={mode === 'contour' ? 'active' : ''}
           onClick={() => setMode('contour')}
-          disabled={contourClosed}
         >
           Mode Contour
         </button>
@@ -125,21 +126,45 @@ export default function TriangulationStep({ project, onSave }: Props) {
         <button onClick={handleAutoMesh} disabled={generating}>
           {generating ? 'Génération...' : 'Auto Mesh'}
         </button>
-        <button
-          onClick={() => handleDensityChange(-1)}
-          disabled={density <= 1 || generating}
-          title="Moins de points"
-        >
-          −
-        </button>
-        <span className="density-label">Densité: {density}</span>
-        <button
-          onClick={() => handleDensityChange(1)}
-          disabled={density >= 10 || generating}
-          title="Plus de points"
-        >
-          +
-        </button>
+
+        {mode === 'contour' && contourClosed && (
+          <>
+            <button
+              onClick={() => resampleContour(Math.max(3, contourPoints.length - 5))}
+              disabled={contourPoints.length <= 3}
+              title="Moins de points sur le bord"
+            >
+              −
+            </button>
+            <span className="density-label">Bord: {contourPoints.length} pts</span>
+            <button
+              onClick={() => resampleContour(contourPoints.length + 5)}
+              title="Plus de points sur le bord"
+            >
+              +
+            </button>
+          </>
+        )}
+
+        {mode === 'internal' && (
+          <>
+            <button
+              onClick={() => handleDensityChange(-1)}
+              disabled={density <= 1 || generating}
+              title="Moins de points"
+            >
+              −
+            </button>
+            <span className="density-label">Densité: {density}</span>
+            <button
+              onClick={() => handleDensityChange(1)}
+              disabled={density >= 10 || generating}
+              title="Plus de points"
+            >
+              +
+            </button>
+          </>
+        )}
 
         <span className="toolbar-separator" />
 
@@ -166,7 +191,8 @@ export default function TriangulationStep({ project, onSave }: Props) {
         )}
         {mode === 'contour' && contourClosed && (
           <span>
-            Contour fermé. Passez en mode "Points internes" pour ajouter des points.
+            Clic gauche = ajouter un point sur le bord | Glisser = déplacer un point du bord |
+            Clic droit = supprimer un point du bord | Molette = zoom | Espace + glisser = déplacer la vue
           </span>
         )}
         {mode === 'internal' && (
@@ -185,6 +211,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
         contourClosed={contourClosed}
         mode={mode}
         onAddContourPoint={addContourPoint}
+        onInsertContourPoint={insertContourPoint}
         onCloseContour={closeContour}
         onAddInternalPoint={addInternalPoint}
         onMovePoint={movePoint}

@@ -110,27 +110,74 @@ export function findPointAt(
   imagePos: Point2D,
   contourPoints: Point2D[],
   internalPoints: Point2D[],
-  hitRadius: number
+  hitRadius: number,
+  filterType?: 'contour' | 'internal'
 ): { type: 'contour' | 'internal'; index: number } | null {
   const hitRadiusSq = hitRadius * hitRadius
 
   // Check internal points first (they're drawn on top)
-  for (let i = internalPoints.length - 1; i >= 0; i--) {
-    const dx = imagePos.x - internalPoints[i].x
-    const dy = imagePos.y - internalPoints[i].y
-    if (dx * dx + dy * dy <= hitRadiusSq) {
-      return { type: 'internal', index: i }
+  if (filterType !== 'contour') {
+    for (let i = internalPoints.length - 1; i >= 0; i--) {
+      const dx = imagePos.x - internalPoints[i].x
+      const dy = imagePos.y - internalPoints[i].y
+      if (dx * dx + dy * dy <= hitRadiusSq) {
+        return { type: 'internal', index: i }
+      }
     }
   }
 
   // Then contour points
-  for (let i = contourPoints.length - 1; i >= 0; i--) {
-    const dx = imagePos.x - contourPoints[i].x
-    const dy = imagePos.y - contourPoints[i].y
-    if (dx * dx + dy * dy <= hitRadiusSq) {
-      return { type: 'contour', index: i }
+  if (filterType !== 'internal') {
+    for (let i = contourPoints.length - 1; i >= 0; i--) {
+      const dx = imagePos.x - contourPoints[i].x
+      const dy = imagePos.y - contourPoints[i].y
+      if (dx * dx + dy * dy <= hitRadiusSq) {
+        return { type: 'contour', index: i }
+      }
     }
   }
 
   return null
+}
+
+/** Find the nearest contour edge segment and return the index of the first point of that segment */
+export function findNearestContourEdge(
+  imagePos: Point2D,
+  contourPoints: Point2D[],
+  maxDist: number
+): { afterIndex: number; projection: Point2D } | null {
+  if (contourPoints.length < 2) return null
+
+  let bestDist = maxDist * maxDist
+  let bestIdx = -1
+  let bestProj: Point2D = { x: 0, y: 0 }
+
+  const n = contourPoints.length
+  for (let i = 0; i < n; i++) {
+    const a = contourPoints[i]
+    const b = contourPoints[(i + 1) % n]
+
+    const abx = b.x - a.x
+    const aby = b.y - a.y
+    const lenSq = abx * abx + aby * aby
+    if (lenSq === 0) continue
+
+    let t = ((imagePos.x - a.x) * abx + (imagePos.y - a.y) * aby) / lenSq
+    t = Math.max(0, Math.min(1, t))
+
+    const px = a.x + t * abx
+    const py = a.y + t * aby
+    const dx = imagePos.x - px
+    const dy = imagePos.y - py
+    const distSq = dx * dx + dy * dy
+
+    if (distSq < bestDist) {
+      bestDist = distSq
+      bestIdx = i
+      bestProj = { x: px, y: py }
+    }
+  }
+
+  if (bestIdx === -1) return null
+  return { afterIndex: bestIdx, projection: bestProj }
 }
