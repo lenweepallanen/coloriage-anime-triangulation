@@ -1,7 +1,8 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef } from 'react'
 import Delaunator from 'delaunator'
 import type { Point2D } from '../../types/project'
 import { pointInPolygon, triangleCentroid } from '../../utils/geometry'
+import { resampleContourFromReference } from '../../utils/autoMeshGenerator'
 
 export interface TriangulationState {
   contourPoints: Point2D[]
@@ -24,6 +25,7 @@ export function useTriangulation(initial?: {
   const [contourClosed, setContourClosed] = useState(
     initial ? initial.contourPoints.length >= 3 : false
   )
+  const referenceContourRef = useRef<Point2D[] | null>(null)
 
   const allPoints = useMemo(
     () => [...contourPoints, ...internalPoints],
@@ -112,58 +114,32 @@ export function useTriangulation(initial?: {
     [contourPoints.length]
   )
 
-  const loadAutoMesh = useCallback((contour: Point2D[], internal: Point2D[]) => {
+  const loadAutoMesh = useCallback((contour: Point2D[], internal: Point2D[], reference?: Point2D[]) => {
     setContourPoints(contour)
     setInternalPoints(internal)
     setContourClosed(true)
+    referenceContourRef.current = reference ?? null
   }, [])
 
   const resampleContour = useCallback((targetCount: number) => {
-    setContourPoints(prev => {
-      if (prev.length < 3 || targetCount < 3) return prev
-
-      // Compute cumulative arc lengths
-      const n = prev.length
-      const cumLen = [0]
-      for (let i = 1; i <= n; i++) {
-        const a = prev[i - 1]
-        const b = prev[i % n]
-        const dx = b.x - a.x
-        const dy = b.y - a.y
-        cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy))
-      }
-      const totalLen = cumLen[n]
-      if (totalLen === 0) return prev
-
-      // Place targetCount points at equal arc-length intervals
-      const step = totalLen / targetCount
-      const result: Point2D[] = []
-      let segIdx = 0
-
-      for (let i = 0; i < targetCount; i++) {
-        const targetDist = i * step
-        while (segIdx < n - 1 && cumLen[segIdx + 1] < targetDist) {
-          segIdx++
-        }
-        const segStart = cumLen[segIdx]
-        const segEnd = cumLen[segIdx + 1]
-        const t = segEnd > segStart ? (targetDist - segStart) / (segEnd - segStart) : 0
-        const a = prev[segIdx]
-        const b = prev[(segIdx + 1) % n]
-        result.push({
-          x: a.x + t * (b.x - a.x),
-          y: a.y + t * (b.y - a.y),
-        })
-      }
-
-      return result
-    })
+    const ref = referenceContourRef.current
+    if (ref && ref.length >= 3 && targetCount >= 3) {
+      // Resample from the dense reference contour (on the real edge)
+      setContourPoints(resampleContourFromReference(ref, targetCount))
+    } else {
+      // Fallback: resample from current points (manual contour, no reference)
+      setContourPoints(prev => {
+        if (prev.length < 3 || targetCount < 3) return prev
+        return resampleContourFromReference(prev, targetCount)
+      })
+    }
   }, [])
 
   const clearAll = useCallback(() => {
     setContourPoints([])
     setInternalPoints([])
     setContourClosed(false)
+    referenceContourRef.current = null
   }, [])
 
   return {

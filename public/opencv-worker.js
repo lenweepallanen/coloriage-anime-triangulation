@@ -582,8 +582,49 @@ function flowCleanup() {
   flowInitialPoints = null;
 }
 
+// Rééchantillonner un contour fermé à N points équidistants par arc-length
+function resampleContourArcLength(rawPoints, targetCount) {
+  var n = rawPoints.length;
+  if (n < 3 || targetCount < 3) return rawPoints;
+
+  // Cumulative arc lengths (closed loop)
+  var cumLen = [0];
+  for (var i = 1; i <= n; i++) {
+    var a = rawPoints[i - 1];
+    var b = rawPoints[i % n];
+    var dx = b.x - a.x;
+    var dy = b.y - a.y;
+    cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  var totalLen = cumLen[n];
+  if (totalLen === 0) return rawPoints;
+
+  var step = totalLen / targetCount;
+  var result = [];
+  var segIdx = 0;
+
+  for (var i = 0; i < targetCount; i++) {
+    var targetDist = i * step;
+    while (segIdx < n - 1 && cumLen[segIdx + 1] < targetDist) {
+      segIdx++;
+    }
+    var segStart = cumLen[segIdx];
+    var segEnd = cumLen[segIdx + 1];
+    var t = segEnd > segStart ? (targetDist - segStart) / (segEnd - segStart) : 0;
+    var a = rawPoints[segIdx];
+    var b = rawPoints[(segIdx + 1) % n];
+    result.push({
+      x: a.x + t * (b.x - a.x),
+      y: a.y + t * (b.y - a.y)
+    });
+  }
+
+  return result;
+}
+
 // Détecter le contour principal d'un dessin (pour la triangulation)
-function detectContour(imgData, density) {
+// Retourne un contour dense (~500 points) fidèle au vrai bord
+function detectContour(imgData) {
   const w = imgData.width;
   const h = imgData.height;
 
@@ -606,7 +647,8 @@ function detectContour(imgData, density) {
 
     var contours = new cv.MatVector();
     var hierarchy = new cv.Mat();
-    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    // CHAIN_APPROX_NONE: get every pixel on the contour for maximum fidelity
+    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
 
     if (contours.size() === 0) {
       contours.delete();
@@ -621,21 +663,22 @@ function detectContour(imgData, density) {
     }
 
     var largestContour = contours.get(maxIdx);
-    var perimeter = cv.arcLength(largestContour, true);
-    var epsilon = perimeter * (0.008 / density);
-    var approx = new cv.Mat();
-    cv.approxPolyDP(largestContour, approx, epsilon, true);
 
-    var points = [];
-    for (var j = 0; j < approx.rows; j++) {
-      points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+    // Extract all raw contour points
+    var rawPoints = [];
+    for (var j = 0; j < largestContour.rows; j++) {
+      rawPoints.push({ x: largestContour.data32S[j * 2], y: largestContour.data32S[j * 2 + 1] });
     }
 
-    approx.delete();
     contours.delete();
     hierarchy.delete();
 
-    return { points: points.length >= 3 ? points : null };
+    if (rawPoints.length < 3) return { points: null };
+
+    // Resample to a dense but manageable reference (~500 points)
+    var densePoints = resampleContourArcLength(rawPoints, 500);
+
+    return { points: densePoints };
   } finally {
     src.delete();
     gray.delete();
@@ -687,7 +730,7 @@ self.onmessage = async function(e) {
 
   if (type === 'contour') {
     try {
-      const result = detectContour(imageData, e.data.density || 1);
+      const result = detectContour(imageData);
       self.postMessage({ type: 'contour-result', points: result.points });
     } catch (err) {
       console.error('Worker contour error:', err);

@@ -5,6 +5,7 @@ import { detectContourViaWorker } from './perspectiveCorrection'
 export interface AutoMeshResult {
   contourPoints: Point2D[]
   internalPoints: Point2D[]
+  referenceContour: Point2D[]
 }
 
 const PROCESS_SIZE = 400
@@ -22,10 +23,12 @@ function loadImage(blob: Blob): Promise<HTMLImageElement> {
 /**
  * Detect the contour of the drawing via the OpenCV Web Worker.
  */
-async function detectContourOpenCV(
-  img: HTMLImageElement,
-  density: number
-): Promise<Point2D[]> {
+/**
+ * Detect a dense reference contour (~500 points) via the OpenCV Web Worker.
+ */
+async function detectDenseContour(
+  img: HTMLImageElement
+): Promise<Point2D[] | null> {
   const origW = img.naturalWidth
   const origH = img.naturalHeight
   const scale = PROCESS_SIZE / Math.max(origW, origH)
@@ -39,14 +42,56 @@ async function detectContourOpenCV(
   ctx.drawImage(img, 0, 0, w, h)
   const imageData = ctx.getImageData(0, 0, w, h)
 
-  const points = await detectContourViaWorker(imageData, density)
+  const points = await detectContourViaWorker(imageData, 1)
 
-  if (!points || points.length < 3) {
-    return fallbackRect(origW, origH)
-  }
+  if (!points || points.length < 3) return null
 
   // Scale back to original coordinates
   return points.map(p => ({ x: p.x / scale, y: p.y / scale }))
+}
+
+/**
+ * Resample a closed contour to targetCount points at equal arc-length intervals.
+ */
+export function resampleContourFromReference(
+  reference: Point2D[],
+  targetCount: number
+): Point2D[] {
+  const n = reference.length
+  if (n < 3 || targetCount < 3) return reference
+
+  const cumLen = [0]
+  for (let i = 1; i <= n; i++) {
+    const a = reference[i - 1]
+    const b = reference[i % n]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy))
+  }
+  const totalLen = cumLen[n]
+  if (totalLen === 0) return reference
+
+  const step = totalLen / targetCount
+  const result: Point2D[] = []
+  let segIdx = 0
+
+  for (let i = 0; i < targetCount; i++) {
+    const targetDist = i * step
+    while (segIdx < n - 1 && cumLen[segIdx + 1] < targetDist) {
+      segIdx++
+    }
+    const segStart = cumLen[segIdx]
+    const segEnd = cumLen[segIdx + 1]
+    const t = segEnd > segStart ? (targetDist - segStart) / (segEnd - segStart) : 0
+    const a = reference[segIdx]
+    const b = reference[(segIdx + 1) % n]
+    result.push({
+      x: a.x + t * (b.x - a.x),
+      y: a.y + t * (b.y - a.y),
+    })
+  }
+
+  return result
 }
 
 function fallbackRect(w: number, h: number): Point2D[] {
@@ -67,10 +112,15 @@ export async function generateAutoMesh(
   const origW = img.naturalWidth
   const origH = img.naturalHeight
 
-  const contourPoints = await detectContourOpenCV(img, density)
+  const denseContour = await detectDenseContour(img)
+  const referenceContour = denseContour ?? fallbackRect(origW, origH)
+
+  // Default contour point count based on density (20 to 80 points)
+  const targetCount = Math.round(20 + density * 6)
+  const contourPoints = resampleContourFromReference(referenceContour, targetCount)
   const internalPoints = generateInternalPoints(contourPoints, origW, origH, density)
 
-  return { contourPoints, internalPoints }
+  return { contourPoints, internalPoints, referenceContour }
 }
 
 function generateInternalPoints(
