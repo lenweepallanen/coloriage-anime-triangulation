@@ -598,17 +598,11 @@ function detectContour(imgData, density) {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.threshold(gray, binary, 128, 255, cv.THRESH_BINARY_INV);
 
-    var kernelSize = Math.max(5, Math.round(Math.max(w, h) * 0.06));
+    var kernelSize = Math.max(5, Math.round(Math.max(w, h) * 0.03));
     if (kernelSize % 2 === 0) kernelSize++;
     var kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(kernelSize, kernelSize));
     cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
     kernel.delete();
-
-    var dilateSize = Math.max(3, Math.round(Math.max(w, h) * 0.02));
-    if (dilateSize % 2 === 0) dilateSize++;
-    var dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(dilateSize, dilateSize));
-    cv.dilate(closed, closed, dilateKernel);
-    dilateKernel.delete();
 
     var contours = new cv.MatVector();
     var hierarchy = new cv.Mat();
