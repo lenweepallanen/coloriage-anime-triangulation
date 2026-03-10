@@ -28,28 +28,25 @@ export function buildAnchorAdjacency(
 export interface ConstraintOptions {
   thresholdAbsolute?: number   // min deviation to trigger correction (px), default 2.0
   thresholdRelative?: number   // deviation in multiples of neighbor spread, default 3.0
-  blendFactor?: number         // correction strength for interior points, default 0.6
-  contourBlendFactor?: number  // correction strength for contour points, default 0.75
+  blendFactor?: number         // correction strength, default 0.6
 }
 
 /**
  * Apply neighbor-consensus displacement constraints after one frame of optical flow.
  * Detects anchors whose displacement deviates too much from their neighbors'
  * median displacement, and blends them back toward the median.
+ * All tracked points are now true anchors (contour points are no longer tracked).
  */
 export function applyNeighborConstraints(
   currentPositions: Point2D[],
   previousPositions: Point2D[],
   adjacency: Map<number, Set<number>>,
-  contourIndices: number[],
   options?: ConstraintOptions
 ): Point2D[] {
   const threshAbs = options?.thresholdAbsolute ?? 2.0
   const threshRel = options?.thresholdRelative ?? 3.0
-  const blendInterior = options?.blendFactor ?? 0.6
-  const blendContour = options?.contourBlendFactor ?? 0.75
+  const blend = options?.blendFactor ?? 0.6
 
-  const contourSet = new Set(contourIndices)
   const n = currentPositions.length
 
   // Compute displacements
@@ -67,7 +64,7 @@ export function applyNeighborConstraints(
     const neighbors = adjacency.get(i)
     if (!neighbors || neighbors.size === 0) continue
 
-    // For points with only 1 neighbor, use a higher threshold to avoid over-constraining
+    // For points with only 1-2 neighbors, use a higher threshold to avoid over-constraining
     const neighborCount = neighbors.size
     const effectiveThreshRel = neighborCount <= 2 ? threshRel * 1.5 : threshRel
 
@@ -100,7 +97,6 @@ export function applyNeighborConstraints(
     // Trigger correction if deviation exceeds threshold
     const threshold = Math.max(threshAbs, spread * effectiveThreshRel)
     if (dev > threshold) {
-      const blend = contourSet.has(i) ? blendContour : blendInterior
       const correctedDx = displacements[i].x + (medianDx - displacements[i].x) * blend
       const correctedDy = displacements[i].y + (medianDy - displacements[i].y) * blend
       corrected[i] = {

@@ -15,27 +15,36 @@ export interface KeyframeData {
   anchorPositions: Point2D[]; // anchor positions at this keyframe
 }
 
+export interface ContourPathEntry {
+  type: 'anchor' | 'contour';
+  index: number; // into anchorPoints[] or contourPoints[]
+}
+
 export interface MeshData {
-  // Points (anchors = contour + interior feature points)
-  anchorPoints: Point2D[];
-  contourIndices: number[];    // indices into anchorPoints forming the contour polygon
-  internalPoints: Point2D[];   // fill points (not tracked, derived from anchors)
+  // 3 distinct point categories
+  anchorPoints: Point2D[];       // tracked points only (promoted contour + interior features)
+  contourPoints: Point2D[];      // non-promoted contour points (NOT tracked, derived via barycentric)
+  internalPoints: Point2D[];     // fill points (NOT tracked, derived via barycentric)
+
+  // Ordered contour path (interleaves promoted anchors + contour points)
+  contourPath: ContourPathEntry[];  // polygon reconstructed by resolving each entry
 
   // Topology (locked after triangulation step)
-  triangles: [number, number, number][]; // indices into allPoints = [...anchors, ...internals]
+  triangles: [number, number, number][]; // indices into allPoints = [...anchors, ...contour, ...internals]
   topologyLocked: boolean;
 
-  // Anchor-only triangulation (for barycentric interpolation of internal points)
+  // Anchor-only triangulation (for barycentric interpolation)
   anchorTriangles: [number, number, number][]; // Delaunay on anchors only
+  contourBarycentrics: BarycentricRef[];       // one per contour point
   internalBarycentrics: BarycentricRef[];      // one per internal point
 
-  // Keyframe animation
-  keyframeInterval: number;          // e.g. every 10 frames
-  keyframes: KeyframeData[];         // anchor positions at keyframes
-  anchorFrames: Point2D[][] | null;  // interpolated anchor positions for ALL frames
+  // Keyframe animation (anchors only)
+  keyframeInterval: number;
+  keyframes: KeyframeData[];
+  anchorFrames: Point2D[][] | null;
 
-  // Final output (consumed by AnimationPlayer unchanged)
-  videoFramesMesh: Point2D[][] | null; // [...anchors, ...internals] per frame
+  // Final output (consumed by AnimationPlayer)
+  videoFramesMesh: Point2D[][] | null; // [...anchors, ...contour, ...internals] per frame
 }
 
 export interface MarkerCorners {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Delaunator from 'delaunator'
 import type { Project, Point2D, MeshData } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
@@ -9,6 +9,29 @@ import { generateTemplatePDF } from '../../utils/pdfGenerator'
 import { computeAllBarycentrics } from '../../utils/barycentricUtils'
 import { pointInPolygon, triangleCentroid } from '../../utils/geometry'
 import type { PointType } from '../triangulation/drawingUtils'
+
+/** Reconstruct full contour polygon from contourPath */
+function getContourPolygon(mesh: MeshData): Point2D[] {
+  if (mesh.contourPath?.length) {
+    return mesh.contourPath.map(entry =>
+      entry.type === 'anchor'
+        ? mesh.anchorPoints[entry.index]
+        : mesh.contourPoints[entry.index]
+    )
+  }
+  return mesh.contourPoints ?? []
+}
+
+/** Extract promoted indices from contourPath */
+function getPromotedIndices(mesh: MeshData): Set<number> {
+  const promoted = new Set<number>()
+  if (mesh.contourPath?.length) {
+    mesh.contourPath.forEach((entry, i) => {
+      if (entry.type === 'anchor') promoted.add(i)
+    })
+  }
+  return promoted
+}
 
 interface Props {
   project: Project
@@ -24,8 +47,9 @@ export default function TriangulationStep({ project, onSave }: Props) {
 
   const mesh = project.mesh
   const anchorPoints = mesh?.anchorPoints ?? []
-  const contourIndices = mesh?.contourIndices ?? []
-  const contourPolygon = contourIndices.map(i => anchorPoints[i])
+  const nonPromotedContour = mesh?.contourPoints ?? []
+  const contourPolygon = useMemo(() => mesh ? getContourPolygon(mesh) : [], [mesh])
+  const promotedIndices = useMemo(() => mesh ? getPromotedIndices(mesh) : new Set<number>(), [mesh])
   const topologyLocked = mesh?.topologyLocked ?? false
 
   const {
@@ -44,7 +68,8 @@ export default function TriangulationStep({ project, onSave }: Props) {
         }
       : undefined,
     anchorPoints.length > 0 ? anchorPoints : undefined,
-    contourIndices.length > 0 ? contourIndices : undefined
+    contourPolygon.length >= 3 ? contourPolygon : undefined,
+    nonPromotedContour.length > 0 ? nonPromotedContour : undefined
   )
 
   useEffect(() => {
@@ -121,6 +146,14 @@ export default function TriangulationStep({ project, onSave }: Props) {
         }
       }
 
+      // Compute barycentrics for non-promoted contour points
+      const contourBarycentrics = computeAllBarycentrics(
+        nonPromotedContour,
+        anchorPoints,
+        anchorTriangles
+      )
+
+      // Compute barycentrics for internal points
       const internalBarycentrics = computeAllBarycentrics(
         internalPoints,
         anchorPoints,
@@ -133,6 +166,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
         triangles,
         topologyLocked: true,
         anchorTriangles,
+        contourBarycentrics,
         internalBarycentrics,
       }
 
@@ -153,6 +187,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
         ...mesh,
         topologyLocked: false,
         anchorTriangles: [],
+        contourBarycentrics: [],
         internalBarycentrics: [],
         keyframes: [],
         anchorFrames: null,
@@ -268,6 +303,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
 
         <span className="toolbar-info">
           Anchors: {anchorPoints.length} |
+          Contour: {nonPromotedContour.length} |
           Internes: {internalPoints.length} |
           Triangles: {triangles.length}
         </span>
@@ -302,6 +338,8 @@ export default function TriangulationStep({ project, onSave }: Props) {
         onDeletePoint={topologyLocked ? () => {} : handleDeletePoint}
         anchorPoints={anchorPoints}
         readOnlyAnchors={true}
+        promotedContourIndices={promotedIndices}
+        nonPromotedContourPoints={nonPromotedContour}
       />
     </div>
   )

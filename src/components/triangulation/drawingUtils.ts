@@ -24,7 +24,9 @@ export function drawScene(
   anchorPoints?: Point2D[],
   readOnlyAnchors?: boolean,
   showAnchorNumbers?: boolean,
-  contourIndexOffset?: number
+  contourIndexOffset?: number,
+  promotedContourIndices?: Set<number>,
+  nonPromotedContourPoints?: Point2D[]
 ) {
   // Clear in CSS pixel space (context is already scaled by DPR via setTransform)
   const dpr = window.devicePixelRatio || 1
@@ -42,10 +44,10 @@ export function drawScene(
   }
 
   // Determine all points for triangle rendering
-  // When anchorPoints are provided, allPoints = [...anchors, ...internals]
-  // Otherwise fall back to [...contour, ...internals]
+  // Must match useTriangulation: [...anchors, ...nonPromotedContour, ...internals]
+  // or [...contour, ...internals] if no anchors
   const basePoints = anchorPoints ?? contourPoints
-  const allPoints = [...basePoints, ...internalPoints]
+  const allPoints = [...basePoints, ...(nonPromotedContourPoints ?? []), ...internalPoints]
 
   // Draw triangles
   if (triangles.length > 0) {
@@ -86,11 +88,18 @@ export function drawScene(
   for (let i = 0; i < contourPoints.length; i++) {
     const p = contourPoints[i]
     const isHovered = hoveredPoint?.type === 'contour' && hoveredPoint.index === i
+    const isPromoted = promotedContourIndices?.has(i) ?? false
 
-    ctx.fillStyle = CONTOUR_COLOR
+    ctx.fillStyle = isPromoted ? ANCHOR_COLOR : CONTOUR_COLOR
     ctx.beginPath()
     ctx.arc(p.x, p.y, isHovered ? hr : pr, 0, Math.PI * 2)
     ctx.fill()
+
+    if (isPromoted) {
+      ctx.strokeStyle = '#d97706'
+      ctx.lineWidth = 1.5 / transform.scale
+      ctx.stroke()
+    }
 
     if (isHovered) {
       ctx.strokeStyle = 'white'

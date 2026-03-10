@@ -22,13 +22,18 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
     setProgress(0)
 
     try {
-      const { anchorFrames, anchorTriangles, internalBarycentrics } = mesh
+      const { anchorFrames, anchorTriangles, contourBarycentrics, internalBarycentrics } = mesh
       const totalFrames = anchorFrames.length
       const videoFramesMesh: Point2D[][] = new Array(totalFrames)
 
       for (let f = 0; f < totalFrames; f++) {
         const frameAnchors = anchorFrames[f]
         const allPoints: Point2D[] = [...frameAnchors]
+
+        // Interpolate contour points from anchor positions via barycentric coords
+        for (const bary of contourBarycentrics) {
+          allPoints.push(interpolateInternalPoint(bary, frameAnchors, anchorTriangles))
+        }
 
         // Interpolate internal points from anchor positions via barycentric coords
         for (const bary of internalBarycentrics) {
@@ -83,7 +88,7 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
     <div className="optical-flow-step">
       <h3>Animation finale</h3>
       <p style={{ fontSize: '0.875rem', color: '#888', marginBottom: 16 }}>
-        Cette étape calcule les positions de tous les points (anchors + internes)
+        Cette étape calcule les positions de tous les points (anchors + contour + internes)
         pour chaque frame en utilisant les coordonnées barycentriques.
         Le résultat est directement utilisable pour l'animation du scan.
       </p>
@@ -96,8 +101,9 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
         <span className="toolbar-info">
           {mesh.anchorFrames!.length} frames |
           {mesh.anchorPoints.length} anchors |
+          {mesh.contourPoints.length} contour |
           {mesh.internalPoints.length} internes |
-          {mesh.anchorPoints.length + mesh.internalPoints.length} points total
+          {mesh.anchorPoints.length + mesh.contourPoints.length + mesh.internalPoints.length} points total
         </span>
       </div>
 
@@ -137,7 +143,7 @@ function FlowPreview({ project }: { project: Project }) {
   const lastTimeRef = useRef(0)
 
   const mesh = project.mesh!
-  const allPoints = [...mesh.anchorPoints, ...mesh.internalPoints]
+  const allPoints = [...mesh.anchorPoints, ...mesh.contourPoints, ...mesh.internalPoints]
   const videoFramesMesh = mesh.videoFramesMesh!
   const totalFrames = videoFramesMesh.length
   const fps = 24

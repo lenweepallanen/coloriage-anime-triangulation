@@ -24,6 +24,9 @@ interface Props {
   readOnlyAnchors?: boolean
   showAnchorNumbers?: boolean
   contourIndexOffset?: number
+  promotedContourIndices?: Set<number>
+  onTogglePromoteContour?: (index: number) => void
+  nonPromotedContourPoints?: Point2D[]
 }
 
 export default function TriangulationCanvas({
@@ -44,6 +47,9 @@ export default function TriangulationCanvas({
   readOnlyAnchors,
   showAnchorNumbers,
   contourIndexOffset,
+  promotedContourIndices,
+  onTogglePromoteContour,
+  nonPromotedContourPoints,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -139,7 +145,9 @@ export default function TriangulationCanvas({
             anchorPoints,
             readOnlyAnchors,
             showAnchorNumbers,
-            contourIndexOffset
+            contourIndexOffset,
+            promotedContourIndices,
+            nonPromotedContourPoints
           )
         }
       }
@@ -151,7 +159,7 @@ export default function TriangulationCanvas({
       running = false
       cancelAnimationFrame(rafId)
     }
-  }, [loadedImage, contourPoints, internalPoints, triangles, contourClosed, hoveredPoint, transformRef, anchorPoints, readOnlyAnchors, showAnchorNumbers, contourIndexOffset])
+  }, [loadedImage, contourPoints, internalPoints, triangles, contourClosed, hoveredPoint, transformRef, anchorPoints, readOnlyAnchors, showAnchorNumbers, contourIndexOffset, promotedContourIndices, nonPromotedContourPoints])
 
   const hitRadius = useCallback(() => {
     return 10 / transformRef.current.scale
@@ -169,6 +177,12 @@ export default function TriangulationCanvas({
       if (hit) {
         // Don't allow dragging read-only anchors
         if (hit.type === 'anchor' && readOnlyAnchors) return
+
+        // Shift+click on contour point → toggle promotion
+        if (e.shiftKey && hit.type === 'contour' && contourClosed && onTogglePromoteContour) {
+          onTogglePromoteContour(hit.index)
+          return
+        }
 
         // Click on first contour point → close the contour
         if (
@@ -199,7 +213,7 @@ export default function TriangulationCanvas({
         onAddAnchorPoint(imgPos)
       }
     },
-    [screenToImage, contourPoints, internalPoints, mode, contourClosed, hitRadius, onAddContourPoint, onInsertContourPoint, onAddInternalPoint, onAddAnchorPoint, isPanning, anchorPoints, readOnlyAnchors]
+    [screenToImage, contourPoints, internalPoints, mode, contourClosed, hitRadius, onAddContourPoint, onInsertContourPoint, onAddInternalPoint, onAddAnchorPoint, isPanning, anchorPoints, readOnlyAnchors, onTogglePromoteContour]
   )
 
   const handleMouseMove = useCallback(

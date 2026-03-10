@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Point2D, BarycentricRef, KeyframeData, MeshData } from '../types/project'
+import type { Project, Point2D, BarycentricRef, KeyframeData, MeshData, ContourPathEntry } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -14,7 +14,24 @@ interface TriangleDoc { a: number; b: number; c: number }
 
 interface MeshDoc {
   anchorPoints: Point2D[]
-  contourIndices: number[]
+  contourPoints: Point2D[]
+  contourPath: ContourPathEntry[]
+  internalPoints: Point2D[]
+  triangles: TriangleDoc[]
+  topologyLocked: boolean
+  anchorTriangles: TriangleDoc[]
+  contourBarycentrics: BarycentricRef[]
+  internalBarycentrics: BarycentricRef[]
+  keyframeInterval: number
+  hasKeyframes: boolean
+  hasAnchorFrames: boolean
+  hasVideoFramesMesh: boolean
+}
+
+// Legacy format (before 3-category split)
+interface LegacyMeshDoc {
+  anchorPoints: Point2D[]
+  contourIndices?: number[]
   internalPoints: Point2D[]
   triangles: TriangleDoc[]
   topologyLocked: boolean
@@ -85,11 +102,13 @@ function toDoc(project: Project): ProjectDoc {
     hasVideo: project.videoBlob != null,
     mesh: project.mesh ? {
       anchorPoints: project.mesh.anchorPoints ?? [],
-      contourIndices: project.mesh.contourIndices ?? [],
+      contourPoints: project.mesh.contourPoints ?? [],
+      contourPath: project.mesh.contourPath ?? [],
       internalPoints: project.mesh.internalPoints ?? [],
       triangles: triToDoc(project.mesh.triangles ?? []),
       topologyLocked: project.mesh.topologyLocked ?? false,
       anchorTriangles: triToDoc(project.mesh.anchorTriangles ?? []),
+      contourBarycentrics: project.mesh.contourBarycentrics ?? [],
       internalBarycentrics: project.mesh.internalBarycentrics ?? [],
       keyframeInterval: project.mesh.keyframeInterval ?? 10,
       hasKeyframes: (project.mesh.keyframes?.length ?? 0) > 0,
@@ -100,16 +119,71 @@ function toDoc(project: Project): ProjectDoc {
   }
 }
 
-function meshFromDoc(meshDoc: MeshDoc): Omit<MeshData, 'keyframes' | 'anchorFrames' | 'videoFramesMesh'> {
+function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): Omit<MeshData, 'keyframes' | 'anchorFrames' | 'videoFramesMesh'> {
+  // Detect legacy format: has contourIndices, no contourPath
+  const legacy = meshDoc as LegacyMeshDoc
+  if (legacy.contourIndices && !('contourPath' in meshDoc && (meshDoc as MeshDoc).contourPath?.length)) {
+    console.log('[Migration] Converting legacy mesh format (contourIndices → 3-category)')
+    const oldAnchors = legacy.anchorPoints ?? []
+    const contourSet = new Set(legacy.contourIndices)
+
+    // Split old anchors into contour points and true anchors (features)
+    const contourPoints: Point2D[] = legacy.contourIndices.map(i => oldAnchors[i])
+    const featureAnchors: Point2D[] = oldAnchors.filter((_, i) => !contourSet.has(i))
+
+    // Build contour path (all contour type in legacy — no promoted anchors)
+    const contourPath: ContourPathEntry[] = contourPoints.map((_, i) => ({ type: 'contour' as const, index: i }))
+
+    // Remap triangle indices: old = [...oldAnchors, ...internals] → new = [...features, ...contour, ...internals]
+    const oldToNew = new Map<number, number>()
+    let featureIdx = 0
+    let contourIdx = 0
+    for (let i = 0; i < oldAnchors.length; i++) {
+      if (contourSet.has(i)) {
+        oldToNew.set(i, featureAnchors.length + contourIdx)
+        contourIdx++
+      } else {
+        oldToNew.set(i, featureIdx)
+        featureIdx++
+      }
+    }
+    const internalPoints = legacy.internalPoints ?? []
+    for (let i = 0; i < internalPoints.length; i++) {
+      const oldIdx = oldAnchors.length + i
+      oldToNew.set(oldIdx, featureAnchors.length + contourPoints.length + i)
+    }
+
+    const oldTriangles = docToTri(legacy.triangles ?? [])
+    const newTriangles = oldTriangles.map(([a, b, c]) => [
+      oldToNew.get(a) ?? a, oldToNew.get(b) ?? b, oldToNew.get(c) ?? c,
+    ] as [number, number, number])
+
+    return {
+      anchorPoints: featureAnchors,
+      contourPoints,
+      contourPath,
+      internalPoints,
+      triangles: newTriangles,
+      topologyLocked: false, // Force re-lock to recompute barycentrics
+      anchorTriangles: [],
+      contourBarycentrics: [],
+      internalBarycentrics: [],
+      keyframeInterval: legacy.keyframeInterval ?? 10,
+    }
+  }
+
+  const doc = meshDoc as MeshDoc
   return {
-    anchorPoints: meshDoc.anchorPoints ?? [],
-    contourIndices: meshDoc.contourIndices ?? [],
-    internalPoints: meshDoc.internalPoints ?? [],
-    triangles: docToTri(meshDoc.triangles ?? []),
-    topologyLocked: meshDoc.topologyLocked ?? false,
-    anchorTriangles: docToTri(meshDoc.anchorTriangles ?? []),
-    internalBarycentrics: meshDoc.internalBarycentrics ?? [],
-    keyframeInterval: meshDoc.keyframeInterval ?? 10,
+    anchorPoints: doc.anchorPoints ?? [],
+    contourPoints: doc.contourPoints ?? [],
+    contourPath: doc.contourPath ?? [],
+    internalPoints: doc.internalPoints ?? [],
+    triangles: docToTri(doc.triangles ?? []),
+    topologyLocked: doc.topologyLocked ?? false,
+    anchorTriangles: docToTri(doc.anchorTriangles ?? []),
+    contourBarycentrics: doc.contourBarycentrics ?? [],
+    internalBarycentrics: doc.internalBarycentrics ?? [],
+    keyframeInterval: doc.keyframeInterval ?? 10,
   }
 }
 
@@ -185,7 +259,7 @@ export async function getAllProjects(): Promise<Project[]> {
       originalImageBlob: null,
       videoBlob: null,
       mesh: data.mesh ? {
-        ...meshFromDoc(data.mesh),
+        ...meshFromDoc(data.mesh as MeshDoc | LegacyMeshDoc),
         keyframes: [],
         anchorFrames: null,
         videoFramesMesh: null,

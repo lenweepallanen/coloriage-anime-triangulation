@@ -4,7 +4,6 @@ import { buildAnchorAdjacency, applyNeighborConstraints } from './trackingConstr
 
 export interface TrackingConstraintParams {
   anchorTriangles: [number, number, number][]
-  contourIndices: number[]
 }
 
 /**
@@ -52,7 +51,7 @@ export async function trackSegment(
     // Apply neighbor constraints in video coords
     if (adjacency && constraints) {
       points = applyNeighborConstraints(
-        points, prevVideoPoints, adjacency, constraints.contourIndices
+        points, prevVideoPoints, adjacency
       )
       await flowUpdatePoints(points)
     }
@@ -181,7 +180,7 @@ export async function precomputeOpticalFlow(
     // Apply neighbor constraints in video coords (skip frame 0 — no displacement yet)
     if (adjacency && constraints && i > 0) {
       points = applyNeighborConstraints(
-        points, prevVideoPoints, adjacency, constraints.contourIndices
+        points, prevVideoPoints, adjacency
       )
       await flowUpdatePoints(points)
     }

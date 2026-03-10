@@ -105,7 +105,7 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
   ctx.drawImage(rectifiedCanvas, 0, 0)
 
   // Get frame 0 points (or static points if no animation)
-  const allPoints = [...mesh.anchorPoints, ...mesh.internalPoints]
+  const allPoints = [...mesh.anchorPoints, ...mesh.contourPoints, ...mesh.internalPoints]
   const framePoints = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
     ? mesh.videoFramesMesh[0]
     : allPoints

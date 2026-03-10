@@ -47,8 +47,9 @@ function runDelaunay(
  * Hook for managing triangulation state.
  *
  * @param initial - Initial contour/internal/triangle data (contour-only mode)
- * @param anchorPoints - If provided, uses anchors as base points instead of contour
- * @param contourIndices - Indices into anchorPoints forming the contour polygon
+ * @param anchorPoints - If provided, uses anchors as base points
+ * @param contourPolygonOverride - Explicit contour polygon for clipping (from contourPath)
+ * @param nonPromotedContourPoints - Non-promoted contour points to include in allPoints
  */
 export function useTriangulation(
   initial?: {
@@ -57,7 +58,8 @@ export function useTriangulation(
     triangles: [number, number, number][]
   },
   anchorPoints?: Point2D[],
-  contourIndices?: number[]
+  contourPolygonOverride?: Point2D[],
+  nonPromotedContourPoints?: Point2D[]
 ) {
   const [contourPoints, setContourPoints] = useState<Point2D[]>(
     initial?.contourPoints ?? []
@@ -69,27 +71,30 @@ export function useTriangulation(
     initial ? initial.contourPoints.length >= 3 : false
   )
 
-  // In anchor-aware mode, the base points are anchors; otherwise contour
-  const basePoints = anchorPoints ?? contourPoints
+  // Contour polygon for clipping: explicit override, or editor contour
   const contourPolygon = useMemo(() => {
-    if (anchorPoints && contourIndices) {
-      return contourIndices.map(i => anchorPoints[i])
+    if (contourPolygonOverride && contourPolygonOverride.length >= 3) {
+      return contourPolygonOverride
     }
     return contourPoints
-  }, [anchorPoints, contourIndices, contourPoints])
+  }, [contourPolygonOverride, contourPoints])
 
-  const allPoints = useMemo(
-    () => [...basePoints, ...internalPoints],
-    [basePoints, internalPoints]
-  )
+  // All points for Delaunay: [...anchors, ...nonPromotedContour, ...internals]
+  // or [...contour, ...internals] if no anchors
+  const allPoints = useMemo(() => {
+    if (anchorPoints) {
+      return [...anchorPoints, ...(nonPromotedContourPoints ?? []), ...internalPoints]
+    }
+    return [...contourPoints, ...internalPoints]
+  }, [anchorPoints, nonPromotedContourPoints, contourPoints, internalPoints])
 
   const triangles = useMemo(() => {
     const isContourReady = anchorPoints
-      ? (contourIndices?.length ?? 0) >= 3
+      ? contourPolygon.length >= 3
       : contourClosed && contourPoints.length >= 3
     if (!isContourReady) return []
     return runDelaunay(allPoints, contourPolygon)
-  }, [allPoints, contourPolygon, contourClosed, contourPoints.length, anchorPoints, contourIndices])
+  }, [allPoints, contourPolygon, contourClosed, contourPoints.length, anchorPoints])
 
   const addContourPoint = useCallback((p: Point2D) => {
     setContourPoints(prev => [...prev, p])

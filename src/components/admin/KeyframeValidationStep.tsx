@@ -80,7 +80,7 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
       // Build constraint params if enabled
       const constraints: TrackingConstraintParams | undefined =
         useConstraints && mesh.anchorTriangles?.length
-          ? { anchorTriangles: mesh.anchorTriangles, contourIndices: mesh.contourIndices }
+          ? { anchorTriangles: mesh.anchorTriangles }
           : undefined
 
       // Track ONLY anchor points (not internal points)
@@ -156,7 +156,7 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
           // Build constraint params if enabled
           const segConstraints: TrackingConstraintParams | undefined =
             useConstraints && mesh?.anchorTriangles?.length
-              ? { anchorTriangles: mesh.anchorTriangles, contourIndices: mesh.contourIndices }
+              ? { anchorTriangles: mesh.anchorTriangles }
               : undefined
 
           setProgress({ stage: 'Propagation...', current: 0, total: endFrame - startFrame })

@@ -130,7 +130,7 @@ function FlowPreview({ project }: { project: Project }) {
   const lastTimeRef = useRef(0)
 
   const mesh = project.mesh!
-  const allPoints = [...mesh.anchorPoints, ...mesh.internalPoints]
+  const allPoints = [...mesh.anchorPoints, ...mesh.contourPoints, ...mesh.internalPoints]
   const videoFramesMesh = mesh.videoFramesMesh!
   const totalFrames = videoFramesMesh.length
   const fps = 24
