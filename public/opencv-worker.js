@@ -497,7 +497,7 @@ function detectCornersLightweight(imgData) {
   return { corners: null };
 }
 
-// --- Optical flow tracking ---
+// --- Optical flow tracking with robust filtering pipeline ---
 
 // State for incremental optical flow
 let flowPrevGray = null;
@@ -507,36 +507,260 @@ let flowMaxLevel = 3;
 let flowCriteria = null;
 let flowInitialPoints = null;
 
-function flowInit(initialPoints) {
+// Robust filtering state
+let flowTriangles = null;        // [[a,b,c], ...] triangle indices
+let flowNeighborMap = null;      // Map<number, number[]> adjacency from triangles
+let flowRefEdgeLengths = null;   // Map<string, number> "i-j" -> reference distance
+let flowMaxDisplacement = 0;     // max pixels per frame
+let flowPointClassifications = null; // boolean[] : true = dark, false = light
+let flowRefTriangleData = null;  // [{area, minAngle, verts:[{x,y},{x,y},{x,y}]}] per triangle
+let flowAnchorPoints = null;     // Point2D[] anchor positions for drift correction
+let flowFrameCounter = 0;        // current frame number
+
+// Pipeline parameters
+var FLOW_ERROR_THRESHOLD = 12.0;
+var FLOW_FB_THRESHOLD = 1.0;
+var FLOW_MAX_DISP_RATIO = 0.08;     // safety net only (8% of frame), real outlier detection is MAD-based (S4)
+var FLOW_MAD_K = 2.5;               // MAD multiplier for outlier detection (Hampel standard)
+var FLOW_MAD_EPSILON = 0.5;          // floor to prevent zero-MAD collapse when neighbors are static
+var FLOW_MIN_EDGE_RATIO = 0.5;
+var FLOW_MAX_EDGE_RATIO = 2.0;
+var FLOW_COLOR_THRESHOLD = 128;    // grayscale dark/light boundary
+var FLOW_COLOR_BLUR_SIZE = 5;      // Gaussian blur kernel for sampling
+var FLOW_COLOR_TOLERANCE = 50;     // tolerance band around threshold (widened for H.264 antialiasing)
+var FLOW_LAPLACIAN_ALPHA = 0.15;   // Laplacian smoothing strength (0=off, 1=snap to centroid)
+var FLOW_MIN_AREA_RATIO = 0.3;     // triangle area must be >= 30% of reference
+var FLOW_MAX_AREA_RATIO = 3.0;     // triangle area must be <= 300% of reference
+var FLOW_MIN_ANGLE_DEG = 10;       // minimum angle in degrees
+var FLOW_SHAPE_CORRECTION_MIN = 0.2; // min correction for mild violations
+var FLOW_SHAPE_CORRECTION_MAX = 0.8; // max correction for severe violations
+var FLOW_AFFINE_COND_MAX = 1e6;      // max condition number for affine fit (above → fallback to median translation)
+var FLOW_ANCHOR_INTERVAL = 15;       // save anchor every N frames
+var FLOW_ANCHOR_MAX_DRIFT = 5.0;     // average drift in px before triggering correction
+var FLOW_ANCHOR_CORRECTION_ALPHA = 0.1; // soft pull strength toward anchor (10%)
+var FLOW_LK_WIN_SIZE = 31;           // Lucas-Kanade search window size (must be odd)
+
+// --- Helper functions ---
+
+function triangleArea(a, b, c) {
+  return Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+}
+
+function triangleMinAngle(a, b, c) {
+  // Returns minimum angle in degrees
+  var sides = [
+    { dx: b.x - a.x, dy: b.y - a.y },  // AB
+    { dx: c.x - b.x, dy: c.y - b.y },  // BC
+    { dx: a.x - c.x, dy: a.y - c.y }   // CA
+  ];
+  var lens = sides.map(function(s) { return Math.sqrt(s.dx * s.dx + s.dy * s.dy); });
+  if (lens[0] < 1e-6 || lens[1] < 1e-6 || lens[2] < 1e-6) return 0;
+
+  // Law of cosines for each angle
+  var ab2 = lens[0] * lens[0], bc2 = lens[1] * lens[1], ca2 = lens[2] * lens[2];
+  var cosA = (ab2 + ca2 - bc2) / (2 * lens[0] * lens[2]);
+  var cosB = (ab2 + bc2 - ca2) / (2 * lens[0] * lens[1]);
+  var cosC = (bc2 + ca2 - ab2) / (2 * lens[1] * lens[2]);
+  // Clamp to [-1,1] for numerical safety
+  cosA = Math.max(-1, Math.min(1, cosA));
+  cosB = Math.max(-1, Math.min(1, cosB));
+  cosC = Math.max(-1, Math.min(1, cosC));
+  var angA = Math.acos(cosA) * 180 / Math.PI;
+  var angB = Math.acos(cosB) * 180 / Math.PI;
+  var angC = Math.acos(cosC) * 180 / Math.PI;
+  return Math.min(angA, angB, angC);
+}
+
+function computeRefTriangleData(points, triangles) {
+  var data = [];
+  for (var t = 0; t < triangles.length; t++) {
+    var tri = triangles[t];
+    var a = points[tri[0]], b = points[tri[1]], c = points[tri[2]];
+    data.push({
+      area: triangleArea(a, b, c),
+      minAngle: triangleMinAngle(a, b, c),
+      verts: [{ x: a.x, y: a.y }, { x: b.x, y: b.y }, { x: c.x, y: c.y }]
+    });
+  }
+  return data;
+}
+
+function buildNeighborMap(triangles, nPoints) {
+  var neighbors = {};
+  for (var i = 0; i < nPoints; i++) {
+    neighbors[i] = [];
+  }
+  var edgeSet = {};
+  for (var t = 0; t < triangles.length; t++) {
+    var tri = triangles[t];
+    var edges = [[tri[0], tri[1]], [tri[1], tri[2]], [tri[0], tri[2]]];
+    for (var e = 0; e < edges.length; e++) {
+      var a = Math.min(edges[e][0], edges[e][1]);
+      var b = Math.max(edges[e][0], edges[e][1]);
+      var key = a + '-' + b;
+      if (!edgeSet[key]) {
+        edgeSet[key] = true;
+        neighbors[a].push(b);
+        neighbors[b].push(a);
+      }
+    }
+  }
+  return neighbors;
+}
+
+function computeEdgeLengths(points, triangles) {
+  var lengths = {};
+  var edgeSet = {};
+  for (var t = 0; t < triangles.length; t++) {
+    var tri = triangles[t];
+    var edges = [[tri[0], tri[1]], [tri[1], tri[2]], [tri[0], tri[2]]];
+    for (var e = 0; e < edges.length; e++) {
+      var a = Math.min(edges[e][0], edges[e][1]);
+      var b = Math.max(edges[e][0], edges[e][1]);
+      var key = a + '-' + b;
+      if (!edgeSet[key]) {
+        edgeSet[key] = true;
+        var dx = points[a].x - points[b].x;
+        var dy = points[a].y - points[b].y;
+        lengths[key] = Math.sqrt(dx * dx + dy * dy);
+      }
+    }
+  }
+  return lengths;
+}
+
+function median(arr) {
+  if (arr.length === 0) return 0;
+  var sorted = arr.slice().sort(function(a, b) { return a - b; });
+  var mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function fitAffine2D(srcPts, dstPts) {
+  // Least-squares affine: [x'] = [a b c] * [x y 1]^T
+  //                        [y']   [d e f]
+  // Build normal equations: A^T A x = A^T b
+  var n = srcPts.length;
+  // A is n×3, we solve two systems (one for x', one for y')
+  // AtA is 3×3, Atb is 3×1
+  var s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0;
+  var bx0 = 0, bx1 = 0, bx2 = 0;
+  var by0 = 0, by1 = 0, by2 = 0;
+  for (var i = 0; i < n; i++) {
+    var sx = srcPts[i].x, sy = srcPts[i].y;
+    var dx = dstPts[i].x, dy = dstPts[i].y;
+    s00 += sx * sx; s01 += sx * sy; s02 += sx;
+    s11 += sy * sy; s12 += sy; s22 += 1;
+    bx0 += sx * dx; bx1 += sy * dx; bx2 += dx;
+    by0 += sx * dy; by1 += sy * dy; by2 += dy;
+  }
+  // Solve 3×3 system via Cramer's rule
+  // Matrix: [[s00, s01, s02], [s01, s11, s12], [s02, s12, s22]]
+  var det = s00 * (s11 * s22 - s12 * s12) - s01 * (s01 * s22 - s12 * s02) + s02 * (s01 * s12 - s11 * s02);
+  if (Math.abs(det) < 1e-10) return null;
+  var invDet = 1.0 / det;
+  // Cofactor matrix (symmetric)
+  var c00 = (s11 * s22 - s12 * s12) * invDet;
+  var c01 = (s02 * s12 - s01 * s22) * invDet;
+  var c02 = (s01 * s12 - s02 * s11) * invDet;
+  var c11 = (s00 * s22 - s02 * s02) * invDet;
+  var c12 = (s01 * s02 - s00 * s12) * invDet;
+  var c22 = (s00 * s11 - s01 * s01) * invDet;
+  // Condition number check: Frobenius norm of A * Frobenius norm of A^-1
+  var frobSq = s00*s00 + 2*s01*s01 + 2*s02*s02 + s11*s11 + 2*s12*s12 + s22*s22;
+  var invFrobSq = c00*c00 + 2*c01*c01 + 2*c02*c02 + c11*c11 + 2*c12*c12 + c22*c22;
+  if (Math.sqrt(frobSq * invFrobSq) > FLOW_AFFINE_COND_MAX) return null;
+  // Solve for x coefficients
+  var a = c00 * bx0 + c01 * bx1 + c02 * bx2;
+  var b = c01 * bx0 + c11 * bx1 + c12 * bx2;
+  var c = c02 * bx0 + c12 * bx1 + c22 * bx2;
+  // Solve for y coefficients
+  var d = c00 * by0 + c01 * by1 + c02 * by2;
+  var e = c01 * by0 + c11 * by1 + c12 * by2;
+  var f = c02 * by0 + c12 * by1 + c22 * by2;
+  return { a: a, b: b, c: c, d: d, e: e, f: f };
+}
+
+function applyAffine(affine, pt) {
+  return {
+    x: affine.a * pt.x + affine.b * pt.y + affine.c,
+    y: affine.d * pt.x + affine.e * pt.y + affine.f
+  };
+}
+
+function flowInit(initialPoints, triangles) {
   flowInitialPoints = initialPoints;
   flowPrevGray = null;
   flowPrevPts = null;
-  flowWinSize = new cv.Size(21, 21);
+  flowWinSize = new cv.Size(FLOW_LK_WIN_SIZE, FLOW_LK_WIN_SIZE);
   flowMaxLevel = 3;
   flowCriteria = new cv.TermCriteria(
     cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 30, 0.01
   );
+
+  // Precompute mesh topology for robust filtering
+  flowTriangles = triangles || [];
+  flowNeighborMap = buildNeighborMap(flowTriangles, initialPoints.length);
+  flowRefEdgeLengths = null; // computed on first frame when we have positions
+  flowRefTriangleData = null; // computed on first frame
+  flowMaxDisplacement = 0;   // set on first frame when we know video dimensions
+  flowPointClassifications = null; // computed on first frame
+
+  // Temporal anchoring state
+  flowAnchorPoints = null;
+  flowFrameCounter = 0;
 }
 
 function flowProcessFrame(imgData) {
-  const w = imgData.width, h = imgData.height;
-  const src = new cv.Mat(h, w, cv.CV_8UC4);
+  var w = imgData.width, h = imgData.height;
+  var src = new cv.Mat(h, w, cv.CV_8UC4);
   src.data.set(new Uint8Array(imgData.data));
-  const gray = new cv.Mat();
+  var gray = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
   src.delete();
 
-  // First frame: just store grayscale and return initial points
+  // First frame: store grayscale, compute reference edge lengths, return initial points
   if (!flowPrevGray) {
     flowPrevGray = gray;
     flowPrevPts = cv.matFromArray(
       flowInitialPoints.length, 1, cv.CV_32FC2,
       flowInitialPoints.flatMap(function(p) { return [p.x, p.y]; })
     );
+    flowRefEdgeLengths = computeEdgeLengths(flowInitialPoints, flowTriangles);
+    flowRefTriangleData = computeRefTriangleData(flowInitialPoints, flowTriangles);
+    flowMaxDisplacement = w * FLOW_MAX_DISP_RATIO;
+
+    // Classify each point as dark (on lines) or light (on paper)
+    var blurredInit = new cv.Mat();
+    cv.GaussianBlur(gray, blurredInit, new cv.Size(FLOW_COLOR_BLUR_SIZE, FLOW_COLOR_BLUR_SIZE), 0);
+    flowPointClassifications = [];
+    for (var j = 0; j < flowInitialPoints.length; j++) {
+      var px = Math.max(0, Math.min(w - 1, Math.round(flowInitialPoints[j].x)));
+      var py = Math.max(0, Math.min(h - 1, Math.round(flowInitialPoints[j].y)));
+      var val = blurredInit.ucharAt(py, px);
+      flowPointClassifications.push(val < FLOW_COLOR_THRESHOLD); // true = dark
+    }
+    blurredInit.delete();
+
+    // Store frame 0 as first anchor
+    flowAnchorPoints = flowInitialPoints.map(function(p) { return { x: p.x, y: p.y }; });
+    flowFrameCounter = 0;
+
     return { points: flowInitialPoints };
   }
 
-  // Optical flow
+  var nPts = flowInitialPoints.length;
+
+  // --- Per-frame metrics ---
+  var metrics = {
+    rejectedS1: 0, rejectedS2: 0, rejectedS2_5: 0,
+    rejectedS3: 0, rejectedS4: 0, rejectedS5: 0,
+    reconstructedS6: 0, correctedS6_5: 0, snappedS7: 0, frozenS7: 0,
+    totalPoints: nPts,
+    avgDisplacement: 0, maxDisplacement: 0
+  };
+
+  // --- Forward LK ---
   var nextPts = new cv.Mat();
   var status = new cv.Mat();
   var err = new cv.Mat();
@@ -551,14 +775,462 @@ function flowProcessFrame(imgData) {
   var prevData = flowPrevPts.data32F;
   var nextData = nextPts.data32F;
   var statusData = status.data;
-  var points = [];
+  var errData = err.data32F;
 
-  for (var j = 0; j < flowInitialPoints.length; j++) {
-    if (statusData[j] === 1) {
-      points.push({ x: nextData[j * 2], y: nextData[j * 2 + 1] });
-    } else {
-      points.push({ x: prevData[j * 2], y: prevData[j * 2 + 1] });
+  // Build prev/next point arrays
+  var prevPoints = [];
+  var rawNextPoints = [];
+  for (var j = 0; j < nPts; j++) {
+    prevPoints.push({ x: prevData[j * 2], y: prevData[j * 2 + 1] });
+    rawNextPoints.push({ x: nextData[j * 2], y: nextData[j * 2 + 1] });
+  }
+
+  // --- Displacement stats ---
+  var totalDisp = 0, maxDisp = 0;
+  for (var j = 0; j < nPts; j++) {
+    var ddx = rawNextPoints[j].x - prevPoints[j].x;
+    var ddy = rawNextPoints[j].y - prevPoints[j].y;
+    var dd = Math.sqrt(ddx * ddx + ddy * ddy);
+    totalDisp += dd;
+    if (dd > maxDisp) maxDisp = dd;
+  }
+  metrics.avgDisplacement = totalDisp / nPts;
+  metrics.maxDisplacement = maxDisp;
+
+  // rejected[j] = true means point j failed quality checks
+  var rejected = new Array(nPts);
+  for (var j = 0; j < nPts; j++) rejected[j] = false;
+
+  // ========== Stage 1: Status + Error Threshold ==========
+  for (var j = 0; j < nPts; j++) {
+    if (statusData[j] !== 1 || errData[j] > FLOW_ERROR_THRESHOLD) {
+      rejected[j] = true;
+      metrics.rejectedS1++;
     }
+  }
+
+  status.delete();
+  err.delete();
+
+  // ========== Stage 2: Forward-Backward Consistency (Kalal et al. 2010) ==========
+  var backPts = new cv.Mat();
+  var statusBack = new cv.Mat();
+  var errBack = new cv.Mat();
+
+  cv.calcOpticalFlowPyrLK(
+    gray, flowPrevGray,
+    nextPts, backPts,
+    statusBack, errBack,
+    flowWinSize, flowMaxLevel, flowCriteria
+  );
+
+  var backData = backPts.data32F;
+  for (var j = 0; j < nPts; j++) {
+    if (!rejected[j]) {
+      var dx = prevData[j * 2] - backData[j * 2];
+      var dy = prevData[j * 2 + 1] - backData[j * 2 + 1];
+      var fbError = Math.sqrt(dx * dx + dy * dy);
+      if (fbError > FLOW_FB_THRESHOLD) {
+        rejected[j] = true;
+        metrics.rejectedS2++;
+      }
+    }
+  }
+
+  statusBack.delete();
+  errBack.delete();
+  backPts.delete();
+  nextPts.delete();
+
+  // Stage 2.5 supprimé — la vérification couleur est reportée dans Stage 7 (Color Snap)
+  // qui corrige au lieu de rejeter, avec une tolérance élargie (±50)
+
+  // ========== Stage 3: Maximum Displacement Cap ==========
+  for (var j = 0; j < nPts; j++) {
+    if (!rejected[j]) {
+      var dx = rawNextPoints[j].x - prevPoints[j].x;
+      var dy = rawNextPoints[j].y - prevPoints[j].y;
+      var disp = Math.sqrt(dx * dx + dy * dy);
+      if (disp > flowMaxDisplacement) {
+        rejected[j] = true;
+        metrics.rejectedS3++;
+      }
+    }
+  }
+
+  // ========== Stage 4: MAD-based Outlier Rejection ==========
+  // Per-neighborhood: compare each point's displacement to its neighbors' median,
+  // reject if deviation exceeds k * (MAD + epsilon). Robust to outliers by construction.
+  // Also precompute per-point deviation scores for use in Stage 5.
+  var pointDeviationScores = new Array(nPts);
+  for (var j = 0; j < nPts; j++) pointDeviationScores[j] = 0;
+
+  for (var j = 0; j < nPts; j++) {
+    if (rejected[j]) continue;
+    var neighbors = flowNeighborMap[j];
+    if (!neighbors || neighbors.length === 0) continue;
+
+    var neighborDxs = [];
+    var neighborDys = [];
+    for (var k = 0; k < neighbors.length; k++) {
+      var ni = neighbors[k];
+      if (!rejected[ni]) {
+        neighborDxs.push(rawNextPoints[ni].x - prevPoints[ni].x);
+        neighborDys.push(rawNextPoints[ni].y - prevPoints[ni].y);
+      }
+    }
+    if (neighborDxs.length === 0) continue;
+
+    var medDx = median(neighborDxs);
+    var medDy = median(neighborDys);
+    var myDx = rawNextPoints[j].x - prevPoints[j].x;
+    var myDy = rawNextPoints[j].y - prevPoints[j].y;
+    var deviation = Math.sqrt((myDx - medDx) * (myDx - medDx) + (myDy - medDy) * (myDy - medDy));
+
+    // Compute MAD of neighbor deviations from their median
+    var neighborDevs = [];
+    for (var k = 0; k < neighborDxs.length; k++) {
+      var devX = neighborDxs[k] - medDx;
+      var devY = neighborDys[k] - medDy;
+      neighborDevs.push(Math.sqrt(devX * devX + devY * devY));
+    }
+    var mad = median(neighborDevs);
+    var threshold = FLOW_MAD_K * (mad + FLOW_MAD_EPSILON);
+
+    pointDeviationScores[j] = deviation;
+
+    if (deviation > threshold) {
+      rejected[j] = true;
+      metrics.rejectedS4++;
+    }
+  }
+
+  // ========== Stage 5: Mesh Edge Length Preservation ==========
+  if (flowRefEdgeLengths && flowTriangles) {
+    for (var t = 0; t < flowTriangles.length; t++) {
+      var tri = flowTriangles[t];
+      var ia = tri[0], ib = tri[1], ic = tri[2];
+      // Only check triangles where all 3 points are still accepted
+      if (rejected[ia] || rejected[ib] || rejected[ic]) continue;
+
+      var edges = [[ia, ib], [ib, ic], [ia, ic]];
+      var worstRatio = 0;
+      var worstPoint = -1;
+
+      for (var e = 0; e < edges.length; e++) {
+        var ea = Math.min(edges[e][0], edges[e][1]);
+        var eb = Math.max(edges[e][0], edges[e][1]);
+        var key = ea + '-' + eb;
+        var refLen = flowRefEdgeLengths[key];
+        if (!refLen || refLen < 1) continue;
+
+        var dx = rawNextPoints[edges[e][0]].x - rawNextPoints[edges[e][1]].x;
+        var dy = rawNextPoints[edges[e][0]].y - rawNextPoints[edges[e][1]].y;
+        var curLen = Math.sqrt(dx * dx + dy * dy);
+        var ratio = curLen / refLen;
+
+        if (ratio < FLOW_MIN_EDGE_RATIO || ratio > FLOW_MAX_EDGE_RATIO) {
+          // Reject the endpoint with the higher neighborhood deviation score (from S4).
+          // This identifies which vertex is more inconsistent with its local neighborhood,
+          // rather than blindly picking the one that moved most.
+          var scoreA = pointDeviationScores[edges[e][0]];
+          var scoreB = pointDeviationScores[edges[e][1]];
+          var badRatio = Math.abs(ratio - 1.0);
+          if (badRatio > worstRatio) {
+            worstRatio = badRatio;
+            worstPoint = scoreA > scoreB ? edges[e][0] : edges[e][1];
+          }
+        }
+      }
+
+      if (worstPoint >= 0) {
+        rejected[worstPoint] = true;
+        metrics.rejectedS5++;
+      }
+    }
+  }
+
+  // ========== Build regulated points (accepted only, null for rejected) ==========
+  // Regularize accepted points first (S6.5, S6.6), then reconstruct rejected (S6).
+  // This ensures reconstruction uses already-regularized neighbor positions.
+  var regulatedPoints = [];
+  for (var j = 0; j < nPts; j++) {
+    if (!rejected[j]) {
+      regulatedPoints.push({ x: rawNextPoints[j].x, y: rawNextPoints[j].y });
+    } else {
+      regulatedPoints.push(null);
+    }
+  }
+
+  // ========== Stage 6.5: Triangle Quality Constraints ==========
+  // For each triangle, check area ratio and minimum angle against reference.
+  // If violated, correct the worst vertex by blending toward its ideal position.
+  // Only applies to triangles where all 3 vertices are accepted (non-null).
+  if (flowRefTriangleData && flowTriangles) {
+    var corrections = [];
+    for (var j = 0; j < nPts; j++) corrections.push({ dx: 0, dy: 0, count: 0, maxSeverity: 0 });
+
+    for (var t = 0; t < flowTriangles.length; t++) {
+      var tri = flowTriangles[t];
+      var ia = tri[0], ib = tri[1], ic = tri[2];
+      // Skip triangles with any rejected vertex
+      if (!regulatedPoints[ia] || !regulatedPoints[ib] || !regulatedPoints[ic]) continue;
+      var ca = regulatedPoints[ia], cb = regulatedPoints[ib], cc = regulatedPoints[ic];
+      var ref = flowRefTriangleData[t];
+
+      var curArea = triangleArea(ca, cb, cc);
+      var areaRatio = (ref.area > 1e-6) ? curArea / ref.area : 1;
+      var areaViolation = (areaRatio < FLOW_MIN_AREA_RATIO || areaRatio > FLOW_MAX_AREA_RATIO);
+
+      var curMinAngle = triangleMinAngle(ca, cb, cc);
+      var angleViolation = (curMinAngle < FLOW_MIN_ANGLE_DEG);
+
+      if (!areaViolation && !angleViolation) continue;
+
+      var centX = (ca.x + cb.x + cc.x) / 3;
+      var centY = (ca.y + cb.y + cc.y) / 3;
+      var refCentX = (ref.verts[0].x + ref.verts[1].x + ref.verts[2].x) / 3;
+      var refCentY = (ref.verts[0].y + ref.verts[1].y + ref.verts[2].y) / 3;
+
+      var curEdges = [
+        Math.sqrt((cb.x - ca.x) * (cb.x - ca.x) + (cb.y - ca.y) * (cb.y - ca.y)),
+        Math.sqrt((cc.x - cb.x) * (cc.x - cb.x) + (cc.y - cb.y) * (cc.y - cb.y)),
+        Math.sqrt((ca.x - cc.x) * (ca.x - cc.x) + (ca.y - cc.y) * (ca.y - cc.y))
+      ];
+      var refEdges = [
+        Math.sqrt((ref.verts[1].x - ref.verts[0].x) ** 2 + (ref.verts[1].y - ref.verts[0].y) ** 2),
+        Math.sqrt((ref.verts[2].x - ref.verts[1].x) ** 2 + (ref.verts[2].y - ref.verts[1].y) ** 2),
+        Math.sqrt((ref.verts[0].x - ref.verts[2].x) ** 2 + (ref.verts[0].y - ref.verts[2].y) ** 2)
+      ];
+      var curAvgEdge = (curEdges[0] + curEdges[1] + curEdges[2]) / 3;
+      var refAvgEdge = (refEdges[0] + refEdges[1] + refEdges[2]) / 3;
+      var scale = (refAvgEdge > 1e-6) ? curAvgEdge / refAvgEdge : 1;
+
+      var idealVerts = [];
+      for (var v = 0; v < 3; v++) {
+        idealVerts.push({
+          x: centX + (ref.verts[v].x - refCentX) * scale,
+          y: centY + (ref.verts[v].y - refCentY) * scale
+        });
+      }
+
+      var indices = [ia, ib, ic];
+      var curVerts = [ca, cb, cc];
+      var worstIdx = -1;
+      var worstDist = 0;
+      for (var v = 0; v < 3; v++) {
+        var ddx = curVerts[v].x - idealVerts[v].x;
+        var ddy = curVerts[v].y - idealVerts[v].y;
+        var dd = ddx * ddx + ddy * ddy;
+        if (dd > worstDist) {
+          worstDist = dd;
+          worstIdx = v;
+        }
+      }
+
+      if (worstIdx >= 0) {
+        // Compute severity of violation (0 to 1)
+        var severity = 0;
+        if (areaViolation) {
+          severity = Math.max(severity, Math.abs(Math.log(areaRatio)) / Math.log(FLOW_MAX_AREA_RATIO));
+        }
+        if (angleViolation) {
+          severity = Math.max(severity, (FLOW_MIN_ANGLE_DEG - curMinAngle) / FLOW_MIN_ANGLE_DEG);
+        }
+        severity = Math.max(0, Math.min(1, severity));
+
+        var ptIdx = indices[worstIdx];
+        corrections[ptIdx].dx += (idealVerts[worstIdx].x - curVerts[worstIdx].x);
+        corrections[ptIdx].dy += (idealVerts[worstIdx].y - curVerts[worstIdx].y);
+        corrections[ptIdx].count += 1;
+        corrections[ptIdx].maxSeverity = Math.max(corrections[ptIdx].maxSeverity, severity);
+      }
+    }
+
+    // Apply corrections with severity-proportional blending
+    for (var j = 0; j < nPts; j++) {
+      if (corrections[j].count > 0 && regulatedPoints[j]) {
+        var avgDx = corrections[j].dx / corrections[j].count;
+        var avgDy = corrections[j].dy / corrections[j].count;
+        var alpha = FLOW_SHAPE_CORRECTION_MIN + (FLOW_SHAPE_CORRECTION_MAX - FLOW_SHAPE_CORRECTION_MIN) * corrections[j].maxSeverity;
+        regulatedPoints[j] = {
+          x: regulatedPoints[j].x + alpha * avgDx,
+          y: regulatedPoints[j].y + alpha * avgDy
+        };
+        metrics.correctedS6_5++;
+      }
+    }
+  }
+
+  // ========== Stage 6.6: Laplacian Smoothing ==========
+  // Light smoothing on accepted points only (skip null/rejected).
+  if (FLOW_LAPLACIAN_ALPHA > 0 && flowNeighborMap) {
+    var snapshot = regulatedPoints.map(function(p) { return p ? { x: p.x, y: p.y } : null; });
+
+    for (var j = 0; j < nPts; j++) {
+      if (!snapshot[j]) continue; // skip rejected points
+      var neighbors = flowNeighborMap[j];
+      if (!neighbors || neighbors.length < 2) continue;
+
+      var cx = 0, cy = 0, validCount = 0;
+      for (var k = 0; k < neighbors.length; k++) {
+        if (snapshot[neighbors[k]]) {
+          cx += snapshot[neighbors[k]].x;
+          cy += snapshot[neighbors[k]].y;
+          validCount++;
+        }
+      }
+      if (validCount < 2) continue;
+      cx /= validCount;
+      cy /= validCount;
+
+      regulatedPoints[j] = {
+        x: snapshot[j].x + FLOW_LAPLACIAN_ALPHA * (cx - snapshot[j].x),
+        y: snapshot[j].y + FLOW_LAPLACIAN_ALPHA * (cy - snapshot[j].y)
+      };
+    }
+  }
+
+  // ========== Stage 6: Affine Interpolation of Rejected Points ==========
+  // Reconstruct rejected points from their now-regularized neighbors.
+  var finalPoints = [];
+  for (var j = 0; j < nPts; j++) {
+    if (regulatedPoints[j]) {
+      finalPoints.push(regulatedPoints[j]);
+    } else {
+      // Reconstruct from regularized neighbors
+      metrics.reconstructedS6++;
+      var neighbors = flowNeighborMap[j];
+      var goodNeighbors = [];
+      if (neighbors) {
+        for (var k = 0; k < neighbors.length; k++) {
+          if (regulatedPoints[neighbors[k]]) {
+            goodNeighbors.push(neighbors[k]);
+          }
+        }
+      }
+
+      if (goodNeighbors.length >= 3) {
+        var srcPts = goodNeighbors.map(function(ni) { return prevPoints[ni]; });
+        var dstPts = goodNeighbors.map(function(ni) { return regulatedPoints[ni]; });
+        var affine = fitAffine2D(srcPts, dstPts);
+        if (affine) {
+          finalPoints.push(applyAffine(affine, prevPoints[j]));
+        } else {
+          var dxs = goodNeighbors.map(function(ni) { return regulatedPoints[ni].x - prevPoints[ni].x; });
+          var dys = goodNeighbors.map(function(ni) { return regulatedPoints[ni].y - prevPoints[ni].y; });
+          finalPoints.push({
+            x: prevPoints[j].x + median(dxs),
+            y: prevPoints[j].y + median(dys)
+          });
+        }
+      } else if (goodNeighbors.length >= 1) {
+        var dxs = goodNeighbors.map(function(ni) { return regulatedPoints[ni].x - prevPoints[ni].x; });
+        var dys = goodNeighbors.map(function(ni) { return regulatedPoints[ni].y - prevPoints[ni].y; });
+        finalPoints.push({
+          x: prevPoints[j].x + median(dxs),
+          y: prevPoints[j].y + median(dys)
+        });
+      } else {
+        finalPoints.push({ x: prevPoints[j].x, y: prevPoints[j].y });
+      }
+    }
+  }
+
+  // ========== Stage 7: Post-interpolation Color Snap ==========
+  // If a final point (tracked or interpolated) lands on the wrong color,
+  // search for the nearest pixel of the correct color and snap to it.
+  var FLOW_COLOR_SEARCH_RADIUS = 20; // max search radius in pixels
+  if (flowPointClassifications) {
+    var postBlurred = new cv.Mat();
+    cv.GaussianBlur(gray, postBlurred, new cv.Size(FLOW_COLOR_BLUR_SIZE, FLOW_COLOR_BLUR_SIZE), 0);
+
+    for (var j = 0; j < nPts; j++) {
+      var fpx = Math.round(finalPoints[j].x);
+      var fpy = Math.round(finalPoints[j].y);
+      var cpx = Math.max(0, Math.min(w - 1, fpx));
+      var cpy = Math.max(0, Math.min(h - 1, fpy));
+      var val = postBlurred.ucharAt(cpy, cpx);
+
+      var colorOk = true;
+      if (flowPointClassifications[j]) {
+        if (val > FLOW_COLOR_THRESHOLD + FLOW_COLOR_TOLERANCE) colorOk = false;
+      } else {
+        if (val < FLOW_COLOR_THRESHOLD - FLOW_COLOR_TOLERANCE) colorOk = false;
+      }
+
+      if (!colorOk) {
+        // Search nearest pixel of correct color in expanding radius
+        var found = false;
+        var bestDist = Infinity;
+        var bestX = fpx, bestY = fpy;
+        var isDark = flowPointClassifications[j];
+
+        for (var r = 1; r <= FLOW_COLOR_SEARCH_RADIUS && !found; r++) {
+          // Scan the perimeter of the square at radius r
+          for (var dx = -r; dx <= r; dx++) {
+            for (var dy = -r; dy <= r; dy++) {
+              // Only check pixels on the perimeter of this ring
+              if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+
+              var sx = fpx + dx, sy = fpy + dy;
+              if (sx < 0 || sx >= w || sy < 0 || sy >= h) continue;
+
+              var sv = postBlurred.ucharAt(sy, sx);
+              var match = isDark
+                ? (sv < FLOW_COLOR_THRESHOLD)
+                : (sv >= FLOW_COLOR_THRESHOLD);
+
+              if (match) {
+                var dist = dx * dx + dy * dy;
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestX = sx;
+                  bestY = sy;
+                  found = true; // found at this radius, finish this ring then stop
+                }
+              }
+            }
+          }
+        }
+
+        if (found) {
+          finalPoints[j] = { x: bestX, y: bestY };
+          metrics.snappedS7++;
+        } else {
+          // No correct color found nearby: freeze at previous position
+          finalPoints[j] = { x: prevPoints[j].x, y: prevPoints[j].y };
+          metrics.frozenS7++;
+        }
+      }
+    }
+
+    postBlurred.delete();
+  }
+
+  // ========== Stage 8: Temporal Anchor Correction ==========
+  // Periodically check drift from anchor and apply soft correction.
+  flowFrameCounter++;
+  if (flowAnchorPoints && flowFrameCounter % FLOW_ANCHOR_INTERVAL === 0) {
+    var totalDrift = 0;
+    for (var j = 0; j < nPts; j++) {
+      var adx = finalPoints[j].x - flowAnchorPoints[j].x;
+      var ady = finalPoints[j].y - flowAnchorPoints[j].y;
+      totalDrift += Math.sqrt(adx * adx + ady * ady);
+    }
+    var avgDrift = totalDrift / nPts;
+
+    if (avgDrift > FLOW_ANCHOR_MAX_DRIFT) {
+      for (var j = 0; j < nPts; j++) {
+        finalPoints[j] = {
+          x: finalPoints[j].x + FLOW_ANCHOR_CORRECTION_ALPHA * (flowAnchorPoints[j].x - finalPoints[j].x),
+          y: finalPoints[j].y + FLOW_ANCHOR_CORRECTION_ALPHA * (flowAnchorPoints[j].y - finalPoints[j].y)
+        };
+      }
+    }
+
+    // Update anchor to current positions
+    flowAnchorPoints = finalPoints.map(function(p) { return { x: p.x, y: p.y }; });
   }
 
   // Update state for next frame
@@ -566,20 +1238,25 @@ function flowProcessFrame(imgData) {
   flowPrevGray = gray;
   flowPrevPts.delete();
   flowPrevPts = cv.matFromArray(
-    points.length, 1, cv.CV_32FC2,
-    points.flatMap(function(p) { return [p.x, p.y]; })
+    finalPoints.length, 1, cv.CV_32FC2,
+    finalPoints.flatMap(function(p) { return [p.x, p.y]; })
   );
-  status.delete();
-  err.delete();
-  nextPts.delete();
 
-  return { points: points };
+  return { points: finalPoints, metrics: metrics };
 }
 
 function flowCleanup() {
   if (flowPrevGray) { flowPrevGray.delete(); flowPrevGray = null; }
   if (flowPrevPts) { flowPrevPts.delete(); flowPrevPts = null; }
   flowInitialPoints = null;
+  flowTriangles = null;
+  flowNeighborMap = null;
+  flowRefEdgeLengths = null;
+  flowRefTriangleData = null;
+  flowMaxDisplacement = 0;
+  flowPointClassifications = null;
+  flowAnchorPoints = null;
+  flowFrameCounter = 0;
 }
 
 // Rééchantillonner un contour fermé à N points équidistants par arc-length
@@ -704,7 +1381,7 @@ self.onmessage = async function(e) {
 
   if (type === 'flow-init') {
     try {
-      flowInit(e.data.points);
+      flowInit(e.data.points, e.data.triangles || []);
       self.postMessage({ type: 'flow-init-done' });
     } catch (err) {
       self.postMessage({ type: 'flow-error', error: err.message });
@@ -715,7 +1392,7 @@ self.onmessage = async function(e) {
   if (type === 'flow-frame') {
     try {
       const result = flowProcessFrame(imageData);
-      self.postMessage({ type: 'flow-frame-result', points: result.points });
+      self.postMessage({ type: 'flow-frame-result', points: result.points, metrics: result.metrics });
     } catch (err) {
       self.postMessage({ type: 'flow-error', error: err.message });
     }

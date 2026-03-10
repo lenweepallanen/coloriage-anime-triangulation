@@ -5,6 +5,22 @@
 
 import type { Point2D } from '../types/project'
 
+export interface FlowMetrics {
+  rejectedS1: number
+  rejectedS2: number
+  rejectedS2_5: number
+  rejectedS3: number
+  rejectedS4: number
+  rejectedS5: number
+  reconstructedS6: number
+  correctedS6_5: number
+  snappedS7: number
+  frozenS7: number
+  totalPoints: number
+  avgDisplacement: number
+  maxDisplacement: number
+}
+
 export interface ProcessResult {
   imageData: ImageData
   corrected: boolean
@@ -103,18 +119,21 @@ function workerRpc(msg: any, responseType: string): Promise<any> {
   })
 }
 
-export async function flowInit(points: { x: number; y: number }[]): Promise<void> {
+export async function flowInit(points: { x: number; y: number }[], triangles: [number, number, number][]): Promise<void> {
   if (!workerReady) await loadOpenCVWorker()
-  await workerRpc({ type: 'flow-init', points }, 'flow-init-done')
+  await workerRpc({ type: 'flow-init', points, triangles }, 'flow-init-done')
 }
 
-export async function flowProcessFrame(imageData: ImageData): Promise<{ x: number; y: number }[]> {
+export async function flowProcessFrame(imageData: ImageData): Promise<{
+  points: { x: number; y: number }[];
+  metrics?: FlowMetrics;
+}> {
   if (!workerReady) await loadOpenCVWorker()
   const result = await workerRpc({
     type: 'flow-frame',
     imageData: { data: imageData.data, width: imageData.width, height: imageData.height }
   }, 'flow-frame-result')
-  return result.points
+  return { points: result.points, metrics: result.metrics }
 }
 
 export async function flowCleanup(): Promise<void> {

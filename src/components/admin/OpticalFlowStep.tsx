@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { Project } from '../../types/project'
 import type { Point2D } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
-import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
+import { loadOpenCVWorker, type FlowMetrics } from '../../utils/perspectiveCorrection'
 import { precomputeOpticalFlow } from '../../utils/opticalFlowComputer'
 
 interface Props {
@@ -14,6 +14,8 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
   const [computing, setComputing] = useState(false)
   const [progress, setProgress] = useState({ stage: '', current: 0, total: 0 })
   const [error, setError] = useState<string | null>(null)
+  const [frameMetrics, setFrameMetrics] = useState<FlowMetrics[]>([])
+  const [showMetrics, setShowMetrics] = useState(false)
 
   const hasMesh = project.mesh && project.mesh.triangles.length > 0
   const hasVideo = !!project.videoBlob
@@ -34,14 +36,23 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
 
       const allPoints = [...project.mesh.contourPoints, ...project.mesh.internalPoints]
 
+      const metricsAccumulator: FlowMetrics[] = []
+      setFrameMetrics([])
+
       const { videoFramesMesh } = await precomputeOpticalFlow(
         null,
         project.videoBlob,
         allPoints,
         imgDims.width,
         imgDims.height,
-        (stage, current, total) => setProgress({ stage, current, total })
+        project.mesh.triangles,
+        (stage, current, total) => setProgress({ stage, current, total }),
+        (_frameIndex, metrics) => {
+          metricsAccumulator.push(metrics)
+          if (metricsAccumulator.length % 10 === 0) setFrameMetrics([...metricsAccumulator])
+        }
       )
+      setFrameMetrics(metricsAccumulator)
 
       await onSave({
         ...project,
@@ -115,6 +126,78 @@ export default function OpticalFlowStep({ project, onSave }: Props) {
           Erreur : {error}
         </div>
       )}
+
+      {frameMetrics.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <button
+            onClick={() => setShowMetrics(s => !s)}
+            style={{ fontSize: '0.8rem', padding: '4px 10px', background: '#333', color: '#ccc', border: '1px solid #555', borderRadius: 4, cursor: 'pointer' }}
+          >
+            {showMetrics ? 'Masquer' : 'Afficher'} les métriques ({frameMetrics.length} frames)
+          </button>
+          {showMetrics && <FlowMetricsPanel metrics={frameMetrics} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FlowMetricsPanel({ metrics }: { metrics: FlowMetrics[] }) {
+  const n = metrics.length
+  if (n === 0) return null
+
+  const sum = (fn: (m: FlowMetrics) => number) => metrics.reduce((acc, m) => acc + fn(m), 0)
+  const avg = (fn: (m: FlowMetrics) => number) => sum(fn) / n
+  const totalPts = metrics[0].totalPoints
+
+  const pct = (val: number) => totalPts > 0 ? (val / totalPts * 100).toFixed(1) + '%' : '—'
+
+  const rows: { label: string; stage: string; value: number; warn: boolean }[] = [
+    { label: 'S1 Status+Erreur LK', stage: 'Rejet', value: avg(m => m.rejectedS1), warn: avg(m => m.rejectedS1) > totalPts * 0.2 },
+    { label: 'S2 Forward-Backward', stage: 'Rejet', value: avg(m => m.rejectedS2), warn: avg(m => m.rejectedS2) > totalPts * 0.2 },
+    { label: 'S2.5 Couleur', stage: 'Rejet', value: avg(m => m.rejectedS2_5), warn: avg(m => m.rejectedS2_5) > totalPts * 0.2 },
+    { label: 'S3 Displacement cap', stage: 'Rejet', value: avg(m => m.rejectedS3), warn: avg(m => m.rejectedS3) > totalPts * 0.1 },
+    { label: 'S4 Median outlier', stage: 'Rejet', value: avg(m => m.rejectedS4), warn: avg(m => m.rejectedS4) > totalPts * 0.2 },
+    { label: 'S5 Edge length', stage: 'Rejet', value: avg(m => m.rejectedS5), warn: avg(m => m.rejectedS5) > totalPts * 0.2 },
+    { label: 'S6 Reconstruction', stage: 'Reconstruit', value: avg(m => m.reconstructedS6), warn: false },
+    { label: 'S6.5 Contraintes geo', stage: 'Corrigé', value: avg(m => m.correctedS6_5), warn: false },
+    { label: 'S7 Color snap', stage: 'Snappé', value: avg(m => m.snappedS7), warn: false },
+    { label: 'S7 Freeze', stage: 'Gelé', value: avg(m => m.frozenS7), warn: avg(m => m.frozenS7) > totalPts * 0.1 },
+  ]
+
+  const avgDisp = avg(m => m.avgDisplacement)
+  const maxMaxDisp = Math.max(...metrics.map(m => m.maxDisplacement))
+
+  const cellStyle: React.CSSProperties = { padding: '3px 8px', borderBottom: '1px solid #444', fontSize: '0.75rem' }
+
+  return (
+    <div style={{ marginTop: 8, background: '#1a1a2e', border: '1px solid #444', borderRadius: 6, padding: 12, maxWidth: 520 }}>
+      <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 8, color: '#ddd' }}>
+        Moyennes sur {n} frames — {totalPts} points/frame
+      </div>
+      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+        <thead>
+          <tr style={{ color: '#999', fontSize: '0.7rem', textAlign: 'left' }}>
+            <th style={cellStyle}>Stage</th>
+            <th style={cellStyle}>Type</th>
+            <th style={{ ...cellStyle, textAlign: 'right' }}>Moy/frame</th>
+            <th style={{ ...cellStyle, textAlign: 'right' }}>% points</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.label} style={{ color: r.warn ? '#ff6b6b' : '#ccc' }}>
+              <td style={cellStyle}>{r.label}</td>
+              <td style={cellStyle}>{r.stage}</td>
+              <td style={{ ...cellStyle, textAlign: 'right', fontFamily: 'monospace' }}>{r.value.toFixed(1)}</td>
+              <td style={{ ...cellStyle, textAlign: 'right', fontFamily: 'monospace' }}>{pct(r.value)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 8, fontSize: '0.7rem', color: '#999' }}>
+        Déplacement moyen : {avgDisp.toFixed(2)}px — Max observé : {maxMaxDisp.toFixed(1)}px
+      </div>
     </div>
   )
 }

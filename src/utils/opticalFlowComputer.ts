@@ -1,5 +1,5 @@
 import type { Point2D } from '../types/project'
-import { flowInit, flowProcessFrame, flowCleanup } from './perspectiveCorrection'
+import { flowInit, flowProcessFrame, flowCleanup, type FlowMetrics } from './perspectiveCorrection'
 
 /**
  * Prepare a video element and canvas for frame-by-frame extraction.
@@ -74,7 +74,9 @@ export async function precomputeOpticalFlow(
   meshPoints: Point2D[],
   imageWidth: number,
   imageHeight: number,
-  onProgress?: (stage: string, current: number, total: number) => void
+  triangles: [number, number, number][],
+  onProgress?: (stage: string, current: number, total: number) => void,
+  onMetrics?: (frameIndex: number, metrics: FlowMetrics) => void
 ): Promise<{ videoFramesMesh: Point2D[][]; fps: number }> {
   onProgress?.('Préparation', 0, 1)
   const { video, url, ctx, width: videoW, height: videoH, fps, totalFrames } =
@@ -89,7 +91,7 @@ export async function precomputeOpticalFlow(
 
   // Initialize optical flow in the worker
   onProgress?.('Initialisation tracking', 0, 1)
-  await flowInit(initialPoints)
+  await flowInit(initialPoints, triangles)
 
   const videoFramesMesh: Point2D[][] = []
 
@@ -97,7 +99,8 @@ export async function precomputeOpticalFlow(
     onProgress?.('Extraction & tracking', i + 1, totalFrames)
 
     const frameData = await extractFrame(video, ctx, i / fps, videoW, videoH)
-    const points = await flowProcessFrame(frameData)
+    const { points, metrics } = await flowProcessFrame(frameData)
+    if (metrics && onMetrics) onMetrics(i, metrics)
     videoFramesMesh.push(points)
   }
 
