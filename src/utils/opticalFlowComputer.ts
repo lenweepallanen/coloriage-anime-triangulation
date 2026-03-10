@@ -1,9 +1,23 @@
 import type { Point2D } from '../types/project'
 import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints } from './perspectiveCorrection'
-import { buildAnchorAdjacency, applyNeighborConstraints } from './trackingConstraints'
+import {
+  buildAnchorAdjacency,
+  applyNeighborConstraints,
+  applyAntiSaut,
+  applyContourConstraints,
+  applyTemporalSmoothing,
+  detectAndCorrectOutliers,
+} from './trackingConstraints'
 
 export interface TrackingConstraintParams {
   anchorTriangles: [number, number, number][]
+  contourAnchorOrder?: number[]
+  enableAntiSaut?: boolean           // default true
+  antiSautVmax?: number              // px, default auto (1.5% of video diagonal)
+  enableTemporalSmoothing?: boolean  // default false
+  temporalSmoothingWindow?: number   // default 3
+  enableContourConstraints?: boolean // default false
+  enableOutlierDetection?: boolean   // default false
 }
 
 /**
@@ -48,12 +62,30 @@ export async function trackSegment(
     const frameData = await extractFrame(video, ctx, frameIdx / fps, videoW, videoH)
     let points = await flowProcessFrame(frameData)
 
-    // Apply neighbor constraints in video coords
-    if (adjacency && constraints) {
-      points = applyNeighborConstraints(
-        points, prevVideoPoints, adjacency
-      )
-      await flowUpdatePoints(points)
+    // Apply per-frame constraints in order
+    if (constraints) {
+      let changed = false
+
+      // 1. Anti-saut
+      if (constraints.enableAntiSaut !== false) {
+        const vmax = constraints.antiSautVmax ?? Math.sqrt(videoW * videoW + videoH * videoH) * 0.015
+        points = applyAntiSaut(points, prevVideoPoints, vmax)
+        changed = true
+      }
+
+      // 2. Neighbor consensus (existing)
+      if (adjacency) {
+        points = applyNeighborConstraints(points, prevVideoPoints, adjacency)
+        changed = true
+      }
+
+      // 3. Contour constraints
+      if (constraints.enableContourConstraints && constraints.contourAnchorOrder?.length) {
+        points = applyContourConstraints(points, prevVideoPoints, constraints.contourAnchorOrder)
+        changed = true
+      }
+
+      if (changed) await flowUpdatePoints(points)
     }
 
     prevVideoPoints = points
@@ -168,7 +200,7 @@ export async function precomputeOpticalFlow(
   onProgress?.('Initialisation tracking', 0, 1)
   await flowInit(initialPoints)
 
-  const videoFramesMesh: Point2D[][] = []
+  let videoFramesMesh: Point2D[][] = []
   let prevVideoPoints = initialPoints
 
   for (let i = 0; i < totalFrames; i++) {
@@ -177,12 +209,30 @@ export async function precomputeOpticalFlow(
     const frameData = await extractFrame(video, ctx, i / fps, videoW, videoH)
     let points = await flowProcessFrame(frameData)
 
-    // Apply neighbor constraints in video coords (skip frame 0 — no displacement yet)
-    if (adjacency && constraints && i > 0) {
-      points = applyNeighborConstraints(
-        points, prevVideoPoints, adjacency
-      )
-      await flowUpdatePoints(points)
+    // Apply per-frame constraints (skip frame 0 — no displacement yet)
+    if (constraints && i > 0) {
+      let changed = false
+      const vmax = constraints.antiSautVmax ?? Math.sqrt(videoW * videoW + videoH * videoH) * 0.015
+
+      // 1. Anti-saut
+      if (constraints.enableAntiSaut !== false) {
+        points = applyAntiSaut(points, prevVideoPoints, vmax)
+        changed = true
+      }
+
+      // 2. Neighbor consensus (existing)
+      if (adjacency) {
+        points = applyNeighborConstraints(points, prevVideoPoints, adjacency)
+        changed = true
+      }
+
+      // 3. Contour constraints
+      if (constraints.enableContourConstraints && constraints.contourAnchorOrder?.length) {
+        points = applyContourConstraints(points, prevVideoPoints, constraints.contourAnchorOrder)
+        changed = true
+      }
+
+      if (changed) await flowUpdatePoints(points)
     }
 
     prevVideoPoints = points
@@ -191,6 +241,20 @@ export async function precomputeOpticalFlow(
 
   await flowCleanup()
   URL.revokeObjectURL(url)
+
+  // Post-processing: temporal smoothing
+  if (constraints?.enableTemporalSmoothing) {
+    videoFramesMesh = applyTemporalSmoothing(
+      videoFramesMesh,
+      constraints.temporalSmoothingWindow ?? 3
+    )
+  }
+
+  // Post-processing: outlier detection & correction
+  if (constraints?.enableOutlierDetection && adjacency) {
+    const result = detectAndCorrectOutliers(videoFramesMesh, adjacency)
+    videoFramesMesh = result.corrected
+  }
 
   // Normalize back to image coordinates for storage
   const normalizedFrames = videoFramesMesh.map(framePoints =>

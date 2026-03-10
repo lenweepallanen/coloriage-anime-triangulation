@@ -11,9 +11,14 @@ interface Props {
   referencePositions?: Point2D[]
   totalFrames: number
   onUpdatePositions: (positions: Point2D[]) => void
-  onValidate: () => void
+  onPropagateForwardOne: () => void
+  onPropagateForwardAll: () => void
+  onPropagateBidiOne: () => void
+  onPropagateBidiAll: () => void
   onValidateOnly?: () => void
   propagating?: boolean
+  isFirstKeyframe?: boolean
+  isLastKeyframe?: boolean
 }
 
 export default function KeyframeEditor({
@@ -24,10 +29,15 @@ export default function KeyframeEditor({
   anchorPositions,
   totalFrames,
   onUpdatePositions,
-  onValidate,
+  onPropagateForwardOne,
+  onPropagateForwardAll,
+  onPropagateBidiOne,
+  onPropagateBidiAll,
   onValidateOnly,
   propagating,
   referencePositions,
+  isFirstKeyframe,
+  isLastKeyframe,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -277,20 +287,45 @@ export default function KeyframeEditor({
   return (
     <div className="keyframe-editor">
       <div className="keyframe-editor-toolbar">
+        {!isLastKeyframe && (
+          <button
+            onClick={onPropagateForwardOne}
+            disabled={propagating}
+            style={{ background: '#22c55e', color: 'white' }}
+          >
+            {propagating ? 'Propagation...' : 'Propager avant'}
+          </button>
+        )}
+        {!isLastKeyframe && (
+          <button
+            onClick={onPropagateForwardAll}
+            disabled={propagating}
+            style={{ background: '#16a34a', color: 'white' }}
+          >
+            Propager avant (tout)
+          </button>
+        )}
         <button
-          onClick={onValidate}
-          disabled={propagating}
-          style={{ background: '#22c55e', color: 'white' }}
+          onClick={onPropagateBidiOne}
+          disabled={propagating || (isFirstKeyframe && isLastKeyframe)}
+          style={{ background: '#2563eb', color: 'white' }}
         >
-          {propagating ? 'Propagation...' : 'Valider & Propager'}
+          Bidi (1 pas)
+        </button>
+        <button
+          onClick={onPropagateBidiAll}
+          disabled={propagating || (isFirstKeyframe && isLastKeyframe)}
+          style={{ background: '#1d4ed8', color: 'white' }}
+        >
+          Bidi (tout)
         </button>
         {onValidateOnly && (
           <button onClick={onValidateOnly} disabled={propagating}>
-            Valider sans propager
+            Passer
           </button>
         )}
         <span style={{ fontSize: '0.75rem', color: '#888' }}>
-          Glissez les points pour corriger — Propager re-tracke vers la keyframe suivante
+          Glissez les points pour corriger | Avant = vers keyframes suivantes | Bidi = avant + arrière
         </span>
       </div>
       <div style={{ display: 'flex', gap: 8, flex: 1, minHeight: 0 }}>

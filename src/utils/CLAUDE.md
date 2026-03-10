@@ -63,12 +63,18 @@ Dessine des marqueurs en L :
 
 ### TrackingConstraintParams
 
-Interface optionnelle passée à `precomputeOpticalFlow` et `trackSegment` pour activer les contraintes de voisinage :
+Interface optionnelle passée à `precomputeOpticalFlow` et `trackSegment` pour activer les contraintes :
 
 ```typescript
 interface TrackingConstraintParams {
   anchorTriangles: [number, number, number][]
-  contourIndices: number[]
+  contourAnchorOrder?: number[]        // indices ordonnés le long du contour
+  enableAntiSaut?: boolean             // défaut true
+  antiSautVmax?: number                // px, défaut auto (1.5% diagonale)
+  enableTemporalSmoothing?: boolean    // défaut false
+  temporalSmoothingWindow?: number     // défaut 3
+  enableContourConstraints?: boolean   // défaut false
+  enableOutlierDetection?: boolean     // défaut false
 }
 ```
 
@@ -81,10 +87,11 @@ interface TrackingConstraintParams {
 3. Construire l'adjacence si `constraints` fourni
 4. `flowInit()` : initialiser tracker dans Worker
 5. Boucle sur tous les frames (24 FPS) : `flowProcessFrame()` par frame
-6. Si contraintes activées (et frame > 0) : `applyNeighborConstraints()` + `flowUpdatePoints()` pour synchroniser le Worker
-7. Reconvertir résultats vers coordonnées image
-8. `flowCleanup()` : libérer mémoire Worker
-9. Retour : `Point2D[][]`
+6. Si contraintes activées (et frame > 0) : applique dans l'ordre anti-saut → voisinage → contour, puis `flowUpdatePoints()` une seule fois
+7. Post-traitement : lissage temporel puis détection outliers (si activés)
+8. Reconvertir résultats vers coordonnées image
+9. `flowCleanup()` : libérer mémoire Worker
+10. Retour : `Point2D[][]`
 
 ### trackSegment
 
@@ -94,7 +101,7 @@ Re-tracke un segment de frames entre deux keyframes, en partant des positions co
 
 1. Seek vers startFrame, initialise le tracker LK avec les positions corrigées
 2. Boucle frame par frame de startFrame vers endFrame (forward ou backward)
-3. Si contraintes activées : applique `applyNeighborConstraints()` + `flowUpdatePoints()` après chaque frame
+3. Si contraintes activées : applique anti-saut → voisinage → contour + `flowUpdatePoints()` après chaque frame (pas de lissage temporel ni outliers pour les segments courts)
 4. Retourne `{ frameIndex, points }[]` en coordonnées image
 
 ## perspectiveCorrection.ts
@@ -129,7 +136,22 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 
 ## trackingConstraints.ts
 
-Stabilisation du tracking optical flow par contraintes de voisinage basées sur la topologie du maillage anchor.
+Stabilisation du tracking optical flow par contraintes multiples. 5 mécanismes complémentaires appliqués dans un ordre précis.
+
+### Ordre d'application (par frame)
+
+```
+1. applyAntiSaut          — clamp déplacement max
+2. applyNeighborConstraints — consensus médiane voisins (topologie)
+3. applyContourConstraints  — consensus contour + ordre
+→ flowUpdatePoints() une seule fois après les 3
+```
+
+Post-traitement (après boucle complète, precomputeOpticalFlow uniquement) :
+```
+4. applyTemporalSmoothing   — moving average temporel
+5. detectAndCorrectOutliers — détection/correction outliers
+```
 
 ### buildAnchorAdjacency
 
@@ -137,24 +159,47 @@ Stabilisation du tracking optical flow par contraintes de voisinage basées sur 
 
 Construit la carte d'adjacence : deux anchors sont voisins s'ils partagent une arête dans `anchorTriangles`.
 
+### applyAntiSaut
+
+`applyAntiSaut(currentPositions, previousPositions, vmax)` → `Point2D[]`
+
+Clamp le déplacement de chaque anchor à `vmax` pixels par frame. Si dépassé, réduit dans la même direction. `vmax` défaut : 1.5% de la diagonale vidéo (calculé dans opticalFlowComputer).
+
 ### applyNeighborConstraints
 
-`applyNeighborConstraints(currentPositions, previousPositions, adjacency, contourIndices, options?)` → `Point2D[]`
+`applyNeighborConstraints(currentPositions, previousPositions, adjacency, options?)` → `Point2D[]`
 
-Après chaque frame de tracking, détecte les anchors dont le déplacement dévie de la médiane de leurs voisins, et les ramène vers cette médiane.
+Détecte les anchors dont le déplacement dévie de la médiane de leurs voisins, et les ramène vers la médiane.
 
 | Paramètre | Défaut | Rôle |
 |-----------|--------|------|
 | `thresholdAbsolute` | 2.0 px | Déviation minimum pour déclencher la correction |
 | `thresholdRelative` | 3.0 | Déviation en multiples de la dispersion voisins |
-| `blendFactor` | 0.6 | Force de correction (points intérieurs) |
-| `contourBlendFactor` | 0.75 | Force de correction (points de contour) |
+| `blendFactor` | 0.6 | Force de correction |
 
-Algorithme :
-1. Calcule le déplacement (dx, dy) de chaque anchor vs frame précédente
-2. Pour chaque anchor, calcule la médiane des déplacements de ses voisins
-3. Si la déviation dépasse `max(threshAbs, spread × threshRel)` → blend vers la médiane
-4. Les points avec ≤ 2 voisins ont un seuil relatif majoré (×1.5) pour éviter le sur-contrainte
+### applyContourConstraints
+
+`applyContourConstraints(currentPositions, previousPositions, contourAnchorOrder, options?)` → `Point2D[]`
+
+Contraintes spécifiques aux anchors de contour :
+1. **Consensus contour** : médiane des 2 voisins de contour (prev/next dans l'ordre), seuil plus serré (1.5px, blend 0.8)
+2. **Enforcement d'ordre** : si 2 anchors consécutifs se croisent (cross product sign flip), interpolation du fautif
+
+### applyTemporalSmoothing
+
+`applyTemporalSmoothing(allFrames, windowSize?)` → `Point2D[][]`
+
+Moving average centré sur une fenêtre de N frames (défaut 3). Frame 0 et dernière frame inchangées. Fenêtres réduites aux bords.
+
+### detectAndCorrectOutliers
+
+`detectAndCorrectOutliers(allFrames, adjacency, options?)` → `{ corrected, suspects }`
+
+Détecte les outliers par :
+- **Accélération** : changement de vélocité > seuil (défaut 5px)
+- **Vélocité relative** : > 4× médiane des voisins pendant 2+ frames
+
+Correction : interpolation temporelle entre la dernière bonne position et la prochaine bonne position. `suspects` : `Map<frameIndex, anchorIndices[]>` pour feedback UI.
 
 ## pdfGenerator.ts
 

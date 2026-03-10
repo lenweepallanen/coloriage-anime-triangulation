@@ -65,7 +65,12 @@ Prérequis : topologie verrouillée + vidéo importée.
 
 ### Tracking initial
 1. Configure l'intervalle de keyframes (±5, ex: 10 frames)
-2. Checkbox **"Contrainte voisinage"** (activée par défaut) : utilise `anchorTriangles` et `contourIndices` pour stabiliser le tracking via `applyNeighborConstraints` après chaque frame
+2. Checkboxes de contraintes (toutes toggleables indépendamment) :
+   - **"Contrainte voisinage"** (défaut: activée) : consensus médiane des voisins topologiques
+   - **"Anti-saut"** (défaut: activée) : clamp déplacement max par frame (1.5% diagonale)
+   - **"Lissage temporel"** (défaut: désactivée) : moving average post-traitement sur 3 frames
+   - **"Contraintes contour"** (défaut: désactivée) : consensus contour + enforcement d'ordre
+   - **"Détection outliers"** (défaut: désactivée) : détection/correction post-traitement par accélération/vélocité
 3. Bouton "Lancer le tracking" → `precomputeOpticalFlow` sur les **anchors seuls** (avec contraintes si activées)
 4. Extraction des keyframes aux intervalles → `extractKeyframes()`
 5. Résultat stocké dans `rawTrackingRef` (données brutes par frame)

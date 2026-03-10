@@ -34,6 +34,10 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
   const [imgDims, setImgDims] = useState<{ width: number; height: number } | null>(null)
   const [saving, setSaving] = useState(false)
   const [useConstraints, setUseConstraints] = useState(true)
+  const [useAntiSaut, setUseAntiSaut] = useState(true)
+  const [useTemporalSmoothing, setUseTemporalSmoothing] = useState(false)
+  const [useContourConstraints, setUseContourConstraints] = useState(false)
+  const [useOutlierDetection, setUseOutlierDetection] = useState(false)
 
   // Ref to hold the full per-frame anchor tracking (before keyframe extraction)
   const rawTrackingRef = useRef<Point2D[][] | null>(null)
@@ -78,9 +82,20 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
       setImgDims(dims)
 
       // Build constraint params if enabled
+      const contourAnchorOrder = mesh.contourPath
+        ?.filter(e => e.type === 'anchor')
+        .map(e => e.index) ?? []
+
       const constraints: TrackingConstraintParams | undefined =
         useConstraints && mesh.anchorTriangles?.length
-          ? { anchorTriangles: mesh.anchorTriangles }
+          ? {
+              anchorTriangles: mesh.anchorTriangles,
+              contourAnchorOrder,
+              enableAntiSaut: useAntiSaut,
+              enableTemporalSmoothing: useTemporalSmoothing,
+              enableContourConstraints: useContourConstraints,
+              enableOutlierDetection: useOutlierDetection,
+            }
           : undefined
 
       // Track ONLY anchor points (not internal points)
@@ -131,84 +146,204 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
   }, [selectedKfIndex])
 
   /**
-   * Validate + propagate: re-track from corrected keyframe forward
-   * to the next keyframe via Lucas-Kanade.
+   * Track a single segment between two keyframes (by index).
+   * Updates rawTrackingRef and returns the endpoint positions.
+   * Direction is determined automatically from frame indices.
    */
-  const handleValidateAndPropagate = useCallback(async () => {
-    if (selectedKfIndex === null || !project.videoBlob || !imgDims) return
+  const trackOneSegment = useCallback(async (
+    fromKfIndex: number,
+    toKfIndex: number,
+    kfs: KeyframeData[],
+    label: string
+  ): Promise<Point2D[] | null> => {
+    if (!project.videoBlob || !imgDims) return null
 
-    const currentKf = keyframes[selectedKfIndex]
-    const nextKfIndex = selectedKfIndex < keyframes.length - 1 ? selectedKfIndex + 1 : null
+    const fromKf = kfs[fromKfIndex]
+    const toKf = kfs[toKfIndex]
+    const startFrame = fromKf.frameIndex
+    const endFrame = toKf.frameIndex
+    if (startFrame === endFrame) return null
 
-    if (nextKfIndex !== null) {
-      const nextKf = keyframes[nextKfIndex]
-      const startFrame = currentKf.frameIndex
-      const endFrame = nextKf.frameIndex
+    const contourAnchorOrder = mesh?.contourPath
+      ?.filter(e => e.type === 'anchor')
+      .map(e => e.index) ?? []
 
-      if (endFrame > startFrame) {
-        setPropagating(true)
-        setError(null)
-
-        try {
-          setProgress({ stage: 'Chargement OpenCV...', current: 0, total: 1 })
-          await loadOpenCVWorker()
-
-          // Build constraint params if enabled
-          const segConstraints: TrackingConstraintParams | undefined =
-            useConstraints && mesh?.anchorTriangles?.length
-              ? { anchorTriangles: mesh.anchorTriangles }
-              : undefined
-
-          setProgress({ stage: 'Propagation...', current: 0, total: endFrame - startFrame })
-          const results = await trackSegment(
-            project.videoBlob,
-            currentKf.anchorPositions,
-            imgDims.width,
-            imgDims.height,
-            startFrame,
-            endFrame,
-            (current, total) => setProgress({ stage: 'Propagation...', current, total }),
-            segConstraints
-          )
-
-          // Update raw tracking data with new segment
-          if (rawTrackingRef.current) {
-            rawTrackingRef.current[startFrame] = currentKf.anchorPositions
-            for (const { frameIndex, points } of results) {
-              if (frameIndex >= 0 && frameIndex < rawTrackingRef.current.length) {
-                rawTrackingRef.current[frameIndex] = points
-              }
-            }
+    const segConstraints: TrackingConstraintParams | undefined =
+      useConstraints && mesh?.anchorTriangles?.length
+        ? {
+            anchorTriangles: mesh.anchorTriangles,
+            contourAnchorOrder,
+            enableAntiSaut: useAntiSaut,
+            enableContourConstraints: useContourConstraints,
+            // No temporal smoothing or outlier detection for segments (too short)
           }
+        : undefined
 
-          // Update next keyframe positions from the new tracking
-          const lastResult = results[results.length - 1]
-          if (lastResult) {
-            setKeyframes(prev => {
-              const next = [...prev]
-              next[nextKfIndex] = {
-                ...next[nextKfIndex],
-                anchorPositions: lastResult.points,
-              }
-              return next
-            })
-          }
-        } catch (err) {
-          console.error('Propagation failed:', err)
-          setError(err instanceof Error ? err.message : 'Erreur propagation')
+    const numFrames = Math.abs(endFrame - startFrame)
+    setProgress({ stage: label, current: 0, total: numFrames })
+
+    const results = await trackSegment(
+      project.videoBlob,
+      fromKf.anchorPositions,
+      imgDims.width,
+      imgDims.height,
+      startFrame,
+      endFrame,
+      (current, total) => setProgress({ stage: label, current, total }),
+      segConstraints
+    )
+
+    // Update raw tracking data
+    if (rawTrackingRef.current) {
+      rawTrackingRef.current[startFrame] = fromKf.anchorPositions
+      for (const { frameIndex, points } of results) {
+        if (frameIndex >= 0 && frameIndex < rawTrackingRef.current.length) {
+          rawTrackingRef.current[frameIndex] = points
         }
-
-        setPropagating(false)
       }
     }
 
-    // Move to next keyframe
-    if (nextKfIndex !== null) {
-      setSelectedKfIndex(nextKfIndex)
-    } else {
-      setSelectedKfIndex(null)
+    return results.length > 0 ? results[results.length - 1].points : null
+  }, [project.videoBlob, imgDims, useConstraints, useAntiSaut, useContourConstraints, mesh])
+
+  /**
+   * Propagate forward one step: current → next keyframe.
+   */
+  const handlePropagateForwardOne = useCallback(async () => {
+    if (selectedKfIndex === null || selectedKfIndex >= keyframes.length - 1) return
+
+    setPropagating(true)
+    setError(null)
+    try {
+      await loadOpenCVWorker()
+      const endPoints = await trackOneSegment(
+        selectedKfIndex, selectedKfIndex + 1, keyframes, 'Propagation avant...'
+      )
+      if (endPoints) {
+        setKeyframes(prev => {
+          const next = [...prev]
+          next[selectedKfIndex + 1] = { ...next[selectedKfIndex + 1], anchorPositions: endPoints }
+          return next
+        })
+      }
+    } catch (err) {
+      console.error('Propagation failed:', err)
+      setError(err instanceof Error ? err.message : 'Erreur propagation')
     }
-  }, [selectedKfIndex, keyframes, project.videoBlob, imgDims])
+    setPropagating(false)
+    setSelectedKfIndex(selectedKfIndex + 1)
+  }, [selectedKfIndex, keyframes, trackOneSegment])
+
+  /**
+   * Propagate forward all: current → next → ... → last keyframe.
+   */
+  const handlePropagateForwardAll = useCallback(async () => {
+    if (selectedKfIndex === null || selectedKfIndex >= keyframes.length - 1) return
+
+    setPropagating(true)
+    setError(null)
+    try {
+      await loadOpenCVWorker()
+      const updatedKfs = [...keyframes]
+
+      for (let i = selectedKfIndex; i < keyframes.length - 1; i++) {
+        const label = `Propagation avant ${i - selectedKfIndex + 1}/${keyframes.length - 1 - selectedKfIndex}...`
+        const endPoints = await trackOneSegment(i, i + 1, updatedKfs, label)
+        if (endPoints) {
+          updatedKfs[i + 1] = { ...updatedKfs[i + 1], anchorPositions: endPoints }
+        }
+      }
+
+      setKeyframes(updatedKfs)
+    } catch (err) {
+      console.error('Propagation failed:', err)
+      setError(err instanceof Error ? err.message : 'Erreur propagation')
+    }
+    setPropagating(false)
+    setSelectedKfIndex(keyframes.length - 1)
+  }, [selectedKfIndex, keyframes, trackOneSegment])
+
+  /**
+   * Propagate bidirectional one step: current → prev + current → next.
+   */
+  const handlePropagateBidiOne = useCallback(async () => {
+    if (selectedKfIndex === null) return
+
+    setPropagating(true)
+    setError(null)
+    try {
+      await loadOpenCVWorker()
+      const updatedKfs = [...keyframes]
+
+      // Backward: current → previous
+      if (selectedKfIndex > 0) {
+        const endPoints = await trackOneSegment(
+          selectedKfIndex, selectedKfIndex - 1, updatedKfs, 'Propagation arrière...'
+        )
+        if (endPoints) {
+          updatedKfs[selectedKfIndex - 1] = { ...updatedKfs[selectedKfIndex - 1], anchorPositions: endPoints }
+        }
+      }
+
+      // Forward: current → next
+      if (selectedKfIndex < keyframes.length - 1) {
+        const endPoints = await trackOneSegment(
+          selectedKfIndex, selectedKfIndex + 1, updatedKfs, 'Propagation avant...'
+        )
+        if (endPoints) {
+          updatedKfs[selectedKfIndex + 1] = { ...updatedKfs[selectedKfIndex + 1], anchorPositions: endPoints }
+        }
+      }
+
+      setKeyframes(updatedKfs)
+    } catch (err) {
+      console.error('Propagation failed:', err)
+      setError(err instanceof Error ? err.message : 'Erreur propagation')
+    }
+    setPropagating(false)
+  }, [selectedKfIndex, keyframes, trackOneSegment])
+
+  /**
+   * Propagate bidirectional total: current → ... → first + current → ... → last.
+   */
+  const handlePropagateBidiAll = useCallback(async () => {
+    if (selectedKfIndex === null) return
+
+    setPropagating(true)
+    setError(null)
+    try {
+      await loadOpenCVWorker()
+      const updatedKfs = [...keyframes]
+      const totalSteps = keyframes.length - 1
+      let stepsDone = 0
+
+      // Backward: current → current-1 → ... → 0
+      for (let i = selectedKfIndex; i > 0; i--) {
+        stepsDone++
+        const label = `Propagation arrière ${stepsDone}/${totalSteps}...`
+        const endPoints = await trackOneSegment(i, i - 1, updatedKfs, label)
+        if (endPoints) {
+          updatedKfs[i - 1] = { ...updatedKfs[i - 1], anchorPositions: endPoints }
+        }
+      }
+
+      // Forward: current → current+1 → ... → last
+      for (let i = selectedKfIndex; i < keyframes.length - 1; i++) {
+        stepsDone++
+        const label = `Propagation avant ${stepsDone}/${totalSteps}...`
+        const endPoints = await trackOneSegment(i, i + 1, updatedKfs, label)
+        if (endPoints) {
+          updatedKfs[i + 1] = { ...updatedKfs[i + 1], anchorPositions: endPoints }
+        }
+      }
+
+      setKeyframes(updatedKfs)
+    } catch (err) {
+      console.error('Propagation failed:', err)
+      setError(err instanceof Error ? err.message : 'Erreur propagation')
+    }
+    setPropagating(false)
+  }, [selectedKfIndex, keyframes, trackOneSegment])
 
   const handleValidateOnly = useCallback(() => {
     if (selectedKfIndex !== null && selectedKfIndex < keyframes.length - 1) {
@@ -293,6 +428,46 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
           Contrainte voisinage
         </label>
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useAntiSaut}
+            onChange={e => setUseAntiSaut(e.target.checked)}
+            disabled={isBusy}
+          />
+          Anti-saut
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useTemporalSmoothing}
+            onChange={e => setUseTemporalSmoothing(e.target.checked)}
+            disabled={isBusy}
+          />
+          Lissage temporel
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useContourConstraints}
+            onChange={e => setUseContourConstraints(e.target.checked)}
+            disabled={isBusy}
+          />
+          Contraintes contour
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useOutlierDetection}
+            onChange={e => setUseOutlierDetection(e.target.checked)}
+            disabled={isBusy}
+          />
+          Détection outliers
+        </label>
+
         <span className="toolbar-separator" />
 
         <button onClick={handleComputeTracking} disabled={isBusy}>
@@ -347,9 +522,14 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
               referencePositions={keyframes[0]?.anchorPositions}
               totalFrames={totalFrames}
               onUpdatePositions={handleUpdateKeyframePositions}
-              onValidate={handleValidateAndPropagate}
+              onPropagateForwardOne={handlePropagateForwardOne}
+              onPropagateForwardAll={handlePropagateForwardAll}
+              onPropagateBidiOne={handlePropagateBidiOne}
+              onPropagateBidiAll={handlePropagateBidiAll}
               onValidateOnly={handleValidateOnly}
               propagating={propagating}
+              isFirstKeyframe={selectedKfIndex === 0}
+              isLastKeyframe={selectedKfIndex === keyframes.length - 1}
             />
           )}
         </>
