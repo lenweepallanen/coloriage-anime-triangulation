@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import ImportStep from '../components/admin/ImportStep'
+import AnchorPointsStep from '../components/admin/AnchorPointsStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
-import PdfStep from '../components/admin/PdfStep'
-import OpticalFlowStep from '../components/admin/OpticalFlowStep'
+import KeyframeValidationStep from '../components/admin/KeyframeValidationStep'
+import FinalPropagationStep from '../components/admin/FinalPropagationStep'
 
-const STEPS = ['Import', 'Triangulation', 'PDF', 'Optical Flow'] as const
+const STEPS = ['Import', 'Points d\'ancrage', 'Triangulation', 'Keyframes', 'Animation finale'] as const
 type Step = (typeof STEPS)[number]
 
 export default function AdminPage() {
@@ -42,14 +43,17 @@ export default function AdminPage() {
         {activeStep === 'Import' && (
           <ImportStep project={project} onSave={save} />
         )}
+        {activeStep === 'Points d\'ancrage' && (
+          <AnchorPointsStep project={project} onSave={save} />
+        )}
         {activeStep === 'Triangulation' && (
           <TriangulationStep project={project} onSave={save} />
         )}
-        {activeStep === 'PDF' && (
-          <PdfStep project={project} />
+        {activeStep === 'Keyframes' && (
+          <KeyframeValidationStep project={project} onSave={save} />
         )}
-        {activeStep === 'Optical Flow' && (
-          <OpticalFlowStep project={project} onSave={save} />
+        {activeStep === 'Animation finale' && (
+          <FinalPropagationStep project={project} onSave={save} />
         )}
       </div>
     </div>

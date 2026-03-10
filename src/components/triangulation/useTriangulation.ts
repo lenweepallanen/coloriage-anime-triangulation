@@ -10,11 +10,55 @@ export interface TriangulationState {
   contourClosed: boolean
 }
 
-export function useTriangulation(initial?: {
-  contourPoints: Point2D[]
-  internalPoints: Point2D[]
-  triangles: [number, number, number][]
-}) {
+function runDelaunay(
+  points: Point2D[],
+  contourPolygon: Point2D[]
+): [number, number, number][] {
+  if (points.length < 3 || contourPolygon.length < 3) return []
+
+  const coords = new Float64Array(points.length * 2)
+  points.forEach((p, i) => {
+    coords[i * 2] = p.x
+    coords[i * 2 + 1] = p.y
+  })
+
+  try {
+    const delaunay = new Delaunator(coords)
+    const result: [number, number, number][] = []
+
+    for (let i = 0; i < delaunay.triangles.length; i += 3) {
+      const a = delaunay.triangles[i]
+      const b = delaunay.triangles[i + 1]
+      const c = delaunay.triangles[i + 2]
+
+      const centroid = triangleCentroid(points[a], points[b], points[c])
+      if (pointInPolygon(centroid, contourPolygon)) {
+        result.push([a, b, c])
+      }
+    }
+
+    return result
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Hook for managing triangulation state.
+ *
+ * @param initial - Initial contour/internal/triangle data (contour-only mode)
+ * @param anchorPoints - If provided, uses anchors as base points instead of contour
+ * @param contourIndices - Indices into anchorPoints forming the contour polygon
+ */
+export function useTriangulation(
+  initial?: {
+    contourPoints: Point2D[]
+    internalPoints: Point2D[]
+    triangles: [number, number, number][]
+  },
+  anchorPoints?: Point2D[],
+  contourIndices?: number[]
+) {
   const [contourPoints, setContourPoints] = useState<Point2D[]>(
     initial?.contourPoints ?? []
   )
@@ -25,41 +69,27 @@ export function useTriangulation(initial?: {
     initial ? initial.contourPoints.length >= 3 : false
   )
 
+  // In anchor-aware mode, the base points are anchors; otherwise contour
+  const basePoints = anchorPoints ?? contourPoints
+  const contourPolygon = useMemo(() => {
+    if (anchorPoints && contourIndices) {
+      return contourIndices.map(i => anchorPoints[i])
+    }
+    return contourPoints
+  }, [anchorPoints, contourIndices, contourPoints])
+
   const allPoints = useMemo(
-    () => [...contourPoints, ...internalPoints],
-    [contourPoints, internalPoints]
+    () => [...basePoints, ...internalPoints],
+    [basePoints, internalPoints]
   )
 
   const triangles = useMemo(() => {
-    if (!contourClosed || contourPoints.length < 3) return []
-    if (allPoints.length < 3) return []
-
-    const coords = new Float64Array(allPoints.length * 2)
-    allPoints.forEach((p, i) => {
-      coords[i * 2] = p.x
-      coords[i * 2 + 1] = p.y
-    })
-
-    try {
-      const delaunay = new Delaunator(coords)
-      const result: [number, number, number][] = []
-
-      for (let i = 0; i < delaunay.triangles.length; i += 3) {
-        const a = delaunay.triangles[i]
-        const b = delaunay.triangles[i + 1]
-        const c = delaunay.triangles[i + 2]
-
-        const centroid = triangleCentroid(allPoints[a], allPoints[b], allPoints[c])
-        if (pointInPolygon(centroid, contourPoints)) {
-          result.push([a, b, c])
-        }
-      }
-
-      return result
-    } catch {
-      return []
-    }
-  }, [allPoints, contourPoints, contourClosed])
+    const isContourReady = anchorPoints
+      ? (contourIndices?.length ?? 0) >= 3
+      : contourClosed && contourPoints.length >= 3
+    if (!isContourReady) return []
+    return runDelaunay(allPoints, contourPolygon)
+  }, [allPoints, contourPolygon, contourClosed, contourPoints.length, anchorPoints, contourIndices])
 
   const addContourPoint = useCallback((p: Point2D) => {
     setContourPoints(prev => [...prev, p])

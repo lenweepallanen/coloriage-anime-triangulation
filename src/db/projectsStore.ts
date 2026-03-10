@@ -6,11 +6,25 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Point2D } from '../types/project'
+import type { Project, Point2D, BarycentricRef, KeyframeData, MeshData } from '../types/project'
 
-// Firestore doc shape (no blobs, no videoFramesMesh)
+// Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
 interface TriangleDoc { a: number; b: number; c: number }
+
+interface MeshDoc {
+  anchorPoints: Point2D[]
+  contourIndices: number[]
+  internalPoints: Point2D[]
+  triangles: TriangleDoc[]
+  topologyLocked: boolean
+  anchorTriangles: TriangleDoc[]
+  internalBarycentrics: BarycentricRef[]
+  keyframeInterval: number
+  hasKeyframes: boolean
+  hasAnchorFrames: boolean
+  hasVideoFramesMesh: boolean
+}
 
 interface ProjectDoc {
   id: string
@@ -18,12 +32,7 @@ interface ProjectDoc {
   createdAt: number
   hasImage: boolean
   hasVideo: boolean
-  mesh: {
-    contourPoints: Point2D[]
-    internalPoints: Point2D[]
-    triangles: TriangleDoc[]
-    hasVideoFramesMesh: boolean
-  } | null
+  mesh: MeshDoc | null
   markers: Project['markers']
 }
 
@@ -52,6 +61,21 @@ async function downloadBlob(path: string): Promise<Blob | null> {
   }
 }
 
+async function downloadJSON<T>(path: string): Promise<T | null> {
+  const blob = await downloadBlob(path)
+  if (!blob) return null
+  const text = await blob.text()
+  return JSON.parse(text)
+}
+
+function triToDoc(tri: [number, number, number][]): TriangleDoc[] {
+  return tri.map(([a, b, c]) => ({ a, b, c }))
+}
+
+function docToTri(docs: TriangleDoc[]): [number, number, number][] {
+  return docs.map(t => [t.a, t.b, t.c] as [number, number, number])
+}
+
 function toDoc(project: Project): ProjectDoc {
   return {
     id: project.id,
@@ -60,12 +84,32 @@ function toDoc(project: Project): ProjectDoc {
     hasImage: project.originalImageBlob != null,
     hasVideo: project.videoBlob != null,
     mesh: project.mesh ? {
-      contourPoints: project.mesh.contourPoints,
+      anchorPoints: project.mesh.anchorPoints,
+      contourIndices: project.mesh.contourIndices,
       internalPoints: project.mesh.internalPoints,
-      triangles: project.mesh.triangles.map(([a, b, c]) => ({ a, b, c })),
+      triangles: triToDoc(project.mesh.triangles),
+      topologyLocked: project.mesh.topologyLocked,
+      anchorTriangles: triToDoc(project.mesh.anchorTriangles),
+      internalBarycentrics: project.mesh.internalBarycentrics,
+      keyframeInterval: project.mesh.keyframeInterval,
+      hasKeyframes: project.mesh.keyframes.length > 0,
+      hasAnchorFrames: project.mesh.anchorFrames != null,
       hasVideoFramesMesh: project.mesh.videoFramesMesh != null,
     } : null,
     markers: project.markers,
+  }
+}
+
+function meshFromDoc(meshDoc: MeshDoc): Omit<MeshData, 'keyframes' | 'anchorFrames' | 'videoFramesMesh'> {
+  return {
+    anchorPoints: meshDoc.anchorPoints,
+    contourIndices: meshDoc.contourIndices,
+    internalPoints: meshDoc.internalPoints,
+    triangles: docToTri(meshDoc.triangles),
+    topologyLocked: meshDoc.topologyLocked,
+    anchorTriangles: docToTri(meshDoc.anchorTriangles),
+    internalBarycentrics: meshDoc.internalBarycentrics,
+    keyframeInterval: meshDoc.keyframeInterval,
   }
 }
 
@@ -77,13 +121,19 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     data.hasVideo ? downloadBlob(`projects/${id}/video`) : Promise.resolve(null),
   ])
 
+  let keyframes: KeyframeData[] = []
+  let anchorFrames: Point2D[][] | null = null
   let videoFramesMesh: Point2D[][] | null = null
-  if (data.mesh?.hasVideoFramesMesh) {
-    const meshBlob = await downloadBlob(`projects/${id}/videoFramesMesh.json`)
-    if (meshBlob) {
-      const text = await meshBlob.text()
-      videoFramesMesh = JSON.parse(text)
-    }
+
+  if (data.mesh) {
+    const downloads = await Promise.all([
+      data.mesh.hasKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/keyframes.json`) : null,
+      data.mesh.hasAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/anchorFrames.json`) : null,
+      data.mesh.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(`projects/${id}/videoFramesMesh.json`) : null,
+    ])
+    keyframes = downloads[0] ?? []
+    anchorFrames = downloads[1]
+    videoFramesMesh = downloads[2]
   }
 
   return {
@@ -93,9 +143,9 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     originalImageBlob: imageBlob,
     videoBlob: videoBlob,
     mesh: data.mesh ? {
-      contourPoints: data.mesh.contourPoints,
-      internalPoints: data.mesh.internalPoints,
-      triangles: data.mesh.triangles.map(t => [t.a, t.b, t.c] as [number, number, number]),
+      ...meshFromDoc(data.mesh),
+      keyframes,
+      anchorFrames,
       videoFramesMesh,
     } : null,
     markers: data.markers,
@@ -135,9 +185,9 @@ export async function getAllProjects(): Promise<Project[]> {
       originalImageBlob: null,
       videoBlob: null,
       mesh: data.mesh ? {
-        contourPoints: data.mesh.contourPoints,
-        internalPoints: data.mesh.internalPoints,
-        triangles: data.mesh.triangles.map(t => [t.a, t.b, t.c] as [number, number, number]),
+        ...meshFromDoc(data.mesh),
+        keyframes: [],
+        anchorFrames: null,
         videoFramesMesh: null,
       } : null,
       markers: data.markers,
@@ -145,7 +195,7 @@ export async function getAllProjects(): Promise<Project[]> {
   })
 }
 
-export type UploadHint = 'image' | 'video' | 'videoFramesMesh'
+export type UploadHint = 'image' | 'video' | 'keyframes' | 'anchorFrames' | 'videoFramesMesh'
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -171,6 +221,24 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         .then(() => console.log('[Storage] Video uploaded'))
     )
   }
+  if (uploadOnly?.includes('keyframes') && project.mesh?.keyframes.length) {
+    const json = JSON.stringify(project.mesh.keyframes)
+    const blob = new Blob([json], { type: 'application/json' })
+    console.log('[Storage] Uploading keyframes for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/keyframes.json`, blob)
+        .then(() => console.log('[Storage] keyframes uploaded'))
+    )
+  }
+  if (uploadOnly?.includes('anchorFrames') && project.mesh?.anchorFrames) {
+    const json = JSON.stringify(project.mesh.anchorFrames)
+    const blob = new Blob([json], { type: 'application/json' })
+    console.log('[Storage] Uploading anchorFrames for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/anchorFrames.json`, blob)
+        .then(() => console.log('[Storage] anchorFrames uploaded'))
+    )
+  }
   if (uploadOnly?.includes('videoFramesMesh') && project.mesh?.videoFramesMesh) {
     const json = JSON.stringify(project.mesh.videoFramesMesh)
     const blob = new Blob([json], { type: 'application/json' })
@@ -192,6 +260,8 @@ export async function deleteProject(id: string): Promise<void> {
   const knownFiles = [
     `projects/${id}/originalImage`,
     `projects/${id}/video`,
+    `projects/${id}/keyframes.json`,
+    `projects/${id}/anchorFrames.json`,
     `projects/${id}/videoFramesMesh.json`,
   ]
   for (const path of knownFiles) {

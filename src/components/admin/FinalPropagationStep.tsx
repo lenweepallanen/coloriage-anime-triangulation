@@ -1,124 +1,131 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { Project } from '../../types/project'
-import type { Point2D } from '../../types/project'
+import type { Project, Point2D, MeshData } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
-import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
-import { precomputeOpticalFlow } from '../../utils/opticalFlowComputer'
+import { interpolateInternalPoint } from '../../utils/barycentricUtils'
 
 interface Props {
   project: Project
   onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
 }
 
-export default function OpticalFlowStep({ project, onSave }: Props) {
+export default function FinalPropagationStep({ project, onSave }: Props) {
   const [computing, setComputing] = useState(false)
-  const [progress, setProgress] = useState({ stage: '', current: 0, total: 0 })
-  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [progress, setProgress] = useState(0)
 
-  const hasMesh = project.mesh && project.mesh.triangles.length > 0
-  const hasVideo = !!project.videoBlob
-  const hasFlow = project.mesh?.videoFramesMesh != null
-
+  const mesh = project.mesh
+  const hasAnchorFrames = mesh?.anchorFrames != null && mesh.anchorFrames.length > 0
+  const hasVideoFramesMesh = mesh?.videoFramesMesh != null
   async function handleCompute() {
-    if (!project.mesh || !project.videoBlob || !project.originalImageBlob) return
-
+    if (!mesh || !mesh.anchorFrames) return
     setComputing(true)
-    setError(null)
+    setProgress(0)
 
     try {
-      setProgress({ stage: 'Chargement OpenCV...', current: 0, total: 1 })
-      await loadOpenCVWorker()
+      const { anchorFrames, anchorTriangles, internalBarycentrics } = mesh
+      const totalFrames = anchorFrames.length
+      const videoFramesMesh: Point2D[][] = new Array(totalFrames)
 
-      // Get image dimensions
-      const imgDims = await getImageDimensions(project.originalImageBlob)
+      for (let f = 0; f < totalFrames; f++) {
+        const frameAnchors = anchorFrames[f]
+        const allPoints: Point2D[] = [...frameAnchors]
 
-      const allPoints = [...project.mesh.anchorPoints, ...project.mesh.internalPoints]
+        // Interpolate internal points from anchor positions via barycentric coords
+        for (const bary of internalBarycentrics) {
+          allPoints.push(interpolateInternalPoint(bary, frameAnchors, anchorTriangles))
+        }
 
-      const { videoFramesMesh } = await precomputeOpticalFlow(
-        null,
-        project.videoBlob,
-        allPoints,
-        imgDims.width,
-        imgDims.height,
-        (stage, current, total) => setProgress({ stage, current, total })
-      )
+        videoFramesMesh[f] = allPoints
 
-      await onSave({
-        ...project,
-        mesh: {
-          ...project.mesh,
-          videoFramesMesh,
-        },
-      }, ['videoFramesMesh'])
+        // Report progress every 10 frames
+        if (f % 10 === 0) {
+          setProgress(Math.round((f / totalFrames) * 100))
+          // Yield to UI
+          await new Promise(r => setTimeout(r, 0))
+        }
+      }
+
+      setProgress(100)
+
+      const updatedMesh: MeshData = {
+        ...mesh,
+        videoFramesMesh,
+      }
+
+      setSaving(true)
+      await onSave({ ...project, mesh: updatedMesh }, ['videoFramesMesh'])
+      setSaving(false)
     } catch (err) {
-      console.error('Optical flow computation failed:', err)
-      setError(err instanceof Error ? err.message : 'Erreur inconnue')
+      console.error('Final propagation failed:', err)
+      alert('Erreur : ' + (err instanceof Error ? err.message : err))
     }
 
     setComputing(false)
   }
 
-  if (!hasVideo || !hasMesh) {
+  if (!mesh?.topologyLocked) {
     return (
       <div className="placeholder">
-        {!hasVideo && 'Importez d\'abord une vidéo. '}
-        {!hasMesh && 'Définissez d\'abord un mesh dans l\'onglet Triangulation.'}
+        Verrouillez d'abord la topologie dans l'onglet Triangulation.
       </div>
     )
   }
 
-  const progressPercent = progress.total > 0
-    ? Math.round((progress.current / progress.total) * 100)
-    : 0
+  if (!hasAnchorFrames) {
+    return (
+      <div className="placeholder">
+        Effectuez d'abord le tracking et la validation des keyframes dans l'onglet Keyframes.
+      </div>
+    )
+  }
 
   return (
     <div className="optical-flow-step">
-      <h3>Pré-calcul du tracking optique</h3>
+      <h3>Animation finale</h3>
       <p style={{ fontSize: '0.875rem', color: '#888', marginBottom: 16 }}>
-        Ce calcul suit les points du mesh à travers chaque frame de la vidéo
-        via l'algorithme Lucas-Kanade. Le résultat permet d'animer le mesh
-        en synchronisation avec la vidéo.
+        Cette étape calcule les positions de tous les points (anchors + internes)
+        pour chaque frame en utilisant les coordonnées barycentriques.
+        Le résultat est directement utilisable pour l'animation du scan.
       </p>
 
-      {hasFlow && (
-        <>
-          <div className="flow-status">
-            Tracking déjà calculé ({project.mesh!.videoFramesMesh!.length} frames).
-            Vous pouvez recalculer si vous avez modifié le mesh.
-          </div>
-          <FlowPreview project={project} />
-        </>
-      )}
-
       <div className="triangulation-toolbar">
-        <button onClick={handleCompute} disabled={computing}>
-          {computing ? 'Calcul en cours...' : hasFlow ? 'Recalculer' : 'Lancer le calcul'}
+        <button onClick={handleCompute} disabled={computing || saving}>
+          {computing ? 'Calcul en cours...' : saving ? 'Sauvegarde...' : hasVideoFramesMesh ? 'Recalculer' : 'Calculer l\'animation'}
         </button>
+
+        <span className="toolbar-info">
+          {mesh.anchorFrames!.length} frames |
+          {mesh.anchorPoints.length} anchors |
+          {mesh.internalPoints.length} internes |
+          {mesh.anchorPoints.length + mesh.internalPoints.length} points total
+        </span>
       </div>
 
       {computing && (
         <div className="progress-container">
           <div className="progress-label">
-            {progress.stage} — {progress.current}/{progress.total} ({progressPercent}%)
+            Propagation des points internes — {progress}%
           </div>
           <div className="progress-bar">
-            <div
-              className="progress-fill"
-              style={{ width: `${progressPercent}%` }}
-            />
+            <div className="progress-fill" style={{ width: `${progress}%` }} />
           </div>
         </div>
       )}
 
-      {error && (
-        <div className="error-message">
-          Erreur : {error}
-        </div>
+      {hasVideoFramesMesh && !computing && (
+        <>
+          <div className="flow-status">
+            Animation calculée : {mesh.videoFramesMesh!.length} frames,{' '}
+            {mesh.videoFramesMesh![0]?.length ?? 0} points par frame.
+          </div>
+          <FlowPreview project={project} />
+        </>
       )}
     </div>
   )
 }
 
+// Extracted and adapted from old OpticalFlowStep
 function FlowPreview({ project }: { project: Project }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [playing, setPlaying] = useState(true)
@@ -135,11 +142,9 @@ function FlowPreview({ project }: { project: Project }) {
   const totalFrames = videoFramesMesh.length
   const fps = 24
 
-  // Load video + get image dimensions
   useEffect(() => {
     if (!project.videoBlob || !project.originalImageBlob) return
 
-    // Get image dimensions to compute coordinate mapping
     const imgUrl = URL.createObjectURL(project.originalImageBlob)
     const img = new Image()
     img.onload = () => {
@@ -148,7 +153,6 @@ function FlowPreview({ project }: { project: Project }) {
     }
     img.src = imgUrl
 
-    // Load video
     const vidUrl = URL.createObjectURL(project.videoBlob)
     const video = document.createElement('video')
     video.src = vidUrl
@@ -178,14 +182,12 @@ function FlowPreview({ project }: { project: Project }) {
     const ch = canvas.height
     if (cw === 0 || ch === 0) return
 
-    // Scale video to fit canvas
     const scaleX = cw / video.videoWidth
     const scaleY = ch / video.videoHeight
     const vScale = Math.min(scaleX, scaleY) * 0.95
     const vox = (cw - video.videoWidth * vScale) / 2
     const voy = (ch - video.videoHeight * vScale) / 2
 
-    // Seek video to match frame
     const targetTime = frameIndex / fps
     if (Math.abs(video.currentTime - targetTime) > 0.02) {
       video.currentTime = targetTime
@@ -194,17 +196,15 @@ function FlowPreview({ project }: { project: Project }) {
     ctx.clearRect(0, 0, cw, ch)
     ctx.drawImage(video, vox, voy, video.videoWidth * vScale, video.videoHeight * vScale)
 
-    // Mesh points are in image coordinates — convert to canvas coordinates
-    // image coords → video coords → canvas coords
     const imgToCanvasX = (ix: number) => (ix / imgDims.width) * video.videoWidth * vScale + vox
     const imgToCanvasY = (iy: number) => (iy / imgDims.height) * video.videoHeight * vScale + voy
 
-    const points: Point2D[] = frameIndex === 0 ? allPoints : videoFramesMesh[frameIndex]
+    const points = frameIndex === 0 ? allPoints : videoFramesMesh[frameIndex]
 
-    // Draw triangles
     ctx.strokeStyle = 'rgba(0, 200, 100, 0.6)'
     ctx.lineWidth = 1
     for (const [a, b, c] of mesh.triangles) {
+      if (a >= points.length || b >= points.length || c >= points.length) continue
       const pa = points[a], pb = points[b], pc = points[c]
       ctx.beginPath()
       ctx.moveTo(imgToCanvasX(pa.x), imgToCanvasY(pa.y))
@@ -214,7 +214,6 @@ function FlowPreview({ project }: { project: Project }) {
       ctx.stroke()
     }
 
-    // Draw points
     ctx.fillStyle = 'rgba(255, 80, 80, 0.8)'
     for (const p of points) {
       ctx.beginPath()
@@ -222,7 +221,6 @@ function FlowPreview({ project }: { project: Project }) {
       ctx.fill()
     }
 
-    // Frame counter
     ctx.fillStyle = 'rgba(0,0,0,0.6)'
     ctx.fillRect(8, 8, 110, 24)
     ctx.fillStyle = '#fff'
@@ -230,10 +228,8 @@ function FlowPreview({ project }: { project: Project }) {
     ctx.fillText(`Frame ${frameIndex + 1}/${totalFrames}`, 14, 24)
   }, [allPoints, videoFramesMesh, mesh.triangles, totalFrames])
 
-  // Animation loop
   useEffect(() => {
     if (!videoReady) return
-
     const frameDuration = 1000 / fps
 
     function tick(time: number) {
@@ -251,7 +247,6 @@ function FlowPreview({ project }: { project: Project }) {
     return () => cancelAnimationFrame(animRef.current)
   }, [videoReady, playing, drawFrame, totalFrames])
 
-  // Resize canvas to container
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -275,7 +270,7 @@ function FlowPreview({ project }: { project: Project }) {
           Rembobiner
         </button>
         <span style={{ fontSize: '0.75rem', color: '#888' }}>
-          Prévisualisation du tracking — {totalFrames} frames à 24 fps
+          Prévisualisation — {totalFrames} frames à 24 fps
         </span>
       </div>
       <div className="flow-preview-canvas-container">
@@ -283,20 +278,4 @@ function FlowPreview({ project }: { project: Project }) {
       </div>
     </div>
   )
-}
-
-function getImageDimensions(blob: Blob): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob)
-    const img = new Image()
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve({ width: img.naturalWidth, height: img.naturalHeight })
-    }
-    img.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error('Failed to load image'))
-    }
-    img.src = url
-  })
 }

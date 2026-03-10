@@ -3,11 +3,14 @@ import type { Transform } from './useCanvasInteraction'
 
 const CONTOUR_COLOR = '#3b82f6'
 const INTERNAL_COLOR = '#ef4444'
+const ANCHOR_COLOR = '#f59e0b'       // gold/amber for feature anchors
 const TRIANGLE_FILL = 'rgba(34, 197, 94, 0.15)'
 const TRIANGLE_STROKE = 'rgba(34, 197, 94, 0.5)'
 const CONTOUR_LINE_COLOR = 'rgba(59, 130, 246, 0.6)'
 const POINT_RADIUS = 6
 const HOVER_RADIUS = 10
+
+export type PointType = 'contour' | 'internal' | 'anchor'
 
 export function drawScene(
   ctx: CanvasRenderingContext2D,
@@ -17,7 +20,11 @@ export function drawScene(
   internalPoints: Point2D[],
   triangles: [number, number, number][],
   contourClosed: boolean,
-  hoveredPoint: { type: 'contour' | 'internal'; index: number } | null
+  hoveredPoint: { type: PointType; index: number } | null,
+  anchorPoints?: Point2D[],
+  readOnlyAnchors?: boolean,
+  showAnchorNumbers?: boolean,
+  contourIndexOffset?: number
 ) {
   // Clear in CSS pixel space (context is already scaled by DPR via setTransform)
   const dpr = window.devicePixelRatio || 1
@@ -34,7 +41,11 @@ export function drawScene(
     ctx.drawImage(image, 0, 0)
   }
 
-  const allPoints = [...contourPoints, ...internalPoints]
+  // Determine all points for triangle rendering
+  // When anchorPoints are provided, allPoints = [...anchors, ...internals]
+  // Otherwise fall back to [...contour, ...internals]
+  const basePoints = anchorPoints ?? contourPoints
+  const allPoints = [...basePoints, ...internalPoints]
 
   // Draw triangles
   if (triangles.length > 0) {
@@ -43,6 +54,7 @@ export function drawScene(
     ctx.lineWidth = 1 / transform.scale
 
     for (const [a, b, c] of triangles) {
+      if (a >= allPoints.length || b >= allPoints.length || c >= allPoints.length) continue
       ctx.beginPath()
       ctx.moveTo(allPoints[a].x, allPoints[a].y)
       ctx.lineTo(allPoints[b].x, allPoints[b].y)
@@ -66,10 +78,11 @@ export function drawScene(
     ctx.stroke()
   }
 
-  // Draw contour points
   const pr = POINT_RADIUS / transform.scale
   const hr = HOVER_RADIUS / transform.scale
 
+  // Draw contour points
+  const labelSize = Math.max(8, 11 / transform.scale)
   for (let i = 0; i < contourPoints.length; i++) {
     const p = contourPoints[i]
     const isHovered = hoveredPoint?.type === 'contour' && hoveredPoint.index === i
@@ -83,6 +96,45 @@ export function drawScene(
       ctx.strokeStyle = 'white'
       ctx.lineWidth = 2 / transform.scale
       ctx.stroke()
+    }
+
+    // Number label
+    if (showAnchorNumbers) {
+      const anchorIdx = (contourIndexOffset ?? 0) + i
+      drawPointLabel(ctx, p, anchorIdx, pr, labelSize, transform.scale)
+    }
+  }
+
+  // Draw anchor points (feature anchors — non-contour anchors)
+  if (anchorPoints) {
+    for (let i = 0; i < anchorPoints.length; i++) {
+      const p = anchorPoints[i]
+      const isHovered = hoveredPoint?.type === 'anchor' && hoveredPoint.index === i
+      const isContourAnchor = contourPoints.some(cp => cp.x === p.x && cp.y === p.y)
+
+      // Skip contour anchors — they're already drawn as contour points
+      if (isContourAnchor) continue
+
+      ctx.fillStyle = readOnlyAnchors ? 'rgba(245, 158, 11, 0.5)' : ANCHOR_COLOR
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, isHovered ? hr : pr, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.strokeStyle = readOnlyAnchors ? 'rgba(245, 158, 11, 0.3)' : '#d97706'
+      ctx.lineWidth = 1.5 / transform.scale
+      ctx.stroke()
+
+      if (isHovered) {
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 2 / transform.scale
+        ctx.stroke()
+      }
+
+      // Number label
+      if (showAnchorNumbers) {
+        const anchorIdx = contourPoints.length + i
+        drawPointLabel(ctx, p, anchorIdx, pr, labelSize, transform.scale)
+      }
     }
   }
 
@@ -111,12 +163,13 @@ export function findPointAt(
   contourPoints: Point2D[],
   internalPoints: Point2D[],
   hitRadius: number,
-  filterType?: 'contour' | 'internal'
-): { type: 'contour' | 'internal'; index: number } | null {
+  filterType?: PointType,
+  anchorPoints?: Point2D[]
+): { type: PointType; index: number } | null {
   const hitRadiusSq = hitRadius * hitRadius
 
   // Check internal points first (they're drawn on top)
-  if (filterType !== 'contour') {
+  if (filterType !== 'contour' && filterType !== 'anchor') {
     for (let i = internalPoints.length - 1; i >= 0; i--) {
       const dx = imagePos.x - internalPoints[i].x
       const dy = imagePos.y - internalPoints[i].y
@@ -126,8 +179,19 @@ export function findPointAt(
     }
   }
 
+  // Check anchor points (feature anchors that aren't contour points)
+  if (anchorPoints && filterType !== 'contour' && filterType !== 'internal') {
+    for (let i = anchorPoints.length - 1; i >= 0; i--) {
+      const dx = imagePos.x - anchorPoints[i].x
+      const dy = imagePos.y - anchorPoints[i].y
+      if (dx * dx + dy * dy <= hitRadiusSq) {
+        return { type: 'anchor', index: i }
+      }
+    }
+  }
+
   // Then contour points
-  if (filterType !== 'internal') {
+  if (filterType !== 'internal' && filterType !== 'anchor') {
     for (let i = contourPoints.length - 1; i >= 0; i--) {
       const dx = imagePos.x - contourPoints[i].x
       const dy = imagePos.y - contourPoints[i].y
@@ -138,6 +202,27 @@ export function findPointAt(
   }
 
   return null
+}
+
+function drawPointLabel(
+  ctx: CanvasRenderingContext2D,
+  p: Point2D,
+  index: number,
+  pointRadius: number,
+  fontSize: number,
+  scale: number
+) {
+  const label = String(index)
+  ctx.font = `bold ${fontSize}px sans-serif`
+  const tw = ctx.measureText(label).width
+  const pad = 2 / scale
+  const bx = p.x + pointRadius + 2 / scale
+  const by = p.y - pointRadius
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+  ctx.fillRect(bx - pad, by - fontSize + pad, tw + pad * 2, fontSize + pad)
+  ctx.fillStyle = '#fff'
+  ctx.fillText(label, bx, by)
 }
 
 /** Find the nearest contour edge segment and return the index of the first point of that segment */

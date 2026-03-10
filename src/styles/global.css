@@ -777,6 +777,93 @@ input[type="text"]:focus {
   background: #16a34a;
 }
 
+/* ===== Keyframe Timeline & Editor ===== */
+.keyframe-timeline {
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: #1e1e2e;
+  border-radius: var(--radius);
+}
+
+.timeline-bar {
+  position: relative;
+  height: 40px;
+  background: #2a2a3a;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.timeline-marker {
+  position: absolute;
+  transform: translateX(-50%);
+  top: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.timeline-marker .marker-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #f59e0b;
+  border: 2px solid #1e1e2e;
+  transition: transform 0.15s;
+}
+
+.timeline-marker.selected .marker-dot {
+  background: #22c55e;
+  transform: scale(1.3);
+}
+
+.timeline-marker:hover .marker-dot {
+  transform: scale(1.2);
+}
+
+.timeline-marker .marker-label {
+  font-size: 0.625rem;
+  color: #888;
+  margin-top: 2px;
+}
+
+.timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.625rem;
+  color: #666;
+}
+
+.keyframe-editor {
+  display: flex;
+  flex-direction: column;
+}
+
+.keyframe-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.keyframe-editor-canvas-container {
+  flex: 1;
+  min-height: 400px;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.keyframe-editor-canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /* Keyframe animations */
 @keyframes flash-fade {
   from { opacity: 1; }

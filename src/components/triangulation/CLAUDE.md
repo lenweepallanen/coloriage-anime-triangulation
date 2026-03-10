@@ -16,22 +16,30 @@
 ```typescript
 contourPoints: Point2D[]         // Points du contour (ordre séquentiel)
 internalPoints: Point2D[]        // Points internes (ordre quelconque)
-allPoints = [...contour, ...internal]  // Fusion pour indexation
+anchorPoints?: Point2D[]         // Points d'ancrage (contour + features), affichés en overlay
+allPoints = [...anchors ?? contour, ...internal]  // Fusion pour indexation Delaunay
 triangles: [number, number, number][]  // Indices dans allPoints
 contourClosed: boolean           // Verrouillage du contour
 ```
 
 ## Modes d'interaction
 
-### Mode Contour (`!contourClosed`)
+### Mode Contour (`mode === 'contour'`)
 - **Clic gauche** zone vide → ajouter point contour
 - **Clic gauche** sur 1er point (≥3 points) → fermer contour
+- **Clic gauche** sur segment contour (fermé) → insérer point sur le bord
 - **Double-clic** (≥3 points) → fermer contour
+- **Glisser** un point → déplacer
 - **Clic droit** sur point → supprimer
 
-### Mode Interne (`contourClosed`)
+### Mode Interne (`mode === 'internal'`)
 - **Clic gauche** zone vide → ajouter point interne
 - **Glisser** un point → déplacer
+- **Clic droit** sur point → supprimer
+
+### Mode Anchor (`mode === 'anchor'`)
+- **Clic gauche** zone vide → ajouter point d'ancrage (feature)
+- **Glisser** un point → déplacer (contour ou anchor)
 - **Clic droit** sur point → supprimer
 
 ### Navigation
@@ -41,19 +49,18 @@ contourClosed: boolean           // Verrouillage du contour
 
 ## Algorithme Delaunay
 
-1. Fusion `contourPoints + internalPoints` en `Float64Array`
+1. Fusion `anchorPoints + internalPoints` (ou `contourPoints + internalPoints` si pas d'anchors) en `Float64Array`
 2. Calcul via bibliothèque `Delaunator`
 3. **Filtrage** : seuls les triangles dont le centroïde est à l'intérieur du contour sont gardés
 4. Test point-in-polygon par ray-casting (`geometry.ts`)
 5. Recalcul automatique via `useMemo` quand les points changent
 
-## Auto-Mesh
+## useTriangulation
 
-Bouton "Auto Mesh" dans `TriangulationStep.tsx` :
-1. Détection contour via OpenCV Worker (`autoMeshGenerator.ts`)
-2. Génération grille de points internes (espacement selon densité 1-10)
-3. Filtrage : points à l'intérieur du contour et éloignés des bords
-4. Chargement via `loadAutoMesh(contour, internal)`
+Le hook accepte optionnellement `anchorPoints` et `contourIndices` pour le mode anchor-aware :
+- Si fournis, `allPoints = [...anchorPoints, ...internalPoints]` pour Delaunay
+- Le contour polygon est dérivé de `contourIndices.map(i => anchorPoints[i])`
+- Expose `resampleContour(targetCount)` pour ajuster la densité du bord
 
 ## Rendu Canvas (drawingUtils.ts)
 
@@ -64,6 +71,14 @@ Bouton "Auto Mesh" dans `TriangulationStep.tsx` :
 | Lignes contour | `rgba(59, 130, 246, 0.6)` | Stroke bleu |
 | Points contour | `#3b82f6` | Cercles bleus (6px, 10px hover) |
 | Points internes | `#ef4444` | Cercles rouges |
+| Points anchor (features) | `#f59e0b` | Cercles or/amber |
+
+### Numérotation des anchors
+
+Quand `showAnchorNumbers` est activé, chaque point affiche un numéro :
+- Contour : indices `contourIndexOffset + i` (défaut 0)
+- Features : indices `contourPoints.length + i`
+- Labels : texte blanc sur fond noir semi-transparent, taille adaptée au zoom
 
 ## Transformation (useCanvasInteraction.ts)
 

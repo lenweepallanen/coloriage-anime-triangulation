@@ -2,8 +2,9 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import type { Point2D } from '../../types/project'
 import { useCanvasInteraction } from './useCanvasInteraction'
 import { drawScene, findPointAt, findNearestContourEdge } from './drawingUtils'
+import type { PointType } from './drawingUtils'
 
-export type EditorMode = 'contour' | 'internal'
+export type EditorMode = 'contour' | 'internal' | 'anchor'
 
 interface Props {
   imageUrl: string | null
@@ -16,8 +17,13 @@ interface Props {
   onInsertContourPoint: (afterIndex: number, p: Point2D) => void
   onCloseContour: () => void
   onAddInternalPoint: (p: Point2D) => void
-  onMovePoint: (type: 'contour' | 'internal', index: number, p: Point2D) => void
-  onDeletePoint: (type: 'contour' | 'internal', index: number) => void
+  onMovePoint: (type: PointType, index: number, p: Point2D) => void
+  onDeletePoint: (type: PointType, index: number) => void
+  anchorPoints?: Point2D[]
+  onAddAnchorPoint?: (p: Point2D) => void
+  readOnlyAnchors?: boolean
+  showAnchorNumbers?: boolean
+  contourIndexOffset?: number
 }
 
 export default function TriangulationCanvas({
@@ -33,6 +39,11 @@ export default function TriangulationCanvas({
   onAddInternalPoint,
   onMovePoint,
   onDeletePoint,
+  anchorPoints,
+  onAddAnchorPoint,
+  readOnlyAnchors,
+  showAnchorNumbers,
+  contourIndexOffset,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -41,12 +52,12 @@ export default function TriangulationCanvas({
     useCanvasInteraction(canvasRef)
 
   const [hoveredPoint, setHoveredPoint] = useState<{
-    type: 'contour' | 'internal'
+    type: PointType
     index: number
   } | null>(null)
 
   const dragging = useRef<{
-    type: 'contour' | 'internal'
+    type: PointType
     index: number
   } | null>(null)
 
@@ -124,7 +135,11 @@ export default function TriangulationCanvas({
             internalPoints,
             triangles,
             contourClosed,
-            hoveredPoint
+            hoveredPoint,
+            anchorPoints,
+            readOnlyAnchors,
+            showAnchorNumbers,
+            contourIndexOffset
           )
         }
       }
@@ -136,7 +151,7 @@ export default function TriangulationCanvas({
       running = false
       cancelAnimationFrame(rafId)
     }
-  }, [loadedImage, contourPoints, internalPoints, triangles, contourClosed, hoveredPoint, transformRef])
+  }, [loadedImage, contourPoints, internalPoints, triangles, contourClosed, hoveredPoint, transformRef, anchorPoints, readOnlyAnchors, showAnchorNumbers, contourIndexOffset])
 
   const hitRadius = useCallback(() => {
     return 10 / transformRef.current.scale
@@ -148,10 +163,13 @@ export default function TriangulationCanvas({
 
       const imgPos = screenToImage(e.clientX, e.clientY)
       // Filter hit-test by current mode when contour is closed
-      const filterType = contourClosed ? mode : undefined
-      const hit = findPointAt(imgPos, contourPoints, internalPoints, hitRadius(), filterType)
+      const filterType = contourClosed ? mode as PointType : undefined
+      const hit = findPointAt(imgPos, contourPoints, internalPoints, hitRadius(), filterType, anchorPoints)
 
       if (hit) {
+        // Don't allow dragging read-only anchors
+        if (hit.type === 'anchor' && readOnlyAnchors) return
+
         // Click on first contour point → close the contour
         if (
           mode === 'contour' &&
@@ -177,9 +195,11 @@ export default function TriangulationCanvas({
         }
       } else if (mode === 'internal' && contourClosed) {
         onAddInternalPoint(imgPos)
+      } else if (mode === 'anchor' && contourClosed && onAddAnchorPoint) {
+        onAddAnchorPoint(imgPos)
       }
     },
-    [screenToImage, contourPoints, internalPoints, mode, contourClosed, hitRadius, onAddContourPoint, onInsertContourPoint, onAddInternalPoint, isPanning]
+    [screenToImage, contourPoints, internalPoints, mode, contourClosed, hitRadius, onAddContourPoint, onInsertContourPoint, onAddInternalPoint, onAddAnchorPoint, isPanning, anchorPoints, readOnlyAnchors]
   )
 
   const handleMouseMove = useCallback(
@@ -191,11 +211,11 @@ export default function TriangulationCanvas({
         return
       }
 
-      const filterType = contourClosed ? mode : undefined
-      const hit = findPointAt(imgPos, contourPoints, internalPoints, hitRadius(), filterType)
+      const filterType = contourClosed ? mode as PointType : undefined
+      const hit = findPointAt(imgPos, contourPoints, internalPoints, hitRadius(), filterType, anchorPoints)
       setHoveredPoint(hit)
     },
-    [screenToImage, contourPoints, internalPoints, hitRadius, onMovePoint, contourClosed, mode]
+    [screenToImage, contourPoints, internalPoints, hitRadius, onMovePoint, contourClosed, mode, anchorPoints]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -216,13 +236,15 @@ export default function TriangulationCanvas({
     (e: React.MouseEvent) => {
       e.preventDefault()
       const imgPos = screenToImage(e.clientX, e.clientY)
-      const filterType = contourClosed ? mode : undefined
-      const hit = findPointAt(imgPos, contourPoints, internalPoints, hitRadius(), filterType)
+      const filterType = contourClosed ? mode as PointType : undefined
+      const hit = findPointAt(imgPos, contourPoints, internalPoints, hitRadius(), filterType, anchorPoints)
       if (hit) {
+        // Don't allow deleting read-only anchors
+        if (hit.type === 'anchor' && readOnlyAnchors) return
         onDeletePoint(hit.type, hit.index)
       }
     },
-    [screenToImage, contourPoints, internalPoints, hitRadius, onDeletePoint, contourClosed, mode]
+    [screenToImage, contourPoints, internalPoints, hitRadius, onDeletePoint, contourClosed, mode, anchorPoints, readOnlyAnchors]
   )
 
   return (

@@ -2,6 +2,59 @@ import type { Point2D } from '../types/project'
 import { flowInit, flowProcessFrame, flowCleanup } from './perspectiveCorrection'
 
 /**
+ * Track a segment of frames starting from given initial positions.
+ * Supports forward (startFrame < endFrame) and backward (startFrame > endFrame) tracking.
+ * Returns positions for each frame in the segment (excluding startFrame, including endFrame).
+ */
+export async function trackSegment(
+  videoBlob: Blob,
+  initialPoints: Point2D[],
+  imageWidth: number,
+  imageHeight: number,
+  startFrame: number,
+  endFrame: number,
+  onProgress?: (current: number, total: number) => void
+): Promise<{ frameIndex: number; points: Point2D[] }[]> {
+  const { video, url, ctx, width: videoW, height: videoH, fps } =
+    await prepareVideo(videoBlob)
+
+  const forward = endFrame > startFrame
+  const step = forward ? 1 : -1
+  const numFrames = Math.abs(endFrame - startFrame)
+
+  // Initialize with the corrected positions (convert to video coords)
+  const initVideoPoints = normalizePoints(initialPoints, imageWidth, imageHeight, videoW, videoH)
+
+  // First, seek to startFrame and init the tracker
+  const startFrameData = await extractFrame(video, ctx, startFrame / fps, videoW, videoH)
+  await flowInit(initVideoPoints)
+  await flowProcessFrame(startFrameData) // Process startFrame to set the reference
+
+  const results: { frameIndex: number; points: Point2D[] }[] = []
+
+  for (let i = 1; i <= numFrames; i++) {
+    onProgress?.(i, numFrames)
+    const frameIdx = startFrame + i * step
+    const frameData = await extractFrame(video, ctx, frameIdx / fps, videoW, videoH)
+    const points = await flowProcessFrame(frameData)
+
+    // Convert back to image coords
+    results.push({
+      frameIndex: frameIdx,
+      points: points.map(p => ({
+        x: (p.x / videoW) * imageWidth,
+        y: (p.y / videoH) * imageHeight,
+      })),
+    })
+  }
+
+  await flowCleanup()
+  URL.revokeObjectURL(url)
+
+  return results
+}
+
+/**
  * Prepare a video element and canvas for frame-by-frame extraction.
  */
 async function prepareVideo(videoBlob: Blob) {

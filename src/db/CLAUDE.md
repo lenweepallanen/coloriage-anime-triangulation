@@ -4,7 +4,7 @@
 
 Séparation métadonnées / blobs :
 - **Firestore** : documents légers (métadonnées, géométrie maillage, marqueurs)
-- **Cloud Storage** : fichiers lourds (images, vidéos, JSON optical flow)
+- **Cloud Storage** : fichiers lourds (images, vidéos, JSON keyframes/animation)
 
 ## Configuration
 
@@ -21,10 +21,17 @@ Séparation métadonnées / blobs :
   name: string
   createdAt: number
   mesh: {
-    contourPoints: Point2D[]
+    anchorPoints: Point2D[]
+    contourIndices: number[]
     internalPoints: Point2D[]
-    triangles: { a: number, b: number, c: number }[]  // Objets (pas de nested arrays Firestore)
-    hasVideoFramesMesh: boolean                        // Flag, données dans Storage
+    triangles: { a: number, b: number, c: number }[]
+    topologyLocked: boolean
+    anchorTriangles: { a, b, c }[]
+    internalBarycentrics: BarycentricRef[]
+    keyframeInterval: number
+    hasKeyframes: boolean           // Flag, données dans Storage
+    hasAnchorFrames: boolean        // Flag, données dans Storage
+    hasVideoFramesMesh: boolean     // Flag, données dans Storage
   } | null
   markers: MarkerCorners | null
 }
@@ -43,6 +50,8 @@ Séparation métadonnées / blobs :
 ```
 projects/{projectId}/originalImage        → Blob image
 projects/{projectId}/video                → Blob vidéo
+projects/{projectId}/keyframes.json       → JSON KeyframeData[]
+projects/{projectId}/anchorFrames.json    → JSON Point2D[][]
 projects/{projectId}/videoFramesMesh.json → JSON Point2D[][]
 scans/{scanId}/scanImage                  → Blob image rectifiée
 ```
@@ -52,7 +61,7 @@ scans/{scanId}/scanImage                  → Blob image rectifiée
 | Fonction | Description |
 |----------|-------------|
 | `createProject(name)` | Crée projet avec UUID |
-| `getProject(id)` | Charge métadonnées + télécharge blobs |
+| `getProject(id)` | Charge métadonnées + télécharge blobs + JSON Storage |
 | `getAllProjects()` | Liste projets (métadonnées seules) |
 | `updateProject(project, uploadOnly?)` | Sauvegarde sélective avec hints |
 | `deleteProject(id)` | Supprime projet + scans + fichiers Storage |
@@ -62,7 +71,9 @@ scans/{scanId}/scanImage                  → Blob image rectifiée
 `updateProject` accepte un tableau `uploadOnly` pour éviter les re-uploads inutiles :
 - `'image'` — upload uniquement l'image
 - `'video'` — upload uniquement la vidéo
-- `'videoFramesMesh'` — upload uniquement le JSON optical flow
+- `'keyframes'` — upload keyframes.json
+- `'anchorFrames'` — upload anchorFrames.json
+- `'videoFramesMesh'` — upload videoFramesMesh.json
 
 Sans hint, seules les métadonnées Firestore sont mises à jour.
 
@@ -81,10 +92,10 @@ Sans hint, seules les métadonnées Firestore sont mises à jour.
 - `uploadBlob(path, blob)` — Upload vers Cloud Storage
 - `downloadBlob(path)` — Télécharge blob, retourne `null` si échec
 
-## Historique
-
-Migration depuis IndexedDB (commit `d2bda23`). L'ancienne implémentation utilisait deux object stores (`'projects'`, `'scans'`) dans une base `'coloringAppDB'`.
-
 ## Sérialisation triangles
 
 Les triangles `[number, number, number][]` sont convertis en `{ a, b, c }[]` pour Firestore (qui ne supporte pas les arrays imbriqués). La conversion se fait dans `updateProject` / `getProject`.
+
+## Historique
+
+Migration depuis IndexedDB (commit `d2bda23`). L'ancienne implémentation utilisait deux object stores (`'projects'`, `'scans'`) dans une base `'coloringAppDB'`.
