@@ -40,8 +40,9 @@ L'utilisateur crée un projet avec une image de coloriage et une vidéo d'animat
 
 1. **Caméra** — Détection temps réel des marqueurs L + analyse qualité
 2. **Ajustement coins** — Repositionnement manuel des 4 coins
-3. **Correction perspective** — Homographie OpenCV → image 2048×2048
-4. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS
+3. **Correction perspective** — Homographie OpenCV → image 2048×2048 → crop marges 64px → resize aux dimensions originales
+4. **Debug** — Visualisation 4 étapes du pipeline (photo brute, 2048 avec marges, croppée, overlay mesh)
+5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS
 
 ## Structure des fichiers
 
@@ -71,6 +72,7 @@ src/
 │   ├── keyframePropagation.ts  Interpolation linéaire entre keyframes + extraction
 │   ├── markerGenerator.ts      Dessin marqueurs L
 │   ├── opticalFlowComputer.ts  Pipeline extraction frames + tracking + segment re-tracking
+│   ├── trackingConstraints.ts  Contraintes voisinage pour stabiliser le tracking
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
 │   └── textureExtractor.ts     Calcul UVs pour PIXI

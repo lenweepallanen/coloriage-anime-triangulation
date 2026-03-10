@@ -26,6 +26,7 @@ Stratégie multi-fallback :
 | `process` | → Worker | `imageData, predetectedCorners?` | `result` + `imageData 2048×2048` |
 | `flow-init` | → Worker | `points: Point2D[]` | `flow-init-done` |
 | `flow-frame` | → Worker | `imageData` | `flow-frame-result` + `points` |
+| `flow-update-points` | → Worker | `points: Point2D[]` | `flow-update-points-done` |
 | `flow-cleanup` | → Worker | — | `flow-cleanup-done` |
 
 ## Algorithmes implémentés
@@ -64,12 +65,14 @@ Pour l'auto-mesh :
 ### Optical Flow Lucas-Kanade (lignes ~500-577)
 
 ```
-flowInit(points)     → stocke points initiaux, reset état
-flowProcessFrame()   → calcOpticalFlowPyrLK(prev, curr, ...)
-                       fenêtre 21×21, pyramide 3 niveaux
-                       30 itérations max, epsilon 0.01
-                       fallback position précédente si tracking perdu
-flowCleanup()        → libère tous les cv.Mat
+flowInit(points)        → stocke points initiaux, reset état
+flowProcessFrame()      → calcOpticalFlowPyrLK(prev, curr, ...)
+                          fenêtre 21×21, pyramide 3 niveaux
+                          30 itérations max, epsilon 0.01
+                          fallback position précédente si tracking perdu
+flowUpdatePoints(pts)   → remplace flowPrevPts par les positions corrigées
+                          (utilisé après applyNeighborConstraints côté main thread)
+flowCleanup()           → libère tous les cv.Mat
 ```
 
 ## Variables d'état persistantes (entre messages)

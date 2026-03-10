@@ -65,9 +65,10 @@ Prérequis : topologie verrouillée + vidéo importée.
 
 ### Tracking initial
 1. Configure l'intervalle de keyframes (±5, ex: 10 frames)
-2. Bouton "Lancer le tracking" → `precomputeOpticalFlow` sur les **anchors seuls**
-3. Extraction des keyframes aux intervalles → `extractKeyframes()`
-4. Résultat stocké dans `rawTrackingRef` (données brutes par frame)
+2. Checkbox **"Contrainte voisinage"** (activée par défaut) : utilise `anchorTriangles` et `contourIndices` pour stabiliser le tracking via `applyNeighborConstraints` après chaque frame
+3. Bouton "Lancer le tracking" → `precomputeOpticalFlow` sur les **anchors seuls** (avec contraintes si activées)
+4. Extraction des keyframes aux intervalles → `extractKeyframes()`
+5. Résultat stocké dans `rawTrackingRef` (données brutes par frame)
 
 ### Timeline (`KeyframeTimeline`)
 - Barre avec marqueurs positionnés proportionnellement
@@ -78,7 +79,7 @@ Prérequis : topologie verrouillée + vidéo importée.
 - Canvas référence (flex: 1) : frame 0 avec anchors numérotés (comparaison visuelle)
 - Pan/zoom via `useCanvasInteraction`
 - Deux boutons :
-  - **"Valider & Propager"** : re-tracke via `trackSegment()` depuis les positions corrigées vers la keyframe suivante, met à jour `rawTrackingRef` et les positions de la keyframe suivante
+  - **"Valider & Propager"** : re-tracke via `trackSegment()` (avec contraintes si activées) depuis les positions corrigées vers la keyframe suivante, met à jour `rawTrackingRef` et les positions de la keyframe suivante
   - **"Valider sans propager"** : passe simplement à la keyframe suivante
 
 ### Sauvegarde

@@ -12,6 +12,7 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `keyframePropagation.ts` | Interpolation linéaire entre keyframes + extraction depuis tracking brut |
 | `markerGenerator.ts` | Dessin des marqueurs L aux coins |
 | `opticalFlowComputer.ts` | Orchestration du pré-calcul optical flow + tracking par segment |
+| `trackingConstraints.ts` | Contraintes de voisinage pour stabiliser le tracking |
 | `perspectiveCorrection.ts` | Bridge RPC vers le Worker OpenCV |
 | `pdfGenerator.ts` | Génération PDF (jsPDF) |
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
@@ -60,27 +61,41 @@ Dessine des marqueurs en L :
 
 ## opticalFlowComputer.ts
 
+### TrackingConstraintParams
+
+Interface optionnelle passée à `precomputeOpticalFlow` et `trackSegment` pour activer les contraintes de voisinage :
+
+```typescript
+interface TrackingConstraintParams {
+  anchorTriangles: [number, number, number][]
+  contourIndices: number[]
+}
+```
+
 ### precomputeOpticalFlow
 
-`precomputeOpticalFlow(cv, videoBlob, meshPoints, imageW, imageH)` :
+`precomputeOpticalFlow(cv, videoBlob, meshPoints, imageW, imageH, onProgress?, constraints?)` :
 
 1. Créer `<video>` depuis blob, extraire durée/dimensions
 2. Convertir points image → coordonnées vidéo
-3. `flowInit()` : initialiser tracker dans Worker
-4. Boucle sur tous les frames (24 FPS) : `flowProcessFrame()` par frame
-5. Reconvertir résultats vers coordonnées image
-6. `flowCleanup()` : libérer mémoire Worker
-7. Retour : `Point2D[][]`
+3. Construire l'adjacence si `constraints` fourni
+4. `flowInit()` : initialiser tracker dans Worker
+5. Boucle sur tous les frames (24 FPS) : `flowProcessFrame()` par frame
+6. Si contraintes activées (et frame > 0) : `applyNeighborConstraints()` + `flowUpdatePoints()` pour synchroniser le Worker
+7. Reconvertir résultats vers coordonnées image
+8. `flowCleanup()` : libérer mémoire Worker
+9. Retour : `Point2D[][]`
 
 ### trackSegment
 
-`trackSegment(videoBlob, initialPoints, imageW, imageH, startFrame, endFrame)` :
+`trackSegment(videoBlob, initialPoints, imageW, imageH, startFrame, endFrame, onProgress?, constraints?)` :
 
 Re-tracke un segment de frames entre deux keyframes, en partant des positions corrigées. Utilisé lors de la propagation après correction d'une keyframe.
 
 1. Seek vers startFrame, initialise le tracker LK avec les positions corrigées
 2. Boucle frame par frame de startFrame vers endFrame (forward ou backward)
-3. Retourne `{ frameIndex, points }[]` en coordonnées image
+3. Si contraintes activées : applique `applyNeighborConstraints()` + `flowUpdatePoints()` après chaque frame
+4. Retourne `{ frameIndex, points }[]` en coordonnées image
 
 ## perspectiveCorrection.ts
 
@@ -100,6 +115,7 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 | `processCapturedImage(blob, corners?)` | `process` | `ImageData 2048×2048` |
 | `flowInit(points)` | `flow-init` | confirmation |
 | `flowProcessFrame(imageData)` | `flow-frame` | `points: Point2D[]` |
+| `flowUpdatePoints(points)` | `flow-update-points` | confirmation |
 | `flowCleanup()` | `flow-cleanup` | confirmation |
 
 ## textureExtractor.ts
@@ -110,6 +126,35 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
   u = point.x / imageWidth
   v = point.y / imageHeight
   ```
+
+## trackingConstraints.ts
+
+Stabilisation du tracking optical flow par contraintes de voisinage basées sur la topologie du maillage anchor.
+
+### buildAnchorAdjacency
+
+`buildAnchorAdjacency(anchorTriangles)` → `Map<number, Set<number>>`
+
+Construit la carte d'adjacence : deux anchors sont voisins s'ils partagent une arête dans `anchorTriangles`.
+
+### applyNeighborConstraints
+
+`applyNeighborConstraints(currentPositions, previousPositions, adjacency, contourIndices, options?)` → `Point2D[]`
+
+Après chaque frame de tracking, détecte les anchors dont le déplacement dévie de la médiane de leurs voisins, et les ramène vers cette médiane.
+
+| Paramètre | Défaut | Rôle |
+|-----------|--------|------|
+| `thresholdAbsolute` | 2.0 px | Déviation minimum pour déclencher la correction |
+| `thresholdRelative` | 3.0 | Déviation en multiples de la dispersion voisins |
+| `blendFactor` | 0.6 | Force de correction (points intérieurs) |
+| `contourBlendFactor` | 0.75 | Force de correction (points de contour) |
+
+Algorithme :
+1. Calcule le déplacement (dx, dy) de chaque anchor vs frame précédente
+2. Pour chaque anchor, calcule la médiane des déplacements de ses voisins
+3. Si la déviation dépasse `max(threshAbs, spread × threshRel)` → blend vers la médiane
+4. Les points avec ≤ 2 voisins ont un seuil relatif majoré (×1.5) pour éviter le sur-contrainte
 
 ## pdfGenerator.ts
 

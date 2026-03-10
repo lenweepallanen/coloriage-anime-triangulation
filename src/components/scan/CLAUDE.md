@@ -1,6 +1,6 @@
 # Scan — Détection, Correction Perspective, Animation
 
-Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traitement → animation.
+Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traitement → debug → animation.
 
 ## Fichiers
 
@@ -8,7 +8,7 @@ Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traiteme
 |---------|------|
 | `CameraView.tsx` | Flux caméra temps réel + détection marqueurs L + analyse qualité |
 | `CornerAdjustment.tsx` | Ajustement manuel des 4 coins détectés (SVG draggable) |
-| `ScanProcessor.tsx` | Hook de traitement : correction perspective + sauvegarde scan |
+| `ScanProcessor.tsx` | Hook de traitement : correction perspective + debug pipeline + sauvegarde scan |
 | `AnimationPlayer.tsx` | Rendu PIXI.js du maillage texturé animé |
 
 ## CameraView — Détection temps réel
@@ -81,10 +81,24 @@ Coins détectés (centroïdes des L)
   → getPerspectiveTransform(src, dst)
   → dst = carré 2048×2048 avec marges 64px
   → warpPerspective → image rectifiée
+  → Crop des marges 64px (zone utile = 1920×1920)
   → Rescale aux dimensions originales de l'image du projet
 ```
 
 Fallback si aucun coin : crop carré centré + scale à 2048×2048.
+
+## Debug pipeline (ScanProcessor.tsx)
+
+Le hook `useScanProcessor` expose un objet `debugImages: DebugImages | null` avec 4 étapes visuelles :
+
+| Étape | Image | Description |
+|-------|-------|-------------|
+| 1 | `capturedUrl` | Photo brute prise par la caméra |
+| 2 | `raw2048Url` | Image 2048×2048 après correction perspective (avec marges 64px) |
+| 3 | `rectifiedUrl` | Image croppée aux dimensions originales (marges retirées) |
+| 4 | `meshOverlayUrl` | Image croppée + overlay triangulation frame 0 (triangles verts, anchors rouges, internes bleus) |
+
+La page ScanPage affiche ces 4 images dans un stage `debug` entre `processing` et `animation`, permettant de vérifier visuellement chaque étape du pipeline avant de lancer l'animation.
 
 ## CornerAdjustment
 
