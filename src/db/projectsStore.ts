@@ -84,15 +84,15 @@ function toDoc(project: Project): ProjectDoc {
     hasImage: project.originalImageBlob != null,
     hasVideo: project.videoBlob != null,
     mesh: project.mesh ? {
-      anchorPoints: project.mesh.anchorPoints,
-      contourIndices: project.mesh.contourIndices,
-      internalPoints: project.mesh.internalPoints,
-      triangles: triToDoc(project.mesh.triangles),
-      topologyLocked: project.mesh.topologyLocked,
-      anchorTriangles: triToDoc(project.mesh.anchorTriangles),
-      internalBarycentrics: project.mesh.internalBarycentrics,
-      keyframeInterval: project.mesh.keyframeInterval,
-      hasKeyframes: project.mesh.keyframes.length > 0,
+      anchorPoints: project.mesh.anchorPoints ?? [],
+      contourIndices: project.mesh.contourIndices ?? [],
+      internalPoints: project.mesh.internalPoints ?? [],
+      triangles: triToDoc(project.mesh.triangles ?? []),
+      topologyLocked: project.mesh.topologyLocked ?? false,
+      anchorTriangles: triToDoc(project.mesh.anchorTriangles ?? []),
+      internalBarycentrics: project.mesh.internalBarycentrics ?? [],
+      keyframeInterval: project.mesh.keyframeInterval ?? 10,
+      hasKeyframes: (project.mesh.keyframes?.length ?? 0) > 0,
       hasAnchorFrames: project.mesh.anchorFrames != null,
       hasVideoFramesMesh: project.mesh.videoFramesMesh != null,
     } : null,
@@ -102,14 +102,14 @@ function toDoc(project: Project): ProjectDoc {
 
 function meshFromDoc(meshDoc: MeshDoc): Omit<MeshData, 'keyframes' | 'anchorFrames' | 'videoFramesMesh'> {
   return {
-    anchorPoints: meshDoc.anchorPoints,
-    contourIndices: meshDoc.contourIndices,
-    internalPoints: meshDoc.internalPoints,
-    triangles: docToTri(meshDoc.triangles),
-    topologyLocked: meshDoc.topologyLocked,
-    anchorTriangles: docToTri(meshDoc.anchorTriangles),
-    internalBarycentrics: meshDoc.internalBarycentrics,
-    keyframeInterval: meshDoc.keyframeInterval,
+    anchorPoints: meshDoc.anchorPoints ?? [],
+    contourIndices: meshDoc.contourIndices ?? [],
+    internalPoints: meshDoc.internalPoints ?? [],
+    triangles: docToTri(meshDoc.triangles ?? []),
+    topologyLocked: meshDoc.topologyLocked ?? false,
+    anchorTriangles: docToTri(meshDoc.anchorTriangles ?? []),
+    internalBarycentrics: meshDoc.internalBarycentrics ?? [],
+    keyframeInterval: meshDoc.keyframeInterval ?? 10,
   }
 }
 

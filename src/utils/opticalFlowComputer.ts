@@ -1,5 +1,11 @@
 import type { Point2D } from '../types/project'
-import { flowInit, flowProcessFrame, flowCleanup } from './perspectiveCorrection'
+import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints } from './perspectiveCorrection'
+import { buildAnchorAdjacency, applyNeighborConstraints } from './trackingConstraints'
+
+export interface TrackingConstraintParams {
+  anchorTriangles: [number, number, number][]
+  contourIndices: number[]
+}
 
 /**
  * Track a segment of frames starting from given initial positions.
@@ -13,7 +19,8 @@ export async function trackSegment(
   imageHeight: number,
   startFrame: number,
   endFrame: number,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  constraints?: TrackingConstraintParams
 ): Promise<{ frameIndex: number; points: Point2D[] }[]> {
   const { video, url, ctx, width: videoW, height: videoH, fps } =
     await prepareVideo(videoBlob)
@@ -25,18 +32,32 @@ export async function trackSegment(
   // Initialize with the corrected positions (convert to video coords)
   const initVideoPoints = normalizePoints(initialPoints, imageWidth, imageHeight, videoW, videoH)
 
+  // Build adjacency if constraints enabled
+  const adjacency = constraints ? buildAnchorAdjacency(constraints.anchorTriangles) : null
+
   // First, seek to startFrame and init the tracker
   const startFrameData = await extractFrame(video, ctx, startFrame / fps, videoW, videoH)
   await flowInit(initVideoPoints)
   await flowProcessFrame(startFrameData) // Process startFrame to set the reference
 
+  let prevVideoPoints = initVideoPoints
   const results: { frameIndex: number; points: Point2D[] }[] = []
 
   for (let i = 1; i <= numFrames; i++) {
     onProgress?.(i, numFrames)
     const frameIdx = startFrame + i * step
     const frameData = await extractFrame(video, ctx, frameIdx / fps, videoW, videoH)
-    const points = await flowProcessFrame(frameData)
+    let points = await flowProcessFrame(frameData)
+
+    // Apply neighbor constraints in video coords
+    if (adjacency && constraints) {
+      points = applyNeighborConstraints(
+        points, prevVideoPoints, adjacency, constraints.contourIndices
+      )
+      await flowUpdatePoints(points)
+    }
+
+    prevVideoPoints = points
 
     // Convert back to image coords
     results.push({
@@ -127,7 +148,8 @@ export async function precomputeOpticalFlow(
   meshPoints: Point2D[],
   imageWidth: number,
   imageHeight: number,
-  onProgress?: (stage: string, current: number, total: number) => void
+  onProgress?: (stage: string, current: number, total: number) => void,
+  constraints?: TrackingConstraintParams
 ): Promise<{ videoFramesMesh: Point2D[][]; fps: number }> {
   onProgress?.('Préparation', 0, 1)
   const { video, url, ctx, width: videoW, height: videoH, fps, totalFrames } =
@@ -140,17 +162,31 @@ export async function precomputeOpticalFlow(
 
   const initialPoints = normalizePoints(meshPoints, imageWidth, imageHeight, videoW, videoH)
 
+  // Build adjacency if constraints enabled
+  const adjacency = constraints ? buildAnchorAdjacency(constraints.anchorTriangles) : null
+
   // Initialize optical flow in the worker
   onProgress?.('Initialisation tracking', 0, 1)
   await flowInit(initialPoints)
 
   const videoFramesMesh: Point2D[][] = []
+  let prevVideoPoints = initialPoints
 
   for (let i = 0; i < totalFrames; i++) {
     onProgress?.('Extraction & tracking', i + 1, totalFrames)
 
     const frameData = await extractFrame(video, ctx, i / fps, videoW, videoH)
-    const points = await flowProcessFrame(frameData)
+    let points = await flowProcessFrame(frameData)
+
+    // Apply neighbor constraints in video coords (skip frame 0 — no displacement yet)
+    if (adjacency && constraints && i > 0) {
+      points = applyNeighborConstraints(
+        points, prevVideoPoints, adjacency, constraints.contourIndices
+      )
+      await flowUpdatePoints(points)
+    }
+
+    prevVideoPoints = points
     videoFramesMesh.push(points)
   }
 

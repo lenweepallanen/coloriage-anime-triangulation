@@ -117,6 +117,11 @@ export async function flowProcessFrame(imageData: ImageData): Promise<{ x: numbe
   return result.points
 }
 
+export async function flowUpdatePoints(points: { x: number; y: number }[]): Promise<void> {
+  if (!workerReady || !worker) return
+  await workerRpc({ type: 'flow-update-points', points }, 'flow-update-points-done')
+}
+
 export async function flowCleanup(): Promise<void> {
   if (!workerReady || !worker) return
   await workerRpc({ type: 'flow-cleanup' }, 'flow-cleanup-done')

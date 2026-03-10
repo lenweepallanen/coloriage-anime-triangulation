@@ -33,20 +33,17 @@ export default function ScanPage() {
 }
 
 function ScanFlow({ project }: { project: Project }) {
-  type ScanStage = 'camera' | 'adjust' | 'processing' | 'preview' | 'animation'
+  type ScanStage = 'camera' | 'adjust' | 'processing' | 'debug' | 'preview' | 'animation'
 
   const [stage, setStage] = useState<ScanStage>('camera')
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null)
   const [detectedCorners, setDetectedCorners] = useState<Point2D[] | null>(null)
   const processor = useScanProcessor(project)
 
-  // Transition from processing to preview when rectified canvas is ready
+  // Transition from processing to debug view when rectified canvas is ready
   useEffect(() => {
     if (processor.rectifiedCanvas && stage === 'processing' && !processor.processing) {
-      const url = processor.rectifiedCanvas.toDataURL()
-      setPreviewUrl(url)
-      setStage('preview')
+      setStage('debug')
     }
   }, [processor.rectifiedCanvas, processor.processing, stage])
 
@@ -70,7 +67,6 @@ function ScanFlow({ project }: { project: Project }) {
 
   function handleRetake() {
     processor.reset()
-    setPreviewUrl(null)
     setCapturedBlob(null)
     setDetectedCorners(null)
     setStage('camera')
@@ -110,14 +106,46 @@ function ScanFlow({ project }: { project: Project }) {
         </div>
       )}
 
-      {stage === 'preview' && previewUrl && (
-        <div className="scan-preview">
-          <h3>Scan redressé</h3>
-          <img
-            src={previewUrl}
-            alt="Scan redressé"
-            style={{ maxWidth: '100%', maxHeight: 400, border: '1px solid #ddd', borderRadius: 8 }}
-          />
+      {stage === 'debug' && processor.debugImages && (
+        <div className="scan-debug" style={{ padding: 16, overflowY: 'auto', maxHeight: '80vh' }}>
+          <h3>Debug — Pipeline de scan</h3>
+
+          <div style={{ marginBottom: 24 }}>
+            <h4>1. Photo capturée (brute)</h4>
+            <img
+              src={processor.debugImages.capturedUrl}
+              alt="Photo brute"
+              style={{ maxWidth: '100%', maxHeight: 300, border: '1px solid #999', borderRadius: 8 }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 24 }}>
+            <h4>2. Après correction perspective (2048×2048 avec marges)</h4>
+            <img
+              src={processor.debugImages.raw2048Url}
+              alt="Correction perspective brute"
+              style={{ maxWidth: '100%', maxHeight: 300, border: '1px solid #999', borderRadius: 8 }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 24 }}>
+            <h4>3. Redressée & croppée (dimensions originales)</h4>
+            <img
+              src={processor.debugImages.rectifiedUrl}
+              alt="Redressée croppée"
+              style={{ maxWidth: '100%', maxHeight: 300, border: '1px solid #999', borderRadius: 8 }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 24 }}>
+            <h4>4. Redressée + Triangulation (frame 0)</h4>
+            <img
+              src={processor.debugImages.meshOverlayUrl}
+              alt="Overlay maillage"
+              style={{ maxWidth: '100%', maxHeight: 400, border: '1px solid #999', borderRadius: 8 }}
+            />
+          </div>
+
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button onClick={() => setStage('animation')}>
               Lancer l'animation

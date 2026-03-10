@@ -679,6 +679,18 @@ self.onmessage = async function(e) {
     return;
   }
 
+  if (type === 'flow-update-points') {
+    if (flowPrevPts) {
+      flowPrevPts.delete();
+      flowPrevPts = cv.matFromArray(
+        e.data.points.length, 1, cv.CV_32FC2,
+        e.data.points.flatMap(function(p) { return [p.x, p.y]; })
+      );
+    }
+    self.postMessage({ type: 'flow-update-points-done' });
+    return;
+  }
+
   if (type === 'flow-cleanup') {
     flowCleanup();
     self.postMessage({ type: 'flow-cleanup-done' });

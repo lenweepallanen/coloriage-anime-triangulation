@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Point2D, KeyframeData, MeshData } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
-import { precomputeOpticalFlow, trackSegment } from '../../utils/opticalFlowComputer'
+import { precomputeOpticalFlow, trackSegment, type TrackingConstraintParams } from '../../utils/opticalFlowComputer'
 import { extractKeyframes, propagateKeyframes } from '../../utils/keyframePropagation'
 import KeyframeTimeline from '../keyframes/KeyframeTimeline'
 import KeyframeEditor from '../keyframes/KeyframeEditor'
@@ -33,6 +33,7 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
   const [totalFrames, setTotalFrames] = useState(0)
   const [imgDims, setImgDims] = useState<{ width: number; height: number } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [useConstraints, setUseConstraints] = useState(true)
 
   // Ref to hold the full per-frame anchor tracking (before keyframe extraction)
   const rawTrackingRef = useRef<Point2D[][] | null>(null)
@@ -76,6 +77,12 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
       const dims = imgDims ?? await getImageDimensions(project.originalImageBlob)
       setImgDims(dims)
 
+      // Build constraint params if enabled
+      const constraints: TrackingConstraintParams | undefined =
+        useConstraints && mesh.anchorTriangles?.length
+          ? { anchorTriangles: mesh.anchorTriangles, contourIndices: mesh.contourIndices }
+          : undefined
+
       // Track ONLY anchor points (not internal points)
       const { videoFramesMesh: anchorTracking } = await precomputeOpticalFlow(
         null,
@@ -83,7 +90,8 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
         mesh.anchorPoints,
         dims.width,
         dims.height,
-        (stage, current, total) => setProgress({ stage, current, total })
+        (stage, current, total) => setProgress({ stage, current, total }),
+        constraints
       )
 
       rawTrackingRef.current = anchorTracking
@@ -145,6 +153,12 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
           setProgress({ stage: 'Chargement OpenCV...', current: 0, total: 1 })
           await loadOpenCVWorker()
 
+          // Build constraint params if enabled
+          const segConstraints: TrackingConstraintParams | undefined =
+            useConstraints && mesh?.anchorTriangles?.length
+              ? { anchorTriangles: mesh.anchorTriangles, contourIndices: mesh.contourIndices }
+              : undefined
+
           setProgress({ stage: 'Propagation...', current: 0, total: endFrame - startFrame })
           const results = await trackSegment(
             project.videoBlob,
@@ -153,7 +167,8 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
             imgDims.height,
             startFrame,
             endFrame,
-            (current, total) => setProgress({ stage: 'Propagation...', current, total })
+            (current, total) => setProgress({ stage: 'Propagation...', current, total }),
+            segConstraints
           )
 
           // Update raw tracking data with new segment
@@ -264,6 +279,18 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
           <button onClick={() => handleIntervalChange(interval - 5)} disabled={interval <= 1 || isBusy}>−</button>
           <span className="density-label">{interval} frames</span>
           <button onClick={() => handleIntervalChange(interval + 5)} disabled={isBusy}>+</button>
+        </label>
+
+        <span className="toolbar-separator" />
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useConstraints}
+            onChange={e => setUseConstraints(e.target.checked)}
+            disabled={isBusy}
+          />
+          Contrainte voisinage
         </label>
 
         <span className="toolbar-separator" />
