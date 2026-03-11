@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import type { Point2D } from '../../types/project'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
+import type { ContourTrackingDebugData } from '../../utils/opticalFlowComputer'
 
 interface Props {
   videoBlob: Blob
@@ -19,6 +20,8 @@ interface Props {
   propagating?: boolean
   isFirstKeyframe?: boolean
   isLastKeyframe?: boolean
+  contourDebug?: ContourTrackingDebugData | null
+  contourAnchorIndices?: number[]
 }
 
 export default function KeyframeEditor({
@@ -38,6 +41,8 @@ export default function KeyframeEditor({
   referencePositions,
   isFirstKeyframe,
   isLastKeyframe,
+  contourDebug,
+  contourAnchorIndices,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -48,6 +53,7 @@ export default function KeyframeEditor({
   const { transformRef, screenToImage, fitToCanvas } = useCanvasInteraction(canvasRef)
   const draggingIdx = useRef<number | null>(null)
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+  const [showContourDebug, setShowContourDebug] = useState(true)
 
   // Load video
   useEffect(() => {
@@ -101,6 +107,12 @@ export default function KeyframeEditor({
     return () => observer.disconnect()
   }, [])
 
+  // Build contour anchor index set for fast lookup
+  const contourAnchorSet = useRef(new Set<number>())
+  useEffect(() => {
+    contourAnchorSet.current = new Set(contourAnchorIndices ?? [])
+  }, [contourAnchorIndices])
+
   // Draw loop
   useEffect(() => {
     let running = true
@@ -136,6 +148,26 @@ export default function KeyframeEditor({
       const pr = 6 / t.scale
       const hr = 10 / t.scale
 
+      // --- Contour debug overlay ---
+      const hasDebug = showContourDebug && contourDebug && contourAnchorIndices
+      const caSet = contourAnchorSet.current
+
+      // Draw detected contour polyline (semi-transparent cyan)
+      if (hasDebug && contourDebug.contourPolyline && contourDebug.contourPolyline.length > 2) {
+        ctx.strokeStyle = 'rgba(0, 220, 255, 0.6)'
+        ctx.lineWidth = 2 / t.scale
+        ctx.beginPath()
+        const cp0 = contourDebug.contourPolyline[0]
+        ctx.moveTo((cp0.x / imageWidth) * vw, (cp0.y / imageHeight) * vh)
+        for (let j = 1; j < contourDebug.contourPolyline.length; j++) {
+          const cp = contourDebug.contourPolyline[j]
+          ctx.lineTo((cp.x / imageWidth) * vw, (cp.y / imageHeight) * vh)
+        }
+        ctx.closePath()
+        ctx.stroke()
+      }
+
+      // Draw anchor points with optional confidence coloring
       const labelSize = Math.max(8, 11 / t.scale)
       for (let i = 0; i < anchorPositions.length; i++) {
         const p = anchorPositions[i]
@@ -146,7 +178,39 @@ export default function KeyframeEditor({
         const isDragging = draggingIdx.current === i
         const r = isHovered || isDragging ? hr : pr
 
-        ctx.fillStyle = isDragging ? '#22c55e' : isHovered ? '#fbbf24' : '#f59e0b'
+        // Determine fill color
+        let fillColor = isDragging ? '#22c55e' : isHovered ? '#fbbf24' : '#f59e0b'
+
+        if (hasDebug && caSet.has(i)) {
+          // Find this anchor's index in contourAnchorIndices
+          const caIdx = contourAnchorIndices!.indexOf(i)
+          if (caIdx >= 0 && caIdx < contourDebug.confidences.length) {
+            const conf = contourDebug.confidences[caIdx]
+            const lost = contourDebug.lostFrameCount[caIdx] > 0
+
+            if (lost) {
+              // Draw orange cross for lost points
+              const crossR = r * 1.5
+              ctx.strokeStyle = '#f97316'
+              ctx.lineWidth = 3 / t.scale
+              ctx.beginPath()
+              ctx.moveTo(vx - crossR, vy - crossR)
+              ctx.lineTo(vx + crossR, vy + crossR)
+              ctx.moveTo(vx + crossR, vy - crossR)
+              ctx.lineTo(vx - crossR, vy + crossR)
+              ctx.stroke()
+            }
+
+            if (!isDragging && !isHovered) {
+              // Color by confidence: green >= 0.7, yellow 0.3-0.7, red < 0.3
+              if (conf >= 0.7) fillColor = '#22c55e'
+              else if (conf >= 0.3) fillColor = '#eab308'
+              else fillColor = '#ef4444'
+            }
+          }
+        }
+
+        ctx.fillStyle = fillColor
         ctx.beginPath()
         ctx.arc(vx, vy, r, 0, Math.PI * 2)
         ctx.fill()
@@ -175,12 +239,29 @@ export default function KeyframeEditor({
       ctx.font = '12px monospace'
       ctx.fillText(`Keyframe ${frameIndex} / ${totalFrames - 1}`, 14, 24)
 
+      // Contour confidence summary
+      if (hasDebug && contourDebug.confidences.length > 0) {
+        const confs = contourDebug.confidences
+        const minC = Math.min(...confs)
+        const maxC = Math.max(...confs)
+        const avgC = confs.reduce((a, b) => a + b, 0) / confs.length
+        const lostCount = contourDebug.lostFrameCount.filter(n => n > 0).length
+
+        const summaryY = 40
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'
+        ctx.fillRect(8, summaryY, 220, 36)
+        ctx.fillStyle = '#fff'
+        ctx.font = '10px monospace'
+        ctx.fillText(`Conf: min=${minC.toFixed(2)} avg=${avgC.toFixed(2)} max=${maxC.toFixed(2)}`, 14, summaryY + 14)
+        ctx.fillText(`Lost: ${lostCount}/${confs.length} contour anchors`, 14, summaryY + 28)
+      }
+
       rafId = requestAnimationFrame(draw)
     }
 
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
-  }, [videoReady, anchorPositions, hoveredIdx, frameIndex, totalFrames, imageWidth, imageHeight, transformRef])
+  }, [videoReady, anchorPositions, hoveredIdx, frameIndex, totalFrames, imageWidth, imageHeight, transformRef, contourDebug, contourAnchorIndices, showContourDebug])
 
   // Resize reference canvas
   useEffect(() => {
@@ -323,6 +404,16 @@ export default function KeyframeEditor({
           <button onClick={onValidateOnly} disabled={propagating}>
             Passer
           </button>
+        )}
+        {contourDebug && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginLeft: 8 }}>
+            <input
+              type="checkbox"
+              checked={showContourDebug}
+              onChange={e => setShowContourDebug(e.target.checked)}
+            />
+            Debug contour
+          </label>
         )}
         <span style={{ fontSize: '0.75rem', color: '#888' }}>
           Glissez les points pour corriger | Avant = vers keyframes suivantes | Bidi = avant + arrière

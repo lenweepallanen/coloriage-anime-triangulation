@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { Project, Point2D, MeshData } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
-import { interpolateInternalPoint } from '../../utils/barycentricUtils'
+import { precomputeARAP, solveARAPFrame } from '../../utils/arapSolver'
 
 interface Props {
   project: Project
@@ -22,25 +22,30 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
     setProgress(0)
 
     try {
-      const { anchorFrames, anchorTriangles, contourBarycentrics, internalBarycentrics } = mesh
+      const { anchorFrames } = mesh
       const totalFrames = anchorFrames.length
       const videoFramesMesh: Point2D[][] = new Array(totalFrames)
 
+      // Build canonical mesh (frame 0) and precompute ARAP
+      const restVertices = [...mesh.anchorPoints, ...mesh.contourPoints, ...mesh.internalPoints]
+      const constrainedIndices = Array.from({ length: mesh.anchorPoints.length }, (_, i) => i)
+
+      console.time('ARAP precomputation')
+      const precomp = precomputeARAP(restVertices, mesh.triangles, constrainedIndices)
+      console.timeEnd('ARAP precomputation')
+
+      console.time('ARAP solve all frames')
+      let prevResult: Point2D[] | undefined
       for (let f = 0; f < totalFrames; f++) {
-        const frameAnchors = anchorFrames[f]
-        const allPoints: Point2D[] = [...frameAnchors]
-
-        // Interpolate contour points from anchor positions via barycentric coords
-        for (const bary of contourBarycentrics) {
-          allPoints.push(interpolateInternalPoint(bary, frameAnchors, anchorTriangles))
+        // Frame 0: use rest positions directly (identity deformation)
+        if (f === 0) {
+          videoFramesMesh[f] = restVertices.slice()
+          prevResult = restVertices
+        } else {
+          const allPoints = solveARAPFrame(precomp, anchorFrames[f], prevResult, 3)
+          videoFramesMesh[f] = allPoints
+          prevResult = allPoints
         }
-
-        // Interpolate internal points from anchor positions via barycentric coords
-        for (const bary of internalBarycentrics) {
-          allPoints.push(interpolateInternalPoint(bary, frameAnchors, anchorTriangles))
-        }
-
-        videoFramesMesh[f] = allPoints
 
         // Report progress every 10 frames
         if (f % 10 === 0) {
@@ -49,6 +54,7 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
           await new Promise(r => setTimeout(r, 0))
         }
       }
+      console.timeEnd('ARAP solve all frames')
 
       setProgress(100)
 
@@ -89,8 +95,8 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
       <h3>Animation finale</h3>
       <p style={{ fontSize: '0.875rem', color: '#888', marginBottom: 16 }}>
         Cette étape calcule les positions de tous les points (anchors + contour + internes)
-        pour chaque frame en utilisant les coordonnées barycentriques.
-        Le résultat est directement utilisable pour l'animation du scan.
+        pour chaque frame en utilisant la déformation ARAP (As-Rigid-As-Possible).
+        Le mesh canonique (frame 0) est déformé pour suivre les anchors tout en préservant la rigidité locale.
       </p>
 
       <div className="triangulation-toolbar">
@@ -110,7 +116,7 @@ export default function FinalPropagationStep({ project, onSave }: Props) {
       {computing && (
         <div className="progress-container">
           <div className="progress-label">
-            Propagation des points internes — {progress}%
+            Déformation ARAP — {progress}%
           </div>
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: `${progress}%` }} />

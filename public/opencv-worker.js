@@ -507,6 +507,12 @@ let flowMaxLevel = 3;
 let flowCriteria = null;
 let flowInitialPoints = null;
 
+// State for contour anchor template matching
+let flowTemplates = null;              // Array of cv.Mat patches per contour anchor
+let flowContourAnchorIndices = null;   // Which point indices are contour anchors
+let flowTemplateSize = 31;             // Patch size for template matching
+let flowTemplateSearchRadius = 30;     // Search radius around LK position
+
 function flowInit(initialPoints) {
   flowInitialPoints = initialPoints;
   flowPrevGray = null;
@@ -573,13 +579,205 @@ function flowProcessFrame(imgData) {
   err.delete();
   nextPts.delete();
 
-  return { points: points };
+  // Run template matching for contour anchors if templates are initialized
+  var contourMatches = flowMatchTemplates(gray, points);
+
+  return { points: points, contourMatches: contourMatches };
+}
+
+/**
+ * Extract dense contour from a frame for snap-to-contour.
+ * Returns all contour pixels (not simplified) of the largest external contour.
+ */
+function extractFrameContourDense(imgData) {
+  var w = imgData.width, h = imgData.height;
+  var src = new cv.Mat(h, w, cv.CV_8UC4);
+  src.data.set(new Uint8Array(imgData.data));
+
+  var gray = new cv.Mat();
+  var blurred = new cv.Mat();
+  var binary = new cv.Mat();
+  var closed = new cv.Mat();
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+
+    // Otsu thresholding (auto-adapts to frame brightness)
+    cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
+
+    // Morphological close to bridge small gaps
+    var kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
+
+    // Optional: dilate 1px to thicken contour for better snap surface
+    var dilateKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    var dilated = new cv.Mat();
+    cv.dilate(closed, dilated, dilateKernel, new cv.Point(-1, -1), 1);
+
+    var contours = new cv.MatVector();
+    var hierarchy = new cv.Mat();
+    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+
+    if (contours.size() === 0) {
+      contours.delete(); hierarchy.delete();
+      kernel.delete(); dilateKernel.delete(); dilated.delete();
+      return { contourPoints: null };
+    }
+
+    // Find largest contour by area
+    var maxArea = 0, maxIdx = 0;
+    for (var i = 0; i < contours.size(); i++) {
+      var area = cv.contourArea(contours.get(i));
+      if (area > maxArea) { maxArea = area; maxIdx = i; }
+    }
+
+    var largest = contours.get(maxIdx);
+    var points = [];
+    for (var j = 0; j < largest.rows; j++) {
+      points.push({ x: largest.data32S[j * 2], y: largest.data32S[j * 2 + 1] });
+    }
+
+    contours.delete(); hierarchy.delete();
+    kernel.delete(); dilateKernel.delete(); dilated.delete();
+
+    return { contourPoints: points };
+  } finally {
+    src.delete(); gray.delete(); blurred.delete(); binary.delete(); closed.delete();
+  }
+}
+
+/**
+ * Initialize templates for contour anchor points.
+ * Must be called after flow-init + first flow-frame (so flowPrevGray is available).
+ */
+function flowInitTemplates(contourAnchorIndices, templateSize) {
+  flowContourAnchorIndices = contourAnchorIndices;
+  flowTemplateSize = templateSize || 31;
+
+  // Free previous templates
+  if (flowTemplates) {
+    for (var i = 0; i < flowTemplates.length; i++) {
+      if (flowTemplates[i]) flowTemplates[i].delete();
+    }
+  }
+
+  if (!flowPrevGray || !flowPrevPts) {
+    flowTemplates = null;
+    return;
+  }
+
+  flowTemplates = [];
+  var half = Math.floor(flowTemplateSize / 2);
+  var h = flowPrevGray.rows;
+  var w = flowPrevGray.cols;
+  var ptsData = flowPrevPts.data32F;
+
+  for (var i = 0; i < contourAnchorIndices.length; i++) {
+    var idx = contourAnchorIndices[i];
+    var cx = Math.round(ptsData[idx * 2]);
+    var cy = Math.round(ptsData[idx * 2 + 1]);
+
+    // Clamp ROI to image bounds
+    var x0 = Math.max(0, cx - half);
+    var y0 = Math.max(0, cy - half);
+    var x1 = Math.min(w, cx + half + 1);
+    var y1 = Math.min(h, cy + half + 1);
+
+    if (x1 - x0 < flowTemplateSize * 0.5 || y1 - y0 < flowTemplateSize * 0.5) {
+      // Template too small (near edge), skip
+      flowTemplates.push(null);
+      continue;
+    }
+
+    var roi = new cv.Rect(x0, y0, x1 - x0, y1 - y0);
+    var patch = flowPrevGray.roi(roi).clone();
+    flowTemplates.push(patch);
+  }
+}
+
+/**
+ * Run template matching for contour anchors on the current gray frame.
+ * Returns match results for each contour anchor.
+ */
+function flowMatchTemplates(gray, lkPoints) {
+  if (!flowTemplates || !flowContourAnchorIndices) return null;
+
+  var h = gray.rows;
+  var w = gray.cols;
+  var results = [];
+  var searchR = flowTemplateSearchRadius;
+
+  for (var i = 0; i < flowContourAnchorIndices.length; i++) {
+    var template = flowTemplates[i];
+    var idx = flowContourAnchorIndices[i];
+    var lkPos = lkPoints[idx];
+
+    if (!template) {
+      results.push({ lkPos: lkPos, tmPos: lkPos, tmScore: 0 });
+      continue;
+    }
+
+    var tW = template.cols;
+    var tH = template.rows;
+
+    // Search ROI around LK position
+    var cx = Math.round(lkPos.x);
+    var cy = Math.round(lkPos.y);
+    var roiX = Math.max(0, cx - searchR);
+    var roiY = Math.max(0, cy - searchR);
+    var roiW = Math.min(w, cx + searchR + 1) - roiX;
+    var roiH = Math.min(h, cy + searchR + 1) - roiY;
+
+    // ROI must be bigger than template
+    if (roiW <= tW || roiH <= tH) {
+      results.push({ lkPos: lkPos, tmPos: lkPos, tmScore: 0 });
+      continue;
+    }
+
+    var roiRect = new cv.Rect(roiX, roiY, roiW, roiH);
+    var searchRegion = gray.roi(roiRect);
+    var resultMat = new cv.Mat();
+
+    try {
+      cv.matchTemplate(searchRegion, template, resultMat, cv.TM_CCOEFF_NORMED);
+      var minMax = cv.minMaxLoc(resultMat);
+      var bestScore = minMax.maxVal;
+      var bestLoc = minMax.maxLoc;
+
+      // Convert from result coords to image coords (top-left of template match)
+      var matchX = roiX + bestLoc.x + tW / 2;
+      var matchY = roiY + bestLoc.y + tH / 2;
+
+      results.push({
+        lkPos: lkPos,
+        tmPos: { x: matchX, y: matchY },
+        tmScore: bestScore
+      });
+    } catch (e) {
+      results.push({ lkPos: lkPos, tmPos: lkPos, tmScore: 0 });
+    } finally {
+      searchRegion.delete();
+      resultMat.delete();
+    }
+  }
+
+  return results;
 }
 
 function flowCleanup() {
   if (flowPrevGray) { flowPrevGray.delete(); flowPrevGray = null; }
   if (flowPrevPts) { flowPrevPts.delete(); flowPrevPts = null; }
   flowInitialPoints = null;
+
+  // Clean up templates
+  if (flowTemplates) {
+    for (var i = 0; i < flowTemplates.length; i++) {
+      if (flowTemplates[i]) flowTemplates[i].delete();
+    }
+    flowTemplates = null;
+  }
+  flowContourAnchorIndices = null;
 }
 
 // Détecter le contour principal d'un dessin (pour la triangulation)
@@ -672,7 +870,31 @@ self.onmessage = async function(e) {
   if (type === 'flow-frame') {
     try {
       const result = flowProcessFrame(imageData);
-      self.postMessage({ type: 'flow-frame-result', points: result.points });
+      const msg = { type: 'flow-frame-result', points: result.points };
+      if (result.contourMatches) {
+        msg.contourMatches = result.contourMatches;
+      }
+      self.postMessage(msg);
+    } catch (err) {
+      self.postMessage({ type: 'flow-error', error: err.message });
+    }
+    return;
+  }
+
+  if (type === 'flow-init-templates') {
+    try {
+      flowInitTemplates(e.data.contourAnchorIndices, e.data.templateSize);
+      self.postMessage({ type: 'flow-init-templates-done' });
+    } catch (err) {
+      self.postMessage({ type: 'flow-error', error: err.message });
+    }
+    return;
+  }
+
+  if (type === 'flow-contour-dense') {
+    try {
+      const result = extractFrameContourDense(imageData);
+      self.postMessage({ type: 'flow-contour-dense-result', contourPoints: result.contourPoints });
     } catch (err) {
       self.postMessage({ type: 'flow-error', error: err.message });
     }

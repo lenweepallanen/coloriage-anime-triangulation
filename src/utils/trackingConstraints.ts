@@ -180,93 +180,301 @@ export function applyTemporalSmoothing(
 }
 
 // ---------------------------------------------------------------------------
-// 3. Contour constraints: tighter consensus + ordering enforcement
+// 3. Curvilinear contour stabilization
 // ---------------------------------------------------------------------------
 
-export interface ContourConstraintOptions {
-  maxDeviation?: number   // px, default 1.5
-  blendFactor?: number    // default 0.8
-  enforceOrdering?: boolean // default true
+export interface ContourStabilizationOptions {
+  minSpacingRatio?: number      // min spacing as fraction of initial spacing, default 0.5
+  spacingRegularization?: number // strength of pull toward initial spacing (0-1), default 0.5
+  smoothingWeight?: number       // Laplacian smoothing weight (0-1), default 0.25
+  smoothingIterations?: number   // number of smoothing passes, default 2
 }
 
 /**
- * Apply stricter displacement constraints to contour anchors.
- * Uses contour-neighbor median (prev/next along contour) with a tight threshold.
- * Optionally enforces that consecutive contour anchors do not swap order.
+ * Compute cumulative arc lengths along a closed polyline.
+ * Returns an array of length n+1 where [0]=0 and [n]=totalLength.
  */
-export function applyContourConstraints(
-  currentPositions: Point2D[],
-  previousPositions: Point2D[],
-  contourAnchorOrder: number[],
-  options?: ContourConstraintOptions
-): Point2D[] {
-  const maxDev = options?.maxDeviation ?? 1.5
-  const blend = options?.blendFactor ?? 0.8
-  const enforce = options?.enforceOrdering ?? true
+function computeCumulativeLengths(polyline: Point2D[]): number[] {
+  const n = polyline.length
+  const cumLen = [0]
+  for (let i = 1; i <= n; i++) {
+    const a = polyline[i - 1]
+    const b = polyline[i % n]
+    const dx = b.x - a.x, dy = b.y - a.y
+    cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy))
+  }
+  return cumLen
+}
 
-  if (contourAnchorOrder.length < 3) return currentPositions.map(p => ({ ...p }))
+/**
+ * Project a point onto a closed polyline segment and return curvilinear coordinate s ∈ [0,1].
+ */
+function projectOntoPolyline(
+  p: Point2D,
+  polyline: Point2D[],
+  cumLen: number[]
+): number {
+  const n = polyline.length
+  const totalLen = cumLen[n]
+  if (totalLen < 1e-10) return 0
 
-  const corrected = currentPositions.map(p => ({ ...p }))
-  const n = contourAnchorOrder.length
+  let bestS = 0
+  let bestDistSq = Infinity
 
-  // Compute displacements for contour anchors
-  const displacements: Point2D[] = currentPositions.map((p, i) => ({
-    x: p.x - previousPositions[i].x,
-    y: p.y - previousPositions[i].y,
-  }))
+  for (let i = 0; i < n; i++) {
+    const a = polyline[i]
+    const b = polyline[(i + 1) % n]
+    const abx = b.x - a.x, aby = b.y - a.y
+    const segLenSq = abx * abx + aby * aby
 
-  // Contour-neighbor median constraint
-  for (let k = 0; k < n; k++) {
-    const idx = contourAnchorOrder[k]
-    const prevIdx = contourAnchorOrder[(k - 1 + n) % n]
-    const nextIdx = contourAnchorOrder[(k + 1) % n]
+    let t = 0
+    if (segLenSq > 1e-10) {
+      t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / segLenSq
+      t = Math.max(0, Math.min(1, t))
+    }
 
-    // Median of prev/next contour neighbor displacements
-    const medDx = (displacements[prevIdx].x + displacements[nextIdx].x) / 2
-    const medDy = (displacements[prevIdx].y + displacements[nextIdx].y) / 2
+    const projX = a.x + t * abx
+    const projY = a.y + t * aby
+    const dx = p.x - projX, dy = p.y - projY
+    const distSq = dx * dx + dy * dy
 
-    const devX = displacements[idx].x - medDx
-    const devY = displacements[idx].y - medDy
-    const dev = Math.sqrt(devX * devX + devY * devY)
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq
+      bestS = (cumLen[i] + t * (cumLen[i + 1] - cumLen[i])) / totalLen
+    }
+  }
 
-    if (dev > maxDev) {
-      const correctedDx = displacements[idx].x + (medDx - displacements[idx].x) * blend
-      const correctedDy = displacements[idx].y + (medDy - displacements[idx].y) * blend
-      corrected[idx] = {
-        x: previousPositions[idx].x + correctedDx,
-        y: previousPositions[idx].y + correctedDy,
+  return bestS
+}
+
+/**
+ * Reconstruct a 2D point from curvilinear coordinate s on a closed polyline.
+ */
+function pointOnPolyline(
+  s: number,
+  polyline: Point2D[],
+  cumLen: number[]
+): Point2D {
+  const n = polyline.length
+  const totalLen = cumLen[n]
+  // Wrap s into [0,1)
+  let sNorm = ((s % 1) + 1) % 1
+  const targetLen = sNorm * totalLen
+
+  // Find the segment containing targetLen
+  for (let i = 0; i < n; i++) {
+    if (targetLen >= cumLen[i] && targetLen <= cumLen[i + 1]) {
+      const segLen = cumLen[i + 1] - cumLen[i]
+      const t = segLen > 1e-10 ? (targetLen - cumLen[i]) / segLen : 0
+      const a = polyline[i]
+      const b = polyline[(i + 1) % n]
+      return {
+        x: a.x + t * (b.x - a.x),
+        y: a.y + t * (b.y - a.y),
       }
     }
   }
 
-  // Ordering enforcement: if consecutive contour anchors cross, interpolate
-  if (enforce) {
+  // Fallback: return last point
+  return { ...polyline[n - 1] }
+}
+
+/**
+ * Compute initial curvilinear spacings between consecutive contour anchors.
+ * Returns d_i = s_{i+1} - s_i for i=0..n-1 (wrapping).
+ * Call this once at frame 0 and pass to stabilizeContourAnchors.
+ */
+export function computeInitialContourSpacings(
+  positions: Point2D[],
+  contourAnchorOrder: number[]
+): number[] {
+  const n = contourAnchorOrder.length
+  if (n < 3) return []
+
+  // Build polyline from contour anchors in order
+  const polyline = contourAnchorOrder.map(idx => positions[idx])
+  const cumLen = computeCumulativeLengths(polyline)
+
+  // Project each anchor onto its own polyline to get s values
+  const sValues: number[] = []
+  for (let k = 0; k < n; k++) {
+    sValues.push(projectOntoPolyline(positions[contourAnchorOrder[k]], polyline, cumLen))
+  }
+
+  // Compute spacings (circular)
+  const spacings: number[] = []
+  for (let k = 0; k < n; k++) {
+    let d = sValues[(k + 1) % n] - sValues[k]
+    if (d < 0) d += 1 // wrap around
+    spacings.push(d)
+  }
+
+  return spacings
+}
+
+/**
+ * Stabilize contour anchor positions using curvilinear coordinates.
+ *
+ * Pipeline:
+ * 1. Build polyline from previous contour anchor positions
+ * 2. Project raw tracked positions onto polyline → curvilinear s_i
+ * 3. Enforce ordering: s_i < s_{i+1}
+ * 4. Enforce minimum spacing: s_{i+1} - s_i >= d_min
+ * 5. Regularize toward initial spacing distribution
+ * 6. Laplacian smoothing on s values
+ * 7. Reconstruct 2D positions from stabilized s values
+ */
+export function stabilizeContourAnchors(
+  currentPositions: Point2D[],
+  previousPositions: Point2D[],
+  contourAnchorOrder: number[],
+  initialSpacings: number[],
+  options?: ContourStabilizationOptions
+): Point2D[] {
+  const n = contourAnchorOrder.length
+  if (n < 3) return currentPositions.map(p => ({ ...p }))
+
+  const minSpacingRatio = options?.minSpacingRatio ?? 0.5
+  const spacingReg = options?.spacingRegularization ?? 0.5
+  const smoothW = options?.smoothingWeight ?? 0.25
+  const smoothIter = options?.smoothingIterations ?? 2
+
+  const corrected = currentPositions.map(p => ({ ...p }))
+
+  // Step 1: Build polyline from previous frame's contour anchors
+  const polyline = contourAnchorOrder.map(idx => previousPositions[idx])
+  const cumLen = computeCumulativeLengths(polyline)
+
+  // Step 2: Project current positions onto polyline → curvilinear coordinates
+  let sValues: number[] = []
+  for (let k = 0; k < n; k++) {
+    sValues.push(projectOntoPolyline(
+      currentPositions[contourAnchorOrder[k]], polyline, cumLen
+    ))
+  }
+
+  // Step 3: Enforce ordering (s_i should increase monotonically, with wrap)
+  // Sort by initial s value to detect permutations, then fix
+  for (let k = 1; k < n; k++) {
+    // Compute signed circular difference
+    let diff = sValues[k] - sValues[k - 1]
+    if (diff < -0.5) diff += 1 // handle wrap-around
+    if (diff < 0) {
+      // k crossed over k-1 → place k just after k-1
+      sValues[k] = sValues[k - 1] + 1e-6
+    }
+  }
+
+  // Step 4: Enforce minimum spacing
+  if (initialSpacings.length === n) {
     for (let k = 0; k < n; k++) {
-      const idxA = contourAnchorOrder[k]
-      const idxB = contourAnchorOrder[(k + 1) % n]
-      const idxC = contourAnchorOrder[(k + 2) % n]
+      const nextK = (k + 1) % n
+      let spacing = sValues[nextK] - sValues[k]
+      if (spacing < 0) spacing += 1 // wrap
 
-      const a = corrected[idxA]
-      const b = corrected[idxB]
-      const c = corrected[idxC]
+      const dMin = initialSpacings[k] * minSpacingRatio
+      if (spacing < dMin && dMin > 0) {
+        // Push next anchor forward by half the deficit
+        const deficit = dMin - spacing
+        sValues[nextK] = sValues[nextK] + deficit * 0.5
+        sValues[k] = sValues[k] - deficit * 0.5
+      }
+    }
+  }
 
-      // Check if B crossed over the AC line using cross product sign
-      const abx = b.x - a.x, aby = b.y - a.y
-      const acx = c.x - a.x, acy = c.y - a.y
-      const crossCurr = abx * acy - aby * acx
+  // Step 5: Regularize toward initial spacing distribution
+  if (initialSpacings.length === n && spacingReg > 0) {
+    for (let k = 0; k < n; k++) {
+      const nextK = (k + 1) % n
+      let currentSpacing = sValues[nextK] - sValues[k]
+      if (currentSpacing < 0) currentSpacing += 1
 
-      const pa = previousPositions[idxA]
-      const pb = previousPositions[idxB]
-      const pc = previousPositions[idxC]
-      const pabx = pb.x - pa.x, paby = pb.y - pa.y
-      const pacx = pc.x - pa.x, pacy = pc.y - pa.y
-      const crossPrev = pabx * pacy - paby * pacx
+      const targetSpacing = initialSpacings[k]
+      const error = targetSpacing - currentSpacing
 
-      // If sign flipped, B crossed the AC line → interpolate B between A and C
-      if (crossPrev !== 0 && Math.sign(crossCurr) !== Math.sign(crossPrev)) {
-        corrected[idxB] = {
-          x: (a.x + c.x) / 2,
-          y: (a.y + c.y) / 2,
+      // Move both endpoints to reduce error
+      const correction = error * spacingReg * 0.5
+      sValues[k] -= correction * 0.5
+      sValues[nextK] += correction * 0.5
+    }
+  }
+
+  // Step 6: Laplacian smoothing on s values
+  for (let iter = 0; iter < smoothIter; iter++) {
+    const smoothed = [...sValues]
+    for (let k = 0; k < n; k++) {
+      const prev = sValues[(k - 1 + n) % n]
+      const next = sValues[(k + 1) % n]
+      // For circular coordinates, handle wrap
+      let sPrev = prev, sNext = next
+      const sCurr = sValues[k]
+
+      // Unwrap neighbors relative to current
+      if (sCurr - sPrev > 0.5) sPrev += 1
+      if (sPrev - sCurr > 0.5) sPrev -= 1
+      if (sCurr - sNext > 0.5) sNext += 1
+      if (sNext - sCurr > 0.5) sNext -= 1
+
+      const avg = smoothW * sPrev + (1 - 2 * smoothW) * sCurr + smoothW * sNext
+      smoothed[k] = ((avg % 1) + 1) % 1 // wrap back to [0,1)
+    }
+    sValues = smoothed
+  }
+
+  // Step 7: Reconstruct 2D positions
+  for (let k = 0; k < n; k++) {
+    corrected[contourAnchorOrder[k]] = pointOnPolyline(sValues[k], polyline, cumLen)
+  }
+
+  return corrected
+}
+
+// Legacy alias
+export const applyContourConstraints = stabilizeContourAnchors
+
+// ---------------------------------------------------------------------------
+// 4. Min separation: anti-agglutination repulsion force
+// ---------------------------------------------------------------------------
+
+/**
+ * Prevent anchor points from getting too close to their topological neighbors.
+ * For each edge in the adjacency, if the distance is below minDist,
+ * push both points apart symmetrically.
+ */
+export function applyMinSeparation(
+  positions: Point2D[],
+  adjacency: Map<number, Set<number>>,
+  minDist: number
+): Point2D[] {
+  const corrected = positions.map(p => ({ ...p }))
+  const processed = new Set<string>()
+
+  for (const [i, neighbors] of adjacency) {
+    for (const j of neighbors) {
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`
+      if (processed.has(key)) continue
+      processed.add(key)
+
+      const dx = corrected[j].x - corrected[i].x
+      const dy = corrected[j].y - corrected[i].y
+      const dist = Math.sqrt(dx * dx + dy * dy)
+
+      if (dist < minDist) {
+        if (dist > 1e-6) {
+          const push = (minDist - dist) / 2
+          const ux = dx / dist, uy = dy / dist
+          corrected[i].x -= ux * push
+          corrected[i].y -= uy * push
+          corrected[j].x += ux * push
+          corrected[j].y += uy * push
+        } else {
+          // Superimposed points: deterministic offset based on index
+          const angle = ((i * 7 + j * 13) % 360) * Math.PI / 180
+          const push = minDist / 2
+          corrected[i].x -= Math.cos(angle) * push
+          corrected[i].y -= Math.sin(angle) * push
+          corrected[j].x += Math.cos(angle) * push
+          corrected[j].y += Math.sin(angle) * push
         }
       }
     }
@@ -276,7 +484,7 @@ export function applyContourConstraints(
 }
 
 // ---------------------------------------------------------------------------
-// 4. Outlier detection & correction
+// 5. Outlier detection & correction
 // ---------------------------------------------------------------------------
 
 export interface OutlierOptions {
@@ -409,7 +617,7 @@ export function detectAndCorrectOutliers(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function median(values: number[]): number {
+export function median(values: number[]): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)

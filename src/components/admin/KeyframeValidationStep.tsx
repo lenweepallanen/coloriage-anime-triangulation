@@ -38,6 +38,9 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
   const [useTemporalSmoothing, setUseTemporalSmoothing] = useState(false)
   const [useContourConstraints, setUseContourConstraints] = useState(false)
   const [useOutlierDetection, setUseOutlierDetection] = useState(false)
+  const [useMinSeparation, setUseMinSeparation] = useState(true)
+  const [useContourRefinement, setUseContourRefinement] = useState(false)
+  const [contourDebugData, setContourDebugData] = useState<import('../../utils/opticalFlowComputer').ContourTrackingDebugData[] | null>(null)
 
   // Ref to hold the full per-frame anchor tracking (before keyframe extraction)
   const rawTrackingRef = useRef<Point2D[][] | null>(null)
@@ -95,11 +98,13 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
               enableTemporalSmoothing: useTemporalSmoothing,
               enableContourConstraints: useContourConstraints,
               enableOutlierDetection: useOutlierDetection,
+              enableMinSeparation: useMinSeparation,
+              enableContourRefinement: useContourRefinement,
             }
           : undefined
 
       // Track ONLY anchor points (not internal points)
-      const { videoFramesMesh: anchorTracking } = await precomputeOpticalFlow(
+      const { videoFramesMesh: anchorTracking, contourDebug } = await precomputeOpticalFlow(
         null,
         project.videoBlob,
         mesh.anchorPoints,
@@ -110,6 +115,7 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
       )
 
       rawTrackingRef.current = anchorTracking
+      setContourDebugData(contourDebug ?? null)
       setTotalFrames(anchorTracking.length)
 
       // Extract keyframes at the configured interval
@@ -175,6 +181,8 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
             contourAnchorOrder,
             enableAntiSaut: useAntiSaut,
             enableContourConstraints: useContourConstraints,
+            enableMinSeparation: useMinSeparation,
+            enableContourRefinement: useContourRefinement,
             // No temporal smoothing or outlier detection for segments (too short)
           }
         : undefined
@@ -204,7 +212,7 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
     }
 
     return results.length > 0 ? results[results.length - 1].points : null
-  }, [project.videoBlob, imgDims, useConstraints, useAntiSaut, useContourConstraints, mesh])
+  }, [project.videoBlob, imgDims, useConstraints, useAntiSaut, useContourConstraints, useMinSeparation, useContourRefinement, mesh])
 
   /**
    * Propagate forward one step: current → next keyframe.
@@ -468,6 +476,26 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
           Détection outliers
         </label>
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useMinSeparation}
+            onChange={e => setUseMinSeparation(e.target.checked)}
+            disabled={isBusy}
+          />
+          Anti-agglutinement
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useContourRefinement}
+            onChange={e => setUseContourRefinement(e.target.checked)}
+            disabled={isBusy}
+          />
+          Raffinement contour
+        </label>
+
         <span className="toolbar-separator" />
 
         <button onClick={handleComputeTracking} disabled={isBusy}>
@@ -530,6 +558,8 @@ export default function KeyframeValidationStep({ project, onSave }: Props) {
               propagating={propagating}
               isFirstKeyframe={selectedKfIndex === 0}
               isLastKeyframe={selectedKfIndex === keyframes.length - 1}
+              contourDebug={contourDebugData?.[keyframes[selectedKfIndex].frameIndex] ?? null}
+              contourAnchorIndices={mesh?.contourPath?.filter(e => e.type === 'anchor').map(e => e.index)}
             />
           )}
         </>

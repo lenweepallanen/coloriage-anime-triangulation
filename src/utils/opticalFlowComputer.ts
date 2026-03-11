@@ -1,13 +1,22 @@
 import type { Point2D } from '../types/project'
-import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints } from './perspectiveCorrection'
+import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints, flowInitTemplates, flowExtractContourDense } from './perspectiveCorrection'
 import {
   buildAnchorAdjacency,
   applyNeighborConstraints,
   applyAntiSaut,
-  applyContourConstraints,
+  stabilizeContourAnchors,
+  computeInitialContourSpacings,
+  applyMinSeparation,
   applyTemporalSmoothing,
   detectAndCorrectOutliers,
+  median,
 } from './trackingConstraints'
+import {
+  initContourTracking,
+  refineContourAnchors,
+  DEFAULT_CONTOUR_TRACKING_CONFIG,
+} from './contourAnchorTracker'
+import type { ContourTrackingConfig, ContourTrackingState } from './contourAnchorTracker'
 
 export interface TrackingConstraintParams {
   anchorTriangles: [number, number, number][]
@@ -18,6 +27,17 @@ export interface TrackingConstraintParams {
   temporalSmoothingWindow?: number   // default 3
   enableContourConstraints?: boolean // default false
   enableOutlierDetection?: boolean   // default false
+  enableMinSeparation?: boolean      // default true (anti-agglutination)
+  minSeparationRatio?: number        // fraction of median initial edge length, default 0.25
+  enableContourRefinement?: boolean  // default false — hybrid LK + template + snap
+  contourRefinementConfig?: Partial<Omit<ContourTrackingConfig, 'contourAnchorIndices'>>
+}
+
+/** Per-frame contour tracking debug data (confidences + contour polyline) */
+export interface ContourTrackingDebugData {
+  confidences: number[]        // per contour-anchor confidence [0,1]
+  lostFrameCount: number[]     // per contour-anchor lost frame count
+  contourPolyline: Point2D[] | null  // dense contour for this frame
 }
 
 /**
@@ -51,20 +71,79 @@ export async function trackSegment(
   // First, seek to startFrame and init the tracker
   const startFrameData = await extractFrame(video, ctx, startFrame / fps, videoW, videoH)
   await flowInit(initVideoPoints)
-  await flowProcessFrame(startFrameData) // Process startFrame to set the reference
+  const startResult = await flowProcessFrame(startFrameData) // Process startFrame to set the reference
 
   let prevVideoPoints = initVideoPoints
   const results: { frameIndex: number; points: Point2D[] }[] = []
+
+  // Compute min separation distance from initial edge lengths
+  let minDist = 0
+  if (constraints?.enableMinSeparation !== false && adjacency) {
+    const edgeLengths: number[] = []
+    for (const [i, neighbors] of adjacency) {
+      for (const j of neighbors) {
+        if (j > i) {
+          const dx = initVideoPoints[i].x - initVideoPoints[j].x
+          const dy = initVideoPoints[i].y - initVideoPoints[j].y
+          edgeLengths.push(Math.sqrt(dx * dx + dy * dy))
+        }
+      }
+    }
+    if (edgeLengths.length > 0) {
+      minDist = median(edgeLengths) * (constraints?.minSeparationRatio ?? 0.25)
+    }
+  }
+
+  // Compute initial contour spacings for curvilinear stabilization
+  let initialContourSpacings: number[] = []
+  if (constraints?.enableContourConstraints && constraints.contourAnchorOrder?.length) {
+    initialContourSpacings = computeInitialContourSpacings(
+      initVideoPoints, constraints.contourAnchorOrder
+    )
+  }
+
+  // Contour refinement setup for segment tracking
+  const useContourRefinement = constraints?.enableContourRefinement && constraints.contourAnchorOrder?.length
+  let contourTrackingState: ContourTrackingState | null = null
+  let contourTrackingConfig: ContourTrackingConfig | null = null
+
+  if (useContourRefinement && constraints.contourAnchorOrder) {
+    contourTrackingConfig = {
+      ...DEFAULT_CONTOUR_TRACKING_CONFIG,
+      ...constraints.contourRefinementConfig,
+      contourAnchorIndices: constraints.contourAnchorOrder,
+    }
+    // Initialize templates from start frame
+    await flowInitTemplates(contourTrackingConfig.contourAnchorIndices, 31)
+    contourTrackingState = initContourTracking(contourTrackingConfig, startResult.points)
+  }
 
   for (let i = 1; i <= numFrames; i++) {
     onProgress?.(i, numFrames)
     const frameIdx = startFrame + i * step
     const frameData = await extractFrame(video, ctx, frameIdx / fps, videoW, videoH)
-    let points = await flowProcessFrame(frameData)
+    const frameResult = await flowProcessFrame(frameData)
+    let points = frameResult.points
 
     // Apply per-frame constraints in order
     if (constraints) {
       let changed = false
+
+      // 0. Contour refinement (template match + snap-to-contour)
+      if (useContourRefinement && contourTrackingState && contourTrackingConfig) {
+        const contourPolyline = await flowExtractContourDense(frameData)
+        const contourMatches = frameResult.contourMatches?.map(m => ({
+          tmPos: m.tmPos,
+          tmScore: m.tmScore,
+        })) ?? null
+
+        const refinement = refineContourAnchors(
+          points, contourMatches, contourPolyline, contourTrackingState, contourTrackingConfig
+        )
+        points = refinement.refined
+        contourTrackingState = refinement.state
+        changed = true
+      }
 
       // 1. Anti-saut
       if (constraints.enableAntiSaut !== false) {
@@ -73,15 +152,23 @@ export async function trackSegment(
         changed = true
       }
 
-      // 2. Neighbor consensus (existing)
+      // 2. Neighbor consensus
       if (adjacency) {
         points = applyNeighborConstraints(points, prevVideoPoints, adjacency)
         changed = true
       }
 
-      // 3. Contour constraints
-      if (constraints.enableContourConstraints && constraints.contourAnchorOrder?.length) {
-        points = applyContourConstraints(points, prevVideoPoints, constraints.contourAnchorOrder)
+      // 3. Curvilinear contour stabilization (skipped when contour refinement is active)
+      if (!useContourRefinement && constraints.enableContourConstraints && constraints.contourAnchorOrder?.length) {
+        points = stabilizeContourAnchors(
+          points, prevVideoPoints, constraints.contourAnchorOrder, initialContourSpacings
+        )
+        changed = true
+      }
+
+      // 4. Min separation (anti-agglutination)
+      if (constraints.enableMinSeparation !== false && adjacency && minDist > 0) {
+        points = applyMinSeparation(points, adjacency, minDist)
         changed = true
       }
 
@@ -181,7 +268,7 @@ export async function precomputeOpticalFlow(
   imageHeight: number,
   onProgress?: (stage: string, current: number, total: number) => void,
   constraints?: TrackingConstraintParams
-): Promise<{ videoFramesMesh: Point2D[][]; fps: number }> {
+): Promise<{ videoFramesMesh: Point2D[][]; fps: number; contourDebug?: ContourTrackingDebugData[] }> {
   onProgress?.('Préparation', 0, 1)
   const { video, url, ctx, width: videoW, height: videoH, fps, totalFrames } =
     await prepareVideo(videoBlob)
@@ -203,16 +290,92 @@ export async function precomputeOpticalFlow(
   let videoFramesMesh: Point2D[][] = []
   let prevVideoPoints = initialPoints
 
+  // Compute min separation distance from initial edge lengths
+  let minDist = 0
+  if (constraints?.enableMinSeparation !== false && adjacency) {
+    const edgeLengths: number[] = []
+    for (const [i, neighbors] of adjacency) {
+      for (const j of neighbors) {
+        if (j > i) {
+          const dx = initialPoints[i].x - initialPoints[j].x
+          const dy = initialPoints[i].y - initialPoints[j].y
+          edgeLengths.push(Math.sqrt(dx * dx + dy * dy))
+        }
+      }
+    }
+    if (edgeLengths.length > 0) {
+      minDist = median(edgeLengths) * (constraints?.minSeparationRatio ?? 0.25)
+    }
+  }
+
+  // Compute initial contour spacings for curvilinear stabilization
+  let initialContourSpacings: number[] = []
+  if (constraints?.enableContourConstraints && constraints.contourAnchorOrder?.length) {
+    initialContourSpacings = computeInitialContourSpacings(
+      initialPoints, constraints.contourAnchorOrder
+    )
+  }
+
+  // Contour refinement setup
+  const useContourRefinement = constraints?.enableContourRefinement && constraints.contourAnchorOrder?.length
+  let contourTrackingState: ContourTrackingState | null = null
+  let contourTrackingConfig: ContourTrackingConfig | null = null
+  const contourDebugData: ContourTrackingDebugData[] = []
+
+  if (useContourRefinement && constraints.contourAnchorOrder) {
+    contourTrackingConfig = {
+      ...DEFAULT_CONTOUR_TRACKING_CONFIG,
+      ...constraints.contourRefinementConfig,
+      contourAnchorIndices: constraints.contourAnchorOrder,
+    }
+  }
+
   for (let i = 0; i < totalFrames; i++) {
     onProgress?.('Extraction & tracking', i + 1, totalFrames)
 
     const frameData = await extractFrame(video, ctx, i / fps, videoW, videoH)
-    let points = await flowProcessFrame(frameData)
+    const frameResult = await flowProcessFrame(frameData)
+    let points = frameResult.points
+
+    // Frame 0: initialize contour templates
+    if (i === 0 && useContourRefinement && contourTrackingConfig) {
+      await flowInitTemplates(contourTrackingConfig.contourAnchorIndices, 31)
+      contourTrackingState = initContourTracking(contourTrackingConfig, points)
+      contourDebugData.push({
+        confidences: [...contourTrackingState.confidences],
+        lostFrameCount: [...contourTrackingState.lostFrameCount],
+        contourPolyline: null,
+      })
+    }
 
     // Apply per-frame constraints (skip frame 0 — no displacement yet)
     if (constraints && i > 0) {
       let changed = false
       const vmax = constraints.antiSautVmax ?? Math.sqrt(videoW * videoW + videoH * videoH) * 0.015
+
+      // 0. Contour refinement (template match + snap-to-contour)
+      if (useContourRefinement && contourTrackingState && contourTrackingConfig) {
+        // Extract dense contour from current frame
+        const contourPolyline = await flowExtractContourDense(frameData)
+        const contourMatches = frameResult.contourMatches?.map(m => ({
+          tmPos: m.tmPos,
+          tmScore: m.tmScore,
+        })) ?? null
+
+        const refinement = refineContourAnchors(
+          points, contourMatches, contourPolyline, contourTrackingState, contourTrackingConfig
+        )
+        points = refinement.refined
+        contourTrackingState = refinement.state
+        changed = true
+
+        // Store debug data
+        contourDebugData.push({
+          confidences: [...contourTrackingState.confidences],
+          lostFrameCount: [...contourTrackingState.lostFrameCount],
+          contourPolyline,
+        })
+      }
 
       // 1. Anti-saut
       if (constraints.enableAntiSaut !== false) {
@@ -220,15 +383,23 @@ export async function precomputeOpticalFlow(
         changed = true
       }
 
-      // 2. Neighbor consensus (existing)
+      // 2. Neighbor consensus
       if (adjacency) {
         points = applyNeighborConstraints(points, prevVideoPoints, adjacency)
         changed = true
       }
 
-      // 3. Contour constraints
-      if (constraints.enableContourConstraints && constraints.contourAnchorOrder?.length) {
-        points = applyContourConstraints(points, prevVideoPoints, constraints.contourAnchorOrder)
+      // 3. Curvilinear contour stabilization (skipped when contour refinement is active)
+      if (!useContourRefinement && constraints.enableContourConstraints && constraints.contourAnchorOrder?.length) {
+        points = stabilizeContourAnchors(
+          points, prevVideoPoints, constraints.contourAnchorOrder, initialContourSpacings
+        )
+        changed = true
+      }
+
+      // 4. Min separation (anti-agglutination)
+      if (constraints.enableMinSeparation !== false && adjacency && minDist > 0) {
+        points = applyMinSeparation(points, adjacency, minDist)
         changed = true
       }
 
@@ -264,5 +435,21 @@ export async function precomputeOpticalFlow(
     }))
   )
 
-  return { videoFramesMesh: normalizedFrames, fps }
+  // Normalize contour debug polylines to image coordinates
+  if (contourDebugData.length > 0) {
+    for (const debug of contourDebugData) {
+      if (debug.contourPolyline) {
+        debug.contourPolyline = debug.contourPolyline.map(p => ({
+          x: (p.x / videoW) * imageWidth,
+          y: (p.y / videoH) * imageHeight,
+        }))
+      }
+    }
+  }
+
+  return {
+    videoFramesMesh: normalizedFrames,
+    fps,
+    contourDebug: useContourRefinement ? contourDebugData : undefined,
+  }
 }

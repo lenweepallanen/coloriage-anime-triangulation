@@ -108,18 +108,50 @@ export async function flowInit(points: { x: number; y: number }[]): Promise<void
   await workerRpc({ type: 'flow-init', points }, 'flow-init-done')
 }
 
-export async function flowProcessFrame(imageData: ImageData): Promise<{ x: number; y: number }[]> {
+export interface ContourMatchResult {
+  lkPos: { x: number; y: number }
+  tmPos: { x: number; y: number }
+  tmScore: number
+}
+
+export interface FlowFrameResult {
+  points: { x: number; y: number }[]
+  contourMatches?: ContourMatchResult[]
+}
+
+export async function flowProcessFrame(imageData: ImageData): Promise<FlowFrameResult> {
   if (!workerReady) await loadOpenCVWorker()
   const result = await workerRpc({
     type: 'flow-frame',
     imageData: { data: imageData.data, width: imageData.width, height: imageData.height }
   }, 'flow-frame-result')
-  return result.points
+  return { points: result.points, contourMatches: result.contourMatches || undefined }
 }
 
 export async function flowUpdatePoints(points: { x: number; y: number }[]): Promise<void> {
   if (!workerReady || !worker) return
   await workerRpc({ type: 'flow-update-points', points }, 'flow-update-points-done')
+}
+
+export async function flowInitTemplates(
+  contourAnchorIndices: number[],
+  templateSize?: number
+): Promise<void> {
+  if (!workerReady) await loadOpenCVWorker()
+  await workerRpc({
+    type: 'flow-init-templates',
+    contourAnchorIndices,
+    templateSize: templateSize ?? 31
+  }, 'flow-init-templates-done')
+}
+
+export async function flowExtractContourDense(imageData: ImageData): Promise<{ x: number; y: number }[] | null> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'flow-contour-dense',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height }
+  }, 'flow-contour-dense-result')
+  return result.contourPoints || null
 }
 
 export async function flowCleanup(): Promise<void> {
