@@ -18,7 +18,7 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     if (!containerRef.current || !project.mesh) return
 
     const mesh = project.mesh
-    const allPoints = [...mesh.anchorPoints, ...mesh.contourPoints, ...mesh.internalPoints]
+    const allPoints = [...mesh.contourVertices, ...mesh.anchorPoints, ...mesh.internalPoints]
     const hasFlow = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
 
     // Create PIXI application

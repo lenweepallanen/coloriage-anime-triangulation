@@ -1,5 +1,6 @@
-import type { Point2D } from '../types/project'
+import type { Point2D, CannyParams } from '../types/project'
 import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints, flowInitTemplates, flowExtractContourDense } from './perspectiveCorrection'
+import type { FlowFrameOptions } from './perspectiveCorrection'
 import {
   buildAnchorAdjacency,
   applyNeighborConstraints,
@@ -9,8 +10,12 @@ import {
   applyMinSeparation,
   applyTemporalSmoothing,
   detectAndCorrectOutliers,
+  applySnapToContour,
+  recoverLostPoints,
   median,
 } from './trackingConstraints'
+import type { SnapToContourOptions } from './trackingConstraints'
+import { ContourSpatialIndex } from './contourSpatialIndex'
 import {
   initContourTracking,
   refineContourAnchors,
@@ -31,6 +36,9 @@ export interface TrackingConstraintParams {
   minSeparationRatio?: number        // fraction of median initial edge length, default 0.25
   enableContourRefinement?: boolean  // default false — hybrid LK + template + snap
   contourRefinementConfig?: Partial<Omit<ContourTrackingConfig, 'contourAnchorIndices'>>
+  enableSnapToContour?: boolean      // default false — snap points onto Canny contour
+  snapToContourConfig?: Partial<SnapToContourOptions>
+  cannyParams?: CannyParams          // Canny params for contour detection during tracking
 }
 
 /** Per-frame contour tracking debug data (confidences + contour polyline) */
@@ -118,11 +126,22 @@ export async function trackSegment(
     contourTrackingState = initContourTracking(contourTrackingConfig, startResult.points)
   }
 
+  // Build flow-frame options for snap-to-contour
+  const useSnap = constraints?.enableSnapToContour && constraints.cannyParams
+  const flowFrameOpts: FlowFrameOptions | undefined = useSnap ? {
+    extractContour: true,
+    cannyParams: {
+      low: constraints.cannyParams!.lowThreshold,
+      high: constraints.cannyParams!.highThreshold,
+      blur: constraints.cannyParams!.blurSize,
+    },
+  } : undefined
+
   for (let i = 1; i <= numFrames; i++) {
     onProgress?.(i, numFrames)
     const frameIdx = startFrame + i * step
     const frameData = await extractFrame(video, ctx, frameIdx / fps, videoW, videoH)
-    const frameResult = await flowProcessFrame(frameData)
+    const frameResult = await flowProcessFrame(frameData, flowFrameOpts)
     let points = frameResult.points
 
     // Apply per-frame constraints in order
@@ -169,6 +188,20 @@ export async function trackSegment(
       // 4. Min separation (anti-agglutination)
       if (constraints.enableMinSeparation !== false && adjacency && minDist > 0) {
         points = applyMinSeparation(points, adjacency, minDist)
+        changed = true
+      }
+
+      // 5. Snap-to-contour (LAST — snaps onto detected Canny contour)
+      if (useSnap && frameResult.detectedContour?.length) {
+        const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
+        const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
+        const snapResult = applySnapToContour(points, contourIndex, snapOpts)
+        points = snapResult.snapped
+        // Recover lost points with wider radius
+        if (snapResult.lostFlags.some(f => f)) {
+          const recovery = recoverLostPoints(points, snapResult.lostFlags, contourIndex)
+          points = recovery.recovered
+        }
         changed = true
       }
 
@@ -330,11 +363,22 @@ export async function precomputeOpticalFlow(
     }
   }
 
+  // Build flow-frame options for snap-to-contour
+  const useSnap = constraints?.enableSnapToContour && constraints.cannyParams
+  const flowFrameOpts: FlowFrameOptions | undefined = useSnap ? {
+    extractContour: true,
+    cannyParams: {
+      low: constraints.cannyParams!.lowThreshold,
+      high: constraints.cannyParams!.highThreshold,
+      blur: constraints.cannyParams!.blurSize,
+    },
+  } : undefined
+
   for (let i = 0; i < totalFrames; i++) {
     onProgress?.('Extraction & tracking', i + 1, totalFrames)
 
     const frameData = await extractFrame(video, ctx, i / fps, videoW, videoH)
-    const frameResult = await flowProcessFrame(frameData)
+    const frameResult = await flowProcessFrame(frameData, flowFrameOpts)
     let points = frameResult.points
 
     // Frame 0: initialize contour templates
@@ -400,6 +444,20 @@ export async function precomputeOpticalFlow(
       // 4. Min separation (anti-agglutination)
       if (constraints.enableMinSeparation !== false && adjacency && minDist > 0) {
         points = applyMinSeparation(points, adjacency, minDist)
+        changed = true
+      }
+
+      // 5. Snap-to-contour (LAST — snaps onto detected Canny contour)
+      if (useSnap && frameResult.detectedContour?.length) {
+        const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
+        const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
+        const snapResult = applySnapToContour(points, contourIndex, snapOpts)
+        points = snapResult.snapped
+        // Recover lost points with wider radius
+        if (snapResult.lostFlags.some(f => f)) {
+          const recovery = recoverLostPoints(points, snapResult.lostFlags, contourIndex)
+          points = recovery.recovered
+        }
         changed = true
       }
 

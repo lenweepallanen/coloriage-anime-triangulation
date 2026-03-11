@@ -117,15 +117,30 @@ export interface ContourMatchResult {
 export interface FlowFrameResult {
   points: { x: number; y: number }[]
   contourMatches?: ContourMatchResult[]
+  detectedContour?: { x: number; y: number }[] | null
 }
 
-export async function flowProcessFrame(imageData: ImageData): Promise<FlowFrameResult> {
+export interface FlowFrameOptions {
+  extractContour?: boolean
+  cannyParams?: { low: number; high: number; blur: number }
+}
+
+export async function flowProcessFrame(imageData: ImageData, options?: FlowFrameOptions): Promise<FlowFrameResult> {
   if (!workerReady) await loadOpenCVWorker()
-  const result = await workerRpc({
+  const msg: Record<string, unknown> = {
     type: 'flow-frame',
-    imageData: { data: imageData.data, width: imageData.width, height: imageData.height }
-  }, 'flow-frame-result')
-  return { points: result.points, contourMatches: result.contourMatches || undefined }
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+  }
+  if (options?.extractContour) {
+    msg.extractContour = true
+    msg.cannyParams = options.cannyParams
+  }
+  const result = await workerRpc(msg, 'flow-frame-result')
+  return {
+    points: result.points,
+    contourMatches: result.contourMatches || undefined,
+    detectedContour: result.detectedContour ?? undefined,
+  }
 }
 
 export async function flowUpdatePoints(points: { x: number; y: number }[]): Promise<void> {
@@ -152,6 +167,40 @@ export async function flowExtractContourDense(imageData: ImageData): Promise<{ x
     imageData: { data: imageData.data, width: imageData.width, height: imageData.height }
   }, 'flow-contour-dense-result')
   return result.contourPoints || null
+}
+
+export async function flowCannyContour(
+  imageData: ImageData,
+  lowThreshold = 50,
+  highThreshold = 150,
+  blurSize = 5
+): Promise<{ x: number; y: number }[] | null> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'canny-contour',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+    lowThreshold,
+    highThreshold,
+    blurSize
+  }, 'canny-contour-result')
+  return result.contourPoints || null
+}
+
+export async function flowCannyEdges(
+  imageData: ImageData,
+  lowThreshold = 50,
+  highThreshold = 150,
+  blurSize = 5
+): Promise<{ x: number; y: number }[] | null> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'canny-edges',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+    lowThreshold,
+    highThreshold,
+    blurSize
+  }, 'canny-edges-result')
+  return result.edgePoints || null
 }
 
 export async function flowCleanup(): Promise<void> {

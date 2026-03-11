@@ -24,17 +24,22 @@ L'utilisateur crée un projet avec une image de coloriage et une vidéo d'animat
 
 ```
 /                    → HomePage     (liste/création de projets)
-/admin/:projectId    → AdminPage   (workflow 5 étapes)
+/admin/:projectId    → AdminPage   (workflow 8 étapes)
 /scan/:projectId     → ScanPage    (scan + animation)
 ```
 
-## Workflow Admin (5 étapes)
+## Workflow Admin (8 étapes)
+
+Pipeline "contour-first" : le contour est défini, validé et tracké en priorité, puis les ancres internes.
 
 1. **Import** — Upload image PNG/JPEG + vidéo MP4/WebM
-2. **Points d'ancrage** — Placement des anchor points (contour + features)
-3. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF
-4. **Keyframes** — Tracking anchors + validation/correction par keyframe + propagation
-5. **Animation finale** — Calcul positions tous points via coordonnées barycentriques
+2. **Contour** — Placement sommets du contour (auto-détection + manuel)
+3. **Validation Canny** — Preview contour externe Canny sur vidéo + réglage seuils
+4. **Tracking Contour** — Optical flow sur sommets contour + keyframes + snap-to-contour Canny
+5. **Points d'ancrage** — Placement points features intérieurs (contour en overlay lecture seule)
+6. **Tracking Ancres** — Optical flow sur ancres internes + keyframes
+7. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF
+8. **Animation finale** — Calcul positions tous points via coordonnées barycentriques
 
 ## Workflow Scan (utilisateur final)
 
@@ -58,10 +63,10 @@ src/
 ├── hooks/useProject.ts         Hook chargement/sauvegarde projet
 ├── pages/
 │   ├── HomePage.tsx            Liste projets
-│   ├── AdminPage.tsx           Onglets admin (5 étapes)
+│   ├── AdminPage.tsx           Onglets admin (8 étapes)
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (Import, Anchors, Triangulation, Keyframes, Animation)
+│   ├── admin/                  Étapes admin (8 étapes : Import → Contour → Canny → TrackContour → Anchors → TrackAnchors → Triangulation → Animation)
 │   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -72,7 +77,8 @@ src/
 │   ├── keyframePropagation.ts  Interpolation linéaire entre keyframes + extraction
 │   ├── markerGenerator.ts      Dessin marqueurs L
 │   ├── opticalFlowComputer.ts  Pipeline extraction frames + tracking + segment re-tracking
-│   ├── trackingConstraints.ts  Contraintes voisinage pour stabiliser le tracking
+│   ├── trackingConstraints.ts  Contraintes voisinage + snap-to-contour Canny
+│   ├── contourSpatialIndex.ts  Index spatial bucket 2D pour snap-to-contour
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
 │   └── textureExtractor.ts     Calcul UVs pour PIXI
@@ -94,26 +100,34 @@ Project {
 }
 
 MeshData {
-  // Points structurels (trackés par optical flow)
-  anchorPoints: Point2D[]            // Contour + features intérieures
-  contourIndices: number[]           // Indices des anchors formant le contour
-  internalPoints: Point2D[]          // Points de remplissage (non trackés)
+  // Contour (étape 2 — sommets trackés par optical flow)
+  contourVertices: Point2D[]         // Sommets du contour fermé
+  cannyParams?: CannyParams          // Seuils Canny validés (étape 3)
 
-  // Topologie (verrouillée après étape 3)
-  triangles: [number,number,number][]  // Indices dans allPoints = [...anchors, ...internals]
+  // Tracking contour (étape 4)
+  contourKeyframes?: KeyframeData[]
+  contourFrames?: Point2D[][]        // Positions contour par frame
+  contourTrackingValidated?: boolean
+
+  // Ancres internes (étape 5 — features : yeux, ailes, etc.)
+  anchorPoints: Point2D[]
+
+  // Tracking ancres (étape 6)
+  anchorKeyframes?: KeyframeData[]
+  anchorFrames?: Point2D[][]         // Positions ancres par frame
+  anchorTrackingValidated?: boolean
+
+  // Points internes (étape 7 — non trackés, suivent via barycentrics)
+  internalPoints: Point2D[]
+
+  // Topologie (verrouillée étape 7)
+  triangles: [number,number,number][]  // Indices dans allPoints = [...contour, ...anchors, ...internals]
   topologyLocked: boolean
+  trackedTriangles: [number,number,number][]  // Delaunay sur tracked seuls
+  internalBarycentrics: BarycentricRef[]      // 1 par point interne
 
-  // Relation anchors → internes (coordonnées barycentriques)
-  anchorTriangles: [number,number,number][]  // Delaunay sur anchors seuls
-  internalBarycentrics: BarycentricRef[]     // 1 par point interne
-
-  // Animation par keyframes
-  keyframeInterval: number
-  keyframes: KeyframeData[]          // Positions anchors aux keyframes
-  anchorFrames: Point2D[][] | null   // Positions anchors interpolées pour toutes les frames
-
-  // Sortie finale (consommé par AnimationPlayer)
-  videoFramesMesh: Point2D[][] | null  // [...anchors, ...internals] par frame
+  // Sortie finale (étape 8, consommé par AnimationPlayer)
+  videoFramesMesh: Point2D[][] | null  // [...tracked, ...internals] par frame
 }
 
 Scan {
@@ -125,7 +139,7 @@ Scan {
 
 ## Indexation des points
 
-Convention utilisée partout : `allPoints = [...anchorPoints, ...internalPoints]`. Les indices dans `triangles` réfèrent à cette fusion. AnimationPlayer consomme `videoFramesMesh` avec cette même convention.
+Convention utilisée partout : `allPoints = [...contourVertices, ...anchorPoints, ...internalPoints]`. Les indices dans `triangles` réfèrent à cette fusion. `tracked = [...contourVertices, ...anchorPoints]` sont les points trackés par optical flow. AnimationPlayer consomme `videoFramesMesh` avec cette même convention.
 
 ## Stockage Firebase
 

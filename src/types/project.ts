@@ -4,7 +4,7 @@ export interface Point2D {
 }
 
 export interface BarycentricRef {
-  anchorTriangleIndex: number; // index into anchorTriangles[]
+  anchorTriangleIndex: number; // index into trackedTriangles[]
   u: number; // weight for vertex A
   v: number; // weight for vertex B
   w: number; // weight for vertex C
@@ -12,39 +12,46 @@ export interface BarycentricRef {
 
 export interface KeyframeData {
   frameIndex: number;
-  anchorPositions: Point2D[]; // anchor positions at this keyframe
+  anchorPositions: Point2D[]; // point positions at this keyframe (contour OR anchor depending on context)
 }
 
-export interface ContourPathEntry {
-  type: 'anchor' | 'contour';
-  index: number; // into anchorPoints[] or contourPoints[]
+export interface CannyParams {
+  lowThreshold: number;
+  highThreshold: number;
+  blurSize: number;
 }
 
 export interface MeshData {
-  // 3 distinct point categories
-  anchorPoints: Point2D[];       // tracked points only (promoted contour + interior features)
-  contourPoints: Point2D[];      // non-promoted contour points (NOT tracked, derived via barycentric)
-  internalPoints: Point2D[];     // fill points (NOT tracked, derived via barycentric)
+  // Étape 2 : Sommets du contour (frame 0, TOUS trackés par optical flow)
+  contourVertices: Point2D[];
 
-  // Ordered contour path (interleaves promoted anchors + contour points)
-  contourPath: ContourPathEntry[];  // polygon reconstructed by resolving each entry
+  // Étape 3 : Paramètres Canny validés
+  cannyParams: CannyParams | null;
 
-  // Topology (locked after triangulation step)
-  triangles: [number, number, number][]; // indices into allPoints = [...anchors, ...contour, ...internals]
-  topologyLocked: boolean;
+  // Étape 4 : Tracking contour
+  contourKeyframeInterval: number;
+  contourKeyframes: KeyframeData[];
+  contourFrames: Point2D[][] | null;    // positions contour interpolées par frame
+  contourTrackingValidated: boolean;
 
-  // Anchor-only triangulation (for barycentric interpolation)
-  anchorTriangles: [number, number, number][]; // Delaunay on anchors only
-  contourBarycentrics: BarycentricRef[];       // one per contour point
-  internalBarycentrics: BarycentricRef[];      // one per internal point
+  // Étape 5 : Anchors internes (frame 0, features intérieures uniquement)
+  anchorPoints: Point2D[];
 
-  // Keyframe animation (anchors only)
-  keyframeInterval: number;
-  keyframes: KeyframeData[];
+  // Étape 6 : Tracking anchors
+  anchorKeyframeInterval: number;
+  anchorKeyframes: KeyframeData[];
   anchorFrames: Point2D[][] | null;
+  anchorTrackingValidated: boolean;
 
-  // Final output (consumed by AnimationPlayer)
-  videoFramesMesh: Point2D[][] | null; // [...anchors, ...contour, ...internals] per frame
+  // Étape 7 : Triangulation
+  internalPoints: Point2D[];
+  triangles: [number, number, number][];  // indices dans [...contourVertices, ...anchorPoints, ...internalPoints]
+  topologyLocked: boolean;
+  trackedTriangles: [number, number, number][];  // Delaunay sur [...contourVertices, ...anchorPoints]
+  internalBarycentrics: BarycentricRef[];
+
+  // Étape 8 : Sortie finale (consumed by AnimationPlayer)
+  videoFramesMesh: Point2D[][] | null;  // [...contourVertices, ...anchorPoints, ...internalPoints] per frame
 }
 
 export interface MarkerCorners {

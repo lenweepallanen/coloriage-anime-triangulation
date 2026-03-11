@@ -617,6 +617,121 @@ export function detectAndCorrectOutliers(
 // Helpers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Snap-to-contour constraint
+// ---------------------------------------------------------------------------
+
+export interface SnapToContourOptions {
+  enabled: boolean
+  snapRadius: number        // px — max distance for full snap (default 12)
+  lostRadius: number        // px — beyond this, point is lost (default 30)
+  strengthNormal: number    // [0,1] — snap strength within snapRadius (default 1.0)
+  strengthPartial: number   // [0,1] — snap strength between snapRadius and lostRadius (default 0.5)
+}
+
+export const DEFAULT_SNAP_OPTIONS: SnapToContourOptions = {
+  enabled: true,
+  snapRadius: 12,
+  lostRadius: 30,
+  strengthNormal: 1.0,
+  strengthPartial: 0.5,
+}
+
+export interface SnapResult {
+  snapped: Point2D[]
+  confidences: number[]
+  lostFlags: boolean[]
+}
+
+/**
+ * Snap tracked points onto the detected contour.
+ * Should be applied LAST in the constraint cascade, before flowUpdatePoints().
+ */
+export function applySnapToContour(
+  points: Point2D[],
+  contourIndex: { nearest(point: Point2D, maxDist: number): { point: Point2D; dist: number } | null },
+  options: SnapToContourOptions = DEFAULT_SNAP_OPTIONS
+): SnapResult {
+  const snapped: Point2D[] = []
+  const confidences: number[] = []
+  const lostFlags: boolean[] = []
+
+  for (const p of points) {
+    const result = contourIndex.nearest(p, options.lostRadius)
+
+    if (!result) {
+      // No contour found within lostRadius → lost
+      snapped.push({ x: p.x, y: p.y })
+      confidences.push(0)
+      lostFlags.push(true)
+      continue
+    }
+
+    const { point: nearest, dist } = result
+
+    if (dist <= options.snapRadius) {
+      // Within snap radius → full snap
+      snapped.push({
+        x: p.x + (nearest.x - p.x) * options.strengthNormal,
+        y: p.y + (nearest.y - p.y) * options.strengthNormal,
+      })
+      const confidence = 1.0 - (dist / options.snapRadius) * 0.3 // [0.7, 1.0]
+      confidences.push(confidence)
+      lostFlags.push(false)
+    } else {
+      // Between snapRadius and lostRadius → partial snap
+      snapped.push({
+        x: p.x + (nearest.x - p.x) * options.strengthPartial,
+        y: p.y + (nearest.y - p.y) * options.strengthPartial,
+      })
+      const confidence = 1.0 - dist / options.lostRadius // [0, ~0.6]
+      confidences.push(Math.max(0, confidence))
+      lostFlags.push(false)
+    }
+  }
+
+  return { snapped, confidences, lostFlags }
+}
+
+/**
+ * Attempt to recover lost points by searching a wider radius.
+ * Recovered points get low confidence (0.3) to signal need for manual review.
+ */
+export function recoverLostPoints(
+  points: Point2D[],
+  lostFlags: boolean[],
+  contourIndex: { nearest(point: Point2D, maxDist: number): { point: Point2D; dist: number } | null },
+  recoveryRadius = 60
+): { recovered: Point2D[]; confidences: number[]; stillLost: boolean[] } {
+  const recovered: Point2D[] = []
+  const confidences: number[] = []
+  const stillLost: boolean[] = []
+
+  for (let i = 0; i < points.length; i++) {
+    if (!lostFlags[i]) {
+      recovered.push(points[i])
+      confidences.push(1.0) // not lost, keep existing confidence
+      stillLost.push(false)
+      continue
+    }
+
+    const result = contourIndex.nearest(points[i], recoveryRadius)
+    if (result) {
+      // Recovered → snap fully but with low confidence
+      recovered.push({ x: result.point.x, y: result.point.y })
+      confidences.push(0.3)
+      stillLost.push(false)
+    } else {
+      // Still lost
+      recovered.push(points[i])
+      confidences.push(0)
+      stillLost.push(true)
+    }
+  }
+
+  return { recovered, confidences, stillLost }
+}
+
 export function median(values: number[]): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)

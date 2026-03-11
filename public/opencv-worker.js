@@ -842,6 +842,112 @@ function detectContour(imgData, density) {
   }
 }
 
+// Détection Canny + findContours — retourne uniquement le plus grand contour externe
+// Stratégie : Canny → dilate+close pour fermer les gaps → floodFill depuis les bords (fond)
+// → inverser → findContours sur la silhouette remplie
+function extractCannyContour(imgData, lowThreshold, highThreshold, blurSize) {
+  var w = imgData.width, h = imgData.height;
+  var src = new cv.Mat(h, w, cv.CV_8UC4);
+  src.data.set(new Uint8Array(imgData.data));
+
+  var gray = new cv.Mat();
+  var blurred = new cv.Mat();
+  var edges = new cv.Mat();
+  var closed = new cv.Mat();
+  var filled = new cv.Mat();
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    var kSize = blurSize % 2 === 1 ? blurSize : blurSize + 1;
+    cv.GaussianBlur(gray, blurred, new cv.Size(kSize, kSize), 0);
+    cv.Canny(blurred, edges, lowThreshold, highThreshold);
+
+    // Dilate then close to bridge gaps in the edge contour
+    var dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+    cv.dilate(edges, closed, dilateKernel, new cv.Point(-1, -1), 3);
+    var closeKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
+    cv.morphologyEx(closed, closed, cv.MORPH_CLOSE, closeKernel);
+
+    // FloodFill from top-left corner to mark the background
+    // We work on a copy since floodFill modifies in-place
+    closed.copyTo(filled);
+    var mask = new cv.Mat(h + 2, w + 2, cv.CV_8UC1, new cv.Scalar(0));
+    cv.floodFill(filled, mask, new cv.Point(0, 0), new cv.Scalar(255));
+
+    // Invert: now the object interior is white, background is black
+    cv.bitwise_not(filled, filled);
+    // Combine with original edges to keep the silhouette shape
+    cv.bitwise_or(closed, filled, filled);
+
+    var contours = new cv.MatVector();
+    var hierarchy = new cv.Mat();
+    cv.findContours(filled, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+
+    mask.delete();
+
+    if (contours.size() === 0) {
+      contours.delete(); hierarchy.delete();
+      dilateKernel.delete(); closeKernel.delete();
+      return { contourPoints: null };
+    }
+
+    // Find largest contour by area
+    var maxArea = 0, maxIdx = 0;
+    for (var i = 0; i < contours.size(); i++) {
+      var area = cv.contourArea(contours.get(i));
+      if (area > maxArea) { maxArea = area; maxIdx = i; }
+    }
+
+    var largest = contours.get(maxIdx);
+    var points = [];
+    for (var j = 0; j < largest.rows; j++) {
+      points.push({ x: largest.data32S[j * 2], y: largest.data32S[j * 2 + 1] });
+    }
+
+    contours.delete(); hierarchy.delete();
+    dilateKernel.delete(); closeKernel.delete();
+    return { contourPoints: points };
+  } finally {
+    src.delete(); gray.delete(); blurred.delete(); edges.delete(); closed.delete(); filled.delete();
+  }
+}
+
+// Détection Canny edges — retourne les pixels de bords
+function extractCannyEdges(imgData, lowThreshold, highThreshold, blurSize) {
+  var w = imgData.width, h = imgData.height;
+  var src = new cv.Mat(h, w, cv.CV_8UC4);
+  src.data.set(new Uint8Array(imgData.data));
+
+  var gray = new cv.Mat();
+  var blurred = new cv.Mat();
+  var edges = new cv.Mat();
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    var kSize = blurSize % 2 === 1 ? blurSize : blurSize + 1;
+    cv.GaussianBlur(gray, blurred, new cv.Size(kSize, kSize), 0);
+    cv.Canny(blurred, edges, lowThreshold, highThreshold);
+
+    // Extract non-zero pixel coordinates
+    var edgePoints = [];
+    var data = edges.data;
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        if (data[y * w + x] > 0) {
+          edgePoints.push({ x: x, y: y });
+        }
+      }
+    }
+
+    return { edgePoints: edgePoints };
+  } finally {
+    src.delete();
+    gray.delete();
+    blurred.delete();
+    edges.delete();
+  }
+}
+
 // Écouter les messages du thread principal
 self.onmessage = async function(e) {
   const { type, imageData } = e.data;
@@ -873,6 +979,17 @@ self.onmessage = async function(e) {
       const msg = { type: 'flow-frame-result', points: result.points };
       if (result.contourMatches) {
         msg.contourMatches = result.contourMatches;
+      }
+      // Optional: extract Canny contour from current frame for snap-to-contour
+      if (e.data.extractContour && e.data.cannyParams) {
+        try {
+          var cp = e.data.cannyParams;
+          var contourResult = extractCannyContour(imageData, cp.low || 50, cp.high || 150, cp.blur || 5);
+          msg.detectedContour = contourResult.contourPoints || null;
+        } catch (contourErr) {
+          console.error('Contour extraction during flow-frame failed:', contourErr);
+          msg.detectedContour = null;
+        }
       }
       self.postMessage(msg);
     } catch (err) {
@@ -916,6 +1033,34 @@ self.onmessage = async function(e) {
   if (type === 'flow-cleanup') {
     flowCleanup();
     self.postMessage({ type: 'flow-cleanup-done' });
+    return;
+  }
+
+  if (type === 'canny-contour') {
+    try {
+      var low = e.data.lowThreshold || 50;
+      var high = e.data.highThreshold || 150;
+      var blur = e.data.blurSize || 5;
+      var result = extractCannyContour(imageData, low, high, blur);
+      self.postMessage({ type: 'canny-contour-result', contourPoints: result.contourPoints });
+    } catch (err) {
+      console.error('Worker canny-contour error:', err);
+      self.postMessage({ type: 'canny-contour-result', contourPoints: null, error: err.message });
+    }
+    return;
+  }
+
+  if (type === 'canny-edges') {
+    try {
+      var low = e.data.lowThreshold || 50;
+      var high = e.data.highThreshold || 150;
+      var blur = e.data.blurSize || 5;
+      var result = extractCannyEdges(imageData, low, high, blur);
+      self.postMessage({ type: 'canny-edges-result', edgePoints: result.edgePoints });
+    } catch (err) {
+      console.error('Worker canny-edges error:', err);
+      self.postMessage({ type: 'canny-edges-result', edgePoints: null, error: err.message });
+    }
     return;
   }
 

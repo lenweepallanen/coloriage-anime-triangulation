@@ -12,7 +12,8 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `keyframePropagation.ts` | Interpolation linéaire entre keyframes + extraction depuis tracking brut |
 | `markerGenerator.ts` | Dessin des marqueurs L aux coins |
 | `opticalFlowComputer.ts` | Orchestration du pré-calcul optical flow + tracking par segment |
-| `trackingConstraints.ts` | Contraintes de voisinage pour stabiliser le tracking |
+| `trackingConstraints.ts` | Contraintes de voisinage + snap-to-contour pour stabiliser le tracking |
+| `contourSpatialIndex.ts` | Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche |
 | `perspectiveCorrection.ts` | Bridge RPC vers le Worker OpenCV |
 | `pdfGenerator.ts` | Génération PDF (jsPDF) |
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
@@ -75,6 +76,10 @@ interface TrackingConstraintParams {
   temporalSmoothingWindow?: number     // défaut 3
   enableContourConstraints?: boolean   // défaut false
   enableOutlierDetection?: boolean     // défaut false
+  enableMinSeparation?: boolean        // défaut true (anti-agglutination)
+  enableSnapToContour?: boolean        // défaut false — snap sur contour Canny
+  snapToContourConfig?: Partial<SnapToContourOptions>
+  cannyParams?: CannyParams            // params Canny pour détection contour pendant tracking
 }
 ```
 
@@ -121,9 +126,10 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 | `detectContourViaWorker(imageData, density)` | `contour` | `points: Point2D[]` |
 | `processCapturedImage(blob, corners?)` | `process` | `ImageData 2048×2048` |
 | `flowInit(points)` | `flow-init` | confirmation |
-| `flowProcessFrame(imageData)` | `flow-frame` | `points: Point2D[]` |
+| `flowProcessFrame(imageData, options?)` | `flow-frame` | `FlowFrameResult` (points + detectedContour?) |
 | `flowUpdatePoints(points)` | `flow-update-points` | confirmation |
 | `flowCleanup()` | `flow-cleanup` | confirmation |
+| `flowCannyContour(imageData, params)` | `canny-contour` | `contourPoints: Point2D[]` |
 
 ## textureExtractor.ts
 
@@ -141,16 +147,18 @@ Stabilisation du tracking optical flow par contraintes multiples. 5 mécanismes 
 ### Ordre d'application (par frame)
 
 ```
-1. applyAntiSaut          — clamp déplacement max
+1. applyAntiSaut            — clamp déplacement max
 2. applyNeighborConstraints — consensus médiane voisins (topologie)
 3. applyContourConstraints  — consensus contour + ordre
-→ flowUpdatePoints() une seule fois après les 3
+4. applyMinSeparation       — anti-agglutination
+5. applySnapToContour       — snap sur contour Canny détecté
+→ flowUpdatePoints() une seule fois après les 5
 ```
 
 Post-traitement (après boucle complète, precomputeOpticalFlow uniquement) :
 ```
-4. applyTemporalSmoothing   — moving average temporel
-5. detectAndCorrectOutliers — détection/correction outliers
+6. applyTemporalSmoothing   — moving average temporel
+7. detectAndCorrectOutliers — détection/correction outliers
 ```
 
 ### buildAnchorAdjacency
@@ -200,6 +208,48 @@ Détecte les outliers par :
 - **Vélocité relative** : > 4× médiane des voisins pendant 2+ frames
 
 Correction : interpolation temporelle entre la dernière bonne position et la prochaine bonne position. `suspects` : `Map<frameIndex, anchorIndices[]>` pour feedback UI.
+
+### applySnapToContour
+
+`applySnapToContour(points, contourIndex, options)` → `{ snapped, confidences, lostFlags }`
+
+Snap les points sur le contour Canny détecté à chaque frame. Utilise `ContourSpatialIndex` pour la recherche rapide.
+
+**3 zones** :
+- Distance ≤ `snapRadius` (12px) → snap complet avec `strengthNormal` (1.0), confidence [0.7, 1.0]
+- Distance entre `snapRadius` et `lostRadius` (30px) → snap partiel avec `strengthPartial` (0.5), confidence [0, 0.7]
+- Distance > `lostRadius` → point marqué lost, confidence 0, pas de déplacement
+
+```typescript
+interface SnapToContourOptions {
+  enabled: boolean
+  snapRadius: number        // défaut 12
+  lostRadius: number        // défaut 30
+  strengthNormal: number    // défaut 1.0
+  strengthPartial: number   // défaut 0.5
+}
+```
+
+### recoverLostPoints
+
+`recoverLostPoints(points, lostFlags, contourIndex, recoveryRadius?)` → `{ recovered, confidences, stillLost }`
+
+Tente de récupérer les points marqués "lost" en cherchant dans un rayon étendu (`recoveryRadius` = 60px). Si trouvé, snap complet ; sinon, le point reste à sa position LK.
+
+## contourSpatialIndex.ts
+
+Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche.
+
+```typescript
+class ContourSpatialIndex {
+  constructor(contourPixels: Point2D[], bucketSize = 8)
+  nearest(point: Point2D, maxDist: number): { point: Point2D; dist: number } | null
+}
+```
+
+- Construit une grille de buckets au constructeur (O(n))
+- `nearest()` cherche dans les buckets voisins dans un rayon `maxDist` (O(1) amortie)
+- Utilisé par `applySnapToContour` et `recoverLostPoints` à chaque frame
 
 ## pdfGenerator.ts
 

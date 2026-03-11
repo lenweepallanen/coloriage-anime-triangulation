@@ -2,12 +2,24 @@ import { useState } from 'react'
 import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import ImportStep from '../components/admin/ImportStep'
+import ContourDefinitionStep from '../components/admin/ContourDefinitionStep'
+import CannyValidationStep from '../components/admin/CannyValidationStep'
+import ContourTrackingStep from '../components/admin/ContourTrackingStep'
 import AnchorPointsStep from '../components/admin/AnchorPointsStep'
+import AnchorTrackingStep from '../components/admin/AnchorTrackingStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
-import KeyframeValidationStep from '../components/admin/KeyframeValidationStep'
-import FinalPropagationStep from '../components/admin/FinalPropagationStep'
+import FinalAnimationStep from '../components/admin/FinalAnimationStep'
 
-const STEPS = ['Import', 'Points d\'ancrage', 'Triangulation', 'Keyframes', 'Animation finale'] as const
+const STEPS = [
+  'Import',
+  'Contour',
+  'Validation Canny',
+  'Tracking Contour',
+  'Ancres',
+  'Tracking Ancres',
+  'Triangulation',
+  'Animation finale',
+] as const
 type Step = (typeof STEPS)[number]
 
 export default function AdminPage() {
@@ -43,17 +55,26 @@ export default function AdminPage() {
         {activeStep === 'Import' && (
           <ImportStep project={project} onSave={save} />
         )}
-        {activeStep === 'Points d\'ancrage' && (
+        {activeStep === 'Contour' && (
+          <ContourDefinitionStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Validation Canny' && (
+          <CannyValidationStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Tracking Contour' && (
+          <ContourTrackingStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Ancres' && (
           <AnchorPointsStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Tracking Ancres' && (
+          <AnchorTrackingStep project={project} onSave={save} />
         )}
         {activeStep === 'Triangulation' && (
           <TriangulationStep project={project} onSave={save} />
         )}
-        {activeStep === 'Keyframes' && (
-          <KeyframeValidationStep project={project} onSave={save} />
-        )}
         {activeStep === 'Animation finale' && (
-          <FinalPropagationStep project={project} onSave={save} />
+          <FinalAnimationStep project={project} onSave={save} />
         )}
       </div>
     </div>

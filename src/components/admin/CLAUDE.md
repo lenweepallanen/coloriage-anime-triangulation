@@ -1,110 +1,102 @@
-# Workflow Admin (5 étapes)
+# Workflow Admin (8 étapes)
 
-Interface à onglets dans `AdminPage.tsx` pour configurer un projet.
+Interface à onglets dans `AdminPage.tsx` pour configurer un projet. Pipeline "contour-first" : le contour est défini, validé et tracké en priorité, puis les ancres internes.
 
 ## Fichiers
 
 | Fichier | Étape | Rôle |
 |---------|-------|------|
 | `ImportStep.tsx` | 1 | Upload image coloriage + vidéo animation |
-| `AnchorPointsStep.tsx` | 2 | Placement points d'ancrage (contour + features) |
-| `TriangulationStep.tsx` | 3 | Points internes + Delaunay + verrouillage topologie + PDF |
-| `KeyframeValidationStep.tsx` | 4 | Tracking anchors + validation/correction keyframes + propagation |
-| `FinalPropagationStep.tsx` | 5 | Calcul animation finale via coordonnées barycentriques |
-| `OpticalFlowStep.tsx` | (legacy) | Ancien pré-calcul optical flow brut (conservé mais non utilisé) |
+| `ContourDefinitionStep.tsx` | 2 | Placement sommets du contour (auto + manuel) |
+| `CannyValidationStep.tsx` | 3 | Preview edges Canny sur vidéo + réglage seuils |
+| `ContourTrackingStep.tsx` | 4 | Tracking contour par optical flow + keyframes |
+| `AnchorPointsStep.tsx` | 5 | Placement points d'ancrage intérieurs (features) |
+| `AnchorTrackingStep.tsx` | 6 | Tracking ancres par optical flow + keyframes |
+| `TriangulationStep.tsx` | 7 | Points internes + Delaunay + verrouillage topologie + PDF |
+| `FinalAnimationStep.tsx` | 8 | Calcul animation finale via coordonnées barycentriques |
 
 ## Étape 1 — Import (`ImportStep.tsx`)
 
 - Upload image (PNG/JPEG) → `project.originalImageBlob`
 - Upload vidéo (MP4/WebM) → `project.videoBlob`
-- Sauvegarde avec `updateProject(project, ['image'])` ou `['video']`
 
-## Étape 2 — Points d'ancrage (`AnchorPointsStep.tsx`)
+## Étape 2 — Contour (`ContourDefinitionStep.tsx`)
 
-Place les anchor points = points structurels qui seront trackés dans la vidéo.
+Place les sommets du contour sur la frame 0. Tous seront trackés par optical flow.
 
-### Deux modes
-- **Mode Contour** : placement/édition des points du contour (bleus)
-  - Auto-détection via OpenCV (`generateAutoMesh`)
-  - Densité contour ajustable (1-10), re-génère live si auto-détecté
-  - Resample du bord (± 5 points) quand le contour est fermé
-  - Clic gauche = ajouter, clic sur 1er point = fermer, clic droit = supprimer
-- **Mode Ancres** : placement des features intérieures (or/amber)
-  - Auto-détection des points internes via `generateAutoMesh`
-  - Densité ancres ajustable (1-10)
-  - Clic gauche = ajouter, glisser = déplacer, clic droit = supprimer
+- Auto-détection via OpenCV (`generateAutoMesh`)
+- Densité ajustable (1-10), re-génère live si auto-détecté
+- Resample (± 5 points) quand le contour est fermé
+- Clic gauche = ajouter, clic sur 1er point = fermer, clic droit = supprimer
+- Sauvegarde → `mesh.contourVertices`
 
-### Données produites
-- `anchorPoints = [...contourPoints, ...featureAnchors]`
-- `contourIndices = [0, 1, ..., N-1]` (N = nombre de points contour)
+## Étape 3 — Validation Canny (`CannyValidationStep.tsx`)
 
-### Numérotation
-Les anchors sont numérotés sur le canvas : contour 0..N-1 (bleu), features N..N+M-1 (or). Cette numérotation est cohérente avec l'éditeur de keyframes.
+Preview du **contour externe** détecté par Canny sur la vidéo, frame par frame.
 
-### État interne
-- `isAutoContour` ref : si vrai, la densité contour re-génère le contour
-- `isAutoAnchors` ref : si vrai, la densité ancres re-génère les features
-- `featureAnchors` state séparé des contourPoints (du hook useTriangulation)
+- Lecteur vidéo : play/pause + slider frame par frame
+- Overlay : contour externe jaune épais (5px) — uniquement la silhouette, pas les traits intérieurs
+- Pipeline Worker : Canny → dilate + close → floodFill → findContours(RETR_EXTERNAL) → plus grand contour
+- 3 sliders : seuil bas (10-200), seuil haut (50-400), taille blur (3/5/7)
+- Bouton "Valider" → sauvegarde `mesh.cannyParams`
+- Utilise `flowCannyContour` (RPC vers `extractCannyContour` dans le Worker)
 
-## Étape 3 — Triangulation (`TriangulationStep.tsx`)
+## Étape 4 — Tracking Contour (`ContourTrackingStep.tsx`)
 
-- Reçoit `anchorPoints` en lecture seule depuis le mesh
-- L'utilisateur ajoute des **points internes** uniquement (auto-grille ou manuels)
-- Delaunay sur `[...anchors, ...internals]`, filtré par contour polygon
-- **Bouton "Verrouiller la topologie"** :
-  1. Calcule Delaunay sur les anchors seuls → `anchorTriangles`
-  2. Pour chaque point interne → `findContainingAnchorTriangle` → `internalBarycentrics`
+Prérequis : contour défini + Canny validé + vidéo importée.
+
+### Phases
+1. **Config** : intervalle keyframes + checkboxes contraintes (anti-saut, voisinage, contour, temporel, outliers, snap-to-contour Canny)
+2. **Tracking** : `precomputeOpticalFlow` sur `contourVertices`
+3. **Keyframes** : édition/correction via `KeyframeEditor` + `KeyframeTimeline`, propagation segment par segment via `trackSegment`
+4. **Validé** : `contourTrackingValidated = true`, sauvegarde `contourKeyframes` + `contourFrames`
+
+## Étape 5 — Ancres (`AnchorPointsStep.tsx`)
+
+Prérequis : tracking contour validé.
+
+- Points features intérieurs uniquement (yeux, ailes, queue...)
+- Contour affiché en overlay lecture seule
+- Auto-détection + densité ajustable
+- Sauvegarde → `mesh.anchorPoints`
+
+## Étape 6 — Tracking Ancres (`AnchorTrackingStep.tsx`)
+
+Prérequis : tracking contour validé + ancres définies.
+
+Même structure que l'étape 4 mais pour les ancres internes :
+- Config contraintes (anti-saut, voisinage, temporel, outliers — pas de contour)
+- Tracking → keyframes → édition → validation
+- Sauvegarde `anchorKeyframes` + `anchorFrames`
+
+## Étape 7 — Triangulation (`TriangulationStep.tsx`)
+
+Prérequis : tracking ancres validé.
+
+- Points trackés = `[...contourVertices, ...anchorPoints]` (lecture seule)
+- L'utilisateur ajoute des **points internes** (auto-grille ou manuels)
+- Delaunay sur `[...tracked, ...internals]`, filtré par contour polygon
+- **Verrouiller la topologie** :
+  1. Delaunay sur tracked seuls → `trackedTriangles`
+  2. Pour chaque point interne → `computeAllBarycentrics` → `internalBarycentrics`
   3. Met `topologyLocked = true`
-- **Bouton PDF** intégré (appelle `generateTemplatePDF`)
-- **Bouton "Déverrouiller"** avec avertissement (perte des keyframes/animation)
-- Une fois verrouillé : plus de modification de points, UI grisée
+- **Bouton PDF** (appelle `generateTemplatePDF`)
+- **Déverrouiller** avec avertissement
 
-## Étape 4 — Keyframes (`KeyframeValidationStep.tsx`)
+## Étape 8 — Animation finale (`FinalAnimationStep.tsx`)
 
-Prérequis : topologie verrouillée + vidéo importée.
-
-### Tracking initial
-1. Configure l'intervalle de keyframes (±5, ex: 10 frames)
-2. Checkboxes de contraintes (toutes toggleables indépendamment) :
-   - **"Contrainte voisinage"** (défaut: activée) : consensus médiane des voisins topologiques
-   - **"Anti-saut"** (défaut: activée) : clamp déplacement max par frame (1.5% diagonale)
-   - **"Lissage temporel"** (défaut: désactivée) : moving average post-traitement sur 3 frames
-   - **"Contraintes contour"** (défaut: désactivée) : consensus contour + enforcement d'ordre
-   - **"Détection outliers"** (défaut: désactivée) : détection/correction post-traitement par accélération/vélocité
-3. Bouton "Lancer le tracking" → `precomputeOpticalFlow` sur les **anchors seuls** (avec contraintes si activées)
-4. Extraction des keyframes aux intervalles → `extractKeyframes()`
-5. Résultat stocké dans `rawTrackingRef` (données brutes par frame)
-
-### Timeline (`KeyframeTimeline`)
-- Barre avec marqueurs positionnés proportionnellement
-- Clic sur un marqueur → ouvre l'éditeur de cette keyframe
-
-### Éditeur (`KeyframeEditor`)
-- Canvas principal (flex: 3) : frame vidéo + overlay anchors draggables numérotés
-- Canvas référence (flex: 1) : frame 0 avec anchors numérotés (comparaison visuelle)
-- Pan/zoom via `useCanvasInteraction`
-- Deux boutons :
-  - **"Valider & Propager"** : re-tracke via `trackSegment()` (avec contraintes si activées) depuis les positions corrigées vers la keyframe suivante, met à jour `rawTrackingRef` et les positions de la keyframe suivante
-  - **"Valider sans propager"** : passe simplement à la keyframe suivante
-
-### Sauvegarde
-- `propagateKeyframes(keyframes, totalFrames)` → interpolation linéaire → `anchorFrames`
-- Sauvegarde keyframes + anchorFrames dans Storage
-
-## Étape 5 — Animation finale (`FinalPropagationStep.tsx`)
-
-Prérequis : topologie verrouillée + anchorFrames calculées.
+Prérequis : topologie verrouillée + contourFrames + anchorFrames.
 
 ### Algorithme
 ```
 Pour chaque frame f :
-  allPoints[f] = [...anchorFrames[f]]
-  Pour chaque point interne i :
-    allPoints[f].push(interpolateInternalPoint(bary[i], anchorFrames[f], anchorTriangles))
+  trackedPositions = [...contourFrames[f], ...anchorFrames[f]]
+  internalPositions = internalBarycentrics.map(b => interpolate(b, trackedPositions, trackedTriangles))
+  allPoints[f] = [...trackedPositions, ...internalPositions]
 ```
 
-### Composants
+### UI
 - Bouton "Calculer l'animation" → boucle sur toutes les frames
 - Barre de progression (yield UI tous les 10 frames)
-- `FlowPreview` : prévisualisation avec vidéo + overlay maillage animé (play/pause/rewind)
+- Preview : vidéo + overlay maillage animé (play/pause/rewind)
 - Sauvegarde `videoFramesMesh` dans Storage

@@ -25,9 +25,10 @@ Stratégie multi-fallback :
 | `contour` | → Worker | `imageData, density` | `contour-result` + `points` |
 | `process` | → Worker | `imageData, predetectedCorners?` | `result` + `imageData 2048×2048` |
 | `flow-init` | → Worker | `points: Point2D[]` | `flow-init-done` |
-| `flow-frame` | → Worker | `imageData` | `flow-frame-result` + `points` |
+| `flow-frame` | → Worker | `imageData, extractContour?, cannyParams?` | `flow-frame-result` + `points` + `detectedContour?` |
 | `flow-update-points` | → Worker | `points: Point2D[]` | `flow-update-points-done` |
 | `flow-cleanup` | → Worker | — | `flow-cleanup-done` |
+| `canny-contour` | → Worker | `imageData, low, high, blur` | `canny-contour-result` + `contourPoints` |
 
 ## Algorithmes implémentés
 
@@ -74,6 +75,25 @@ flowUpdatePoints(pts)   → remplace flowPrevPts par les positions corrigées
                           (utilisé après applyNeighborConstraints côté main thread)
 flowCleanup()           → libère tous les cv.Mat
 ```
+
+### Extraction contour Canny (`extractCannyContour`, lignes ~845+)
+
+Détecte le contour externe (silhouette) uniquement, pas les traits intérieurs.
+
+```
+1. Grayscale → GaussianBlur(blur×blur)
+2. Canny(low, high)
+3. Dilate (ellipse 5×5, 3 itérations)
+4. Morphological close (ellipse 7×7)
+5. FloodFill depuis (0,0) → marque le fond
+6. Invert → silhouette remplie
+7. findContours(RETR_EXTERNAL) → plus grand contour par aire
+8. Retourne les pixels du contour
+```
+
+Utilisé par :
+- `canny-contour` message handler (standalone, pour preview Canny)
+- `flow-frame` handler avec `extractContour: true` (pendant le tracking, même passe)
 
 ## Variables d'état persistantes (entre messages)
 
