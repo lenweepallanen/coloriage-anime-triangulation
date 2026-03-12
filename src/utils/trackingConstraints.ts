@@ -732,6 +732,147 @@ export function recoverLostPoints(
   return { recovered, confidences, stillLost }
 }
 
+// ---------------------------------------------------------------------------
+// 6. Curvilinear spring repulsion on Canny contour
+// ---------------------------------------------------------------------------
+
+export interface CurvilinearSpringOptions {
+  springStiffness?: number    // [0,1], default 0.4 — correction strength per iteration
+  iterations?: number         // number of relaxation iterations, default 3
+  minSpacingRatio?: number    // min spacing as fraction of target, default 0.3
+}
+
+/**
+ * Compute initial curvilinear spacings on a reference polyline (Canny contour).
+ * Returns normalized spacings (sum ≈ 1.0) for each consecutive pair in contourAnchorOrder.
+ * Call once at frame 0 with the first Canny contour polyline.
+ */
+export function computeInitialCannySpacings(
+  positions: Point2D[],
+  contourAnchorOrder: number[],
+  cannyPolyline: Point2D[]
+): number[] {
+  const n = contourAnchorOrder.length
+  if (n < 3 || cannyPolyline.length < 3) return []
+
+  const cumLen = computeCumulativeLengths(cannyPolyline)
+
+  const sValues: number[] = []
+  for (let k = 0; k < n; k++) {
+    sValues.push(projectOntoPolyline(positions[contourAnchorOrder[k]], cannyPolyline, cumLen))
+  }
+
+  const spacings: number[] = []
+  for (let k = 0; k < n; k++) {
+    let d = sValues[(k + 1) % n] - sValues[k]
+    if (d < 0) d += 1
+    spacings.push(d)
+  }
+
+  return spacings
+}
+
+/**
+ * Apply curvilinear spring repulsion along the Canny contour.
+ *
+ * After snap-to-contour places vertices on the Canny edge map, this function
+ * ensures even spacing by treating consecutive contour anchors as connected
+ * by springs whose rest length is the initial curvilinear spacing.
+ *
+ * Algorithm:
+ * 1. Project contour anchors onto the ordered Canny polyline → curvilinear s_i
+ * 2. Enforce monotonic ordering of s values
+ * 3. Iteratively relax springs: for each consecutive pair, apply force
+ *    proportional to (currentSpacing - targetSpacing)
+ * 4. Enforce minimum spacing
+ * 5. Reconstruct 2D positions on the Canny polyline
+ */
+export function applyCurvilinearSpringOnCanny(
+  positions: Point2D[],
+  contourAnchorOrder: number[],
+  cannyPolyline: Point2D[],
+  initialCannySpacings: number[],
+  options?: CurvilinearSpringOptions
+): Point2D[] {
+  const n = contourAnchorOrder.length
+  if (n < 3 || cannyPolyline.length < 3) return positions.map(p => ({ ...p }))
+  if (initialCannySpacings.length !== n) return positions.map(p => ({ ...p }))
+
+  const stiffness = options?.springStiffness ?? 0.4
+  const iterations = options?.iterations ?? 3
+  const minSpacingRatio = options?.minSpacingRatio ?? 0.3
+
+  const corrected = positions.map(p => ({ ...p }))
+
+  // Build cumulative lengths of the Canny polyline
+  const cumLen = computeCumulativeLengths(cannyPolyline)
+
+  // Step 1: Project contour anchors onto Canny polyline → curvilinear coordinates
+  let sValues: number[] = []
+  for (let k = 0; k < n; k++) {
+    sValues.push(projectOntoPolyline(
+      positions[contourAnchorOrder[k]], cannyPolyline, cumLen
+    ))
+  }
+
+  // Step 2: Enforce monotonic ordering
+  for (let k = 1; k < n; k++) {
+    let diff = sValues[k] - sValues[k - 1]
+    if (diff < -0.5) diff += 1
+    if (diff < 0) {
+      sValues[k] = sValues[k - 1] + 1e-6
+    }
+  }
+
+  // Step 3: Iterative spring relaxation
+  for (let iter = 0; iter < iterations; iter++) {
+    // Accumulate forces on each vertex
+    const forces = new Array(n).fill(0)
+
+    for (let k = 0; k < n; k++) {
+      const nextK = (k + 1) % n
+      let currentSpacing = sValues[nextK] - sValues[k]
+      if (currentSpacing < 0) currentSpacing += 1
+
+      const targetSpacing = initialCannySpacings[k]
+      const error = targetSpacing - currentSpacing
+
+      // Spring force: positive error means pair is too close, push apart
+      const force = error * stiffness
+      forces[k] -= force * 0.5
+      forces[nextK] += force * 0.5
+    }
+
+    // Apply forces
+    for (let k = 0; k < n; k++) {
+      sValues[k] += forces[k]
+      // Wrap to [0,1)
+      sValues[k] = ((sValues[k] % 1) + 1) % 1
+    }
+  }
+
+  // Step 4: Enforce minimum spacing
+  for (let k = 0; k < n; k++) {
+    const nextK = (k + 1) % n
+    let spacing = sValues[nextK] - sValues[k]
+    if (spacing < 0) spacing += 1
+
+    const dMin = initialCannySpacings[k] * minSpacingRatio
+    if (spacing < dMin && dMin > 0) {
+      const deficit = dMin - spacing
+      sValues[k] = ((sValues[k] - deficit * 0.5) % 1 + 1) % 1
+      sValues[nextK] = ((sValues[nextK] + deficit * 0.5) % 1 + 1) % 1
+    }
+  }
+
+  // Step 5: Reconstruct 2D positions on the Canny polyline
+  for (let k = 0; k < n; k++) {
+    corrected[contourAnchorOrder[k]] = pointOnPolyline(sValues[k], cannyPolyline, cumLen)
+  }
+
+  return corrected
+}
+
 export function median(values: number[]): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)

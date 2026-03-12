@@ -6,19 +6,23 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Point2D, BarycentricRef, KeyframeData, CannyParams } from '../types/project'
+import type { Project, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
 interface TriangleDoc { a: number; b: number; c: number }
 
 interface MeshDoc {
-  contourVertices: Point2D[]
   cannyParams: CannyParams | null
-  contourKeyframeInterval: number
-  contourTrackingValidated: boolean
-  hasContourKeyframes: boolean
-  hasContourFrames: boolean
+  contourAnchors: Point2D[]
+  contourAnchorKeyframeInterval: number
+  contourAnchorTrackingValidated: boolean
+  hasContourAnchorKeyframes: boolean
+  hasContourAnchorFrames: boolean
+  contourSubdivisionPoints: Point2D[]
+  contourSubdivisionParams: CurvilinearParam[]
+  hasContourSubdivisionFrames: boolean
+  contourSubdivisionValidated: boolean
   anchorPoints: Point2D[]
   anchorKeyframeInterval: number
   anchorTrackingValidated: boolean
@@ -32,10 +36,11 @@ interface MeshDoc {
   hasVideoFramesMesh: boolean
 }
 
-// Legacy format (v1: contourIndices, v2: contourPath/promotion)
+// Legacy formats (v1-v3)
 interface LegacyMeshDoc {
   anchorPoints?: Point2D[]
   contourPoints?: Point2D[]
+  contourVertices?: Point2D[]
   contourIndices?: number[]
   contourPath?: { type: string; index: number }[]
   internalPoints?: Point2D[]
@@ -48,6 +53,16 @@ interface LegacyMeshDoc {
   hasKeyframes?: boolean
   hasAnchorFrames?: boolean
   hasVideoFramesMesh?: boolean
+  // v3 fields
+  contourKeyframeInterval?: number
+  contourTrackingValidated?: boolean
+  hasContourKeyframes?: boolean
+  hasContourFrames?: boolean
+  cannyParams?: CannyParams | null
+  anchorKeyframeInterval?: number
+  anchorTrackingValidated?: boolean
+  hasAnchorKeyframes?: boolean
+  trackedTriangles?: TriangleDoc[]
 }
 
 interface ProjectDoc {
@@ -108,12 +123,16 @@ function toDoc(project: Project): ProjectDoc {
     hasImage: project.originalImageBlob != null,
     hasVideo: project.videoBlob != null,
     mesh: project.mesh ? {
-      contourVertices: project.mesh.contourVertices ?? [],
       cannyParams: project.mesh.cannyParams ?? null,
-      contourKeyframeInterval: project.mesh.contourKeyframeInterval ?? 10,
-      contourTrackingValidated: project.mesh.contourTrackingValidated ?? false,
-      hasContourKeyframes: (project.mesh.contourKeyframes?.length ?? 0) > 0,
-      hasContourFrames: project.mesh.contourFrames != null,
+      contourAnchors: project.mesh.contourAnchors ?? [],
+      contourAnchorKeyframeInterval: project.mesh.contourAnchorKeyframeInterval ?? 10,
+      contourAnchorTrackingValidated: project.mesh.contourAnchorTrackingValidated ?? false,
+      hasContourAnchorKeyframes: (project.mesh.contourAnchorKeyframes?.length ?? 0) > 0,
+      hasContourAnchorFrames: project.mesh.contourAnchorFrames != null,
+      contourSubdivisionPoints: project.mesh.contourSubdivisionPoints ?? [],
+      contourSubdivisionParams: project.mesh.contourSubdivisionParams ?? [],
+      hasContourSubdivisionFrames: project.mesh.contourSubdivisionFrames != null,
+      contourSubdivisionValidated: project.mesh.contourSubdivisionValidated ?? false,
       anchorPoints: project.mesh.anchorPoints ?? [],
       anchorKeyframeInterval: project.mesh.anchorKeyframeInterval ?? 10,
       anchorTrackingValidated: project.mesh.anchorTrackingValidated ?? false,
@@ -131,43 +150,42 @@ function toDoc(project: Project): ProjectDoc {
 }
 
 type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
-  'contourKeyframes' | 'contourFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'>
+  'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
+  'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'>
 
 function isLegacyDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
-  return !!(legacy.contourIndices || legacy.contourPath) && !('contourVertices' in meshDoc)
+  // Legacy if has old-style fields and NOT new v4 contourAnchors
+  return (!('contourAnchors' in meshDoc)) &&
+    !!(legacy.contourIndices || legacy.contourPath || legacy.contourVertices)
 }
 
 function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
   if (isLegacyDoc(meshDoc)) {
-    console.log('[Migration] Converting legacy mesh format → v3 (contour-first pipeline)')
+    console.log('[Migration] Converting legacy mesh format → v4 (curvilinear contour)')
     const legacy = meshDoc
-    const oldAnchors = legacy.anchorPoints ?? []
 
-    // Extract contour vertices from old format
-    let contourVertices: Point2D[] = []
-    if (legacy.contourIndices?.length) {
-      contourVertices = legacy.contourIndices.map(i => oldAnchors[i])
-    } else if (legacy.contourPath?.length) {
-      const contourPoints = (legacy as Record<string, unknown>).contourPoints as Point2D[] ?? []
-      contourVertices = legacy.contourPath.map(entry =>
-        entry.type === 'anchor' ? oldAnchors[entry.index] : contourPoints[entry.index]
-      )
+    // Try to extract some contour anchor points from old data
+    let contourAnchors: Point2D[] = []
+    if (legacy.contourVertices?.length) {
+      // v3 format: take a few evenly spaced points as anchors
+      const cv = legacy.contourVertices
+      const step = Math.max(1, Math.floor(cv.length / 5))
+      for (let i = 0; i < cv.length; i += step) {
+        contourAnchors.push(cv[i])
+      }
     }
 
-    // Feature anchors = non-contour anchors
-    const contourSet = new Set(legacy.contourIndices ?? [])
-    const anchorPoints = legacy.contourIndices
-      ? oldAnchors.filter((_, i) => !contourSet.has(i))
-      : [] // contourPath format: anchors mixed, can't cleanly separate — reset
-
     return {
-      contourVertices,
-      cannyParams: null,
-      contourKeyframeInterval: 10,
-      contourTrackingValidated: false,
-      anchorPoints,
-      anchorKeyframeInterval: 10,
+      cannyParams: legacy.cannyParams ?? null,
+      contourAnchors,
+      contourAnchorKeyframeInterval: 10,
+      contourAnchorTrackingValidated: false,
+      contourSubdivisionPoints: [],
+      contourSubdivisionParams: [],
+      contourSubdivisionValidated: false,
+      anchorPoints: legacy.anchorPoints ?? [],
+      anchorKeyframeInterval: legacy.anchorKeyframeInterval ?? 10,
       anchorTrackingValidated: false,
       internalPoints: legacy.internalPoints ?? [],
       triangles: [],
@@ -179,10 +197,13 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
 
   const d = meshDoc as MeshDoc
   return {
-    contourVertices: d.contourVertices ?? [],
     cannyParams: d.cannyParams ?? null,
-    contourKeyframeInterval: d.contourKeyframeInterval ?? 10,
-    contourTrackingValidated: d.contourTrackingValidated ?? false,
+    contourAnchors: d.contourAnchors ?? [],
+    contourAnchorKeyframeInterval: d.contourAnchorKeyframeInterval ?? 10,
+    contourAnchorTrackingValidated: d.contourAnchorTrackingValidated ?? false,
+    contourSubdivisionPoints: d.contourSubdivisionPoints ?? [],
+    contourSubdivisionParams: d.contourSubdivisionParams ?? [],
+    contourSubdivisionValidated: d.contourSubdivisionValidated ?? false,
     anchorPoints: d.anchorPoints ?? [],
     anchorKeyframeInterval: d.anchorKeyframeInterval ?? 10,
     anchorTrackingValidated: d.anchorTrackingValidated ?? false,
@@ -202,8 +223,9 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     data.hasVideo ? downloadBlob(`projects/${id}/video`) : Promise.resolve(null),
   ])
 
-  let contourKeyframes: KeyframeData[] = []
-  let contourFrames: Point2D[][] | null = null
+  let contourAnchorKeyframes: KeyframeData[] = []
+  let contourAnchorFrames: Point2D[][] | null = null
+  let contourSubdivisionFrames: Point2D[][] | null = null
   let anchorKeyframes: KeyframeData[] = []
   let anchorFrames: Point2D[][] | null = null
   let videoFramesMesh: Point2D[][] | null = null
@@ -211,17 +233,19 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
   if (data.mesh) {
     const meshDoc = data.mesh as MeshDoc
     const downloads = await Promise.all([
-      meshDoc.hasContourKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourKeyframes.json`) : null,
-      meshDoc.hasContourFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourFrames.json`) : null,
+      meshDoc.hasContourAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourAnchorKeyframes.json`) : null,
+      meshDoc.hasContourAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourAnchorFrames.json`) : null,
+      meshDoc.hasContourSubdivisionFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourSubdivisionFrames.json`) : null,
       meshDoc.hasAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/anchorKeyframes.json`) : null,
       meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/anchorFrames.json`) : null,
       meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(`projects/${id}/videoFramesMesh.json`) : null,
     ])
-    contourKeyframes = downloads[0] ?? []
-    contourFrames = downloads[1]
-    anchorKeyframes = downloads[2] ?? []
-    anchorFrames = downloads[3]
-    videoFramesMesh = downloads[4]
+    contourAnchorKeyframes = downloads[0] ?? []
+    contourAnchorFrames = downloads[1]
+    contourSubdivisionFrames = downloads[2]
+    anchorKeyframes = downloads[3] ?? []
+    anchorFrames = downloads[4]
+    videoFramesMesh = downloads[5]
   }
 
   return {
@@ -232,8 +256,9 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     videoBlob: videoBlob,
     mesh: data.mesh ? {
       ...meshFromDoc(data.mesh),
-      contourKeyframes,
-      contourFrames,
+      contourAnchorKeyframes,
+      contourAnchorFrames,
+      contourSubdivisionFrames,
       anchorKeyframes,
       anchorFrames,
       videoFramesMesh,
@@ -276,8 +301,9 @@ export async function getAllProjects(): Promise<Project[]> {
       videoBlob: null,
       mesh: data.mesh ? {
         ...meshFromDoc(data.mesh as MeshDoc | LegacyMeshDoc),
-        contourKeyframes: [],
-        contourFrames: null,
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: null,
+        contourSubdivisionFrames: null,
         anchorKeyframes: [],
         anchorFrames: null,
         videoFramesMesh: null,
@@ -287,7 +313,7 @@ export async function getAllProjects(): Promise<Project[]> {
   })
 }
 
-export type UploadHint = 'image' | 'video' | 'contourKeyframes' | 'contourFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
+export type UploadHint = 'image' | 'video' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -313,22 +339,31 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         .then(() => console.log('[Storage] Video uploaded'))
     )
   }
-  if (uploadOnly?.includes('contourKeyframes') && project.mesh?.contourKeyframes.length) {
-    const json = JSON.stringify(project.mesh.contourKeyframes)
+  if (uploadOnly?.includes('contourAnchorKeyframes') && project.mesh?.contourAnchorKeyframes.length) {
+    const json = JSON.stringify(project.mesh.contourAnchorKeyframes)
     const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourKeyframes for:', id)
+    console.log('[Storage] Uploading contourAnchorKeyframes for:', id)
     uploads.push(
-      uploadBlob(`projects/${id}/contourKeyframes.json`, blob)
-        .then(() => console.log('[Storage] contourKeyframes uploaded'))
+      uploadBlob(`projects/${id}/contourAnchorKeyframes.json`, blob)
+        .then(() => console.log('[Storage] contourAnchorKeyframes uploaded'))
     )
   }
-  if (uploadOnly?.includes('contourFrames') && project.mesh?.contourFrames) {
-    const json = JSON.stringify(project.mesh.contourFrames)
+  if (uploadOnly?.includes('contourAnchorFrames') && project.mesh?.contourAnchorFrames) {
+    const json = JSON.stringify(project.mesh.contourAnchorFrames)
     const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourFrames for:', id)
+    console.log('[Storage] Uploading contourAnchorFrames for:', id)
     uploads.push(
-      uploadBlob(`projects/${id}/contourFrames.json`, blob)
-        .then(() => console.log('[Storage] contourFrames uploaded'))
+      uploadBlob(`projects/${id}/contourAnchorFrames.json`, blob)
+        .then(() => console.log('[Storage] contourAnchorFrames uploaded'))
+    )
+  }
+  if (uploadOnly?.includes('contourSubdivisionFrames') && project.mesh?.contourSubdivisionFrames) {
+    const json = JSON.stringify(project.mesh.contourSubdivisionFrames)
+    const blob = new Blob([json], { type: 'application/json' })
+    console.log('[Storage] Uploading contourSubdivisionFrames for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/contourSubdivisionFrames.json`, blob)
+        .then(() => console.log('[Storage] contourSubdivisionFrames uploaded'))
     )
   }
   if (uploadOnly?.includes('anchorKeyframes') && project.mesh?.anchorKeyframes.length) {
@@ -370,13 +405,16 @@ export async function deleteProject(id: string): Promise<void> {
   const knownFiles = [
     `projects/${id}/originalImage`,
     `projects/${id}/video`,
-    `projects/${id}/contourKeyframes.json`,
-    `projects/${id}/contourFrames.json`,
+    `projects/${id}/contourAnchorKeyframes.json`,
+    `projects/${id}/contourAnchorFrames.json`,
+    `projects/${id}/contourSubdivisionFrames.json`,
     `projects/${id}/anchorKeyframes.json`,
     `projects/${id}/anchorFrames.json`,
     `projects/${id}/videoFramesMesh.json`,
     // Legacy paths (cleanup)
     `projects/${id}/keyframes.json`,
+    `projects/${id}/contourKeyframes.json`,
+    `projects/${id}/contourFrames.json`,
   ]
   for (const path of knownFiles) {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))

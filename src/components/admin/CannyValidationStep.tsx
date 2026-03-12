@@ -221,11 +221,33 @@ export default function CannyValidationStep({ project, onSave }: Props) {
   }, [params, computeCannyOverlay, totalFrames, playing])
 
   async function handleValidate() {
-    if (!project.mesh) return
     setSaving(true)
     try {
+      const baseMesh: import('../../types/project').MeshData = project.mesh ?? {
+        cannyParams: null,
+        contourAnchors: [],
+        contourAnchorKeyframeInterval: 10,
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: null,
+        contourAnchorTrackingValidated: false,
+        contourSubdivisionPoints: [],
+        contourSubdivisionParams: [],
+        contourSubdivisionFrames: null,
+        contourSubdivisionValidated: false,
+        anchorPoints: [],
+        anchorKeyframeInterval: 10,
+        anchorKeyframes: [],
+        anchorFrames: null,
+        anchorTrackingValidated: false,
+        internalPoints: [],
+        triangles: [],
+        topologyLocked: false,
+        trackedTriangles: [],
+        internalBarycentrics: [],
+        videoFramesMesh: null,
+      }
       const mesh = {
-        ...project.mesh,
+        ...baseMesh,
         cannyParams: params,
       }
       await onSave({ ...project, mesh })
@@ -239,8 +261,8 @@ export default function CannyValidationStep({ project, onSave }: Props) {
     return <div className="placeholder">Importez d&apos;abord une vidéo dans l&apos;onglet Import.</div>
   }
 
-  if (!project.mesh?.contourVertices?.length) {
-    return <div className="placeholder">Définissez d&apos;abord le contour à l&apos;étape précédente.</div>
+  if (!project.originalImageBlob) {
+    return <div className="placeholder">Importez d&apos;abord une image dans l&apos;onglet Import.</div>
   }
 
   return (

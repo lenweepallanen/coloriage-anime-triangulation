@@ -21,15 +21,17 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
     () => project.mesh?.anchorPoints ?? []
   )
 
-  // Load contour from mesh as read-only reference
-  const contourVertices = project.mesh?.contourVertices ?? []
+  // Load full contour from mesh as read-only reference (anchors + subdivision)
+  const contourAnchors = project.mesh?.contourAnchors ?? []
+  const contourSubPts = project.mesh?.contourSubdivisionPoints ?? []
+  const fullContour = [...contourAnchors, ...contourSubPts]
 
   const {
     contourPoints,
     contourClosed,
   } = useTriangulation(
-    contourVertices.length
-      ? { contourPoints: contourVertices, internalPoints: [], triangles: [] }
+    fullContour.length
+      ? { contourPoints: fullContour, internalPoints: [], triangles: [] }
       : undefined
   )
 
@@ -109,10 +111,10 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
     setSaving(false)
   }
 
-  if (!project.mesh?.contourTrackingValidated) {
+  if (!project.mesh?.contourAnchorTrackingValidated) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord le tracking du contour (étape 4).
+        Validez d&apos;abord le tracking contour (étape 5).
       </div>
     )
   }
@@ -160,7 +162,7 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
         </button>
 
         <span className="toolbar-info">
-          Contour: {contourVertices.length} pts (lecture seule) |
+          Contour: {fullContour.length} pts (lecture seule) |
           Ancres: {featureAnchors.length} pts
         </span>
       </div>

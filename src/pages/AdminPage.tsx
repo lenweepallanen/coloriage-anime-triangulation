@@ -2,23 +2,23 @@ import { useState } from 'react'
 import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import ImportStep from '../components/admin/ImportStep'
-import ContourDefinitionStep from '../components/admin/ContourDefinitionStep'
 import CannyValidationStep from '../components/admin/CannyValidationStep'
+import ContourAnchorsStep from '../components/admin/ContourAnchorsStep'
 import ContourTrackingStep from '../components/admin/ContourTrackingStep'
+import ContourSubdivisionStep from '../components/admin/ContourSubdivisionStep'
 import AnchorPointsStep from '../components/admin/AnchorPointsStep'
 import AnchorTrackingStep from '../components/admin/AnchorTrackingStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
-import FinalAnimationStep from '../components/admin/FinalAnimationStep'
 
 const STEPS = [
   'Import',
-  'Contour',
-  'Validation Canny',
+  'Canny',
+  'Anchors Contour',
+  'Subdivision',
   'Tracking Contour',
-  'Ancres',
+  'Ancres Internes',
   'Tracking Ancres',
   'Triangulation',
-  'Animation finale',
 ] as const
 type Step = (typeof STEPS)[number]
 
@@ -55,16 +55,19 @@ export default function AdminPage() {
         {activeStep === 'Import' && (
           <ImportStep project={project} onSave={save} />
         )}
-        {activeStep === 'Contour' && (
-          <ContourDefinitionStep project={project} onSave={save} />
-        )}
-        {activeStep === 'Validation Canny' && (
+        {activeStep === 'Canny' && (
           <CannyValidationStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Anchors Contour' && (
+          <ContourAnchorsStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Subdivision' && (
+          <ContourSubdivisionStep project={project} onSave={save} />
         )}
         {activeStep === 'Tracking Contour' && (
           <ContourTrackingStep project={project} onSave={save} />
         )}
-        {activeStep === 'Ancres' && (
+        {activeStep === 'Ancres Internes' && (
           <AnchorPointsStep project={project} onSave={save} />
         )}
         {activeStep === 'Tracking Ancres' && (
@@ -72,9 +75,6 @@ export default function AdminPage() {
         )}
         {activeStep === 'Triangulation' && (
           <TriangulationStep project={project} onSave={save} />
-        )}
-        {activeStep === 'Animation finale' && (
-          <FinalAnimationStep project={project} onSave={save} />
         )}
       </div>
     </div>

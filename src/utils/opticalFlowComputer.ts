@@ -12,8 +12,11 @@ import {
   detectAndCorrectOutliers,
   applySnapToContour,
   recoverLostPoints,
+  applyCurvilinearSpringOnCanny,
+  computeInitialCannySpacings,
   median,
 } from './trackingConstraints'
+import type { CurvilinearSpringOptions } from './trackingConstraints'
 import type { SnapToContourOptions } from './trackingConstraints'
 import { ContourSpatialIndex } from './contourSpatialIndex'
 import {
@@ -38,6 +41,8 @@ export interface TrackingConstraintParams {
   contourRefinementConfig?: Partial<Omit<ContourTrackingConfig, 'contourAnchorIndices'>>
   enableSnapToContour?: boolean      // default false — snap points onto Canny contour
   snapToContourConfig?: Partial<SnapToContourOptions>
+  enableCurvilinearSpring?: boolean  // default false — spring repulsion along Canny contour
+  curvilinearSpringConfig?: Partial<CurvilinearSpringOptions>
   cannyParams?: CannyParams          // Canny params for contour detection during tracking
 }
 
@@ -126,9 +131,11 @@ export async function trackSegment(
     contourTrackingState = initContourTracking(contourTrackingConfig, startResult.points)
   }
 
-  // Build flow-frame options for snap-to-contour
+  // Build flow-frame options for snap-to-contour or curvilinear spring
   const useSnap = constraints?.enableSnapToContour && constraints.cannyParams
-  const flowFrameOpts: FlowFrameOptions | undefined = useSnap ? {
+  const useCurvilinearSpring = constraints?.enableCurvilinearSpring && constraints.contourAnchorOrder?.length && constraints.cannyParams
+  const needContourExtraction = useSnap || useCurvilinearSpring
+  const flowFrameOpts: FlowFrameOptions | undefined = needContourExtraction ? {
     extractContour: true,
     cannyParams: {
       low: constraints.cannyParams!.lowThreshold,
@@ -136,6 +143,17 @@ export async function trackSegment(
       blur: constraints.cannyParams!.blurSize,
     },
   } : undefined
+
+  // Compute initial Canny spacings for curvilinear spring (from start frame)
+  let initialCannySpacings: number[] = []
+  if (useCurvilinearSpring && constraints.contourAnchorOrder) {
+    const startDenseContour = await flowExtractContourDense(startFrameData)
+    if (startDenseContour && startDenseContour.length >= 3) {
+      initialCannySpacings = computeInitialCannySpacings(
+        initVideoPoints, constraints.contourAnchorOrder, startDenseContour
+      )
+    }
+  }
 
   for (let i = 1; i <= numFrames; i++) {
     onProgress?.(i, numFrames)
@@ -191,7 +209,7 @@ export async function trackSegment(
         changed = true
       }
 
-      // 5. Snap-to-contour (LAST — snaps onto detected Canny contour)
+      // 5. Snap-to-contour (snaps onto detected Canny contour)
       if (useSnap && frameResult.detectedContour?.length) {
         const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
         const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
@@ -203,6 +221,18 @@ export async function trackSegment(
           points = recovery.recovered
         }
         changed = true
+      }
+
+      // 6. Curvilinear spring repulsion on Canny contour (after snap)
+      if (useCurvilinearSpring && initialCannySpacings.length > 0 && constraints.contourAnchorOrder) {
+        const denseContour = await flowExtractContourDense(frameData)
+        if (denseContour && denseContour.length >= 3) {
+          points = applyCurvilinearSpringOnCanny(
+            points, constraints.contourAnchorOrder, denseContour,
+            initialCannySpacings, constraints.curvilinearSpringConfig
+          )
+          changed = true
+        }
       }
 
       if (changed) await flowUpdatePoints(points)
@@ -363,9 +393,11 @@ export async function precomputeOpticalFlow(
     }
   }
 
-  // Build flow-frame options for snap-to-contour
+  // Build flow-frame options for snap-to-contour or curvilinear spring
   const useSnap = constraints?.enableSnapToContour && constraints.cannyParams
-  const flowFrameOpts: FlowFrameOptions | undefined = useSnap ? {
+  const useCurvilinearSpring = constraints?.enableCurvilinearSpring && constraints.contourAnchorOrder?.length && constraints.cannyParams
+  const needContourExtraction = useSnap || useCurvilinearSpring
+  const flowFrameOpts: FlowFrameOptions | undefined = needContourExtraction ? {
     extractContour: true,
     cannyParams: {
       low: constraints.cannyParams!.lowThreshold,
@@ -374,6 +406,9 @@ export async function precomputeOpticalFlow(
     },
   } : undefined
 
+  // Initial Canny spacings will be computed from frame 0
+  let initialCannySpacings: number[] = []
+
   for (let i = 0; i < totalFrames; i++) {
     onProgress?.('Extraction & tracking', i + 1, totalFrames)
 
@@ -381,15 +416,26 @@ export async function precomputeOpticalFlow(
     const frameResult = await flowProcessFrame(frameData, flowFrameOpts)
     let points = frameResult.points
 
-    // Frame 0: initialize contour templates
-    if (i === 0 && useContourRefinement && contourTrackingConfig) {
-      await flowInitTemplates(contourTrackingConfig.contourAnchorIndices, 31)
-      contourTrackingState = initContourTracking(contourTrackingConfig, points)
-      contourDebugData.push({
-        confidences: [...contourTrackingState.confidences],
-        lostFrameCount: [...contourTrackingState.lostFrameCount],
-        contourPolyline: null,
-      })
+    // Frame 0: initialize contour templates + compute initial Canny spacings
+    if (i === 0) {
+      if (useContourRefinement && contourTrackingConfig) {
+        await flowInitTemplates(contourTrackingConfig.contourAnchorIndices, 31)
+        contourTrackingState = initContourTracking(contourTrackingConfig, points)
+        contourDebugData.push({
+          confidences: [...contourTrackingState.confidences],
+          lostFrameCount: [...contourTrackingState.lostFrameCount],
+          contourPolyline: null,
+        })
+      }
+
+      if (useCurvilinearSpring && constraints.contourAnchorOrder) {
+        const denseContour = await flowExtractContourDense(frameData)
+        if (denseContour && denseContour.length >= 3) {
+          initialCannySpacings = computeInitialCannySpacings(
+            points, constraints.contourAnchorOrder, denseContour
+          )
+        }
+      }
     }
 
     // Apply per-frame constraints (skip frame 0 — no displacement yet)
@@ -447,7 +493,7 @@ export async function precomputeOpticalFlow(
         changed = true
       }
 
-      // 5. Snap-to-contour (LAST — snaps onto detected Canny contour)
+      // 5. Snap-to-contour (snaps onto detected Canny contour)
       if (useSnap && frameResult.detectedContour?.length) {
         const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
         const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
@@ -459,6 +505,18 @@ export async function precomputeOpticalFlow(
           points = recovery.recovered
         }
         changed = true
+      }
+
+      // 6. Curvilinear spring repulsion on Canny contour (after snap)
+      if (useCurvilinearSpring && initialCannySpacings.length > 0 && constraints.contourAnchorOrder) {
+        const denseContour = await flowExtractContourDense(frameData)
+        if (denseContour && denseContour.length >= 3) {
+          points = applyCurvilinearSpringOnCanny(
+            points, constraints.contourAnchorOrder, denseContour,
+            initialCannySpacings, constraints.curvilinearSpringConfig
+          )
+          changed = true
+        }
       }
 
       if (changed) await flowUpdatePoints(points)

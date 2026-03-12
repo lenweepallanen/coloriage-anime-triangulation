@@ -323,11 +323,11 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
   }
 
   // Prerequisites
-  if (!mesh?.contourTrackingValidated) {
-    return <div className="placeholder">Validez d&apos;abord le tracking contour (étape 4).</div>
+  if (!mesh?.contourAnchorTrackingValidated) {
+    return <div className="placeholder">Validez d&apos;abord le tracking contour (étape 5).</div>
   }
   if (!mesh?.anchorPoints?.length) {
-    return <div className="placeholder">Définissez d&apos;abord les points d&apos;ancrage (étape 5).</div>
+    return <div className="placeholder">Définissez d&apos;abord les ancres internes (étape 6).</div>
   }
   if (!project.videoBlob) {
     return <div className="placeholder">Importez d&apos;abord une vidéo.</div>

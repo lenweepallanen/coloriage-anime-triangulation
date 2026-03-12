@@ -22,6 +22,8 @@ interface Props {
   isLastKeyframe?: boolean
   contourDebug?: ContourTrackingDebugData | null
   contourAnchorIndices?: number[]
+  onSnapPoint?: (p: Point2D) => Point2D
+  cannyContourPoints?: Point2D[]
 }
 
 export default function KeyframeEditor({
@@ -43,6 +45,8 @@ export default function KeyframeEditor({
   isLastKeyframe,
   contourDebug,
   contourAnchorIndices,
+  onSnapPoint,
+  cannyContourPoints,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -147,6 +151,18 @@ export default function KeyframeEditor({
       const vh = video.videoHeight
       const pr = 6 / t.scale
       const hr = 10 / t.scale
+
+      // --- Canny contour overlay (dots) ---
+      if (cannyContourPoints && cannyContourPoints.length > 0) {
+        ctx.fillStyle = 'rgba(0, 220, 255, 0.35)'
+        const dotR = 1 / t.scale
+        for (let j = 0; j < cannyContourPoints.length; j++) {
+          const cp = cannyContourPoints[j]
+          const cx = (cp.x / imageWidth) * vw
+          const cy = (cp.y / imageHeight) * vh
+          ctx.fillRect(cx - dotR, cy - dotR, dotR * 2, dotR * 2)
+        }
+      }
 
       // --- Contour debug overlay ---
       const hasDebug = showContourDebug && contourDebug && contourAnchorIndices
@@ -261,7 +277,7 @@ export default function KeyframeEditor({
 
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
-  }, [videoReady, anchorPositions, hoveredIdx, frameIndex, totalFrames, imageWidth, imageHeight, transformRef, contourDebug, contourAnchorIndices, showContourDebug])
+  }, [videoReady, anchorPositions, hoveredIdx, frameIndex, totalFrames, imageWidth, imageHeight, transformRef, contourDebug, contourAnchorIndices, showContourDebug, cannyContourPoints])
 
   // Resize reference canvas
   useEffect(() => {
@@ -353,7 +369,7 @@ export default function KeyframeEditor({
     if (draggingIdx.current !== null) {
       const idx = draggingIdx.current
       const newPositions = [...anchorPositions]
-      newPositions[idx] = imgPos
+      newPositions[idx] = onSnapPoint ? onSnapPoint(imgPos) : imgPos
       onUpdatePositions(newPositions)
       return
     }
