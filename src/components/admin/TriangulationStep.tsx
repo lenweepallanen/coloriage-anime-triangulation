@@ -431,6 +431,38 @@ export default function TriangulationStep({ project, onSave }: Props) {
         }
       }
 
+      // Draw vertices by category
+      const nCA = mesh!.contourAnchors.length
+      const nSub = mesh!.contourSubdivisionPoints.length
+      const nAP = mesh!.anchorPoints.length
+      // allPoints = [...contourAnchors(nCA), ...subdivision(nSub), ...anchorPoints(nAP), ...internals]
+      for (let i = 0; i < points.length; i++) {
+        const p = toCanvas(points[i])
+        let color: string
+        let radius: number
+        if (i < nCA) {
+          // Contour anchors — red
+          color = 'rgba(255, 60, 60, 0.9)'
+          radius = 3.5
+        } else if (i < nCA + nSub) {
+          // Subdivision — yellow
+          color = 'rgba(255, 220, 50, 0.8)'
+          radius = 2
+        } else if (i < nCA + nSub + nAP) {
+          // Internal anchors — cyan
+          color = 'rgba(0, 200, 255, 0.9)'
+          radius = 3.5
+        } else {
+          // Internal (barycentric) — white
+          color = 'rgba(255, 255, 255, 0.7)'
+          radius = 2
+        }
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+        ctx.fillStyle = color
+        ctx.fill()
+      }
+
       // Frame counter
       ctx.fillStyle = 'rgba(0,0,0,0.6)'
       ctx.fillRect(8, 8, 120, 24)
@@ -488,6 +520,18 @@ export default function TriangulationStep({ project, onSave }: Props) {
       setAnimProgress('Calcul animation...')
       const videoFramesMesh: Point2D[][] = []
 
+      // DEBUG: log sizes at frame 0
+      console.log('[ANIM DEBUG] contourAnchors.length:', mesh.contourAnchors.length)
+      console.log('[ANIM DEBUG] anchorPoints.length:', mesh.anchorPoints.length)
+      console.log('[ANIM DEBUG] contourSubdivisionPoints.length:', mesh.contourSubdivisionPoints.length)
+      console.log('[ANIM DEBUG] internalPoints.length:', mesh.internalPoints.length)
+      console.log('[ANIM DEBUG] trackedTriangles.length:', trackedTris.length)
+      console.log('[ANIM DEBUG] internalBarycentrics.length:', intBary.length)
+      console.log('[ANIM DEBUG] totalFrames:', totalF)
+      console.log('[ANIM DEBUG] contourAnchorFrames.length:', contourAnchorFrames.length)
+      console.log('[ANIM DEBUG] ancFrames.length:', ancFrames.length)
+      console.log('[ANIM DEBUG] contourSubFrames?.length:', contourSubFrames?.length)
+
       for (let f = 0; f < totalF; f++) {
         if (f % 10 === 0) {
           setAnimProgress(`Frame ${f + 1} / ${totalF}`)
@@ -500,10 +544,58 @@ export default function TriangulationStep({ project, onSave }: Props) {
         // Subdivision positions (from curvilinear computation)
         const subPositions = contourSubFrames?.[f] ?? mesh.contourSubdivisionPoints
 
+        // DEBUG: log details for frames around the collapse (11-14)
+        if (f >= 11 && f <= 14) {
+          console.log(`[ANIM DEBUG] === Frame ${f} ===`)
+          console.log(`  contourAnchorFrames[${f}].length:`, contourAnchorFrames[f]?.length)
+          console.log(`  ancFrames[${f}].length:`, ancFrames[f]?.length)
+          console.log(`  subPositions.length:`, subPositions?.length)
+          console.log(`  trackedPositions.length:`, trackedPositions.length)
+
+          // Check for NaN/undefined in tracked positions
+          const badTracked = trackedPositions.filter((p, i) =>
+            !p || isNaN(p.x) || isNaN(p.y)
+          )
+          if (badTracked.length > 0) {
+            console.warn(`  ⚠️ ${badTracked.length} BAD tracked positions (NaN/undefined)`)
+          }
+
+          // Check for NaN/zero in subdivision
+          const badSub = subPositions?.filter(p => !p || isNaN(p.x) || isNaN(p.y) || (p.x === 0 && p.y === 0))
+          if (badSub && badSub.length > 0) {
+            console.warn(`  ⚠️ ${badSub.length} BAD/zero subdivision positions`)
+          }
+
+          // Log contour anchor positions
+          console.log(`  contourAnchors:`, contourAnchorFrames[f]?.map((p: Point2D) => `(${p.x.toFixed(1)},${p.y.toFixed(1)})`))
+          // Log internal anchor positions
+          console.log(`  anchorPoints:`, ancFrames[f]?.map((p: Point2D) => `(${p.x.toFixed(1)},${p.y.toFixed(1)})`))
+
+          // Log first few subdivision positions
+          console.log(`  subPositions[0..4]:`, subPositions?.slice(0, 5).map((p: Point2D) => `(${p.x.toFixed(1)},${p.y.toFixed(1)})`))
+        }
+
         // Internal points via barycentrics
         const internalPositions = intBary.map(bary =>
           interpolateInternalPoint(bary, trackedPositions, trackedTris)
         )
+
+        // DEBUG: log internal positions for collapse frames
+        if (f >= 11 && f <= 14) {
+          const badInternal = internalPositions.filter(p => isNaN(p.x) || isNaN(p.y))
+          if (badInternal.length > 0) {
+            console.warn(`  ⚠️ ${badInternal.length} NaN internal positions`)
+          }
+          // Compute bounding box of internal positions to detect collapse
+          const xs = internalPositions.map(p => p.x)
+          const ys = internalPositions.map(p => p.y)
+          const bbox = {
+            minX: Math.min(...xs).toFixed(1), maxX: Math.max(...xs).toFixed(1),
+            minY: Math.min(...ys).toFixed(1), maxY: Math.max(...ys).toFixed(1),
+          }
+          console.log(`  internalPositions bbox:`, bbox)
+          console.log(`  internalPositions spread: ${(Math.max(...xs) - Math.min(...xs)).toFixed(1)} x ${(Math.max(...ys) - Math.min(...ys)).toFixed(1)}`)
+        }
 
         // allPoints = [...contourAnchors, ...contourSubdivisionPoints, ...anchorPoints, ...internalPoints]
         videoFramesMesh.push([
@@ -603,12 +695,88 @@ export default function TriangulationStep({ project, onSave }: Props) {
         ])
       }
 
+      // DEBUG: log ARAP setup
+      console.log('[ARAP DEBUG] nAll:', arapSystem.nAll)
+      console.log('[ARAP DEBUG] nFree:', arapSystem.nFree)
+      console.log('[ARAP DEBUG] nPinned:', arapSystem.pinnedIndices.length)
+      console.log('[ARAP DEBUG] freeIndices:', arapSystem.freeIndices)
+      console.log('[ARAP DEBUG] totalFrames:', totalF)
+      console.log('[ARAP DEBUG] pinnedFrame[0].length:', allPinnedFrames[0]?.length)
+
       let videoFramesMesh = batchSolveARAP(
         arapSystem,
         allPinnedFrames,
         3,
         (frame, total) => setAnimProgress(`ARAP frame ${frame + 1} / ${total}`)
       )
+
+      // DEBUG: log frames around the collapse
+      for (let f = Math.max(0, 11); f <= Math.min(14, videoFramesMesh.length - 1); f++) {
+        const pts = videoFramesMesh[f]
+        const nCA = contourAnchors.length
+        const nSub = contourSubPts.length
+        const nAP = anchorPoints.length
+        const freeStart = nCA + nSub + nAP
+
+        // Pinned positions bounding box
+        const pinnedPts = pts.slice(0, freeStart)
+        const pinnedXs = pinnedPts.map(p => p.x)
+        const pinnedYs = pinnedPts.map(p => p.y)
+
+        // Free (internal) positions bounding box
+        const freePts = pts.slice(freeStart)
+        const freeXs = freePts.map(p => p.x)
+        const freeYs = freePts.map(p => p.y)
+
+        console.log(`[ARAP DEBUG] === Frame ${f} ===`)
+        console.log(`  pinned bbox: x[${Math.min(...pinnedXs).toFixed(1)}..${Math.max(...pinnedXs).toFixed(1)}] y[${Math.min(...pinnedYs).toFixed(1)}..${Math.max(...pinnedYs).toFixed(1)}]`)
+        console.log(`  free bbox:   x[${Math.min(...freeXs).toFixed(1)}..${Math.max(...freeXs).toFixed(1)}] y[${Math.min(...freeYs).toFixed(1)}..${Math.max(...freeYs).toFixed(1)}]`)
+        console.log(`  free spread: ${(Math.max(...freeXs) - Math.min(...freeXs)).toFixed(1)} x ${(Math.max(...freeYs) - Math.min(...freeYs)).toFixed(1)}`)
+
+        // Check for NaN
+        const nanCount = freePts.filter(p => isNaN(p.x) || isNaN(p.y)).length
+        if (nanCount > 0) console.warn(`  ⚠️ ${nanCount} NaN free positions!`)
+
+        // Check pinned input vs output match
+        const pinnedInput = allPinnedFrames[f]
+        let mismatch = 0
+        for (let i = 0; i < Math.min(pinnedInput.length, freeStart); i++) {
+          if (Math.abs(pts[i].x - pinnedInput[i].x) > 0.01 || Math.abs(pts[i].y - pinnedInput[i].y) > 0.01) {
+            mismatch++
+          }
+        }
+        if (mismatch > 0) console.warn(`  ⚠️ ${mismatch} pinned position mismatches (input vs output)!`)
+
+        // Centroid of free points
+        const cx = freeXs.reduce((a, b) => a + b, 0) / freeXs.length
+        const cy = freeYs.reduce((a, b) => a + b, 0) / freeYs.length
+        console.log(`  free centroid: (${cx.toFixed(1)}, ${cy.toFixed(1)})`)
+
+        // Compare pinned input positions vs previous frame to find jumps
+        if (f > 0) {
+          const prevPinned = allPinnedFrames[f - 1]
+          const curPinned = allPinnedFrames[f]
+          const jumps: string[] = []
+          for (let i = 0; i < curPinned.length; i++) {
+            const dx = curPinned[i].x - prevPinned[i].x
+            const dy = curPinned[i].y - prevPinned[i].y
+            const dist = Math.sqrt(dx * dx + dy * dy)
+            if (dist > 5) {
+              let cat = ''
+              if (i < nCA) cat = `contourAnchor[${i}]`
+              else if (i < nCA + nSub) cat = `subdivision[${i - nCA}]`
+              else cat = `anchorPoint[${i - nCA - nSub}]`
+              jumps.push(`${cat}: ${dist.toFixed(1)}px (${prevPinned[i].x.toFixed(1)},${prevPinned[i].y.toFixed(1)})→(${curPinned[i].x.toFixed(1)},${curPinned[i].y.toFixed(1)})`)
+            }
+          }
+          if (jumps.length > 0) {
+            console.warn(`  ⚠️ ${jumps.length} pinned points jumped >5px vs prev frame:`)
+            jumps.forEach(j => console.warn(`    ${j}`))
+          } else {
+            console.log(`  all pinned points moved <5px vs prev frame`)
+          }
+        }
+      }
 
       // Temporal smoothing to reduce jitter
       if (smoothingWindow > 1) {

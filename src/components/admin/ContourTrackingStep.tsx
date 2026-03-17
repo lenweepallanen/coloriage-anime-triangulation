@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
-import { orderContourPixels, computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames } from '../../utils/curvilinearContour'
+import { orderContourPixels, computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames, signedArea, ensureConsistentOrientation } from '../../utils/curvilinearContour'
 import { trackCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 
 interface Props {
@@ -79,6 +79,18 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
   const [hasEdited, setHasEdited] = useState(false)
   const editedIndicesRef = useRef<Set<number>>(new Set())
   const [propagating, setPropagating] = useState(false)
+
+  // Contour animation preview (validated phase)
+  const [contourAnimActive, setContourAnimActive] = useState(false)
+  const [contourAnimComputing, setContourAnimComputing] = useState(false)
+  const [contourAnimFrame, setContourAnimFrame] = useState(0)
+  const [contourAnimPlaying, setContourAnimPlaying] = useState(false)
+  const contourAnimCanvasRef = useRef<HTMLCanvasElement>(null)
+  const contourAnimVideoRef = useRef<HTMLVideoElement | null>(null)
+  const contourAnimSubdivRef = useRef<Point2D[][] | null>(null)
+  const contourAnimDimsRef = useRef<{ w: number; h: number } | null>(null)
+  const contourAnimTotalRef = useRef(0)
+  const contourAnimAnimRef = useRef<number>(0)
 
   // Extrema tracking constants
   const N_EXTREMA = 20
@@ -166,6 +178,9 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       const vw = video.videoWidth, vh = video.videoHeight
       const totalFrames = Math.floor(video.duration * 24)
 
+      // Reference orientation from frame 0
+      const referenceOrientation = signedArea(ordered0)
+
       // 4. Allocate result arrays
       const allFrames: Point2D[][] = []
       const allRawFrames: Point2D[][] = []
@@ -217,6 +232,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         if (p0Frame) {
           ordered = reorderContourFromOrigin(ordered, p0Frame)
         }
+        // Ensure consistent CW/CCW orientation with frame 0
+        ordered = ensureConsistentOrientation(ordered, referenceOrientation)
         const arcLengths = computeArcLengths(ordered)
         const totalLen = arcLengths[arcLengths.length - 1] || 1
         allCannyFrames.push(ordered)
@@ -988,6 +1005,197 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     setPhase('ready')
   }, [mesh, project, onSave])
 
+  // ─── Contour Animation Preview (validated phase) ────────────────
+  const handleStartContourAnim = useCallback(async () => {
+    if (!mesh?.contourAnchorFrames || !project.videoBlob || !project.originalImageBlob) return
+    setContourAnimComputing(true)
+    setProgress('Chargement video + image...')
+
+    try {
+      // Load image dimensions
+      const img = await loadImage(project.originalImageBlob)
+      const imgDims = { w: img.naturalWidth, h: img.naturalHeight }
+      contourAnimDimsRef.current = imgDims
+      URL.revokeObjectURL(img.src)
+
+      // Load video
+      const video = document.createElement('video')
+      video.muted = true
+      video.playsInline = true
+      video.preload = 'auto'
+      video.src = URL.createObjectURL(project.videoBlob)
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve()
+        video.onerror = () => reject(new Error('Video load failed'))
+      })
+      contourAnimVideoRef.current = video
+      contourAnimTotalRef.current = Math.round(video.duration * 24)
+
+      // Compute subdivision frames if needed
+      const params = mesh.contourSubdivisionParams
+      if (params && params.length > 0 && mesh.cannyParams) {
+        setProgress('Calcul subdivision contour...')
+        await loadOpenCVWorker()
+        const subdivFrames = await computeAllSubdivisionFrames(
+          project.videoBlob,
+          mesh.contourAnchorFrames,
+          params,
+          mesh.cannyParams,
+          imgDims.w,
+          imgDims.h,
+          (p) => setProgress(`Subdivision frame ${p.frame}/${p.total}`),
+          mesh.contourOriginFrames
+        )
+        contourAnimSubdivRef.current = subdivFrames
+      }
+
+      setContourAnimFrame(0)
+      setContourAnimActive(true)
+      setProgress('')
+    } catch (err) {
+      console.error('Contour anim preview failed:', err)
+      setProgress(`Erreur: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setContourAnimComputing(false)
+    }
+  }, [mesh, project])
+
+  const drawContourAnimFrame = useCallback(async (frame: number) => {
+    const canvas = contourAnimCanvasRef.current
+    const video = contourAnimVideoRef.current
+    const imgDims = contourAnimDimsRef.current
+    const anchorFrames = mesh?.contourAnchorFrames
+    if (!canvas || !video || !imgDims || !anchorFrames) return
+
+    const ctx = canvas.getContext('2d')!
+
+    // Seek video
+    video.currentTime = frame / 24
+    await new Promise<void>(r => { video.onseeked = () => r() })
+
+    // Fit canvas
+    const maxW = canvas.parentElement?.clientWidth ?? 800
+    const vw = video.videoWidth, vh = video.videoHeight
+    const displayScale = Math.min(maxW / vw, 600 / vh, 1)
+    canvas.width = Math.round(vw * displayScale)
+    canvas.height = Math.round(vh * displayScale)
+
+    // Draw video frame
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    const frameData = anchorFrames[frame]
+    if (!frameData) return
+
+    const scaleX = canvas.width / imgDims.w
+    const scaleY = canvas.height / imgDims.h
+
+    const subdivData = contourAnimSubdivRef.current
+    const subdivParams = mesh?.contourSubdivisionParams
+
+    if (subdivData && subdivData[frame] && subdivParams) {
+      const subdivPts = subdivData[frame]
+      const orderedContour = buildOrderedContour(frameData, subdivPts, subdivParams)
+
+      // Draw full contour polygon (yellow)
+      if (orderedContour.length >= 3) {
+        ctx.beginPath()
+        ctx.moveTo(orderedContour[0].x * scaleX, orderedContour[0].y * scaleY)
+        for (let i = 1; i < orderedContour.length; i++) {
+          ctx.lineTo(orderedContour[i].x * scaleX, orderedContour[i].y * scaleY)
+        }
+        ctx.closePath()
+        ctx.strokeStyle = 'rgba(255, 220, 50, 0.8)'
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+
+      // Draw subdivision points (green)
+      for (let i = 0; i < subdivPts.length; i++) {
+        const sx = subdivPts[i].x * scaleX
+        const sy = subdivPts[i].y * scaleY
+        ctx.beginPath()
+        ctx.arc(sx, sy, 4, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(50, 200, 50, 0.8)'
+        ctx.fill()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+    } else {
+      // Anchors-only polygon (blue)
+      if (frameData.length >= 3) {
+        ctx.beginPath()
+        ctx.moveTo(frameData[0].x * scaleX, frameData[0].y * scaleY)
+        for (let i = 1; i < frameData.length; i++) {
+          ctx.lineTo(frameData[i].x * scaleX, frameData[i].y * scaleY)
+        }
+        ctx.closePath()
+        ctx.strokeStyle = 'rgba(80, 140, 255, 0.7)'
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+    }
+
+    // Draw anchor points (red)
+    for (let i = 0; i < frameData.length; i++) {
+      const cx = frameData[i].x * scaleX
+      const cy = frameData[i].y * scaleY
+      ctx.beginPath()
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(220, 50, 50, 0.9)'
+      ctx.fill()
+      ctx.strokeStyle = 'white'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+
+      ctx.fillStyle = 'white'
+      ctx.font = 'bold 10px sans-serif'
+      ctx.fillText(`A${i}`, cx + 8, cy - 4)
+    }
+  }, [mesh])
+
+  // Draw contour anim on frame change
+  useEffect(() => {
+    if (contourAnimActive && phase === 'validated') {
+      drawContourAnimFrame(contourAnimFrame)
+    }
+  }, [contourAnimActive, contourAnimFrame, phase, drawContourAnimFrame])
+
+  // Playback loop for contour animation
+  useEffect(() => {
+    if (!contourAnimPlaying || phase !== 'validated') return
+
+    let lastTime = 0
+    const step = (time: number) => {
+      if (time - lastTime >= 1000 / 24) {
+        lastTime = time
+        setContourAnimFrame(f => {
+          const next = f + 1
+          if (next >= contourAnimTotalRef.current) {
+            setContourAnimPlaying(false)
+            return 0
+          }
+          return next
+        })
+      }
+      contourAnimAnimRef.current = requestAnimationFrame(step)
+    }
+    contourAnimAnimRef.current = requestAnimationFrame(step)
+
+    return () => cancelAnimationFrame(contourAnimAnimRef.current)
+  }, [contourAnimPlaying, phase])
+
+  const handleStopContourAnim = useCallback(() => {
+    setContourAnimPlaying(false)
+    setContourAnimActive(false)
+    setContourAnimFrame(0)
+    if (contourAnimVideoRef.current) {
+      URL.revokeObjectURL(contourAnimVideoRef.current.src)
+      contourAnimVideoRef.current = null
+    }
+    contourAnimSubdivRef.current = null
+  }, [])
+
   // ─── Cleanup ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
@@ -995,6 +1203,10 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         URL.revokeObjectURL(videoRef.current.src)
       }
       cancelAnimationFrame(animRef.current)
+      if (contourAnimVideoRef.current) {
+        URL.revokeObjectURL(contourAnimVideoRef.current.src)
+      }
+      cancelAnimationFrame(contourAnimAnimRef.current)
     }
   }, [])
 
@@ -1115,8 +1327,21 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             )}
           </div>
 
-          {/* Propagate button */}
+          {/* Edit actions */}
           <div style={{ marginTop: 12 }}>
+            {hasEdited && !showFullContour && (
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  editedIndicesRef.current.clear()
+                  setHasEdited(false)
+                }}
+                disabled={propagating || playing}
+                style={{ marginRight: 8 }}
+              >
+                Appliquer edits (frame courante)
+              </button>
+            )}
             <button
               className="btn-secondary"
               onClick={handlePropagate}
@@ -1128,8 +1353,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             {hasEdited && !showFullContour && (
               <span style={{ color: '#ffa000', fontSize: '0.85em' }}>
                 {editedIndicesRef.current.size > 0
-                  ? `Point${editedIndicesRef.current.size > 1 ? 's' : ''} ${[...editedIndicesRef.current].join(', ')} edite${editedIndicesRef.current.size > 1 ? 's' : ''} — propager pour appliquer`
-                  : 'Points edites — propager pour appliquer'}
+                  ? `Point${editedIndicesRef.current.size > 1 ? 's' : ''} ${[...editedIndicesRef.current].join(', ')} edite${editedIndicesRef.current.size > 1 ? 's' : ''}`
+                  : 'Points edites'}
               </span>
             )}
             {propagating && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
@@ -1184,10 +1409,51 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             Tracking contour valide ({mesh!.contourAnchors.length} anchors,{' '}
             {mesh!.contourAnchorFrames?.length ?? '?'} frames)
           </p>
+
+          {/* Contour animation preview */}
+          {!contourAnimActive ? (
+            <button
+              className="btn-secondary"
+              onClick={handleStartContourAnim}
+              disabled={saving || contourAnimComputing}
+              style={{ marginTop: 8 }}
+            >
+              {contourAnimComputing ? 'Chargement...' : 'Preview Animation Contour'}
+            </button>
+          ) : (
+            <div style={{ marginTop: 12 }}>
+              <div className="step-actions" style={{ marginBottom: 8 }}>
+                <button className="btn-secondary" onClick={() => setContourAnimPlaying(!contourAnimPlaying)}>
+                  {contourAnimPlaying ? 'Pause' : 'Play'}
+                </button>
+                <button className="btn-secondary" onClick={() => { setContourAnimPlaying(false); setContourAnimFrame(0) }}>
+                  Debut
+                </button>
+                <button className="btn-secondary" onClick={handleStopContourAnim}>
+                  Fermer
+                </button>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={contourAnimTotalRef.current - 1}
+                value={contourAnimFrame}
+                onChange={e => { setContourAnimPlaying(false); setContourAnimFrame(Number(e.target.value)) }}
+                style={{ width: '100%' }}
+              />
+              <p style={{ fontSize: '0.85em', color: '#aaa', margin: '4px 0' }}>
+                Frame {contourAnimFrame + 1} / {contourAnimTotalRef.current}
+              </p>
+              <canvas ref={contourAnimCanvasRef} style={{ width: '100%', border: '1px solid #444', borderRadius: 4 }} />
+            </div>
+          )}
+          {contourAnimComputing && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
+
           <button
             className="btn-secondary"
             onClick={handleReset}
-            disabled={saving}
+            disabled={saving || contourAnimComputing}
+            style={{ marginTop: 12 }}
           >
             {saving ? 'Sauvegarde...' : 'Reinitialiser'}
           </button>

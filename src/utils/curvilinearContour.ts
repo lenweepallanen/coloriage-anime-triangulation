@@ -135,6 +135,41 @@ export function interpolateAtArcLength(
   }
 }
 
+// ─── Contour orientation (signed area) ────────────────────────────
+
+/**
+ * Calcule l'aire signée d'un polygone (formule du lacet / shoelace).
+ * Positif = sens anti-horaire (CCW), négatif = sens horaire (CW).
+ */
+export function signedArea(contour: Point2D[]): number {
+  let area = 0
+  const n = contour.length
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    area += contour[i].x * contour[j].y
+    area -= contour[j].x * contour[i].y
+  }
+  return area / 2
+}
+
+/**
+ * Assure une orientation constante du contour entre frames.
+ * Compare l'aire signée avec une référence et inverse si le signe a changé.
+ */
+export function ensureConsistentOrientation(
+  contour: Point2D[],
+  referenceSign: number
+): Point2D[] {
+  if (contour.length < 3) return contour
+  const currentSign = signedArea(contour)
+  // Si les signes diffèrent (l'un positif, l'autre négatif), inverser le contour
+  if ((currentSign > 0) !== (referenceSign > 0)) {
+    // Garder le premier élément (P0) en place, inverser le reste
+    return [contour[0], ...contour.slice(1).reverse()]
+  }
+  return contour
+}
+
 // ─── Reorder contour from origin point ────────────────────────────
 
 /**
@@ -373,6 +408,7 @@ export async function computeAllSubdivisionFrames(
   const scaleY = imageHeight / canvas.height
 
   const allFrames: Point2D[][] = []
+  let referenceOrientation: number | null = null // signed area of frame 0 contour
 
   for (let f = 0; f < totalFrames; f++) {
     // Seek to frame
@@ -406,6 +442,13 @@ export async function computeAllSubdivisionFrames(
       // Reorder from tracked origin point if available
       if (originFrames?.[f]?.[0]) {
         orderedContour = reorderContourFromOrigin(orderedContour, originFrames[f][0])
+      }
+
+      // Ensure consistent CW/CCW orientation across frames
+      if (referenceOrientation === null) {
+        referenceOrientation = signedArea(orderedContour)
+      } else {
+        orderedContour = ensureConsistentOrientation(orderedContour, referenceOrientation)
       }
 
       // Compute subdivision positions
