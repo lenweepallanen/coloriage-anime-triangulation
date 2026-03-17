@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import type { Project } from '../../types/project'
 import type { Point2D } from '../../types/project'
 import { processCapturedImage } from '../../utils/perspectiveCorrection'
+import { computeScanInsets } from '../../utils/pdfLayout'
 import { createScan } from '../../db/scansStore'
 
 // Hook version for cleaner integration
@@ -46,14 +47,18 @@ export function useScanProcessor(project: Project) {
         canvas.height = imgDims.height
         const ctx = canvas.getContext('2d')!
 
-        // Draw the corrected 2048x2048 image scaled to original dimensions
-        // The perspective correction maps content to a 2048x2048 image with 64px margins,
-        // so the actual content is in the region (margin, margin) to (2048-margin, 2048-margin).
-        // We crop to that region when drawing to the original-sized canvas.
+        // Draw the corrected 2048x2048 image scaled to original dimensions.
+        // The homography maps L-marker centroids to (margin, margin) in the 2048 space.
+        // The centroid of an L-shape is ~3.17mm INSIDE the actual image edge,
+        // so the scan content is slightly zoomed in compared to the full image.
+        // This zoom is compensated in UV mapping (AnimationPlayer) and mesh overlay below.
         const margin = 64
         const srcSize = result.imageData.width // 2048
         const contentSize = srcSize - 2 * margin // 1920
         ctx.drawImage(raw2048Canvas, margin, margin, contentSize, contentSize, 0, 0, imgDims.width, imgDims.height)
+
+        // Enhance contrast: push dark lines to true black, light areas to white
+        enhanceContrast(ctx, imgDims.width, imgDims.height)
 
         // 3. Image redressée croppée
         const rectifiedUrl = canvas.toDataURL()
@@ -92,6 +97,63 @@ export function useScanProcessor(project: Project) {
   return { handleCapture, processing, error, rectifiedCanvas, debugImages, reset }
 }
 
+/**
+ * Levels adjustment: remap pixel values so that dark contour lines become
+ * true black and the paper background becomes true white.
+ * blackPoint / whitePoint are auto-detected from the image histogram.
+ */
+function enhanceContrast(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const imageData = ctx.getImageData(0, 0, w, h)
+  const data = imageData.data
+
+  // Build luminance histogram
+  const hist = new Uint32Array(256)
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+    hist[lum]++
+  }
+
+  // Auto-detect black/white points at 0.5% and 99.5% percentiles
+  const totalPixels = w * h
+  const lowThreshold = totalPixels * 0.005
+  const highThreshold = totalPixels * 0.995
+
+  let blackPoint = 0
+  let whitePoint = 255
+  let cumulative = 0
+  for (let i = 0; i < 256; i++) {
+    cumulative += hist[i]
+    if (cumulative >= lowThreshold) { blackPoint = i; break }
+  }
+  cumulative = 0
+  for (let i = 0; i < 256; i++) {
+    cumulative += hist[i]
+    if (cumulative >= highThreshold) { whitePoint = i; break }
+  }
+
+  // Ensure a minimum range
+  if (whitePoint - blackPoint < 30) {
+    blackPoint = Math.max(0, blackPoint - 15)
+    whitePoint = Math.min(255, whitePoint + 15)
+  }
+
+  // Build lookup table
+  const lut = new Uint8Array(256)
+  const range = whitePoint - blackPoint
+  for (let i = 0; i < 256; i++) {
+    lut[i] = Math.max(0, Math.min(255, Math.round(((i - blackPoint) / range) * 255)))
+  }
+
+  // Apply LUT to each channel
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = lut[data[i]]
+    data[i + 1] = lut[data[i + 1]]
+    data[i + 2] = lut[data[i + 2]]
+  }
+
+  ctx.putImageData(imageData, 0, 0)
+}
+
 function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project): string {
   const mesh = project.mesh
   if (!mesh) return rectifiedCanvas.toDataURL()
@@ -103,6 +165,14 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
 
   // Draw the rectified image as background
   ctx.drawImage(rectifiedCanvas, 0, 0)
+
+  // The scan texture is slightly zoomed in (L-marker centroids are inside the image edges).
+  // Transform mesh points (image coords) → scan canvas coords.
+  const { insetX, insetY } = computeScanInsets(rectifiedCanvas.width, rectifiedCanvas.height)
+  const scaleX = rectifiedCanvas.width / (rectifiedCanvas.width - 2 * insetX)
+  const scaleY = rectifiedCanvas.height / (rectifiedCanvas.height - 2 * insetY)
+  const toScanX = (x: number) => (x - insetX) * scaleX
+  const toScanY = (y: number) => (y - insetY) * scaleY
 
   // Get frame 0 points (or static points if no animation)
   const allPoints = [...mesh.contourAnchors, ...mesh.contourSubdivisionPoints, ...mesh.anchorPoints, ...mesh.internalPoints]
@@ -118,9 +188,9 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     const b = framePoints[tri[1]]
     const c = framePoints[tri[2]]
     ctx.beginPath()
-    ctx.moveTo(a.x, a.y)
-    ctx.lineTo(b.x, b.y)
-    ctx.lineTo(c.x, c.y)
+    ctx.moveTo(toScanX(a.x), toScanY(a.y))
+    ctx.lineTo(toScanX(b.x), toScanY(b.y))
+    ctx.lineTo(toScanX(c.x), toScanY(c.y))
     ctx.closePath()
     ctx.stroke()
   }
@@ -131,7 +201,7 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     const isAnchor = i < mesh.anchorPoints.length
     ctx.fillStyle = isAnchor ? 'rgba(255, 0, 0, 0.8)' : 'rgba(0, 100, 255, 0.8)'
     ctx.beginPath()
-    ctx.arc(p.x, p.y, isAnchor ? 4 : 2.5, 0, Math.PI * 2)
+    ctx.arc(toScanX(p.x), toScanY(p.y), isAnchor ? 4 : 2.5, 0, Math.PI * 2)
     ctx.fill()
   }
 

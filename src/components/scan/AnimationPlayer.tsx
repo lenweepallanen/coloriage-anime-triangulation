@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react'
 import * as PIXI from 'pixi.js'
 import type { Project, Point2D, CurvilinearParam } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
+import { computeScanInsets } from '../../utils/pdfLayout'
 
 interface Props {
   project: Project
@@ -111,8 +112,9 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     // Create texture from the scan canvas
     const texture = PIXI.Texture.from(scanCanvas)
 
-    // Compute UVs (normalized coordinates in the texture)
-    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height)
+    // Compute UVs with inset correction (scan is slightly zoomed in due to L-marker centroid offset)
+    const insets = computeScanInsets(scanCanvas.width, scanCanvas.height)
+    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, insets)
 
     // Build indices from triangles
     const indices = new Uint16Array(mesh.triangles.length * 3)
@@ -144,13 +146,6 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     const pixiMesh = new PIXI.Mesh(geometry, material)
     app.stage.addChild(pixiMesh)
 
-    // Create graphics for Bézier contour outline
-    const contourGraphics = new PIXI.Graphics()
-    app.stage.addChild(contourGraphics)
-
-    // Draw initial contour
-    drawSmoothContour(contourGraphics, allPoints, contourIndices, scale, offsetX, offsetY, 3)
-
     // Animation loop
     let frameIndex = 0
     const fps = 24
@@ -177,9 +172,6 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
             (verts.data as Float32Array)[i * 2 + 1] = framePoints[i].y * scale + offsetY
           }
           verts.update()
-
-          // Update Bézier contour outline
-          drawSmoothContour(contourGraphics, framePoints, contourIndices, scale, offsetX, offsetY, 3)
         }
       })
     }

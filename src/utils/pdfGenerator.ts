@@ -1,12 +1,6 @@
 import { jsPDF } from 'jspdf'
 import type { Project } from '../types/project'
-
-// A4 dimensions in mm
-const A4_W = 210
-const A4_H = 297
-const MARGIN = 15      // mm margin for content
-const MARKER_SIZE = 15  // mm - size of L markers when printed
-const MARKER_THICK = 4  // mm - thickness of L arms
+import { A4_W, A4_H, MARGIN, MARKER_SIZE, MARKER_THICK, MARKER_MARGIN } from './pdfLayout'
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -80,11 +74,10 @@ export async function generateTemplatePDF(project: Project): Promise<Blob> {
   doc.addImage(imgDataUrl, format, imgX, imgY, imgW, imgH)
 
   // Draw L markers at the corners of the image area
-  const markerMargin = 2 // mm offset from image edge
-  drawPdfLMarker(doc, imgX - markerMargin, imgY - markerMargin, 'topLeft')
-  drawPdfLMarker(doc, imgX + imgW + markerMargin, imgY - markerMargin, 'topRight')
-  drawPdfLMarker(doc, imgX - markerMargin, imgY + imgH + markerMargin, 'bottomLeft')
-  drawPdfLMarker(doc, imgX + imgW + markerMargin, imgY + imgH + markerMargin, 'bottomRight')
+  drawPdfLMarker(doc, imgX - MARKER_MARGIN, imgY - MARKER_MARGIN, 'topLeft')
+  drawPdfLMarker(doc, imgX + imgW + MARKER_MARGIN, imgY - MARKER_MARGIN, 'topRight')
+  drawPdfLMarker(doc, imgX - MARKER_MARGIN, imgY + imgH + MARKER_MARGIN, 'bottomLeft')
+  drawPdfLMarker(doc, imgX + imgW + MARKER_MARGIN, imgY + imgH + MARKER_MARGIN, 'bottomRight')
 
   return doc.output('blob')
 }
