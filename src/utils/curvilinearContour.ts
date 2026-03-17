@@ -343,6 +343,8 @@ export async function computeAllSubdivisionFrames(
   anchorFrames: Point2D[][],
   params: CurvilinearParam[],
   cannyParams: CannyParams,
+  imageWidth: number,
+  imageHeight: number,
   onProgress?: (p: ContourComputationProgress) => void,
   originFrames?: Point2D[][] | null
 ): Promise<Point2D[][]> {
@@ -366,6 +368,10 @@ export async function computeAllSubdivisionFrames(
   canvas.height = video.videoHeight
   const ctx = canvas.getContext('2d')!
 
+  // Scale factors: video coords → image coords
+  const scaleX = imageWidth / canvas.width
+  const scaleY = imageHeight / canvas.height
+
   const allFrames: Point2D[][] = []
 
   for (let f = 0; f < totalFrames; f++) {
@@ -388,8 +394,14 @@ export async function computeAllSubdivisionFrames(
     )
 
     if (contourPixels && contourPixels.length > 0) {
+      // Scale Canny pixels from video coords to image coords
+      const imgContourPixels = contourPixels.map(p => ({
+        x: p.x * scaleX,
+        y: p.y * scaleY
+      }))
+
       // Order the contour pixels into a chain
-      let orderedContour = orderContourPixels(contourPixels)
+      let orderedContour = orderContourPixels(imgContourPixels)
 
       // Reorder from tracked origin point if available
       if (originFrames?.[f]?.[0]) {

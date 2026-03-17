@@ -24,22 +24,24 @@ L'utilisateur crée un projet avec une image de coloriage et une vidéo d'animat
 
 ```
 /                    → HomePage     (liste/création de projets)
-/admin/:projectId    → AdminPage   (workflow 8 étapes)
+/admin/:projectId    → AdminPage   (workflow 10 étapes)
 /scan/:projectId     → ScanPage    (scan + animation)
 ```
 
-## Workflow Admin (8 étapes)
+## Workflow Admin (10 étapes)
 
-Pipeline "contour-first" avec coordonnées curvilignes. Seuls 4-5 points caractéristiques du contour sont trackés par optical flow ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
+Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 définit le s=0 du contour. Seuls 4-5 points caractéristiques du contour sont trackés par extrema de courbure CSS ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
 1. **Import** — Upload image PNG/JPEG + vidéo MP4/WebM
 2. **Canny** — Preview contour externe Canny sur vidéo + réglage seuils
-3. **Anchors Contour** — Placement 4-5 points caractéristiques sur le contour (auto-snap Canny)
-4. **Subdivision** — Points intermédiaires entre anchors + calcul par frame via coordonnées curvilignes Canny
-5. **Tracking Contour** — Optical flow sur anchors contour + keyframes + snap-to-contour Canny
-6. **Ancres Internes** — Placement points features intérieurs (contour en overlay lecture seule)
-7. **Tracking Ancres** — Optical flow sur ancres internes + keyframes
-8. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF + animation finale
+3. **Point 0 Contour** — Placement du point d'origine P0 sur le contour (définit s=0)
+4. **Tracking Point 0** — Optical flow + snap-to-contour Canny sur P0 frame par frame
+5. **Anchors Contour** — Placement 4-5 points caractéristiques sur le contour (auto-snap Canny)
+6. **Subdivision** — Points intermédiaires entre anchors + calcul par frame via coordonnées curvilignes Canny
+7. **Tracking Contour** — Placement déterministe par coordonnée curviligne normalisée + snap extrema courbure CSS
+8. **Ancres Internes** — Placement points features intérieurs (contour en overlay lecture seule)
+9. **Tracking Ancres** — Optical flow sur ancres internes + keyframes
+10. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF + animation finale
 
 ## Workflow Scan (utilisateur final)
 
@@ -63,10 +65,10 @@ src/
 ├── hooks/useProject.ts         Hook chargement/sauvegarde projet
 ├── pages/
 │   ├── HomePage.tsx            Liste projets
-│   ├── AdminPage.tsx           Onglets admin (8 étapes)
+│   ├── AdminPage.tsx           Onglets admin (10 étapes)
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (8 étapes : Import → Canny → ContourAnchors → Subdivision → TrackContour → Anchors → TrackAnchors → Triangulation)
+│   ├── admin/                  Étapes admin (10 étapes + support)
 │   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -80,6 +82,9 @@ src/
 │   ├── trackingConstraints.ts  Contraintes voisinage + snap-to-contour + spring curviligne
 │   ├── contourAnchorTracker.ts Raffinement hybride LK + template matching + snap contour
 │   ├── curvilinearContour.ts   Coordonnées curvilignes sur contour Canny
+│   ├── curvatureScaleSpace.ts  Détection extrema courbure CSS + tracking frame par frame
+│   ├── arapSolver.ts           Déformation ARAP (As-Rigid-As-Possible) du maillage
+│   ├── optimalTransportSnap.ts Assignment optimal (transport) pour snap contour robuste
 │   ├── contourSpatialIndex.ts  Index spatial bucket 2D pour snap-to-contour
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
@@ -104,36 +109,45 @@ Project {
 MeshData {
   cannyParams: CannyParams | null     // Seuils Canny validés (étape 2)
 
-  // Contour anchors (placement étape 3, tracking étape 5)
+  // Point d'origine contour (étape 3)
+  contourOrigin: Point2D | null              // Position P0 sur l'image originale
+
+  // Tracking point d'origine (étape 4)
+  contourOriginKeyframeInterval: number
+  contourOriginKeyframes: KeyframeData[]
+  contourOriginFrames: Point2D[][] | null    // 1 élément par inner array
+  contourOriginTrackingValidated: boolean
+
+  // Contour anchors (placement étape 5, tracking étape 7)
   contourAnchors: Point2D[]                    // 4-5 points caractéristiques
   contourAnchorKeyframeInterval: number
   contourAnchorKeyframes: KeyframeData[]
-  contourAnchorFrames: Point2D[][] | null      // rempli étape 5
-  contourAnchorTrackingValidated: boolean      // validé étape 5
+  contourAnchorFrames: Point2D[][] | null      // rempli étape 7
+  contourAnchorTrackingValidated: boolean      // validé étape 7
 
-  // Subdivision contour (étape 4 — points curvilignes calculés par frame)
+  // Subdivision contour (étape 6 — points curvilignes calculés par frame)
   contourSubdivisionPoints: Point2D[]
   contourSubdivisionParams: CurvilinearParam[]  // {segmentIndex, t}
   contourSubdivisionFrames: Point2D[][] | null
   contourSubdivisionValidated: boolean
 
-  // Ancres internes (étape 6 — features : yeux, ailes, etc.)
+  // Ancres internes (étape 8 — features : yeux, ailes, etc.)
   anchorPoints: Point2D[]
   anchorKeyframeInterval: number
   anchorKeyframes: KeyframeData[]
   anchorFrames: Point2D[][] | null
   anchorTrackingValidated: boolean
 
-  // Points internes (étape 8 — non trackés, suivent via barycentrics)
+  // Points internes (étape 10 — non trackés, suivent via barycentrics)
   internalPoints: Point2D[]
 
-  // Topologie (verrouillée étape 8)
+  // Topologie (verrouillée étape 10)
   triangles: [number,number,number][]
   topologyLocked: boolean
   trackedTriangles: [number,number,number][]
   internalBarycentrics: BarycentricRef[]
 
-  // Sortie finale (étape 8, consommé par AnimationPlayer)
+  // Sortie finale (étape 10, consommé par AnimationPlayer)
   videoFramesMesh: Point2D[][] | null
 }
 
@@ -154,12 +168,23 @@ contour   = [...contourAnchors, ...contourSubdivisionPoints]  // Polygone fermé
 ```
 Les indices dans `triangles` réfèrent à `allPoints`. AnimationPlayer consomme `videoFramesMesh` avec cette même convention.
 
+## Systèmes de coordonnées
+
+Trois espaces de coordonnées coexistent :
+1. **Image** — coordonnées originales de l'image (stockage du maillage)
+2. **Vidéo** — coordonnées du frame vidéo (pendant l'optical flow et la détection Canny)
+3. **Écran** — coordonnées canvas/PIXI (rendu avec DPI)
+
+**Règle critique** : les positions des anchors (`contourAnchorFrames`, `anchorFrames`, etc.) sont toujours stockées en **coordonnées image**. Les pixels Canny détectés sur les frames vidéo doivent être convertis de coords vidéo → coords image avant toute utilisation avec les positions anchor : `imgX = (videoX / videoWidth) * imageWidth`.
+
 ## Stockage Firebase
 
 - **Firestore** : métadonnées projet (nom, dates, mesh geometry sauf gros JSON)
 - **Cloud Storage** :
   - `projects/{id}/originalImage` — blob image
   - `projects/{id}/video` — blob vidéo
+  - `projects/{id}/contourOriginKeyframes.json` — keyframes point d'origine
+  - `projects/{id}/contourOriginFrames.json` — positions P0 par frame
   - `projects/{id}/contourAnchorKeyframes.json` — keyframes anchors contour
   - `projects/{id}/contourAnchorFrames.json` — positions anchors contour par frame
   - `projects/{id}/contourSubdivisionFrames.json` — positions subdivision par frame
@@ -167,13 +192,6 @@ Les indices dans `triangles` réfèrent à `allPoints`. AnimationPlayer consomme
   - `projects/{id}/anchorFrames.json` — positions ancres internes par frame
   - `projects/{id}/videoFramesMesh.json` — données animation finale
   - `scans/{id}/scanImage` — image rectifiée
-
-## Systèmes de coordonnées
-
-Trois espaces de coordonnées coexistent :
-1. **Image** — coordonnées originales de l'image (stockage du maillage)
-2. **Vidéo** — coordonnées du frame vidéo (pendant l'optical flow)
-3. **Écran** — coordonnées canvas/PIXI (rendu avec DPI)
 
 ## Conventions
 

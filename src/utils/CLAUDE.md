@@ -15,6 +15,9 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `trackingConstraints.ts` | Contraintes de voisinage + snap-to-contour + spring curviligne pour stabiliser le tracking |
 | `contourAnchorTracker.ts` | Raffinement hybride LK + template matching + snap contour pour anchors contour |
 | `curvilinearContour.ts` | Coordonnées curvilignes sur contour Canny (ordonnancement pixels, subdivision, calcul par frame) |
+| `curvatureScaleSpace.ts` | Détection multi-échelle des extrema de courbure + tracking CSS frame par frame |
+| `arapSolver.ts` | Déformation ARAP (As-Rigid-As-Possible) du maillage 2D |
+| `optimalTransportSnap.ts` | Assignment optimal (transport) pour snap contour robuste |
 | `contourSpatialIndex.ts` | Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche |
 | `perspectiveCorrection.ts` | Bridge RPC vers le Worker OpenCV |
 | `pdfGenerator.ts` | Génération PDF (jsPDF) |
@@ -149,6 +152,67 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
   u = point.x / imageWidth
   v = point.y / imageHeight
   ```
+
+## curvatureScaleSpace.ts
+
+Détection multi-échelle des extrema de courbure et tracking frame par frame via Curvature Scale Space (CSS).
+
+### Fonctions principales
+
+| Fonction | Rôle |
+|----------|------|
+| `detectCSSCandidates(contour, N)` | Détection multi-échelle (5 σ) : courbure κ via dérivées gaussiennes, scoring par persistance, NMS en arc-length, top-N |
+| `detectCurvatureExtrema(contour, N)` | Version single-scale : top-N points de plus forte \|κ\| sur contour rééchantillonné |
+| `trackCurvatureExtrema(contour, N, previousExtrema)` | Matching frame-par-frame des extrema par assignation gloutonne nearest-neighbor, identité persistante |
+| `cssSnapToContour(pos, contour, arcLengths, window)` | Snap anchor vers le pic κ le plus fort dans une fenêtre locale |
+| `cssSnapToContourRegistered(pos, contour, arcLengths, window, signature)` | Snap avec matching de signature de courbure (signe, magnitude, prominence) |
+| `computeInitialAnchorArcLengths(anchors, contour)` | Arc-length de référence de chaque anchor à frame 0 |
+| `computeInitialSignatures(anchors, contour)` | Signature de courbure (signe, \|κ\|, prominence, rang local) de chaque anchor à frame 0 |
+| `computeContourSignatureField(contour)` | Champ dense de signature intrinsèque (s, κ, dκ/ds) sur le contour rééchantillonné |
+| `matchAnchorsIntrinsic(anchors, field, prevField)` | Matching par minimisation `(Δs)² + λ₁(Δκ)² + λ₂(Δκ')²` |
+
+### Utilisé par
+- `ContourTrackingStep` (étape 7) : `trackCurvatureExtrema` pour tracking des extrema frame par frame, snap anchors vers les pics de courbure persistants
+
+## arapSolver.ts
+
+Déformation ARAP (As-Rigid-As-Possible) du maillage 2D avec sommets pinnés.
+
+### Fonctions principales
+
+| Fonction | Rôle |
+|----------|------|
+| `precomputeARAP(allPoints, triangles, pinnedIndices)` | Pré-calcul : Laplacien L_ff/L_fp, poids cotangent, factorisation Cholesky. Appelé une fois par topologie |
+| `solveARAP(system, pinnedPositions, iterations?)` | Résout 1 frame : étape locale (rotation polaire par sommet) + étape globale (résolution Cholesky) |
+| `batchSolveARAP(system, pinnedFrames, iterations?)` | Résout toutes les frames séquentiellement avec warm-start |
+
+### Algorithme (par itération)
+1. **Étape locale** : pour chaque sommet, matrice covariance 2×2 des arêtes déformées vs repos → rotation la plus proche via décomposition polaire
+2. **Étape globale** : construire RHS depuis rotations + contraintes pinnées → résoudre via Cholesky
+
+### Utilisé par
+- `TriangulationStep` (étape 10) : option alternative aux barycentrics pour les points internes, minimise la distorsion locale lors de la déformation
+
+## optimalTransportSnap.ts
+
+Assignment optimal (transport) pour snap contour robuste via algorithme hongrois.
+
+### Fonction principale
+
+`applyOTSnap(anchors, cannyPixels, contourOrigin?)` → `{ snapped: Point2D[], success: boolean }`
+
+### Algorithme
+1. Ordonner les pixels Canny en chaîne continue
+2. Rééchantillonner à ~300 points uniformes en arc-length
+3. Calculer courbure κ à chaque échantillon
+4. Projeter anchors sur le contour → paires (s, κ)
+5. **Beam pre-selection** : top-5 candidats les plus proches par anchor en espace (s, κ)
+6. Matrice de coût normalisée : `C(i,j) = (Δs/σ_s)² + λ(Δκ/σ_κ)²`
+7. Résolution par algorithme hongrois (O(n³))
+8. **Validation monotonie** : la séquence snap doit respecter l'ordre arc-length, sinon fallback géométrique
+
+### Utilisé par
+- Optionnel dans le pipeline de tracking contour comme alternative robuste au snap géométrique pur
 
 ## trackingConstraints.ts
 
@@ -350,24 +414,29 @@ Coordonnées curvilignes sur contour Canny. Place des points intermédiaires ent
 | `orderContourPixels(pixels)` | Ordonne les pixels Canny en chaîne continue (parcours glouton nearest-neighbor) |
 | `computeArcLengths(path)` | Calcule les longueurs d'arc cumulées le long du chemin |
 | `interpolateAtArcLength(path, arcLengths, t)` | Interpole un point à la position curviligne normalisée `t` ∈ [0,1] |
+| `reorderContourFromOrigin(contour, originPoint)` | Réordonne le contour pour que P0 soit à l'index 0 (s=0) |
 | `snapToContour(point, contourIndex, maxDist)` | Snap un point sur le pixel Canny le plus proche via `ContourSpatialIndex` |
 | `extractPathBetweenAnchors(orderedContour, anchorA, anchorB)` | Extrait le sous-chemin le plus court entre deux anchors sur le contour fermé |
 | `subdivideSegment(path, count, segmentIndex)` | Place N points uniformes le long d'un segment → `{ points, params }` |
 | `subdivideContour(orderedContour, anchors, pointsPerSegment)` | Génère tous les points de subdivision pour tous les segments |
 | `computeSubdivisionForFrame(orderedContour, anchorPositions, params)` | Calcule les positions de subdivision pour une frame |
-| `computeAllSubdivisionFrames(videoBlob, anchorFrames, params, cannyParams, onProgress)` | Pipeline complet : extraction frames vidéo → Canny → ordonnancement → subdivision par frame |
+| `computeAllSubdivisionFrames(videoBlob, anchorFrames, params, cannyParams, imageWidth, imageHeight, onProgress?, originFrames?)` | Pipeline complet : extraction frames vidéo → Canny → conversion coords vidéo→image → ordonnancement → subdivision par frame |
 
-### Pipeline par frame
+### Pipeline par frame (computeAllSubdivisionFrames)
 ```
-1. Extraire frame vidéo sur canvas
-2. flowCannyContour() → pixels contour Canny
-3. orderContourPixels() → chaîne ordonnée
-4. Pour chaque anchor → snap sur chaîne
-5. Pour chaque segment [anchor_i, anchor_{i+1}] :
+1. Extraire frame vidéo sur canvas (coords vidéo)
+2. flowCannyContour() → pixels contour Canny (coords vidéo)
+3. Convertir pixels vidéo → coords image (× imageWidth/videoWidth)
+4. orderContourPixels() → chaîne ordonnée (coords image)
+5. reorderContourFromOrigin() depuis P0 tracké
+6. Pour chaque segment [anchor_i, anchor_{i+1}] :
    - extractPathBetweenAnchors() → sous-chemin
    - computeArcLengths() → longueurs d'arc
    - interpolateAtArcLength(t) → position point intermédiaire
+7. Fallback si Canny vide : interpolation linéaire entre anchors
 ```
+
+**Note** : la conversion coords vidéo → image est critique car les `anchorFrames` sont toujours en coordonnées image.
 
 ## contourSpatialIndex.ts
 

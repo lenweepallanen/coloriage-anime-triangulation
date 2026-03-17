@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { Project, Point2D, MeshData } from '../../types/project'
+import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
-import { orderContourPixels, computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin } from '../../utils/curvilinearContour'
+import { orderContourPixels, computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames } from '../../utils/curvilinearContour'
 import { trackCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 
 interface Props {
@@ -19,6 +19,30 @@ function loadImage(blob: Blob): Promise<HTMLImageElement> {
     img.onerror = reject
     img.src = URL.createObjectURL(blob)
   })
+}
+
+// Build ordered contour: interleave anchors + subdivision points
+function buildOrderedContour(
+  anchors: Point2D[],
+  subdivPoints: Point2D[],
+  params: CurvilinearParam[]
+): Point2D[] {
+  const ordered: Point2D[] = []
+  const numAnchors = anchors.length
+  for (let i = 0; i < numAnchors; i++) {
+    ordered.push(anchors[i])
+    const segPoints: { t: number; point: Point2D }[] = []
+    for (let j = 0; j < params.length; j++) {
+      if (params[j].segmentIndex === i) {
+        segPoints.push({ t: params[j].t, point: subdivPoints[j] })
+      }
+    }
+    segPoints.sort((a, b) => a.t - b.t)
+    for (const sp of segPoints) {
+      ordered.push(sp.point)
+    }
+  }
+  return ordered
 }
 
 export default function ContourTrackingStep({ project, onSave }: Props) {
@@ -45,9 +69,15 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
   const imageDimsRef = useRef<{ w: number; h: number } | null>(null)
   const lastModeRef = useRef<boolean>(false) // true = step-by-step
 
+  // Full contour preview state
+  const [showFullContour, setShowFullContour] = useState(false)
+  const [computingSubdiv, setComputingSubdiv] = useState(false)
+  const subdivFramesRef = useRef<Point2D[][] | null>(null)
+
   // Drag state
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null)
   const [hasEdited, setHasEdited] = useState(false)
+  const editedIndicesRef = useRef<Set<number>>(new Set())
   const [propagating, setPropagating] = useState(false)
 
   // Extrema tracking constants
@@ -270,6 +300,23 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           }
         }
 
+        // Re-snap all non-lost points onto nearest Canny pixel
+        // (fixes blend interpolation and stale extremum positions being off-contour)
+        for (let a = 0; a < adjustedPositions.length; a++) {
+          if (frameLostFlags[a]) continue
+          const pos = adjustedPositions[a]
+          let bestIdx = 0, bestDist = Infinity
+          for (let i = 0; i < ordered.length; i++) {
+            const d = Math.hypot(ordered[i].x - pos.x, ordered[i].y - pos.y)
+            if (d < bestDist) { bestDist = d; bestIdx = i }
+          }
+          adjustedPositions[a] = ordered[bestIdx]
+          // Also update s to match the snapped position
+          if (stepByStep) {
+            anchorS[a] = arcLengths[bestIdx] / totalLen
+          }
+        }
+
         allFrames.push(adjustedPositions)
         allRawFrames.push(rawPositions)
         allLostFlags.push(frameLostFlags)
@@ -301,6 +348,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
 
       lastModeRef.current = stepByStep
       setHasEdited(false)
+      editedIndicesRef.current.clear()
       setPreviewFrame(0)
       setPhase('preview')
       setProgress('')
@@ -359,52 +407,106 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       }
     }
 
-    // Draw polygon connecting adjusted positions (blue)
-    if (frameData.length >= 3) {
-      ctx.beginPath()
-      ctx.moveTo(frameData[0].x * scaleX, frameData[0].y * scaleY)
-      for (let i = 1; i < frameData.length; i++) {
-        ctx.lineTo(frameData[i].x * scaleX, frameData[i].y * scaleY)
+    // Full contour mode: draw ordered polygon (anchors + subdivision)
+    const subdivData = subdivFramesRef.current
+    const subdivParams = mesh?.contourSubdivisionParams
+    if (showFullContour && subdivData && subdivData[frame] && subdivParams) {
+      const subdivPts = subdivData[frame]
+      const orderedContour = buildOrderedContour(frameData, subdivPts, subdivParams)
+
+      // Draw full contour polygon (yellow)
+      if (orderedContour.length >= 3) {
+        ctx.beginPath()
+        ctx.moveTo(orderedContour[0].x * scaleX, orderedContour[0].y * scaleY)
+        for (let i = 1; i < orderedContour.length; i++) {
+          ctx.lineTo(orderedContour[i].x * scaleX, orderedContour[i].y * scaleY)
+        }
+        ctx.closePath()
+        ctx.strokeStyle = 'rgba(255, 220, 50, 0.8)'
+        ctx.lineWidth = 2
+        ctx.stroke()
       }
-      ctx.closePath()
-      ctx.strokeStyle = 'rgba(80, 140, 255, 0.7)'
-      ctx.lineWidth = 2
-      ctx.stroke()
+
+      // Draw subdivision points (green, smaller)
+      for (let i = 0; i < subdivPts.length; i++) {
+        const sx = subdivPts[i].x * scaleX
+        const sy = subdivPts[i].y * scaleY
+        ctx.beginPath()
+        ctx.arc(sx, sy, 4, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(50, 200, 50, 0.8)'
+        ctx.fill()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+
+      // Draw anchor points (red, larger)
+      for (let i = 0; i < frameData.length; i++) {
+        const cx = frameData[i].x * scaleX
+        const cy = frameData[i].y * scaleY
+        const isLost = lostFlags?.[i] ?? false
+
+        ctx.beginPath()
+        ctx.arc(cx, cy, 6, 0, Math.PI * 2)
+        ctx.fillStyle = isLost ? 'rgba(255, 160, 0, 0.9)' : 'rgba(220, 50, 50, 0.9)'
+        ctx.fill()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+
+        ctx.fillStyle = 'white'
+        ctx.font = 'bold 10px sans-serif'
+        ctx.fillText(`A${i}`, cx + 8, cy - 4)
+      }
+    } else {
+      // Anchors-only mode (original behavior)
+
+      // Draw polygon connecting adjusted positions (blue)
+      if (frameData.length >= 3) {
+        ctx.beginPath()
+        ctx.moveTo(frameData[0].x * scaleX, frameData[0].y * scaleY)
+        for (let i = 1; i < frameData.length; i++) {
+          ctx.lineTo(frameData[i].x * scaleX, frameData[i].y * scaleY)
+        }
+        ctx.closePath()
+        ctx.strokeStyle = 'rgba(80, 140, 255, 0.7)'
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+
+      // Draw raw s-positions (gray, faded, smaller)
+      for (let i = 0; i < rawData.length; i++) {
+        const rx = rawData[i].x * scaleX
+        const ry = rawData[i].y * scaleY
+        ctx.beginPath()
+        ctx.arc(rx, ry, 4, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(180, 180, 180, 0.5)'
+        ctx.fill()
+        ctx.fillStyle = 'rgba(180, 180, 180, 0.7)'
+        ctx.font = 'bold 9px sans-serif'
+        ctx.fillText(`${i}`, rx + 6, ry - 3)
+      }
+
+      // Draw adjusted positions: green = snapped, orange = lost
+      for (let i = 0; i < frameData.length; i++) {
+        const cx = frameData[i].x * scaleX
+        const cy = frameData[i].y * scaleY
+        const isLost = lostFlags?.[i] ?? false
+
+        ctx.beginPath()
+        ctx.arc(cx, cy, 6, 0, Math.PI * 2)
+        ctx.fillStyle = isLost ? 'rgba(255, 160, 0, 0.9)' : 'rgba(50, 220, 50, 0.9)'
+        ctx.fill()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+
+        ctx.fillStyle = 'white'
+        ctx.font = 'bold 10px sans-serif'
+        ctx.fillText(`${i}${isLost ? '?' : ''}`, cx + 8, cy - 4)
+      }
     }
-
-    // Draw raw s-positions (gray, faded, smaller)
-    for (let i = 0; i < rawData.length; i++) {
-      const rx = rawData[i].x * scaleX
-      const ry = rawData[i].y * scaleY
-      ctx.beginPath()
-      ctx.arc(rx, ry, 4, 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(180, 180, 180, 0.5)'
-      ctx.fill()
-      ctx.fillStyle = 'rgba(180, 180, 180, 0.7)'
-      ctx.font = 'bold 9px sans-serif'
-      ctx.fillText(`${i}`, rx + 6, ry - 3)
-    }
-
-    // Draw adjusted positions: green = snapped, orange = lost
-    for (let i = 0; i < frameData.length; i++) {
-      const cx = frameData[i].x * scaleX
-      const cy = frameData[i].y * scaleY
-      const isLost = lostFlags?.[i] ?? false
-
-      ctx.beginPath()
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2)
-      ctx.fillStyle = isLost ? 'rgba(255, 160, 0, 0.9)' : 'rgba(50, 220, 50, 0.9)'
-      ctx.fill()
-      ctx.strokeStyle = 'white'
-      ctx.lineWidth = 1.5
-      ctx.stroke()
-
-      // Label
-      ctx.fillStyle = 'white'
-      ctx.font = 'bold 10px sans-serif'
-      ctx.fillText(`${i}${isLost ? '?' : ''}`, cx + 8, cy - 4)
-    }
-  }, [])
+  }, [showFullContour, mesh])
 
   // Draw on frame change
   useEffect(() => {
@@ -456,16 +558,29 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     const scaleX = canvas.width / imgDims.w
     const scaleY = canvas.height / imgDims.h
 
-    // Update position in image coords
-    computed[previewFrame][draggingIdx] = {
-      x: cx / scaleX,
-      y: cy / scaleY,
+    // Update position in image coords, snapped to nearest Canny pixel
+    const imgX = cx / scaleX
+    const imgY = cy / scaleY
+    const cannyPts = cannyFramesRef.current?.[previewFrame]
+
+    if (cannyPts && cannyPts.length > 0) {
+      // Snap: find nearest Canny pixel (orthogonal projection onto contour)
+      let bestIdx = 0, bestDist = Infinity
+      for (let i = 0; i < cannyPts.length; i++) {
+        const d = Math.hypot(cannyPts[i].x - imgX, cannyPts[i].y - imgY)
+        if (d < bestDist) { bestDist = d; bestIdx = i }
+      }
+      computed[previewFrame][draggingIdx] = { ...cannyPts[bestIdx] }
+    } else {
+      computed[previewFrame][draggingIdx] = { x: imgX, y: imgY }
     }
+
     // Also clear lost flag for this point
     if (lostFlagsRef.current?.[previewFrame]) {
       lostFlagsRef.current[previewFrame][draggingIdx] = false
     }
     setHasEdited(true)
+    editedIndicesRef.current.add(draggingIdx)
     drawPreview(previewFrame)
   }, [draggingIdx, previewFrame, drawPreview])
 
@@ -481,12 +596,21 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     if (startFrame >= totalFrames - 1) return
 
     const stepByStep = lastModeRef.current
+    const editedIndices = new Set(editedIndicesRef.current)
+    const contourAnchors = mesh.contourAnchors
+    const selectiveMode = editedIndices.size > 0 && editedIndices.size < contourAnchors.length
+
     setPropagating(true)
     setPlaying(false)
-    setProgress(`Propagation depuis frame ${startFrame + 1}...`)
+    setShowFullContour(false)
+    subdivFramesRef.current = null
+
+    const editedList = [...editedIndices]
+    setProgress(selectiveMode
+      ? `Propagation selective (point${editedList.length > 1 ? 's' : ''} ${editedList.join(', ')}) depuis frame ${startFrame + 1}...`
+      : `Propagation depuis frame ${startFrame + 1}...`)
 
     try {
-      const contourAnchors = mesh.contourAnchors
       const originFrames = mesh.contourOriginFrames!
       const cannyParams = mesh.cannyParams!
       const imgDims = imageDimsRef.current!
@@ -529,7 +653,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         const arcLengths = computeArcLengths(ordered)
         const totalLen = arcLengths[arcLengths.length - 1] || 1
 
-        // Compute anchorS from edited positions
+        // Compute anchorS from positions (all anchors — needed for step-by-step chain)
         for (let a = 0; a < contourAnchors.length; a++) {
           const pos = editedPositions[a]
           let bestIdx = 0, bestDist = Infinity
@@ -559,7 +683,9 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       // Process frames from startFrame+1 to end
       for (let f = startFrame + 1; f < totalFrames; f++) {
         if (f % 5 === 0) {
-          setProgress(`Propagation frame ${f}/${totalFrames}`)
+          setProgress(selectiveMode
+            ? `Propagation selective (point${editedList.length > 1 ? 's' : ''} ${editedList.join(', ')}) frame ${f}/${totalFrames}`
+            : `Propagation frame ${f}/${totalFrames}`)
           await new Promise(r => setTimeout(r, 0))
         }
 
@@ -571,9 +697,18 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         const cannyPts = await flowCannyContour(imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
 
         if (!cannyPts || cannyPts.length < 10) {
-          computedFramesRef.current[f] = [...computedFramesRef.current[f - 1]]
-          rawFramesRef.current[f] = [...rawFramesRef.current[f - 1]]
-          lostFlagsRef.current[f] = contourAnchors.map(() => true)
+          if (selectiveMode) {
+            // Only overwrite edited anchors with previous frame fallback
+            for (const a of editedIndices) {
+              computedFramesRef.current[f][a] = { ...computedFramesRef.current[f - 1][a] }
+              rawFramesRef.current![f][a] = { ...rawFramesRef.current![f - 1][a] }
+              lostFlagsRef.current[f][a] = true
+            }
+          } else {
+            computedFramesRef.current[f] = [...computedFramesRef.current[f - 1]]
+            rawFramesRef.current![f] = [...rawFramesRef.current![f - 1]]
+            lostFlagsRef.current[f] = contourAnchors.map(() => true)
+          }
           if (cannyFramesRef.current) cannyFramesRef.current[f] = []
           continue
         }
@@ -589,15 +724,37 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
         previousExtrema = extremaResult.extrema
 
-        const rawPositions: Point2D[] = []
-        const adjustedPositions: Point2D[] = []
-        const frameLostFlags: boolean[] = []
+        // Initialize arrays from existing data (selective) or empty (full)
+        const rawPositions: Point2D[] = selectiveMode
+          ? [...(rawFramesRef.current![f] ?? rawFramesRef.current![f - 1])]
+          : new Array(contourAnchors.length)
+        const adjustedPositions: Point2D[] = selectiveMode
+          ? [...(computedFramesRef.current[f] ?? computedFramesRef.current[f - 1])]
+          : new Array(contourAnchors.length)
+        const frameLostFlags: boolean[] = selectiveMode
+          ? [...(lostFlagsRef.current[f] ?? contourAnchors.map(() => false))]
+          : new Array(contourAnchors.length)
 
         for (let a = 0; a < contourAnchors.length; a++) {
+          // Skip non-edited anchors in selective mode
+          if (selectiveMode && !editedIndices.has(a)) {
+            // Still update anchorS for step-by-step from existing position
+            if (stepByStep) {
+              const existingPos = adjustedPositions[a]
+              let bestIdx = 0, bestDist = Infinity
+              for (let i = 0; i < ordered.length; i++) {
+                const d = Math.hypot(ordered[i].x - existingPos.x, ordered[i].y - existingPos.y)
+                if (d < bestDist) { bestDist = d; bestIdx = i }
+              }
+              anchorS[a] = arcLengths[bestIdx] / totalLen
+            }
+            continue
+          }
+
           if (a === 0 && p0Frame) {
-            rawPositions.push(p0Frame)
-            adjustedPositions.push(p0Frame)
-            frameLostFlags.push(false)
+            rawPositions[a] = p0Frame
+            adjustedPositions[a] = p0Frame
+            frameLostFlags[a] = false
             if (stepByStep) {
               let bestIdx = 0, bestDist = Infinity
               for (let i = 0; i < ordered.length; i++) {
@@ -610,7 +767,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           }
 
           const rawPos = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
-          rawPositions.push(rawPos)
+          rawPositions[a] = rawPos
 
           const extIdx = anchorExtremumIdx[a]
           const trackedExtremum = extremaResult.extrema[extIdx]
@@ -619,8 +776,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             const dist = Math.hypot(rawPos.x - trackedExtremum.position.x, rawPos.y - trackedExtremum.position.y)
 
             if (dist <= SNAP_THRESHOLD) {
-              adjustedPositions.push(trackedExtremum.position)
-              frameLostFlags.push(false)
+              adjustedPositions[a] = trackedExtremum.position
+              frameLostFlags[a] = false
               if (stepByStep) anchorS[a] = trackedExtremum.arcLengthNorm
             } else if (dist <= LOST_THRESHOLD) {
               const t = (dist - SNAP_THRESHOLD) / (LOST_THRESHOLD - SNAP_THRESHOLD)
@@ -628,8 +785,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
                 x: trackedExtremum.position.x * (1 - t) + rawPos.x * t,
                 y: trackedExtremum.position.y * (1 - t) + rawPos.y * t,
               }
-              adjustedPositions.push(blended)
-              frameLostFlags.push(false)
+              adjustedPositions[a] = blended
+              frameLostFlags[a] = false
               if (stepByStep) {
                 let bestIdx = 0, bestDist = Infinity
                 for (let i = 0; i < ordered.length; i++) {
@@ -639,17 +796,33 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
                 anchorS[a] = arcLengths[bestIdx] / totalLen
               }
             } else {
-              adjustedPositions.push(rawPos)
-              frameLostFlags.push(true)
+              adjustedPositions[a] = rawPos
+              frameLostFlags[a] = true
             }
           } else {
-            adjustedPositions.push(rawPos)
-            frameLostFlags.push(true)
+            adjustedPositions[a] = rawPos
+            frameLostFlags[a] = true
+          }
+        }
+
+        // Re-snap non-lost points onto nearest Canny pixel (only edited in selective mode)
+        for (let a = 0; a < adjustedPositions.length; a++) {
+          if (frameLostFlags[a]) continue
+          if (selectiveMode && !editedIndices.has(a)) continue
+          const pos = adjustedPositions[a]
+          let bestIdx = 0, bestDist = Infinity
+          for (let i = 0; i < ordered.length; i++) {
+            const d = Math.hypot(ordered[i].x - pos.x, ordered[i].y - pos.y)
+            if (d < bestDist) { bestDist = d; bestIdx = i }
+          }
+          adjustedPositions[a] = ordered[bestIdx]
+          if (stepByStep) {
+            anchorS[a] = arcLengths[bestIdx] / totalLen
           }
         }
 
         computedFramesRef.current[f] = adjustedPositions
-        rawFramesRef.current[f] = rawPositions
+        rawFramesRef.current![f] = rawPositions
         lostFlagsRef.current[f] = frameLostFlags
       }
 
@@ -659,9 +832,10 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       const lostCounts = contourAnchors.map((_, a) =>
         lostFlagsRef.current!.slice(startFrame).reduce((sum, flags) => sum + (flags[a] ? 1 : 0), 0)
       )
-      console.log(`Propagation from frame ${startFrame} — lost frames per anchor:`, lostCounts)
+      console.log(`Propagation${selectiveMode ? ` selective (points ${editedList.join(', ')})` : ''} from frame ${startFrame} — lost frames per anchor:`, lostCounts)
 
       setHasEdited(false)
+      editedIndicesRef.current.clear()
       setProgress('')
       drawPreview(previewFrame)
     } catch (err) {
@@ -671,6 +845,47 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       setPropagating(false)
     }
   }, [mesh, project, previewFrame, drawPreview])
+
+  // ─── Full contour preview (anchors + subdivision) ──────────────
+  const handleComputeFullContour = useCallback(async () => {
+    if (!mesh || !computedFramesRef.current || !project.videoBlob || !project.originalImageBlob) return
+    const params = mesh.contourSubdivisionParams
+    if (!params || params.length === 0 || !mesh.cannyParams) return
+
+    setComputingSubdiv(true)
+    setProgress('Calcul subdivision contour...')
+
+    try {
+      // Ensure image dimensions are available
+      let imgDims = imageDimsRef.current
+      if (!imgDims) {
+        const img = await loadImage(project.originalImageBlob)
+        imgDims = { w: img.naturalWidth, h: img.naturalHeight }
+        imageDimsRef.current = imgDims
+        URL.revokeObjectURL(img.src)
+      }
+
+      await loadOpenCVWorker()
+      const subdivFrames = await computeAllSubdivisionFrames(
+        project.videoBlob,
+        computedFramesRef.current,
+        params,
+        mesh.cannyParams,
+        imgDims.w,
+        imgDims.h,
+        (p) => setProgress(`Subdivision frame ${p.frame}/${p.total}`),
+        mesh.contourOriginFrames
+      )
+      subdivFramesRef.current = subdivFrames
+      setShowFullContour(true)
+      setProgress('')
+    } catch (err) {
+      console.error('Subdivision computation failed:', err)
+      setProgress(`Erreur subdivision: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setComputingSubdiv(false)
+    }
+  }, [mesh, project])
 
   // ─── Playback ───────────────────────────────────────────────────
   useEffect(() => {
@@ -734,9 +949,12 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     rawFramesRef.current = null
     lostFlagsRef.current = null
     cannyFramesRef.current = null
+    subdivFramesRef.current = null
     totalFramesRef.current = 0
     setPlaying(false)
     setPreviewFrame(0)
+    setShowFullContour(false)
+    editedIndicesRef.current.clear()
 
     if (videoRef.current) {
       URL.revokeObjectURL(videoRef.current.src)
@@ -870,17 +1088,31 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           />
 
           <div className="preview-legend" style={{ fontSize: '0.85em', marginTop: 8, color: '#aaa' }}>
-            <span style={{ color: 'rgba(255,255,0,0.6)' }}>● Jaune</span> = contour Canny
-            {' | '}
-            <span style={{ color: 'rgba(80,140,255,0.8)' }}>— Bleu</span> = polygone anchors
-            {' | '}
-            <span style={{ color: 'rgba(180,180,180,0.8)' }}>● Gris</span> = position brute (s)
-            {' | '}
-            <span style={{ color: 'rgba(50,220,50,0.9)' }}>● Vert</span> = snap extremum
-            {' | '}
-            <span style={{ color: 'rgba(255,160,0,0.9)' }}>● Orange</span> = perdu
-            <br />
-            Glissez un point pour le repositionner, puis cliquez "Propager avant".
+            {showFullContour ? (
+              <>
+                <span style={{ color: 'rgba(255,255,0,0.6)' }}>● Jaune</span> = contour Canny
+                {' | '}
+                <span style={{ color: 'rgba(255,220,50,0.8)' }}>— Jaune</span> = polygone complet
+                {' | '}
+                <span style={{ color: 'rgba(220,50,50,0.9)' }}>● Rouge</span> = anchors
+                {' | '}
+                <span style={{ color: 'rgba(50,200,50,0.8)' }}>● Vert</span> = subdivision
+              </>
+            ) : (
+              <>
+                <span style={{ color: 'rgba(255,255,0,0.6)' }}>● Jaune</span> = contour Canny
+                {' | '}
+                <span style={{ color: 'rgba(80,140,255,0.8)' }}>— Bleu</span> = polygone anchors
+                {' | '}
+                <span style={{ color: 'rgba(180,180,180,0.8)' }}>● Gris</span> = position brute (s)
+                {' | '}
+                <span style={{ color: 'rgba(50,220,50,0.9)' }}>● Vert</span> = snap extremum
+                {' | '}
+                <span style={{ color: 'rgba(255,160,0,0.9)' }}>● Orange</span> = perdu
+                <br />
+                Glissez un point pour le repositionner, puis cliquez "Propager avant".
+              </>
+            )}
           </div>
 
           {/* Propagate button */}
@@ -888,14 +1120,43 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             <button
               className="btn-secondary"
               onClick={handlePropagate}
-              disabled={propagating || playing}
+              disabled={propagating || playing || showFullContour}
               style={{ marginRight: 8 }}
             >
               {propagating ? 'Propagation...' : `Propager avant (depuis frame ${previewFrame + 1})`}
             </button>
-            {hasEdited && <span style={{ color: '#ffa000', fontSize: '0.85em' }}>Points edites — propager pour appliquer</span>}
+            {hasEdited && !showFullContour && (
+              <span style={{ color: '#ffa000', fontSize: '0.85em' }}>
+                {editedIndicesRef.current.size > 0
+                  ? `Point${editedIndicesRef.current.size > 1 ? 's' : ''} ${[...editedIndicesRef.current].join(', ')} edite${editedIndicesRef.current.size > 1 ? 's' : ''} — propager pour appliquer`
+                  : 'Points edites — propager pour appliquer'}
+              </span>
+            )}
             {propagating && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
           </div>
+
+          {/* Full contour preview */}
+          {mesh?.contourSubdivisionParams && mesh.contourSubdivisionParams.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              {!showFullContour ? (
+                <button
+                  className="btn-secondary"
+                  onClick={handleComputeFullContour}
+                  disabled={computingSubdiv || propagating || playing}
+                >
+                  {computingSubdiv ? 'Calcul subdivision...' : 'Preview contour complet'}
+                </button>
+              ) : (
+                <button
+                  className="btn-secondary"
+                  onClick={() => setShowFullContour(false)}
+                >
+                  Preview anchors seuls
+                </button>
+              )}
+              {computingSubdiv && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
+            </div>
+          )}
 
           <div className="step-actions" style={{ marginTop: 16 }}>
             <button

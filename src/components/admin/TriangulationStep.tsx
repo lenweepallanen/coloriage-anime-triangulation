@@ -468,7 +468,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
     try {
       // Compute subdivision frames if not already done
       let contourSubFrames = mesh.contourSubdivisionFrames
-      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams) {
+      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams && imageDims) {
         setAnimProgress('Calcul positions contour subdivision...')
         await loadOpenCVWorker()
         contourSubFrames = await computeAllSubdivisionFrames(
@@ -476,6 +476,8 @@ export default function TriangulationStep({ project, onSave }: Props) {
           contourAnchorFrames,
           mesh.contourSubdivisionParams,
           mesh.cannyParams,
+          imageDims.w,
+          imageDims.h,
           (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`),
           mesh.contourOriginFrames
         )
@@ -541,7 +543,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
     try {
       // Compute subdivision frames if not already done
       let contourSubFrames = mesh.contourSubdivisionFrames
-      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams) {
+      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams && imageDims) {
         setAnimProgress('Calcul positions contour subdivision...')
         await loadOpenCVWorker()
         contourSubFrames = await computeAllSubdivisionFrames(
@@ -549,6 +551,8 @@ export default function TriangulationStep({ project, onSave }: Props) {
           contourAnchorFrames,
           mesh.contourSubdivisionParams,
           mesh.cannyParams,
+          imageDims.w,
+          imageDims.h,
           (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`),
           mesh.contourOriginFrames
         )
