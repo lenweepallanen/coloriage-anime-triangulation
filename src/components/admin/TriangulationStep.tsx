@@ -11,6 +11,7 @@ import { precomputeARAP, batchSolveARAP } from '../../utils/arapSolver'
 import { pointInPolygon, triangleCentroid } from '../../utils/geometry'
 import { computeAllSubdivisionFrames } from '../../utils/curvilinearContour'
 import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
+import { applyTemporalSmoothing } from '../../utils/trackingConstraints'
 import type { PointType } from '../triangulation/drawingUtils'
 
 interface Props {
@@ -64,6 +65,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
   // Animation state
   const [computing, setComputing] = useState(false)
   const [animProgress, setAnimProgress] = useState('')
+  const [smoothingWindow, setSmoothingWindow] = useState(3)
   const [playing, setPlaying] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const animCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -512,6 +514,15 @@ export default function TriangulationStep({ project, onSave }: Props) {
         ])
       }
 
+      // Temporal smoothing to reduce jitter
+      if (smoothingWindow > 1) {
+        setAnimProgress('Lissage temporel...')
+        await new Promise(r => setTimeout(r, 0))
+        const smoothed = applyTemporalSmoothing(videoFramesMesh, smoothingWindow)
+        videoFramesMesh.length = 0
+        videoFramesMesh.push(...smoothed)
+      }
+
       setAnimProgress('Sauvegarde...')
       const updatedMesh: MeshData = {
         ...mesh,
@@ -592,12 +603,19 @@ export default function TriangulationStep({ project, onSave }: Props) {
         ])
       }
 
-      const videoFramesMesh = batchSolveARAP(
+      let videoFramesMesh = batchSolveARAP(
         arapSystem,
         allPinnedFrames,
         3,
         (frame, total) => setAnimProgress(`ARAP frame ${frame + 1} / ${total}`)
       )
+
+      // Temporal smoothing to reduce jitter
+      if (smoothingWindow > 1) {
+        setAnimProgress('Lissage temporel...')
+        await new Promise(r => setTimeout(r, 0))
+        videoFramesMesh = applyTemporalSmoothing(videoFramesMesh, smoothingWindow)
+      }
 
       // Yield to UI periodically
       setAnimProgress('Sauvegarde...')
@@ -770,6 +788,15 @@ export default function TriangulationStep({ project, onSave }: Props) {
                 >
                   {computing ? 'Calcul en cours...' : 'Calculer ARAP'}
                 </button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa' }}>
+                  Lissage :
+                  <input type="range" min={1} max={11} step={2}
+                    value={smoothingWindow}
+                    onChange={e => setSmoothingWindow(Number(e.target.value))}
+                    disabled={computing}
+                    style={{ width: 80 }} />
+                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
+                </label>
                 {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
               </>
             ) : (
@@ -786,7 +813,16 @@ export default function TriangulationStep({ project, onSave }: Props) {
                   ▶
                 </button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <button onClick={handleComputeAnimation} disabled={computing} style={{ marginLeft: 'auto' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa', marginLeft: 'auto' }}>
+                  Lissage :
+                  <input type="range" min={1} max={11} step={2}
+                    value={smoothingWindow}
+                    onChange={e => setSmoothingWindow(Number(e.target.value))}
+                    disabled={computing}
+                    style={{ width: 80 }} />
+                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
+                </label>
+                <button onClick={handleComputeAnimation} disabled={computing}>
                   Recalculer (Bary)
                 </button>
                 <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#9333ea', color: 'white' }}>

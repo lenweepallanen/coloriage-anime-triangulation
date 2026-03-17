@@ -1,12 +1,82 @@
 import { useRef, useEffect, useState } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project } from '../../types/project'
+import type { Project, Point2D, CurvilinearParam } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 
 interface Props {
   project: Project
   scanCanvas: HTMLCanvasElement
   onClose: () => void
+}
+
+/**
+ * Build the ordered indices into allPoints that trace the contour once,
+ * interleaving anchors and subdivision points in curvilinear order.
+ * Returns indices into allPoints (where anchors are 0..A-1, subdivisions are A..A+S-1).
+ */
+function buildOrderedContourIndices(
+  numAnchors: number,
+  subParams: CurvilinearParam[]
+): number[] {
+  const result: number[] = []
+  for (let i = 0; i < numAnchors; i++) {
+    // Add anchor i (index i in allPoints)
+    result.push(i)
+    // Collect subdivision points for segment i, sorted by t
+    const segPts: { globalIndex: number; t: number }[] = []
+    for (let j = 0; j < subParams.length; j++) {
+      if (subParams[j].segmentIndex === i) {
+        // Subdivision point j is at index (numAnchors + j) in allPoints
+        segPts.push({ globalIndex: numAnchors + j, t: subParams[j].t })
+      }
+    }
+    segPts.sort((a, b) => a.t - b.t)
+    for (const sp of segPts) {
+      result.push(sp.globalIndex)
+    }
+  }
+  return result
+}
+
+/**
+ * Draw a smooth closed Bézier path through ordered points using
+ * Catmull-Rom → cubic Bézier conversion.
+ */
+function drawSmoothContour(
+  graphics: PIXI.Graphics,
+  framePoints: Point2D[],
+  orderedIndices: number[],
+  scale: number,
+  offsetX: number,
+  offsetY: number,
+  lineWidth: number
+) {
+  if (orderedIndices.length < 3) return
+
+  graphics.clear()
+  graphics.lineStyle(lineWidth, 0x000000, 1)
+
+  const n = orderedIndices.length
+  const px = (idx: number) => framePoints[idx].x * scale + offsetX
+  const py = (idx: number) => framePoints[idx].y * scale + offsetY
+
+  const tension = 0.5 / 3
+
+  graphics.moveTo(px(orderedIndices[0]), py(orderedIndices[0]))
+
+  for (let i = 0; i < n; i++) {
+    const i0 = orderedIndices[(i - 1 + n) % n]
+    const i1 = orderedIndices[i]
+    const i2 = orderedIndices[(i + 1) % n]
+    const i3 = orderedIndices[(i + 2) % n]
+
+    const cp1x = px(i1) + (px(i2) - px(i0)) * tension
+    const cp1y = py(i1) + (py(i2) - py(i0)) * tension
+    const cp2x = px(i2) - (px(i3) - px(i1)) * tension
+    const cp2y = py(i2) - (py(i3) - py(i1)) * tension
+
+    graphics.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, px(i2), py(i2))
+  }
 }
 
 export default function AnimationPlayer({ project, scanCanvas, onClose }: Props) {
@@ -21,11 +91,17 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     const allPoints = [...mesh.contourAnchors, ...mesh.contourSubdivisionPoints, ...mesh.anchorPoints, ...mesh.internalPoints]
     const hasFlow = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
 
+    // Build ordered contour indices (curvilinear order, single loop)
+    const contourIndices = buildOrderedContourIndices(
+      mesh.contourAnchors.length,
+      mesh.contourSubdivisionParams || []
+    )
+
     // Create PIXI application
     const app = new PIXI.Application({
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
-      backgroundColor: 0x111111,
+      backgroundColor: 0xFFFFFF,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     })
@@ -68,6 +144,13 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     const pixiMesh = new PIXI.Mesh(geometry, material)
     app.stage.addChild(pixiMesh)
 
+    // Create graphics for Bézier contour outline
+    const contourGraphics = new PIXI.Graphics()
+    app.stage.addChild(contourGraphics)
+
+    // Draw initial contour
+    drawSmoothContour(contourGraphics, allPoints, contourIndices, scale, offsetX, offsetY, 3)
+
     // Animation loop
     let frameIndex = 0
     const fps = 24
@@ -94,6 +177,9 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
             (verts.data as Float32Array)[i * 2 + 1] = framePoints[i].y * scale + offsetY
           }
           verts.update()
+
+          // Update Bézier contour outline
+          drawSmoothContour(contourGraphics, framePoints, contourIndices, scale, offsetX, offsetY, 3)
         }
       })
     }

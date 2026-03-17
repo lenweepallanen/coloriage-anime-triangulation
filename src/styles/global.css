@@ -472,7 +472,7 @@ input[type="text"]:focus {
 
 .animation-canvas {
   flex: 1;
-  background: #111;
+  background: #fff;
   border-radius: var(--radius);
   overflow: hidden;
 }
