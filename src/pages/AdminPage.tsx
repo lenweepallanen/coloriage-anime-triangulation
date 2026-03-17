@@ -3,9 +3,11 @@ import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import ImportStep from '../components/admin/ImportStep'
 import CannyValidationStep from '../components/admin/CannyValidationStep'
+import ContourOriginStep from '../components/admin/ContourOriginStep'
+import ContourOriginTrackingStep from '../components/admin/ContourOriginTrackingStep'
 import ContourAnchorsStep from '../components/admin/ContourAnchorsStep'
-import ContourTrackingStep from '../components/admin/ContourTrackingStep'
 import ContourSubdivisionStep from '../components/admin/ContourSubdivisionStep'
+import ContourTrackingStep from '../components/admin/ContourTrackingStep'
 import AnchorPointsStep from '../components/admin/AnchorPointsStep'
 import AnchorTrackingStep from '../components/admin/AnchorTrackingStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
@@ -13,6 +15,8 @@ import TriangulationStep from '../components/admin/TriangulationStep'
 const STEPS = [
   'Import',
   'Canny',
+  'Point 0 Contour',
+  'Tracking Point 0',
   'Anchors Contour',
   'Subdivision',
   'Tracking Contour',
@@ -57,6 +61,12 @@ export default function AdminPage() {
         )}
         {activeStep === 'Canny' && (
           <CannyValidationStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Point 0 Contour' && (
+          <ContourOriginStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Tracking Point 0' && (
+          <ContourOriginTrackingStep project={project} onSave={save} />
         )}
         {activeStep === 'Anchors Contour' && (
           <ContourAnchorsStep project={project} onSave={save} />

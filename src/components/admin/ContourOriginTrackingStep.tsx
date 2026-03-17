@@ -6,6 +6,8 @@ import { precomputeOpticalFlow, trackSegment } from '../../utils/opticalFlowComp
 import { propagateKeyframes } from '../../utils/keyframePropagation'
 import KeyframeEditor from '../keyframes/KeyframeEditor'
 import FrameNavigator from '../keyframes/FrameNavigator'
+import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
+import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 
 interface Props {
   project: Project
@@ -14,13 +16,14 @@ interface Props {
 
 type Phase = 'config' | 'tracking' | 'editing' | 'validated'
 
-export default function AnchorTrackingStep({ project, onSave }: Props) {
+export default function ContourOriginTrackingStep({ project, onSave }: Props) {
   const mesh = project.mesh
-  const anchorPoints = mesh?.anchorPoints ?? []
+  const contourOrigin = mesh?.contourOrigin
+  const cannyParams = mesh?.cannyParams
 
-  const initialPhase: Phase = mesh?.anchorTrackingValidated
+  const initialPhase: Phase = mesh?.contourOriginTrackingValidated
     ? 'validated'
-    : (mesh?.anchorKeyframes?.length ?? 0) > 0
+    : (mesh?.contourOriginKeyframes?.length ?? 0) > 0
       ? 'editing'
       : 'config'
 
@@ -29,19 +32,13 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
   const [saving, setSaving] = useState(false)
   const [propagating, setPropagating] = useState(false)
 
-  // Constraint toggles
-  const [enableAntiSaut, setEnableAntiSaut] = useState(true)
-  const [enableNeighbor, setEnableNeighbor] = useState(true)
-  const [enableTemporal, setEnableTemporal] = useState(false)
-  const [enableOutlier, setEnableOutlier] = useState(false)
-
   const rawTrackingRef = useRef<Point2D[][]>([])
 
-  // ===== Frame-by-frame navigation + on-demand keyframes =====
+  // Frame-by-frame navigation + on-demand keyframes
   const [currentFrame, setCurrentFrame] = useState(0)
   const [editedFrames, setEditedFrames] = useState<Map<number, Point2D[]>>(() => {
     const map = new Map<number, Point2D[]>()
-    for (const kf of mesh?.anchorKeyframes ?? []) {
+    for (const kf of mesh?.contourOriginKeyframes ?? []) {
       map.set(kf.frameIndex, kf.anchorPositions)
     }
     return map
@@ -51,6 +48,15 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
   const editedFrameSet = useMemo(() => new Set(editedFrames.keys()), [editedFrames])
 
   const [imageDims, setImageDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+
+  // Snap function for KeyframeEditor
+  const cannyIndexRef = useRef<ContourSpatialIndex | null>(null)
+
+  const handleSnapPoint = useCallback((p: Point2D): Point2D => {
+    if (!cannyIndexRef.current) return p
+    const result = cannyIndexRef.current.nearest(p, 30)
+    return result ? result.point : p
+  }, [])
 
   useState(() => {
     if (!project.originalImageBlob) return
@@ -63,30 +69,17 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     img.src = url
   })
 
-  const buildConstraints = useCallback((): TrackingConstraintParams | undefined => {
-    if (!enableAntiSaut && !enableNeighbor && !enableTemporal && !enableOutlier) {
-      return undefined
-    }
-
-    const anchorTriangles: [number, number, number][] = []
-    for (let i = 0; i < anchorPoints.length - 2; i++) {
-      anchorTriangles.push([i, i + 1, i + 2])
-    }
-
-    return {
-      anchorTriangles,
-      enableAntiSaut,
-      enableTemporalSmoothing: enableTemporal,
-      enableOutlierDetection: enableOutlier,
-    }
-  }, [enableAntiSaut, enableNeighbor, enableTemporal, enableOutlier, anchorPoints])
+  const originAsArray = useMemo(
+    () => contourOrigin ? [contourOrigin] : [],
+    [contourOrigin]
+  )
 
   // ===== Get positions for any frame =====
   const getFramePositions = useCallback((frame: number): Point2D[] => {
     if (editedFrames.has(frame)) return editedFrames.get(frame)!
     if (rawTrackingRef.current[frame]) return rawTrackingRef.current[frame]
-    return anchorPoints
-  }, [editedFrames, anchorPoints])
+    return originAsArray
+  }, [editedFrames, originAsArray])
 
   // ===== Find neighboring edited frames =====
   const findNeighborEdited = useCallback((frame: number): { prev: number | null; next: number | null } => {
@@ -100,7 +93,7 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     return { prev, next }
   }, [editedFrames])
 
-  // ===== Handle position update (user drag) — marks frame as edited =====
+  // ===== Handle position update =====
   const handleUpdatePositions = useCallback((positions: Point2D[]) => {
     setEditedFrames(prev => {
       const next = new Map(prev)
@@ -115,8 +108,14 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
   // ===== Track segment helper =====
   const trackAndUpdateSegment = useCallback(async (fromFrame: number, toFrame: number) => {
     if (!project.videoBlob || imageDims.w === 0) return
-    const constraints = buildConstraints()
     const startPositions = getFramePositions(fromFrame)
+
+    const constraints: TrackingConstraintParams = {
+      anchorTriangles: [],
+      enableAntiSaut: true,
+      enableSnapToContour: true,
+      cannyParams: cannyParams ?? undefined,
+    }
 
     const segResults = await trackSegment(
       project.videoBlob,
@@ -143,9 +142,9 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
         })
       }
     }
-  }, [project.videoBlob, imageDims, buildConstraints, getFramePositions, editedFrames])
+  }, [project.videoBlob, imageDims, cannyParams, getFramePositions, editedFrames])
 
-  // ===== Forward propagation =====
+  // ===== Propagation handlers =====
   const handlePropagateForward = useCallback(async (scope: 'segment' | 'all') => {
     if (!project.videoBlob || imageDims.w === 0) return
     setPropagating(true)
@@ -167,7 +166,6 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     setPropagating(false)
   }, [currentFrame, editedFrames, findNeighborEdited, trackAndUpdateSegment, project.videoBlob, imageDims])
 
-  // ===== Backward propagation =====
   const handlePropagateBackward = useCallback(async (scope: 'segment' | 'all') => {
     if (!project.videoBlob || imageDims.w === 0) return
     setPropagating(true)
@@ -188,7 +186,6 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     setPropagating(false)
   }, [currentFrame, editedFrames, findNeighborEdited, trackAndUpdateSegment, project.videoBlob, imageDims])
 
-  // ===== Bidirectional propagation =====
   const handlePropagateBidi = useCallback(async (scope: 'segment' | 'all') => {
     if (!project.videoBlob || imageDims.w === 0) return
     setPropagating(true)
@@ -220,23 +217,24 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     setPropagating(false)
   }, [currentFrame, editedFrames, findNeighborEdited, trackAndUpdateSegment, project.videoBlob, imageDims])
 
-  // ===== Build KeyframeData[] from editedFrames for save =====
+  // ===== Build KeyframeData[] from editedFrames =====
   const buildKeyframesFromEdited = useCallback((): KeyframeData[] => {
     const frames = new Map(editedFrames)
     if (!frames.has(0)) {
-      frames.set(0, rawTrackingRef.current[0] ?? anchorPoints)
+      frames.set(0, rawTrackingRef.current[0] ?? originAsArray)
     }
     const lastFrame = totalFramesRef.current - 1
     if (lastFrame > 0 && !frames.has(lastFrame)) {
-      frames.set(lastFrame, rawTrackingRef.current[lastFrame] ?? anchorPoints)
+      frames.set(lastFrame, rawTrackingRef.current[lastFrame] ?? originAsArray)
     }
     return Array.from(frames.entries())
       .sort(([a], [b]) => a - b)
       .map(([frameIndex, anchorPositions]) => ({ frameIndex, anchorPositions }))
-  }, [editedFrames, anchorPoints])
+  }, [editedFrames, originAsArray])
 
+  // ===== Launch tracking =====
   async function handleLaunchTracking() {
-    if (!project.videoBlob || !mesh || anchorPoints.length === 0) return
+    if (!project.videoBlob || !mesh || !contourOrigin) return
     if (imageDims.w === 0) {
       alert('Dimensions image non chargées, réessayez.')
       return
@@ -246,11 +244,42 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     setProgress('Démarrage...')
 
     try {
-      const constraints = buildConstraints()
+      // Build Canny index for snap during editing
+      if (cannyParams && project.originalImageBlob) {
+        await loadOpenCVWorker()
+        const img = new Image()
+        const url = URL.createObjectURL(project.originalImageBlob)
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve()
+          img.onerror = () => reject(new Error('Image load failed'))
+          img.src = url
+        })
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        const ctx = canvas.getContext('2d')!
+        ctx.drawImage(img, 0, 0)
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        const contourPts = await flowCannyContour(
+          imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize
+        )
+        if (contourPts && contourPts.length > 0) {
+          cannyIndexRef.current = new ContourSpatialIndex(contourPts, 8)
+        }
+        URL.revokeObjectURL(url)
+      }
+
+      const constraints: TrackingConstraintParams = {
+        anchorTriangles: [],
+        enableAntiSaut: true,
+        enableSnapToContour: true,
+        cannyParams: cannyParams ?? undefined,
+      }
+
       const result = await precomputeOpticalFlow(
         null,
         project.videoBlob,
-        anchorPoints,
+        [contourOrigin],
         imageDims.w,
         imageDims.h,
         (stage, current, total) => {
@@ -270,32 +299,99 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
       setPhase('editing')
       setProgress('')
     } catch (err) {
-      console.error('Anchor tracking failed:', err)
+      console.error('Origin tracking failed:', err)
       alert('Erreur tracking : ' + (err instanceof Error ? err.message : err))
       setPhase('config')
       setProgress('')
     }
   }
 
+  // ===== Save & validate =====
   async function handleSaveAndValidate() {
     if (!mesh) return
     setSaving(true)
     try {
       const totalFrames = totalFramesRef.current
       const keyframes = buildKeyframesFromEdited()
-      const anchorFrames = propagateKeyframes(keyframes, totalFrames)
+      const contourOriginFrames = propagateKeyframes(keyframes, totalFrames)
+
+      // Snap intermediate frames to Canny contour
+      if (cannyParams && project.videoBlob) {
+        try {
+          await loadOpenCVWorker()
+          const video = document.createElement('video')
+          video.muted = true
+          video.preload = 'auto'
+          const url = URL.createObjectURL(project.videoBlob)
+          video.src = url
+          await new Promise<void>((resolve, reject) => {
+            video.onloadedmetadata = () => resolve()
+            video.onerror = () => reject(new Error('Video load failed'))
+          })
+
+          const canvas = document.createElement('canvas')
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          const ctx = canvas.getContext('2d')!
+
+          const keyframeSet = new Set(keyframes.map(k => k.frameIndex))
+
+          for (let f = 0; f < totalFrames; f++) {
+            if (keyframeSet.has(f)) continue
+            if (f % 5 !== 0 && f !== totalFrames - 1) continue // Sample every 5 frames for perf
+
+            video.currentTime = f / 24
+            await new Promise<void>(resolve => { video.onseeked = () => resolve() })
+            ctx.drawImage(video, 0, 0)
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+            const contourPts = await flowCannyContour(
+              imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize
+            )
+            if (contourPts && contourPts.length > 0) {
+              const idx = new ContourSpatialIndex(contourPts, 8)
+              const snapped = contourOriginFrames[f].map(p => {
+                const nearest = idx.nearest(p, 30)
+                return nearest ? nearest.point : p
+              })
+              contourOriginFrames[f] = snapped
+            }
+          }
+          URL.revokeObjectURL(url)
+        } catch (err) {
+          console.warn('Snap-to-contour during validation failed:', err)
+        }
+      }
 
       const updatedMesh: MeshData = {
         ...mesh,
-        anchorKeyframeInterval: 0,
-        anchorKeyframes: keyframes,
-        anchorFrames,
-        anchorTrackingValidated: true,
+        contourOriginKeyframeInterval: 0,
+        contourOriginKeyframes: keyframes,
+        contourOriginFrames,
+        contourOriginTrackingValidated: true,
+        // Reset downstream
+        contourAnchors: [],
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: null,
+        contourAnchorTrackingValidated: false,
+        contourSubdivisionPoints: [],
+        contourSubdivisionParams: [],
+        contourSubdivisionFrames: null,
+        contourSubdivisionValidated: false,
+        anchorPoints: [],
+        anchorKeyframes: [],
+        anchorFrames: null,
+        anchorTrackingValidated: false,
+        internalPoints: [],
+        triangles: [],
+        topologyLocked: false,
+        trackedTriangles: [],
+        internalBarycentrics: [],
+        videoFramesMesh: null,
       }
 
       await onSave(
         { ...project, mesh: updatedMesh },
-        ['anchorKeyframes', 'anchorFrames']
+        ['contourOriginKeyframes', 'contourOriginFrames']
       )
       setPhase('validated')
     } catch (err) {
@@ -306,33 +402,35 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
   }
 
   function handleReset() {
-    if (!confirm('Réinitialiser le tracking des ancres ? Les corrections seront perdues.')) return
+    if (!confirm('Réinitialiser le tracking du Point 0 ? Les corrections seront perdues.')) return
     setEditedFrames(new Map())
     rawTrackingRef.current = []
     setCurrentFrame(0)
     setPhase('config')
   }
 
-  // Prerequisites
-  if (!mesh?.contourAnchorTrackingValidated) {
-    return <div className="placeholder">Validez d&apos;abord le tracking contour (étape 5).</div>
+  // ===== Prerequisites =====
+  if (!cannyParams) {
+    return <div className="placeholder">Validez d&apos;abord les paramètres Canny (étape 2).</div>
   }
-  if (!mesh?.anchorPoints?.length) {
-    return <div className="placeholder">Définissez d&apos;abord les ancres internes (étape 6).</div>
+  if (!contourOrigin) {
+    return <div className="placeholder">Définissez d&apos;abord le Point 0 du contour (étape 3).</div>
   }
   if (!project.videoBlob) {
-    return <div className="placeholder">Importez d&apos;abord une vidéo.</div>
+    return <div className="placeholder">Importez d&apos;abord une vidéo (étape 1).</div>
   }
+
+  // ===== Render =====
 
   if (phase === 'validated') {
     return (
       <div className="tracking-step">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px' }}>
           <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '1.1rem' }}>
-            Tracking ancres validé
+            Tracking Point 0 validé
           </span>
           <span style={{ color: '#888' }}>
-            {anchorPoints.length} ancres trackées sur {mesh.anchorFrames?.length ?? '?'} frames
+            1 point tracké sur {mesh.contourOriginFrames?.length ?? '?'} frames
           </span>
           <button className="btn-danger" onClick={handleReset}>
             Recommencer
@@ -346,30 +444,10 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     return (
       <div className="tracking-step">
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <h3 style={{ margin: 0 }}>Configuration du tracking des ancres</h3>
+          <h3 style={{ margin: 0 }}>Tracking du Point 0 (origine curviligne)</h3>
           <p style={{ color: '#888', margin: 0 }}>
-            {anchorPoints.length} points d&apos;ancrage à tracker.
+            Le Point 0 sera tracké par optical flow avec snap automatique sur le contour Canny.
           </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <strong>Contraintes :</strong>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableAntiSaut} onChange={e => setEnableAntiSaut(e.target.checked)} />
-              Anti-saut (clamp déplacement max)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableNeighbor} onChange={e => setEnableNeighbor(e.target.checked)} />
-              Contrainte voisinage (consensus médiane)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableTemporal} onChange={e => setEnableTemporal(e.target.checked)} />
-              Lissage temporel (post-traitement)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableOutlier} onChange={e => setEnableOutlier(e.target.checked)} />
-              Détection outliers (post-traitement)
-            </label>
-          </div>
 
           <button
             onClick={handleLaunchTracking}
@@ -386,31 +464,31 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     return (
       <div className="tracking-step">
         <div style={{ padding: '16px', textAlign: 'center' }}>
-          <h3>Tracking en cours...</h3>
+          <h3>Tracking Point 0 en cours...</h3>
           <p style={{ fontFamily: 'monospace' }}>{progress}</p>
           <div style={{ width: '100%', maxWidth: 400, margin: '0 auto', height: 4, background: '#333', borderRadius: 2 }}>
-            <div style={{ width: '50%', height: '100%', background: '#2563eb', borderRadius: 2, transition: 'width 0.3s' }} />
+            <div style={{ width: '50%', height: '100%', background: '#ec4899', borderRadius: 2, transition: 'width 0.3s' }} />
           </div>
         </div>
       </div>
     )
   }
 
-  // Editing phase (frame-by-frame)
+  // Editing phase
   const currentPositions = getFramePositions(currentFrame)
 
   return (
     <div className="tracking-step" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-        <span style={{ fontWeight: 'bold' }}>
-          Édition frame par frame
+        <span style={{ fontWeight: 'bold', color: '#ec4899' }}>
+          Point 0 — Édition frame par frame
         </span>
         <button
           onClick={handleSaveAndValidate}
           disabled={saving}
           style={{ background: '#22c55e', color: 'white' }}
         >
-          {saving ? 'Sauvegarde...' : 'Valider le tracking ancres'}
+          {saving ? 'Sauvegarde...' : 'Valider le tracking Point 0'}
         </button>
         <button className="btn-danger" onClick={handleReset}>
           Recommencer
@@ -440,6 +518,7 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
         isEdited={editedFrames.has(currentFrame)}
         isFirstFrame={currentFrame === 0}
         isLastFrame={currentFrame === totalFramesRef.current - 1}
+        onSnapPoint={handleSnapPoint}
       />
     </div>
   )

@@ -12,18 +12,19 @@ interface Props {
   referencePositions?: Point2D[]
   totalFrames: number
   onUpdatePositions: (positions: Point2D[]) => void
-  onPropagateForwardOne: () => void
-  onPropagateForwardAll: () => void
-  onPropagateBidiOne: () => void
-  onPropagateBidiAll: () => void
-  onValidateOnly?: () => void
+  // Directional propagation (optional — hidden when not provided)
+  onPropagateForward?: (scope: 'segment' | 'all') => void
+  onPropagateBackward?: (scope: 'segment' | 'all') => void
+  onPropagateBidi?: (scope: 'segment' | 'all') => void
   propagating?: boolean
-  isFirstKeyframe?: boolean
-  isLastKeyframe?: boolean
+  isEdited?: boolean
+  isFirstFrame?: boolean
+  isLastFrame?: boolean
   contourDebug?: ContourTrackingDebugData | null
   contourAnchorIndices?: number[]
   onSnapPoint?: (p: Point2D) => Point2D
   cannyContourPoints?: Point2D[]
+  ghostPositions?: Point2D[]  // positions arc-length brutes (avant raffinement courbure)
 }
 
 export default function KeyframeEditor({
@@ -34,19 +35,19 @@ export default function KeyframeEditor({
   anchorPositions,
   totalFrames,
   onUpdatePositions,
-  onPropagateForwardOne,
-  onPropagateForwardAll,
-  onPropagateBidiOne,
-  onPropagateBidiAll,
-  onValidateOnly,
+  onPropagateForward,
+  onPropagateBackward,
+  onPropagateBidi,
   propagating,
   referencePositions,
-  isFirstKeyframe,
-  isLastKeyframe,
+  isEdited,
+  isFirstFrame,
+  isLastFrame,
   contourDebug,
   contourAnchorIndices,
   onSnapPoint,
   cannyContourPoints,
+  ghostPositions,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -183,6 +184,42 @@ export default function KeyframeEditor({
         ctx.stroke()
       }
 
+      // Draw ghost positions (raw arc-length before curvature snap)
+      if (ghostPositions && ghostPositions.length > 0) {
+        const ghostR = 4 / t.scale
+        for (let i = 0; i < ghostPositions.length; i++) {
+          const gp = ghostPositions[i]
+          const gx = (gp.x / imageWidth) * vw
+          const gy = (gp.y / imageHeight) * vh
+          // Cyan diamond for raw arc-length position
+          ctx.fillStyle = 'rgba(0, 200, 255, 0.7)'
+          ctx.beginPath()
+          ctx.moveTo(gx, gy - ghostR)
+          ctx.lineTo(gx + ghostR, gy)
+          ctx.lineTo(gx, gy + ghostR)
+          ctx.lineTo(gx - ghostR, gy)
+          ctx.closePath()
+          ctx.fill()
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)'
+          ctx.lineWidth = 1 / t.scale
+          ctx.stroke()
+          // Line from ghost to final position
+          if (i < anchorPositions.length) {
+            const ap = anchorPositions[i]
+            const ax = (ap.x / imageWidth) * vw
+            const ay = (ap.y / imageHeight) * vh
+            ctx.strokeStyle = 'rgba(0, 200, 255, 0.4)'
+            ctx.lineWidth = 1 / t.scale
+            ctx.setLineDash([3 / t.scale, 3 / t.scale])
+            ctx.beginPath()
+            ctx.moveTo(gx, gy)
+            ctx.lineTo(ax, ay)
+            ctx.stroke()
+            ctx.setLineDash([])
+          }
+        }
+      }
+
       // Draw anchor points with optional confidence coloring
       const labelSize = Math.max(8, 11 / t.scale)
       for (let i = 0; i < anchorPositions.length; i++) {
@@ -249,11 +286,13 @@ export default function KeyframeEditor({
 
       // Frame info
       ctx.restore()
+      const infoW = isEdited ? 160 : 130
       ctx.fillStyle = 'rgba(0,0,0,0.6)'
-      ctx.fillRect(8, 8, 130, 24)
+      ctx.fillRect(8, 8, infoW, 24)
       ctx.fillStyle = '#fff'
       ctx.font = '12px monospace'
-      ctx.fillText(`Keyframe ${frameIndex} / ${totalFrames - 1}`, 14, 24)
+      ctx.fillText(`Frame ${frameIndex} / ${totalFrames - 1}${isEdited ? ' [edit]' : ''}`, 14, 24)
+
 
       // Contour confidence summary
       if (hasDebug && contourDebug.confidences.length > 0) {
@@ -277,7 +316,7 @@ export default function KeyframeEditor({
 
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
-  }, [videoReady, anchorPositions, hoveredIdx, frameIndex, totalFrames, imageWidth, imageHeight, transformRef, contourDebug, contourAnchorIndices, showContourDebug, cannyContourPoints])
+  }, [videoReady, anchorPositions, hoveredIdx, frameIndex, totalFrames, imageWidth, imageHeight, transformRef, contourDebug, contourAnchorIndices, showContourDebug, cannyContourPoints, isEdited])
 
   // Resize reference canvas
   useEffect(() => {
@@ -381,60 +420,83 @@ export default function KeyframeEditor({
     draggingIdx.current = null
   }, [])
 
+  const hasPropagation = !!(onPropagateForward || onPropagateBackward || onPropagateBidi)
+
   return (
     <div className="keyframe-editor">
-      <div className="keyframe-editor-toolbar">
-        {!isLastKeyframe && (
+      {hasPropagation ? (
+        <div className="keyframe-editor-toolbar">
           <button
-            onClick={onPropagateForwardOne}
-            disabled={propagating}
+            onClick={() => onPropagateBackward?.('segment')}
+            disabled={propagating || isFirstFrame}
+            style={{ background: '#7c3aed', color: 'white' }}
+            title="Re-track vers la frame éditée précédente"
+          >
+            {propagating ? '...' : '\u2190 1 seg'}
+          </button>
+          <button
+            onClick={() => onPropagateBackward?.('all')}
+            disabled={propagating || isFirstFrame}
+            style={{ background: '#6d28d9', color: 'white' }}
+            title="Re-track en arrière jusqu'au début"
+          >
+            \u2190 tout
+          </button>
+          <span className="toolbar-separator" />
+          <button
+            onClick={() => onPropagateBidi?.('segment')}
+            disabled={propagating || (isFirstFrame && isLastFrame)}
+            style={{ background: '#2563eb', color: 'white' }}
+            title="Re-track 1 segment dans les 2 directions"
+          >
+            \u2194 1 seg
+          </button>
+          <button
+            onClick={() => onPropagateBidi?.('all')}
+            disabled={propagating || (isFirstFrame && isLastFrame)}
+            style={{ background: '#1d4ed8', color: 'white' }}
+            title="Re-track dans les 2 directions jusqu'aux extrémités"
+          >
+            \u2194 tout
+          </button>
+          <span className="toolbar-separator" />
+          <button
+            onClick={() => onPropagateForward?.('segment')}
+            disabled={propagating || isLastFrame}
             style={{ background: '#22c55e', color: 'white' }}
+            title="Re-track vers la frame éditée suivante"
           >
-            {propagating ? 'Propagation...' : 'Propager avant'}
+            {propagating ? 'Propagation...' : '\u2192 1 seg'}
           </button>
-        )}
-        {!isLastKeyframe && (
           <button
-            onClick={onPropagateForwardAll}
-            disabled={propagating}
+            onClick={() => onPropagateForward?.('all')}
+            disabled={propagating || isLastFrame}
             style={{ background: '#16a34a', color: 'white' }}
+            title="Re-track en avant jusqu'à la fin"
           >
-            Propager avant (tout)
+            \u2192 tout
           </button>
-        )}
-        <button
-          onClick={onPropagateBidiOne}
-          disabled={propagating || (isFirstKeyframe && isLastKeyframe)}
-          style={{ background: '#2563eb', color: 'white' }}
-        >
-          Bidi (1 pas)
-        </button>
-        <button
-          onClick={onPropagateBidiAll}
-          disabled={propagating || (isFirstKeyframe && isLastKeyframe)}
-          style={{ background: '#1d4ed8', color: 'white' }}
-        >
-          Bidi (tout)
-        </button>
-        {onValidateOnly && (
-          <button onClick={onValidateOnly} disabled={propagating}>
-            Passer
-          </button>
-        )}
-        {contourDebug && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginLeft: 8 }}>
-            <input
-              type="checkbox"
-              checked={showContourDebug}
-              onChange={e => setShowContourDebug(e.target.checked)}
-            />
-            Debug contour
-          </label>
-        )}
-        <span style={{ fontSize: '0.75rem', color: '#888' }}>
-          Glissez les points pour corriger | Avant = vers keyframes suivantes | Bidi = avant + arrière
-        </span>
-      </div>
+          {contourDebug && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginLeft: 8 }}>
+              <input
+                type="checkbox"
+                checked={showContourDebug}
+                onChange={e => setShowContourDebug(e.target.checked)}
+              />
+              Debug contour
+            </label>
+          )}
+          <span style={{ fontSize: '0.75rem', color: '#888' }}>
+            Glissez les points pour corriger | \u2190 arrière | \u2194 bidi | \u2192 avant
+          </span>
+        </div>
+      ) : (
+        <div className="keyframe-editor-toolbar">
+          <span style={{ fontSize: '0.75rem', color: '#888' }}>
+            Glissez les points pour corriger leur position
+          </span>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, flex: 1, minHeight: 0 }}>
         <div ref={containerRef} className="keyframe-editor-canvas-container" style={{ flex: 3 }}>
           <canvas

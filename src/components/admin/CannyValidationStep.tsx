@@ -225,6 +225,11 @@ export default function CannyValidationStep({ project, onSave }: Props) {
     try {
       const baseMesh: import('../../types/project').MeshData = project.mesh ?? {
         cannyParams: null,
+        contourOrigin: null,
+        contourOriginKeyframeInterval: 10,
+        contourOriginKeyframes: [],
+        contourOriginFrames: null,
+        contourOriginTrackingValidated: false,
         contourAnchors: [],
         contourAnchorKeyframeInterval: 10,
         contourAnchorKeyframes: [],
@@ -249,6 +254,20 @@ export default function CannyValidationStep({ project, onSave }: Props) {
       const mesh = {
         ...baseMesh,
         cannyParams: params,
+        // Reset downstream origin data when Canny params change
+        contourOrigin: null,
+        contourOriginKeyframeInterval: 10,
+        contourOriginKeyframes: [],
+        contourOriginFrames: null,
+        contourOriginTrackingValidated: false,
+        contourAnchors: [],
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: null,
+        contourAnchorTrackingValidated: false,
+        contourSubdivisionPoints: [],
+        contourSubdivisionParams: [],
+        contourSubdivisionFrames: null,
+        contourSubdivisionValidated: false,
       }
       await onSave({ ...project, mesh })
     } catch (err) {

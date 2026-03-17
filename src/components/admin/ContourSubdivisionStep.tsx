@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
-import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 import {
   orderContourPixels,
   subdivideContour,
+  reorderContourFromOrigin,
 } from '../../utils/curvilinearContour'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 
@@ -109,7 +109,10 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
         if (cancelled) return
         if (contourPts && contourPts.length > 0) {
           setCannyPixels(contourPts)
-          const ordered = orderContourPixels(contourPts)
+          let ordered = orderContourPixels(contourPts)
+          if (mesh?.contourOrigin) {
+            ordered = reorderContourFromOrigin(ordered, mesh.contourOrigin)
+          }
           setOrderedContour(ordered)
         }
       } catch (err) {

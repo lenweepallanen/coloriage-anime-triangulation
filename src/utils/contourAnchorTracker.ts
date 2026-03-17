@@ -5,6 +5,8 @@
  */
 
 import type { Point2D } from '../types/project'
+import { orderContourPixels, computeArcLengths } from './curvilinearContour'
+import { cssSnapToContour, cssSnapToContourRegistered, type CurvatureSignature } from './curvatureScaleSpace'
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -46,6 +48,17 @@ export interface ContourTrackingState {
 export interface ContourMatchInput {
   tmPos: Point2D
   tmScore: number
+}
+
+// ---------------------------------------------------------------------------
+// CSS snap params (optional curvature-aware snap)
+// ---------------------------------------------------------------------------
+
+export interface CSSSnapParams {
+  initialArcLengths: number[]  // one per contour anchor, from frame 0
+  windowFraction: number       // default 0.08
+  sigma: number                // default 16
+  signatures?: CurvatureSignature[]  // optional curvature signatures for registered snap
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +118,8 @@ export function refineContourAnchors(
   contourMatches: ContourMatchInput[] | null,
   contourPolyline: Point2D[] | null,
   state: ContourTrackingState,
-  config: ContourTrackingConfig
+  config: ContourTrackingConfig,
+  cssSnapParams?: CSSSnapParams
 ): { refined: Point2D[]; state: ContourTrackingState } {
   const refined = allPositions.map(p => ({ ...p }))
   const newState: ContourTrackingState = {
@@ -116,6 +130,14 @@ export function refineContourAnchors(
 
   const { contourAnchorIndices, snapRadius, snapLostFactor, templateWeight, snapWeight, minConfidence, maxLostFrames } = config
   const maxSnapDist = snapRadius * snapLostFactor
+
+  // Pre-compute ordered contour + arc-lengths once per frame for CSS snap
+  let cssOrderedContour: Point2D[] | null = null
+  let cssArcLengths: number[] | null = null
+  if (cssSnapParams && contourPolyline && contourPolyline.length > 10) {
+    cssOrderedContour = orderContourPixels(contourPolyline)
+    cssArcLengths = computeArcLengths(cssOrderedContour)
+  }
 
   for (let i = 0; i < contourAnchorIndices.length; i++) {
     const idx = contourAnchorIndices[i]
@@ -139,10 +161,43 @@ export function refineContourAnchors(
       const fusedForSnap = pTM
         ? { x: pLK.x * (1 - templateWeight) + pTM.x * templateWeight, y: pLK.y * (1 - templateWeight) + pTM.y * templateWeight }
         : pLK
-      const snapResult = findNearestOnContour(fusedForSnap, contourPolyline)
-      snapDist = snapResult.distance
-      if (snapDist < maxSnapDist) {
-        pSnap = snapResult.nearest
+
+      // Try CSS snap first if available (registered variant preferred)
+      if (cssOrderedContour && cssArcLengths && cssSnapParams && i < cssSnapParams.initialArcLengths.length) {
+        const hasSignature = cssSnapParams.signatures && i < cssSnapParams.signatures.length
+        const cssResult = hasSignature
+          ? cssSnapToContourRegistered(
+              fusedForSnap,
+              cssSnapParams.initialArcLengths[i],
+              cssSnapParams.signatures![i],
+              cssOrderedContour,
+              cssArcLengths,
+              cssSnapParams.windowFraction,
+              cssSnapParams.sigma
+            )
+          : cssSnapToContour(
+              fusedForSnap,
+              cssSnapParams.initialArcLengths[i],
+              cssOrderedContour,
+              cssArcLengths,
+              cssSnapParams.windowFraction,
+              cssSnapParams.sigma
+            )
+        if (!cssResult.usedFallback) {
+          pSnap = cssResult.position
+          const dx = fusedForSnap.x - cssResult.position.x
+          const dy = fusedForSnap.y - cssResult.position.y
+          snapDist = Math.sqrt(dx * dx + dy * dy)
+        }
+      }
+
+      // Fallback to geometric snap if CSS snap didn't find a peak
+      if (!pSnap) {
+        const snapResult = findNearestOnContour(fusedForSnap, contourPolyline)
+        snapDist = snapResult.distance
+        if (snapDist < maxSnapDist) {
+          pSnap = snapResult.nearest
+        }
       }
     }
 

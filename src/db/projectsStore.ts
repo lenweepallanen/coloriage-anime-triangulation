@@ -14,6 +14,11 @@ interface TriangleDoc { a: number; b: number; c: number }
 
 interface MeshDoc {
   cannyParams: CannyParams | null
+  contourOrigin: Point2D | null
+  contourOriginKeyframeInterval: number
+  contourOriginTrackingValidated: boolean
+  hasContourOriginKeyframes: boolean
+  hasContourOriginFrames: boolean
   contourAnchors: Point2D[]
   contourAnchorKeyframeInterval: number
   contourAnchorTrackingValidated: boolean
@@ -124,6 +129,11 @@ function toDoc(project: Project): ProjectDoc {
     hasVideo: project.videoBlob != null,
     mesh: project.mesh ? {
       cannyParams: project.mesh.cannyParams ?? null,
+      contourOrigin: project.mesh.contourOrigin ?? null,
+      contourOriginKeyframeInterval: project.mesh.contourOriginKeyframeInterval ?? 10,
+      contourOriginTrackingValidated: project.mesh.contourOriginTrackingValidated ?? false,
+      hasContourOriginKeyframes: (project.mesh.contourOriginKeyframes?.length ?? 0) > 0,
+      hasContourOriginFrames: project.mesh.contourOriginFrames != null,
       contourAnchors: project.mesh.contourAnchors ?? [],
       contourAnchorKeyframeInterval: project.mesh.contourAnchorKeyframeInterval ?? 10,
       contourAnchorTrackingValidated: project.mesh.contourAnchorTrackingValidated ?? false,
@@ -150,6 +160,7 @@ function toDoc(project: Project): ProjectDoc {
 }
 
 type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
+  'contourOriginKeyframes' | 'contourOriginFrames' |
   'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
   'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'>
 
@@ -178,6 +189,9 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
 
     return {
       cannyParams: legacy.cannyParams ?? null,
+      contourOrigin: null,
+      contourOriginKeyframeInterval: 10,
+      contourOriginTrackingValidated: false,
       contourAnchors,
       contourAnchorKeyframeInterval: 10,
       contourAnchorTrackingValidated: false,
@@ -198,6 +212,9 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
   const d = meshDoc as MeshDoc
   return {
     cannyParams: d.cannyParams ?? null,
+    contourOrigin: d.contourOrigin ?? null,
+    contourOriginKeyframeInterval: d.contourOriginKeyframeInterval ?? 10,
+    contourOriginTrackingValidated: d.contourOriginTrackingValidated ?? false,
     contourAnchors: d.contourAnchors ?? [],
     contourAnchorKeyframeInterval: d.contourAnchorKeyframeInterval ?? 10,
     contourAnchorTrackingValidated: d.contourAnchorTrackingValidated ?? false,
@@ -223,6 +240,8 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     data.hasVideo ? downloadBlob(`projects/${id}/video`) : Promise.resolve(null),
   ])
 
+  let contourOriginKeyframes: KeyframeData[] = []
+  let contourOriginFrames: Point2D[][] | null = null
   let contourAnchorKeyframes: KeyframeData[] = []
   let contourAnchorFrames: Point2D[][] | null = null
   let contourSubdivisionFrames: Point2D[][] | null = null
@@ -233,6 +252,8 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
   if (data.mesh) {
     const meshDoc = data.mesh as MeshDoc
     const downloads = await Promise.all([
+      meshDoc.hasContourOriginKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourOriginKeyframes.json`) : null,
+      meshDoc.hasContourOriginFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourOriginFrames.json`) : null,
       meshDoc.hasContourAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourAnchorKeyframes.json`) : null,
       meshDoc.hasContourAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourAnchorFrames.json`) : null,
       meshDoc.hasContourSubdivisionFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourSubdivisionFrames.json`) : null,
@@ -240,12 +261,14 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
       meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/anchorFrames.json`) : null,
       meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(`projects/${id}/videoFramesMesh.json`) : null,
     ])
-    contourAnchorKeyframes = downloads[0] ?? []
-    contourAnchorFrames = downloads[1]
-    contourSubdivisionFrames = downloads[2]
-    anchorKeyframes = downloads[3] ?? []
-    anchorFrames = downloads[4]
-    videoFramesMesh = downloads[5]
+    contourOriginKeyframes = downloads[0] ?? []
+    contourOriginFrames = downloads[1]
+    contourAnchorKeyframes = downloads[2] ?? []
+    contourAnchorFrames = downloads[3]
+    contourSubdivisionFrames = downloads[4]
+    anchorKeyframes = downloads[5] ?? []
+    anchorFrames = downloads[6]
+    videoFramesMesh = downloads[7]
   }
 
   return {
@@ -256,6 +279,8 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     videoBlob: videoBlob,
     mesh: data.mesh ? {
       ...meshFromDoc(data.mesh),
+      contourOriginKeyframes,
+      contourOriginFrames,
       contourAnchorKeyframes,
       contourAnchorFrames,
       contourSubdivisionFrames,
@@ -301,6 +326,8 @@ export async function getAllProjects(): Promise<Project[]> {
       videoBlob: null,
       mesh: data.mesh ? {
         ...meshFromDoc(data.mesh as MeshDoc | LegacyMeshDoc),
+        contourOriginKeyframes: [],
+        contourOriginFrames: null,
         contourAnchorKeyframes: [],
         contourAnchorFrames: null,
         contourSubdivisionFrames: null,
@@ -313,7 +340,7 @@ export async function getAllProjects(): Promise<Project[]> {
   })
 }
 
-export type UploadHint = 'image' | 'video' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
+export type UploadHint = 'image' | 'video' | 'contourOriginKeyframes' | 'contourOriginFrames' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -337,6 +364,24 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
     uploads.push(
       uploadBlob(`projects/${id}/video`, project.videoBlob)
         .then(() => console.log('[Storage] Video uploaded'))
+    )
+  }
+  if (uploadOnly?.includes('contourOriginKeyframes') && project.mesh?.contourOriginKeyframes.length) {
+    const json = JSON.stringify(project.mesh.contourOriginKeyframes)
+    const blob = new Blob([json], { type: 'application/json' })
+    console.log('[Storage] Uploading contourOriginKeyframes for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/contourOriginKeyframes.json`, blob)
+        .then(() => console.log('[Storage] contourOriginKeyframes uploaded'))
+    )
+  }
+  if (uploadOnly?.includes('contourOriginFrames') && project.mesh?.contourOriginFrames) {
+    const json = JSON.stringify(project.mesh.contourOriginFrames)
+    const blob = new Blob([json], { type: 'application/json' })
+    console.log('[Storage] Uploading contourOriginFrames for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/contourOriginFrames.json`, blob)
+        .then(() => console.log('[Storage] contourOriginFrames uploaded'))
     )
   }
   if (uploadOnly?.includes('contourAnchorKeyframes') && project.mesh?.contourAnchorKeyframes.length) {
@@ -405,6 +450,8 @@ export async function deleteProject(id: string): Promise<void> {
   const knownFiles = [
     `projects/${id}/originalImage`,
     `projects/${id}/video`,
+    `projects/${id}/contourOriginKeyframes.json`,
+    `projects/${id}/contourOriginFrames.json`,
     `projects/${id}/contourAnchorKeyframes.json`,
     `projects/${id}/contourAnchorFrames.json`,
     `projects/${id}/contourSubdivisionFrames.json`,

@@ -1,467 +1,719 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { Project, Point2D, MeshData, KeyframeData } from '../../types/project'
+import type { Project, Point2D, MeshData } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
-import type { TrackingConstraintParams } from '../../utils/opticalFlowComputer'
-import { precomputeOpticalFlow, trackSegment } from '../../utils/opticalFlowComputer'
-import { extractKeyframes, propagateKeyframes } from '../../utils/keyframePropagation'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
-import { computeAllSubdivisionFrames } from '../../utils/curvilinearContour'
-import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
-import KeyframeEditor from '../keyframes/KeyframeEditor'
-import KeyframeTimeline from '../keyframes/KeyframeTimeline'
+import { orderContourPixels, computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin } from '../../utils/curvilinearContour'
+import { trackCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 
 interface Props {
   project: Project
   onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
 }
 
-type Phase = 'config' | 'tracking' | 'keyframes' | 'validated'
+type Phase = 'ready' | 'computing' | 'preview' | 'validated'
+
+function loadImage(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = URL.createObjectURL(blob)
+  })
+}
 
 export default function ContourTrackingStep({ project, onSave }: Props) {
   const mesh = project.mesh
-  const contourAnchors = mesh?.contourAnchors ?? []
 
-  const initialPhase: Phase = mesh?.contourAnchorTrackingValidated
-    ? 'validated'
-    : (mesh?.contourAnchorKeyframes?.length ?? 0) > 0
-      ? 'keyframes'
-      : 'config'
-
+  const initialPhase: Phase = mesh?.contourAnchorTrackingValidated ? 'validated' : 'ready'
   const [phase, setPhase] = useState<Phase>(initialPhase)
-  const [interval, setInterval_] = useState(mesh?.contourAnchorKeyframeInterval ?? 10)
   const [progress, setProgress] = useState('')
   const [saving, setSaving] = useState(false)
+
+  // Preview state
+  const [previewFrame, setPreviewFrame] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const animRef = useRef<number>(0)
+
+  // Computation results
+  const computedFramesRef = useRef<Point2D[][] | null>(null)
+  const rawFramesRef = useRef<Point2D[][] | null>(null)
+  const lostFlagsRef = useRef<boolean[][] | null>(null)
+  const cannyFramesRef = useRef<Point2D[][] | null>(null)
+  const totalFramesRef = useRef(0)
+  const imageDimsRef = useRef<{ w: number; h: number } | null>(null)
+  const lastModeRef = useRef<boolean>(false) // true = step-by-step
+
+  // Drag state
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null)
+  const [hasEdited, setHasEdited] = useState(false)
   const [propagating, setPropagating] = useState(false)
 
-  // Constraint toggles
-  const [enableAntiSaut, setEnableAntiSaut] = useState(true)
-  const [enableNeighbor, setEnableNeighbor] = useState(true)
-  const [enableTemporal, setEnableTemporal] = useState(false)
-  const [enableContour, setEnableContour] = useState(false)
-  const [enableOutlier, setEnableOutlier] = useState(false)
-  const [enableSnap, setEnableSnap] = useState(true)
-  const [enableCurvilinearSpring, setEnableCurvilinearSpring] = useState(false)
+  // Extrema tracking constants
+  const N_EXTREMA = 20
+  const SNAP_THRESHOLD = 15   // px: distance max gris↔extremum pour snap
+  const LOST_THRESHOLD = 40   // px: au-delà → point perdu
 
-  // Preview animation state
-  const [previewMode, setPreviewMode] = useState<'none' | 'anchors' | 'full'>('none')
-  const [previewPlaying, setPreviewPlaying] = useState(false)
-  const [previewFrame, setPreviewFrame] = useState(0)
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null)
-  const previewVideoRef = useRef<HTMLVideoElement | null>(null)
-  const previewAnimRef = useRef(0)
-  const [previewVideoReady, setPreviewVideoReady] = useState(false)
-  const [previewComputing, setPreviewComputing] = useState(false)
-  const [previewProgress, setPreviewProgress] = useState('')
-  const previewContourFramesRef = useRef<Point2D[][] | null>(null)
-  const [previewReady, setPreviewReady] = useState(false)
+  // ─── Prerequisites ──────────────────────────────────────────────
+  const hasAnchors = (mesh?.contourAnchors?.length ?? 0) >= 3
+  const hasCanny = !!mesh?.cannyParams
+  const hasOrigin = !!mesh?.contourOriginFrames
+  const hasVideo = !!project.videoBlob
+  const hasImage = !!project.originalImageBlob
+  const ready = hasAnchors && hasCanny && hasOrigin && hasVideo && hasImage
 
-  // Raw tracking data (per-frame positions for all contour vertices)
-  const rawTrackingRef = useRef<Point2D[][]>([])
-
-  // Keyframes state
-  const [keyframes, setKeyframes] = useState<KeyframeData[]>(mesh?.contourAnchorKeyframes ?? [])
-  const [selectedKfIdx, setSelectedKfIdx] = useState<number | null>(null)
-  const totalFramesRef = useRef(0)
-
-  const [imageDims, setImageDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
-  const contourIndexRef = useRef<ContourSpatialIndex | null>(null)
-  const [cannyContourPoints, setCannyContourPoints] = useState<Point2D[]>([])
-  const [autoSnap, setAutoSnap] = useState(true)
-  const snapVideoRef = useRef<HTMLVideoElement | null>(null)
-  const lastSnappedFrameRef = useRef<number>(-1)
-
-  // Load image dimensions on mount
-  useState(() => {
-    if (!project.originalImageBlob) return
-    const img = new Image()
-    const url = URL.createObjectURL(project.originalImageBlob)
-    img.onload = () => {
-      setImageDims({ w: img.naturalWidth, h: img.naturalHeight })
-      URL.revokeObjectURL(url)
-    }
-    img.src = url
-  })
-
-  // Create video element for Canny detection on keyframe frames
-  useEffect(() => {
-    if (!project.videoBlob) return
-    const url = URL.createObjectURL(project.videoBlob)
-    const video = document.createElement('video')
-    video.src = url
-    video.muted = true
-    video.preload = 'auto'
-    video.onloadeddata = () => {
-      snapVideoRef.current = video
-    }
-    video.load()
-    return () => {
-      URL.revokeObjectURL(url)
-      snapVideoRef.current = null
-    }
-  }, [project.videoBlob])
-
-  // Detect Canny on the current keyframe's video frame
-  useEffect(() => {
-    if (selectedKfIdx === null || keyframes.length === 0) return
-    const kf = keyframes[selectedKfIdx]
-    if (!kf || !mesh?.cannyParams) return
-    const frameIdx = kf.frameIndex
-    if (frameIdx === lastSnappedFrameRef.current) return
-
-    let cancelled = false
-    const cannyParams = mesh.cannyParams
-
-    async function detectOnFrame() {
-      const video = snapVideoRef.current
-      if (!video) return
-
-      try {
-        await loadOpenCVWorker()
-
-        // Seek to the keyframe's frame
-        video.currentTime = frameIdx / 24
-        await new Promise<void>((resolve) => {
-          video.onseeked = () => resolve()
-        })
-
-        // Extract frame to canvas
-        const vw = video.videoWidth
-        const vh = video.videoHeight
-        const canvas = document.createElement('canvas')
-        canvas.width = vw
-        canvas.height = vh
-        const ctx = canvas.getContext('2d')!
-        ctx.drawImage(video, 0, 0)
-
-        const imageData = ctx.getImageData(0, 0, vw, vh)
-        const contourPts = await flowCannyContour(
-          imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize
-        )
-
-        if (cancelled) return
-        if (contourPts && contourPts.length > 0) {
-          // Convert video coords → image coords
-          const iw = imageDims.w || vw
-          const ih = imageDims.h || vh
-          const imgContourPts = contourPts.map(p => ({
-            x: (p.x / vw) * iw,
-            y: (p.y / vh) * ih,
-          }))
-          contourIndexRef.current = new ContourSpatialIndex(imgContourPts, 8)
-          setCannyContourPoints(imgContourPts)
-          lastSnappedFrameRef.current = frameIdx
-        }
-      } catch (err) {
-        console.error('Failed to detect Canny on frame:', err)
-      }
-    }
-
-    detectOnFrame()
-    return () => { cancelled = true }
-  }, [selectedKfIdx, keyframes, mesh?.cannyParams, imageDims])
-
-  // Snap function for keyframe editor (uses contour of current frame)
-  const handleSnapPoint = useCallback((p: Point2D): Point2D => {
-    if (!contourIndexRef.current) return p
-    const result = contourIndexRef.current.nearestUnbounded(p)
-    return result ? result.point : p
-  }, [])
-
-  // Build constraints for tracking
-  const buildConstraints = useCallback((): TrackingConstraintParams | undefined => {
-    if (!enableAntiSaut && !enableNeighbor && !enableTemporal && !enableContour && !enableOutlier && !enableSnap && !enableCurvilinearSpring) {
-      return undefined
-    }
-
-    // Build a simple chain adjacency for contour anchors
-    const contourOrder = contourAnchors.map((_, i) => i)
-    const anchorTriangles: [number, number, number][] = []
-    for (let i = 0; i < contourAnchors.length - 1; i++) {
-      const next = (i + 2) % contourAnchors.length
-      anchorTriangles.push([i, i + 1, next])
-    }
-
-    return {
-      anchorTriangles,
-      contourAnchorOrder: contourOrder,
-      enableAntiSaut,
-      enableTemporalSmoothing: enableTemporal,
-      enableContourConstraints: enableContour,
-      enableOutlierDetection: enableOutlier,
-      enableSnapToContour: enableSnap,
-      enableCurvilinearSpring,
-      cannyParams: (enableSnap || enableCurvilinearSpring) ? (mesh?.cannyParams ?? undefined) : undefined,
-    }
-  }, [enableAntiSaut, enableNeighbor, enableTemporal, enableContour, enableOutlier, enableSnap, enableCurvilinearSpring, contourAnchors, mesh?.cannyParams])
-
-  // Launch tracking
-  async function handleLaunchTracking() {
-    if (!project.videoBlob || !mesh || contourAnchors.length === 0) return
-    if (imageDims.w === 0) {
-      alert('Dimensions image non chargées, réessayez.')
-      return
-    }
-
-    setPhase('tracking')
-    setProgress('Démarrage...')
+  // ─── Compute (shared logic) ─────────────────────────────────────
+  const runCompute = useCallback(async (stepByStep: boolean) => {
+    if (!ready || !mesh) return
+    setPhase('computing')
+    setProgress(`Initialisation... (mode ${stepByStep ? 'proche en proche' : 'fixe'})`)
 
     try {
-      const constraints = buildConstraints()
-      const result = await precomputeOpticalFlow(
-        null,
-        project.videoBlob,
-        contourAnchors,
-        imageDims.w,
-        imageDims.h,
-        (stage, current, total) => {
-          setProgress(`${stage} : ${current}/${total}`)
-        },
-        constraints
+      const contourAnchors = mesh.contourAnchors
+      const originFrames = mesh.contourOriginFrames!
+      const cannyParams = mesh.cannyParams!
+
+      await loadOpenCVWorker()
+
+      // 1. Get image dimensions
+      const img = await loadImage(project.originalImageBlob!)
+      const iw = img.naturalWidth, ih = img.naturalHeight
+      URL.revokeObjectURL(img.src)
+      imageDimsRef.current = { w: iw, h: ih }
+
+      // 2. Detect Canny on original image -> compute reference arc-lengths
+      const canvas0 = document.createElement('canvas')
+      canvas0.width = iw; canvas0.height = ih
+      const ctx0 = canvas0.getContext('2d')!
+      ctx0.drawImage(img, 0, 0)
+      const imgData0 = ctx0.getImageData(0, 0, iw, ih)
+      const cannyPts0 = await flowCannyContour(imgData0, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
+      if (!cannyPts0 || cannyPts0.length < 10) {
+        setProgress('Erreur: contour Canny non détecté sur l\'image originale')
+        setPhase('ready')
+        return
+      }
+
+      let ordered0 = orderContourPixels(cannyPts0)
+      if (mesh.contourOrigin) {
+        ordered0 = reorderContourFromOrigin(ordered0, mesh.contourOrigin)
+      }
+      const arcLengths0 = computeArcLengths(ordered0)
+      const totalLen0 = arcLengths0[arcLengths0.length - 1] || 1
+
+      // Compute normalized s for each anchor at frame 0
+      const anchorS: number[] = contourAnchors.map(anchor => {
+        let bestIdx = 0, bestDist = Infinity
+        for (let i = 0; i < ordered0.length; i++) {
+          const d = Math.hypot(ordered0[i].x - anchor.x, ordered0[i].y - anchor.y)
+          if (d < bestDist) { bestDist = d; bestIdx = i }
+        }
+        return arcLengths0[bestIdx] / totalLen0
+      })
+
+      // 2b. Detect curvature extrema on frame 0 + associate each anchor
+      const extrema0Result = trackCurvatureExtrema(ordered0, N_EXTREMA, null)
+      let previousExtrema: CSSCandidate[] = extrema0Result.extrema
+
+      // For each anchor, find the closest extremum → anchorExtremumIdx[a]
+      const anchorExtremumIdx: number[] = contourAnchors.map(anchor => {
+        let bestIdx = 0, bestDist = Infinity
+        for (let i = 0; i < previousExtrema.length; i++) {
+          const d = Math.hypot(previousExtrema[i].position.x - anchor.x, previousExtrema[i].position.y - anchor.y)
+          if (d < bestDist) { bestDist = d; bestIdx = i }
+        }
+        return bestIdx
+      })
+
+      // 3. Create video, get total frames
+      const url = URL.createObjectURL(project.videoBlob!)
+      const video = document.createElement('video')
+      video.src = url
+      video.muted = true
+      video.preload = 'auto'
+      await new Promise<void>(r => { video.onloadeddata = () => r(); video.load() })
+      const vw = video.videoWidth, vh = video.videoHeight
+      const totalFrames = Math.floor(video.duration * 24)
+
+      // 4. Allocate result arrays
+      const allFrames: Point2D[][] = []
+      const allRawFrames: Point2D[][] = []
+      const allLostFlags: boolean[][] = []
+      const allCannyFrames: Point2D[][] = []
+
+      // Frame 0 = original anchor positions (no lost)
+      allFrames.push([...contourAnchors])
+      allRawFrames.push([...contourAnchors])
+      allLostFlags.push(contourAnchors.map(() => false))
+      allCannyFrames.push(ordered0)
+
+      const vCanvas = document.createElement('canvas')
+      vCanvas.width = vw; vCanvas.height = vh
+      const vCtx = vCanvas.getContext('2d')!
+
+      // 5. Process each frame
+      for (let f = 1; f < totalFrames; f++) {
+        if (f % 5 === 0 || f === 1) {
+          setProgress(`Frame ${f}/${totalFrames}`)
+          await new Promise(r => setTimeout(r, 0))
+        }
+
+        // Seek
+        video.currentTime = f / 24
+        await new Promise<void>(r => { video.onseeked = () => r() })
+
+        // Draw frame
+        vCtx.drawImage(video, 0, 0)
+        const imageData = vCtx.getImageData(0, 0, vw, vh)
+
+        // Detect Canny
+        const cannyPts = await flowCannyContour(imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
+
+        if (!cannyPts || cannyPts.length < 10) {
+          allFrames.push([...allFrames[f - 1]])
+          allRawFrames.push([...allRawFrames[f - 1]])
+          allLostFlags.push(contourAnchors.map(() => true))
+          allCannyFrames.push([])
+          continue
+        }
+
+        // Scale Canny points from video coords to image coords
+        const imgCanny = cannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
+
+        // Order and reorder from P0
+        let ordered = orderContourPixels(imgCanny)
+        const p0Frame = originFrames[f]?.[0]
+        if (p0Frame) {
+          ordered = reorderContourFromOrigin(ordered, p0Frame)
+        }
+        const arcLengths = computeArcLengths(ordered)
+        const totalLen = arcLengths[arcLengths.length - 1] || 1
+        allCannyFrames.push(ordered)
+
+        // Detect & track curvature extrema for this frame
+        const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
+        previousExtrema = extremaResult.extrema
+
+        // Place each anchor at its s coordinate, then snap to tracked extremum
+        const rawPositions: Point2D[] = []
+        const adjustedPositions: Point2D[] = []
+        const frameLostFlags: boolean[] = []
+
+        for (let a = 0; a < contourAnchors.length; a++) {
+          if (a === 0 && p0Frame) {
+            // Anchor 0 = P0, use tracked position directly
+            rawPositions.push(p0Frame)
+            adjustedPositions.push(p0Frame)
+            frameLostFlags.push(false)
+            // Step-by-step: update s from P0 position
+            if (stepByStep) {
+              let bestIdx = 0, bestDist = Infinity
+              for (let i = 0; i < ordered.length; i++) {
+                const d = Math.hypot(ordered[i].x - p0Frame.x, ordered[i].y - p0Frame.y)
+                if (d < bestDist) { bestDist = d; bestIdx = i }
+              }
+              anchorS[a] = arcLengths[bestIdx] / totalLen
+            }
+            continue
+          }
+
+          const rawPos = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
+          rawPositions.push(rawPos)
+
+          // Find this anchor's tracked extremum
+          const extIdx = anchorExtremumIdx[a]
+          const trackedExtremum = extremaResult.extrema[extIdx]
+
+          if (trackedExtremum) {
+            const dist = Math.hypot(rawPos.x - trackedExtremum.position.x, rawPos.y - trackedExtremum.position.y)
+
+            if (dist <= SNAP_THRESHOLD) {
+              // Close enough → snap to extremum
+              adjustedPositions.push(trackedExtremum.position)
+              frameLostFlags.push(false)
+              // Step-by-step: update s from snapped position
+              if (stepByStep) {
+                anchorS[a] = trackedExtremum.arcLengthNorm
+              }
+            } else if (dist <= LOST_THRESHOLD) {
+              // Partial snap (blend between raw and extremum)
+              const t = (dist - SNAP_THRESHOLD) / (LOST_THRESHOLD - SNAP_THRESHOLD)
+              const blended = {
+                x: trackedExtremum.position.x * (1 - t) + rawPos.x * t,
+                y: trackedExtremum.position.y * (1 - t) + rawPos.y * t,
+              }
+              adjustedPositions.push(blended)
+              frameLostFlags.push(false)
+              // Step-by-step: update s from blended position
+              if (stepByStep) {
+                let bestIdx = 0, bestDist = Infinity
+                for (let i = 0; i < ordered.length; i++) {
+                  const d = Math.hypot(ordered[i].x - blended.x, ordered[i].y - blended.y)
+                  if (d < bestDist) { bestDist = d; bestIdx = i }
+                }
+                anchorS[a] = arcLengths[bestIdx] / totalLen
+              }
+            } else {
+              // Too far → lost, fallback to raw position
+              adjustedPositions.push(rawPos)
+              frameLostFlags.push(true)
+              // Step-by-step: still update s from raw position (keep tracking)
+              if (stepByStep) {
+                // Don't update s when lost — keep last good s to avoid cascading drift
+              }
+            }
+          } else {
+            // No extremum found → fallback
+            adjustedPositions.push(rawPos)
+            frameLostFlags.push(true)
+          }
+        }
+
+        allFrames.push(adjustedPositions)
+        allRawFrames.push(rawPositions)
+        allLostFlags.push(frameLostFlags)
+      }
+
+      URL.revokeObjectURL(url)
+
+      // Store results
+      computedFramesRef.current = allFrames
+      rawFramesRef.current = allRawFrames
+      lostFlagsRef.current = allLostFlags
+      cannyFramesRef.current = allCannyFrames
+      totalFramesRef.current = totalFrames
+
+      // Log lost stats
+      const lostCounts = contourAnchors.map((_, a) =>
+        allLostFlags.reduce((sum, flags) => sum + (flags[a] ? 1 : 0), 0)
       )
+      console.log(`Extrema tracking (${stepByStep ? 'step-by-step' : 'fixed-s'}) — lost frames per anchor:`, lostCounts)
 
-      rawTrackingRef.current = result.videoFramesMesh
-      totalFramesRef.current = result.videoFramesMesh.length
+      // Create video element for preview
+      const previewUrl = URL.createObjectURL(project.videoBlob!)
+      const previewVideo = document.createElement('video')
+      previewVideo.src = previewUrl
+      previewVideo.muted = true
+      previewVideo.preload = 'auto'
+      await new Promise<void>(r => { previewVideo.onloadeddata = () => r(); previewVideo.load() })
+      videoRef.current = previewVideo
 
-      const kfs = extractKeyframes(result.videoFramesMesh, interval)
-      setKeyframes(kfs)
-      setSelectedKfIdx(0)
-      setPhase('keyframes')
+      lastModeRef.current = stepByStep
+      setHasEdited(false)
+      setPreviewFrame(0)
+      setPhase('preview')
       setProgress('')
     } catch (err) {
       console.error('Contour tracking failed:', err)
-      alert('Erreur tracking : ' + (err instanceof Error ? err.message : err))
-      setPhase('config')
-      setProgress('')
+      setProgress(`Erreur: ${err instanceof Error ? err.message : String(err)}`)
+      setPhase('ready')
     }
-  }
+  }, [ready, mesh, project])
 
-  // Propagate forward one step from current keyframe
-  const handlePropagateForwardOne = useCallback(async () => {
-    if (selectedKfIdx === null || selectedKfIdx >= keyframes.length - 1) return
-    if (!project.videoBlob || imageDims.w === 0) return
+  const handleCompute = useCallback(() => runCompute(false), [runCompute])
+  const handleComputeStepByStep = useCallback(() => runCompute(true), [runCompute])
 
+  // ─── Preview rendering ──────────────────────────────────────────
+  const drawPreview = useCallback(async (frame: number) => {
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    const computed = computedFramesRef.current
+    const raw = rawFramesRef.current
+    const imgDims = imageDimsRef.current
+    if (!canvas || !video || !computed || !raw || !imgDims) return
+
+    const ctx = canvas.getContext('2d')!
+
+    // Seek video
+    video.currentTime = frame / 24
+    await new Promise<void>(r => { video.onseeked = () => r() })
+
+    // Fit canvas to container
+    const maxW = canvas.parentElement?.clientWidth ?? 800
+    const vw = video.videoWidth, vh = video.videoHeight
+    const displayScale = Math.min(maxW / vw, 600 / vh, 1)
+    canvas.width = Math.round(vw * displayScale)
+    canvas.height = Math.round(vh * displayScale)
+
+    // Draw video frame
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    const frameData = computed[frame]
+    const rawData = raw[frame]
+    const lostFlags = lostFlagsRef.current?.[frame]
+    const cannyPts = cannyFramesRef.current?.[frame]
+    if (!frameData || !rawData) return
+
+    // Anchors are in image coords → scale to canvas coords
+    const scaleX = canvas.width / imgDims.w
+    const scaleY = canvas.height / imgDims.h
+
+    // Draw Canny contour (yellow pixels)
+    if (cannyPts && cannyPts.length > 0) {
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.5)'
+      for (let i = 0; i < cannyPts.length; i++) {
+        const px = cannyPts[i].x * scaleX
+        const py = cannyPts[i].y * scaleY
+        ctx.fillRect(px - 0.5, py - 0.5, 1.5, 1.5)
+      }
+    }
+
+    // Draw polygon connecting adjusted positions (blue)
+    if (frameData.length >= 3) {
+      ctx.beginPath()
+      ctx.moveTo(frameData[0].x * scaleX, frameData[0].y * scaleY)
+      for (let i = 1; i < frameData.length; i++) {
+        ctx.lineTo(frameData[i].x * scaleX, frameData[i].y * scaleY)
+      }
+      ctx.closePath()
+      ctx.strokeStyle = 'rgba(80, 140, 255, 0.7)'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+
+    // Draw raw s-positions (gray, faded, smaller)
+    for (let i = 0; i < rawData.length; i++) {
+      const rx = rawData[i].x * scaleX
+      const ry = rawData[i].y * scaleY
+      ctx.beginPath()
+      ctx.arc(rx, ry, 4, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(180, 180, 180, 0.5)'
+      ctx.fill()
+      ctx.fillStyle = 'rgba(180, 180, 180, 0.7)'
+      ctx.font = 'bold 9px sans-serif'
+      ctx.fillText(`${i}`, rx + 6, ry - 3)
+    }
+
+    // Draw adjusted positions: green = snapped, orange = lost
+    for (let i = 0; i < frameData.length; i++) {
+      const cx = frameData[i].x * scaleX
+      const cy = frameData[i].y * scaleY
+      const isLost = lostFlags?.[i] ?? false
+
+      ctx.beginPath()
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2)
+      ctx.fillStyle = isLost ? 'rgba(255, 160, 0, 0.9)' : 'rgba(50, 220, 50, 0.9)'
+      ctx.fill()
+      ctx.strokeStyle = 'white'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+
+      // Label
+      ctx.fillStyle = 'white'
+      ctx.font = 'bold 10px sans-serif'
+      ctx.fillText(`${i}${isLost ? '?' : ''}`, cx + 8, cy - 4)
+    }
+  }, [])
+
+  // Draw on frame change
+  useEffect(() => {
+    if (phase === 'preview') {
+      drawPreview(previewFrame)
+    }
+  }, [phase, previewFrame, drawPreview])
+
+  // ─── Drag interaction ─────────────────────────────────────────
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current
+    const computed = computedFramesRef.current
+    const imgDims = imageDimsRef.current
+    if (!canvas || !computed || !imgDims || playing) return
+
+    const rect = canvas.getBoundingClientRect()
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    const scaleX = canvas.width / imgDims.w
+    const scaleY = canvas.height / imgDims.h
+
+    const frameData = computed[previewFrame]
+    if (!frameData) return
+
+    // Find closest point within 15px canvas distance
+    let bestIdx = -1, bestDist = 15
+    for (let i = 0; i < frameData.length; i++) {
+      const px = frameData[i].x * scaleX
+      const py = frameData[i].y * scaleY
+      const d = Math.hypot(cx - px, cy - py)
+      if (d < bestDist) { bestDist = d; bestIdx = i }
+    }
+
+    if (bestIdx >= 0) {
+      setDraggingIdx(bestIdx)
+    }
+  }, [previewFrame, playing])
+
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (draggingIdx === null) return
+    const canvas = canvasRef.current
+    const computed = computedFramesRef.current
+    const imgDims = imageDimsRef.current
+    if (!canvas || !computed || !imgDims) return
+
+    const rect = canvas.getBoundingClientRect()
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    const scaleX = canvas.width / imgDims.w
+    const scaleY = canvas.height / imgDims.h
+
+    // Update position in image coords
+    computed[previewFrame][draggingIdx] = {
+      x: cx / scaleX,
+      y: cy / scaleY,
+    }
+    // Also clear lost flag for this point
+    if (lostFlagsRef.current?.[previewFrame]) {
+      lostFlagsRef.current[previewFrame][draggingIdx] = false
+    }
+    setHasEdited(true)
+    drawPreview(previewFrame)
+  }, [draggingIdx, previewFrame, drawPreview])
+
+  const handleCanvasMouseUp = useCallback(() => {
+    setDraggingIdx(null)
+  }, [])
+
+  // ─── Propagate forward ────────────────────────────────────────
+  const handlePropagate = useCallback(async () => {
+    if (!mesh || !computedFramesRef.current || !lostFlagsRef.current || !rawFramesRef.current) return
+    const startFrame = previewFrame
+    const totalFrames = totalFramesRef.current
+    if (startFrame >= totalFrames - 1) return
+
+    const stepByStep = lastModeRef.current
     setPropagating(true)
+    setPlaying(false)
+    setProgress(`Propagation depuis frame ${startFrame + 1}...`)
+
     try {
-      const currentKf = keyframes[selectedKfIdx]
-      const nextKf = keyframes[selectedKfIdx + 1]
-      const constraints = buildConstraints()
+      const contourAnchors = mesh.contourAnchors
+      const originFrames = mesh.contourOriginFrames!
+      const cannyParams = mesh.cannyParams!
+      const imgDims = imageDimsRef.current!
+      const iw = imgDims.w, ih = imgDims.h
 
-      const segResults = await trackSegment(
-        project.videoBlob,
-        currentKf.anchorPositions,
-        imageDims.w,
-        imageDims.h,
-        currentKf.frameIndex,
-        nextKf.frameIndex,
-        undefined,
-        constraints
-      )
+      // Edited positions at startFrame
+      const editedPositions = computedFramesRef.current[startFrame]
 
-      for (const seg of segResults) {
-        rawTrackingRef.current[seg.frameIndex] = seg.points
-      }
+      await loadOpenCVWorker()
 
-      if (segResults.length > 0) {
-        const lastSeg = segResults[segResults.length - 1]
-        const newKeyframes = [...keyframes]
-        newKeyframes[selectedKfIdx + 1] = {
-          ...nextKf,
-          anchorPositions: lastSeg.points,
+      // Create video for seeking
+      const url = URL.createObjectURL(project.videoBlob!)
+      const video = document.createElement('video')
+      video.src = url
+      video.muted = true
+      video.preload = 'auto'
+      await new Promise<void>(r => { video.onloadeddata = () => r(); video.load() })
+      const vw = video.videoWidth, vh = video.videoHeight
+
+      const vCanvas = document.createElement('canvas')
+      vCanvas.width = vw; vCanvas.height = vh
+      const vCtx = vCanvas.getContext('2d')!
+
+      // Detect Canny at startFrame to get contour + extrema state
+      video.currentTime = startFrame / 24
+      await new Promise<void>(r => { video.onseeked = () => r() })
+      vCtx.drawImage(video, 0, 0)
+      const startImageData = vCtx.getImageData(0, 0, vw, vh)
+      const startCannyPts = await flowCannyContour(startImageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
+
+      // Compute anchorS from edited positions on startFrame's contour
+      const anchorS: number[] = new Array(contourAnchors.length).fill(0)
+      let previousExtrema: CSSCandidate[] | null = null
+
+      if (startCannyPts && startCannyPts.length >= 10) {
+        const imgCanny = startCannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
+        let ordered = orderContourPixels(imgCanny)
+        const p0Frame = originFrames[startFrame]?.[0]
+        if (p0Frame) ordered = reorderContourFromOrigin(ordered, p0Frame)
+        const arcLengths = computeArcLengths(ordered)
+        const totalLen = arcLengths[arcLengths.length - 1] || 1
+
+        // Compute anchorS from edited positions
+        for (let a = 0; a < contourAnchors.length; a++) {
+          const pos = editedPositions[a]
+          let bestIdx = 0, bestDist = Infinity
+          for (let i = 0; i < ordered.length; i++) {
+            const d = Math.hypot(ordered[i].x - pos.x, ordered[i].y - pos.y)
+            if (d < bestDist) { bestDist = d; bestIdx = i }
+          }
+          anchorS[a] = arcLengths[bestIdx] / totalLen
         }
-        setKeyframes(newKeyframes)
+
+        // Detect extrema at startFrame
+        const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, null)
+        previousExtrema = extremaResult.extrema
       }
 
-      setSelectedKfIdx(selectedKfIdx + 1)
+      // Re-associate anchors to extrema from edited positions
+      const anchorExtremumIdx: number[] = editedPositions.map(pos => {
+        if (!previousExtrema) return 0
+        let bestIdx = 0, bestDist = Infinity
+        for (let i = 0; i < previousExtrema.length; i++) {
+          const d = Math.hypot(previousExtrema[i].position.x - pos.x, previousExtrema[i].position.y - pos.y)
+          if (d < bestDist) { bestDist = d; bestIdx = i }
+        }
+        return bestIdx
+      })
+
+      // Process frames from startFrame+1 to end
+      for (let f = startFrame + 1; f < totalFrames; f++) {
+        if (f % 5 === 0) {
+          setProgress(`Propagation frame ${f}/${totalFrames}`)
+          await new Promise(r => setTimeout(r, 0))
+        }
+
+        video.currentTime = f / 24
+        await new Promise<void>(r => { video.onseeked = () => r() })
+        vCtx.drawImage(video, 0, 0)
+        const imageData = vCtx.getImageData(0, 0, vw, vh)
+
+        const cannyPts = await flowCannyContour(imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
+
+        if (!cannyPts || cannyPts.length < 10) {
+          computedFramesRef.current[f] = [...computedFramesRef.current[f - 1]]
+          rawFramesRef.current[f] = [...rawFramesRef.current[f - 1]]
+          lostFlagsRef.current[f] = contourAnchors.map(() => true)
+          if (cannyFramesRef.current) cannyFramesRef.current[f] = []
+          continue
+        }
+
+        const imgCanny = cannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
+        let ordered = orderContourPixels(imgCanny)
+        const p0Frame = originFrames[f]?.[0]
+        if (p0Frame) ordered = reorderContourFromOrigin(ordered, p0Frame)
+        const arcLengths = computeArcLengths(ordered)
+        const totalLen = arcLengths[arcLengths.length - 1] || 1
+        if (cannyFramesRef.current) cannyFramesRef.current[f] = ordered
+
+        const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
+        previousExtrema = extremaResult.extrema
+
+        const rawPositions: Point2D[] = []
+        const adjustedPositions: Point2D[] = []
+        const frameLostFlags: boolean[] = []
+
+        for (let a = 0; a < contourAnchors.length; a++) {
+          if (a === 0 && p0Frame) {
+            rawPositions.push(p0Frame)
+            adjustedPositions.push(p0Frame)
+            frameLostFlags.push(false)
+            if (stepByStep) {
+              let bestIdx = 0, bestDist = Infinity
+              for (let i = 0; i < ordered.length; i++) {
+                const d = Math.hypot(ordered[i].x - p0Frame.x, ordered[i].y - p0Frame.y)
+                if (d < bestDist) { bestDist = d; bestIdx = i }
+              }
+              anchorS[a] = arcLengths[bestIdx] / totalLen
+            }
+            continue
+          }
+
+          const rawPos = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
+          rawPositions.push(rawPos)
+
+          const extIdx = anchorExtremumIdx[a]
+          const trackedExtremum = extremaResult.extrema[extIdx]
+
+          if (trackedExtremum) {
+            const dist = Math.hypot(rawPos.x - trackedExtremum.position.x, rawPos.y - trackedExtremum.position.y)
+
+            if (dist <= SNAP_THRESHOLD) {
+              adjustedPositions.push(trackedExtremum.position)
+              frameLostFlags.push(false)
+              if (stepByStep) anchorS[a] = trackedExtremum.arcLengthNorm
+            } else if (dist <= LOST_THRESHOLD) {
+              const t = (dist - SNAP_THRESHOLD) / (LOST_THRESHOLD - SNAP_THRESHOLD)
+              const blended = {
+                x: trackedExtremum.position.x * (1 - t) + rawPos.x * t,
+                y: trackedExtremum.position.y * (1 - t) + rawPos.y * t,
+              }
+              adjustedPositions.push(blended)
+              frameLostFlags.push(false)
+              if (stepByStep) {
+                let bestIdx = 0, bestDist = Infinity
+                for (let i = 0; i < ordered.length; i++) {
+                  const d = Math.hypot(ordered[i].x - blended.x, ordered[i].y - blended.y)
+                  if (d < bestDist) { bestDist = d; bestIdx = i }
+                }
+                anchorS[a] = arcLengths[bestIdx] / totalLen
+              }
+            } else {
+              adjustedPositions.push(rawPos)
+              frameLostFlags.push(true)
+            }
+          } else {
+            adjustedPositions.push(rawPos)
+            frameLostFlags.push(true)
+          }
+        }
+
+        computedFramesRef.current[f] = adjustedPositions
+        rawFramesRef.current[f] = rawPositions
+        lostFlagsRef.current[f] = frameLostFlags
+      }
+
+      URL.revokeObjectURL(url)
+
+      // Log stats
+      const lostCounts = contourAnchors.map((_, a) =>
+        lostFlagsRef.current!.slice(startFrame).reduce((sum, flags) => sum + (flags[a] ? 1 : 0), 0)
+      )
+      console.log(`Propagation from frame ${startFrame} — lost frames per anchor:`, lostCounts)
+
+      setHasEdited(false)
+      setProgress('')
+      drawPreview(previewFrame)
     } catch (err) {
       console.error('Propagation failed:', err)
+      setProgress(`Erreur propagation: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setPropagating(false)
     }
-    setPropagating(false)
-  }, [selectedKfIdx, keyframes, project.videoBlob, imageDims, buildConstraints])
+  }, [mesh, project, previewFrame, drawPreview])
 
-  // Propagate forward all from current keyframe
-  const handlePropagateForwardAll = useCallback(async () => {
-    if (selectedKfIdx === null || selectedKfIdx >= keyframes.length - 1) return
-    if (!project.videoBlob || imageDims.w === 0) return
+  // ─── Playback ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!playing || phase !== 'preview') return
 
-    setPropagating(true)
-    try {
-      const newKeyframes = [...keyframes]
-      let currentIdx = selectedKfIdx
-      const constraints = buildConstraints()
-
-      while (currentIdx < newKeyframes.length - 1) {
-        const currentKf = newKeyframes[currentIdx]
-        const nextKf = newKeyframes[currentIdx + 1]
-
-        const segResults = await trackSegment(
-          project.videoBlob,
-          currentKf.anchorPositions,
-          imageDims.w,
-          imageDims.h,
-          currentKf.frameIndex,
-          nextKf.frameIndex,
-          undefined,
-          constraints
-        )
-
-        for (const seg of segResults) {
-          rawTrackingRef.current[seg.frameIndex] = seg.points
-        }
-
-        if (segResults.length > 0) {
-          const lastSeg = segResults[segResults.length - 1]
-          newKeyframes[currentIdx + 1] = {
-            ...nextKf,
-            anchorPositions: lastSeg.points,
+    let lastTime = 0
+    const step = (time: number) => {
+      if (time - lastTime >= 1000 / 24) {
+        lastTime = time
+        setPreviewFrame(f => {
+          const next = f + 1
+          if (next >= totalFramesRef.current) {
+            setPlaying(false)
+            return 0
           }
-        }
-
-        currentIdx++
+          return next
+        })
       }
-
-      setKeyframes(newKeyframes)
-      setSelectedKfIdx(newKeyframes.length - 1)
-    } catch (err) {
-      console.error('Propagation all failed:', err)
+      animRef.current = requestAnimationFrame(step)
     }
-    setPropagating(false)
-  }, [selectedKfIdx, keyframes, project.videoBlob, imageDims, buildConstraints])
+    animRef.current = requestAnimationFrame(step)
 
-  // Bidi propagate one step
-  const handlePropagateBidiOne = useCallback(async () => {
-    if (selectedKfIdx === null) return
-    if (!project.videoBlob || imageDims.w === 0) return
+    return () => cancelAnimationFrame(animRef.current)
+  }, [playing, phase])
 
-    setPropagating(true)
-    try {
-      const currentKf = keyframes[selectedKfIdx]
-      const newKeyframes = [...keyframes]
-      const constraints = buildConstraints()
-
-      // Forward
-      if (selectedKfIdx < keyframes.length - 1) {
-        const nextKf = keyframes[selectedKfIdx + 1]
-        const segResults = await trackSegment(
-          project.videoBlob, currentKf.anchorPositions,
-          imageDims.w, imageDims.h,
-          currentKf.frameIndex, nextKf.frameIndex,
-          undefined, constraints
-        )
-        for (const seg of segResults) rawTrackingRef.current[seg.frameIndex] = seg.points
-        if (segResults.length > 0) {
-          newKeyframes[selectedKfIdx + 1] = {
-            ...nextKf, anchorPositions: segResults[segResults.length - 1].points,
-          }
-        }
-      }
-
-      // Backward
-      if (selectedKfIdx > 0) {
-        const prevKf = keyframes[selectedKfIdx - 1]
-        const segResults = await trackSegment(
-          project.videoBlob, currentKf.anchorPositions,
-          imageDims.w, imageDims.h,
-          currentKf.frameIndex, prevKf.frameIndex,
-          undefined, constraints
-        )
-        for (const seg of segResults) rawTrackingRef.current[seg.frameIndex] = seg.points
-        if (segResults.length > 0) {
-          newKeyframes[selectedKfIdx - 1] = {
-            ...prevKf, anchorPositions: segResults[segResults.length - 1].points,
-          }
-        }
-      }
-
-      setKeyframes(newKeyframes)
-    } catch (err) {
-      console.error('Bidi propagation failed:', err)
-    }
-    setPropagating(false)
-  }, [selectedKfIdx, keyframes, project.videoBlob, imageDims, buildConstraints])
-
-  // Bidi propagate all
-  const handlePropagateBidiAll = useCallback(async () => {
-    if (selectedKfIdx === null) return
-    if (!project.videoBlob || imageDims.w === 0) return
-
-    setPropagating(true)
-    try {
-      const newKeyframes = [...keyframes]
-      const constraints = buildConstraints()
-
-      // Forward from current to end
-      for (let i = selectedKfIdx; i < newKeyframes.length - 1; i++) {
-        const segResults = await trackSegment(
-          project.videoBlob, newKeyframes[i].anchorPositions,
-          imageDims.w, imageDims.h,
-          newKeyframes[i].frameIndex, newKeyframes[i + 1].frameIndex,
-          undefined, constraints
-        )
-        for (const seg of segResults) rawTrackingRef.current[seg.frameIndex] = seg.points
-        if (segResults.length > 0) {
-          newKeyframes[i + 1] = {
-            ...newKeyframes[i + 1], anchorPositions: segResults[segResults.length - 1].points,
-          }
-        }
-      }
-
-      // Backward from current to start
-      for (let i = selectedKfIdx; i > 0; i--) {
-        const segResults = await trackSegment(
-          project.videoBlob, newKeyframes[i].anchorPositions,
-          imageDims.w, imageDims.h,
-          newKeyframes[i].frameIndex, newKeyframes[i - 1].frameIndex,
-          undefined, constraints
-        )
-        for (const seg of segResults) rawTrackingRef.current[seg.frameIndex] = seg.points
-        if (segResults.length > 0) {
-          newKeyframes[i - 1] = {
-            ...newKeyframes[i - 1], anchorPositions: segResults[segResults.length - 1].points,
-          }
-        }
-      }
-
-      setKeyframes(newKeyframes)
-    } catch (err) {
-      console.error('Bidi all failed:', err)
-    }
-    setPropagating(false)
-  }, [selectedKfIdx, keyframes, project.videoBlob, imageDims, buildConstraints])
-
-  // Update keyframe positions (from editor drag)
-  const handleUpdatePositions = useCallback((positions: Point2D[]) => {
-    if (selectedKfIdx === null) return
-    const newKeyframes = [...keyframes]
-    newKeyframes[selectedKfIdx] = {
-      ...newKeyframes[selectedKfIdx],
-      anchorPositions: positions,
-    }
-    setKeyframes(newKeyframes)
-  }, [selectedKfIdx, keyframes])
-
-  // Skip keyframe without propagation
-  const handleValidateOnly = useCallback(() => {
-    if (selectedKfIdx === null || selectedKfIdx >= keyframes.length - 1) return
-    setSelectedKfIdx(selectedKfIdx + 1)
-  }, [selectedKfIdx, keyframes])
-
-  // Save & validate tracking
-  async function handleSaveAndValidate() {
-    if (!mesh || keyframes.length === 0) return
+  // ─── Validate ───────────────────────────────────────────────────
+  const handleValidate = useCallback(async () => {
+    if (!computedFramesRef.current || !mesh) return
     setSaving(true)
-    try {
-      const totalFrames = totalFramesRef.current
-      const contourAnchorFrames = propagateKeyframes(keyframes, totalFrames)
 
+    try {
       const updatedMesh: MeshData = {
         ...mesh,
-        contourAnchorKeyframeInterval: interval,
-        contourAnchorKeyframes: keyframes,
-        contourAnchorFrames,
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: computedFramesRef.current,
         contourAnchorTrackingValidated: true,
         // Reset downstream
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
+        anchorFrames: null,
+        anchorTrackingValidated: false,
+        videoFramesMesh: null,
+        topologyLocked: false,
       }
 
       await onSave(
@@ -471,523 +723,214 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       setPhase('validated')
     } catch (err) {
       console.error('Save failed:', err)
-      alert('Erreur : ' + (err instanceof Error ? err.message : err))
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
-  }
+  }, [mesh, project, onSave])
 
-  // Preview: compute full contour (anchors + Canny subdivision) per frame
-  const contourSubParams = mesh?.contourSubdivisionParams ?? []
-
-  // Build ordered contour from anchor positions + subdivision positions for one frame
-  const buildOrderedContour = useCallback((anchors: Point2D[], subdivisionPts: Point2D[]): Point2D[] => {
-    const nAnchors = anchors.length
-    if (nAnchors < 2) return anchors
-
-    // Group subdivision params by segment, sorted by t
-    const segSubs: number[][] = Array.from({ length: nAnchors }, () => [])
-    for (let j = 0; j < contourSubParams.length; j++) {
-      const { segmentIndex } = contourSubParams[j]
-      if (segmentIndex < nAnchors) {
-        segSubs[segmentIndex].push(j)
-      }
-    }
-    // Sort each segment's subdivision indices by t
-    for (const seg of segSubs) {
-      seg.sort((a, b) => contourSubParams[a].t - contourSubParams[b].t)
-    }
-
-    const ordered: Point2D[] = []
-    for (let i = 0; i < nAnchors; i++) {
-      ordered.push(anchors[i])
-      for (const subIdx of segSubs[i]) {
-        ordered.push(subdivisionPts[subIdx] ?? anchors[i])
-      }
-    }
-    return ordered
-  }, [contourSubParams])
-
-  // Compute preview: anchors-only (instant) or full contour (Canny subdivision)
-  const handleComputePreviewAnchors = useCallback(() => {
-    if (keyframes.length < 2 || totalFramesRef.current === 0) return
-
-    setPreviewReady(false)
-    setPreviewPlaying(false)
+  // ─── Reset ──────────────────────────────────────────────────────
+  const handleReset = useCallback(async () => {
+    computedFramesRef.current = null
+    rawFramesRef.current = null
+    lostFlagsRef.current = null
+    cannyFramesRef.current = null
+    totalFramesRef.current = 0
+    setPlaying(false)
     setPreviewFrame(0)
-    previewContourFramesRef.current = null
 
-    const anchorFrames = propagateKeyframes(keyframes, totalFramesRef.current)
-    previewContourFramesRef.current = anchorFrames
-    setPreviewMode('anchors')
-    setPreviewReady(true)
-  }, [keyframes])
+    if (videoRef.current) {
+      URL.revokeObjectURL(videoRef.current.src)
+      videoRef.current = null
+    }
 
-  const handleComputePreviewFull = useCallback(async () => {
-    if (keyframes.length < 2 || totalFramesRef.current === 0) return
-    if (!project.videoBlob || !mesh?.cannyParams) return
-
-    setPreviewComputing(true)
-    setPreviewReady(false)
-    setPreviewPlaying(false)
-    setPreviewFrame(0)
-    previewContourFramesRef.current = null
-    setPreviewMode('full')
-
-    try {
-      const anchorFrames = propagateKeyframes(keyframes, totalFramesRef.current)
-
-      if (contourSubParams.length > 0) {
-        setPreviewProgress('Chargement OpenCV...')
-        await loadOpenCVWorker()
-
-        setPreviewProgress('Calcul contour Canny par frame...')
-        const subdivisionFrames = await computeAllSubdivisionFrames(
-          project.videoBlob,
-          anchorFrames,
-          contourSubParams,
-          mesh.cannyParams,
-          (p) => setPreviewProgress(`Contour Canny : frame ${p.frame}/${p.total}`)
+    if (mesh?.contourAnchorTrackingValidated) {
+      setSaving(true)
+      try {
+        const updatedMesh: MeshData = {
+          ...mesh,
+          contourAnchorKeyframes: [],
+          contourAnchorFrames: null,
+          contourAnchorTrackingValidated: false,
+          contourSubdivisionFrames: null,
+          contourSubdivisionValidated: false,
+          anchorFrames: null,
+          anchorTrackingValidated: false,
+          videoFramesMesh: null,
+          topologyLocked: false,
+        }
+        await onSave(
+          { ...project, mesh: updatedMesh },
+          ['contourAnchorKeyframes', 'contourAnchorFrames']
         )
-
-        // Build ordered contour for each frame
-        const fullContourFrames = anchorFrames.map((anchors, f) =>
-          buildOrderedContour(anchors, subdivisionFrames[f] ?? [])
-        )
-        previewContourFramesRef.current = fullContourFrames
-      } else {
-        // No subdivision — just anchors
-        previewContourFramesRef.current = anchorFrames
+      } finally {
+        setSaving(false)
       }
-
-      setPreviewReady(true)
-    } catch (err) {
-      console.error('Preview computation failed:', err)
-      alert('Erreur calcul preview : ' + (err instanceof Error ? err.message : err))
     }
-    setPreviewComputing(false)
-    setPreviewProgress('')
-  }, [keyframes, project.videoBlob, mesh?.cannyParams, contourSubParams, buildOrderedContour])
 
-  // Setup preview video element
+    setPhase('ready')
+  }, [mesh, project, onSave])
+
+  // ─── Cleanup ────────────────────────────────────────────────────
   useEffect(() => {
-    if (previewMode === 'none' || !project.videoBlob) return
-    const url = URL.createObjectURL(project.videoBlob)
-    const video = document.createElement('video')
-    video.src = url
-    video.muted = true
-    video.preload = 'auto'
-    video.onloadeddata = () => {
-      previewVideoRef.current = video
-      setPreviewVideoReady(true)
-    }
-    video.load()
     return () => {
-      URL.revokeObjectURL(url)
-      previewVideoRef.current = null
-      setPreviewVideoReady(false)
-    }
-  }, [previewMode, project.videoBlob])
-
-  // Preview playback loop at 24 FPS
-  useEffect(() => {
-    if (!previewPlaying || !previewReady) return
-    const frames = previewContourFramesRef.current
-    if (!frames) return
-    let lastTime = performance.now()
-    function tick(now: number) {
-      if (now - lastTime >= 1000 / 24) {
-        lastTime = now
-        setPreviewFrame(f => (f + 1) % frames!.length)
+      if (videoRef.current) {
+        URL.revokeObjectURL(videoRef.current.src)
       }
-      previewAnimRef.current = requestAnimationFrame(tick)
+      cancelAnimationFrame(animRef.current)
     }
-    previewAnimRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(previewAnimRef.current)
-  }, [previewPlaying, previewReady])
+  }, [])
 
-  // Stop playback when preview closes
-  useEffect(() => {
-    if (previewMode === 'none') {
-      setPreviewPlaying(false)
-      setPreviewFrame(0)
-    }
-  }, [previewMode])
-
-  // Invalidate preview when keyframes change
-  useEffect(() => {
-    if (previewReady) {
-      setPreviewReady(false)
-      previewContourFramesRef.current = null
-      setPreviewPlaying(false)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyframes])
-
-  // Draw preview frame: video + full contour overlay
-  useEffect(() => {
-    if (previewMode === 'none' || !previewVideoReady || !previewReady) return
-    const frames = previewContourFramesRef.current
-    const canvas = previewCanvasRef.current
-    const video = previewVideoRef.current
-    if (!frames || !canvas || !video || previewFrame >= frames.length) return
-
-    // Ensure canvas dimensions
-    const rect = canvas.getBoundingClientRect()
-    if (rect.width > 0 && rect.height > 0) {
-      const dpr = window.devicePixelRatio || 1
-      canvas.width = rect.width * dpr
-      canvas.height = rect.height * dpr
-    }
-    if (canvas.width === 0 || canvas.height === 0) return
-
-    const frame = previewFrame
-    const targetTime = frame / 24
-
-    function draw() {
-      const ctx = canvas!.getContext('2d')
-      if (!ctx) return
-      const dpr = window.devicePixelRatio || 1
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      const cssW = canvas!.width / dpr
-      const cssH = canvas!.height / dpr
-      ctx.clearRect(0, 0, cssW, cssH)
-
-      const vw = video!.videoWidth, vh = video!.videoHeight
-      const s = Math.min(cssW / vw, cssH / vh) * 0.95
-      const ox = (cssW - vw * s) / 2, oy = (cssH - vh * s) / 2
-      ctx.drawImage(video!, ox, oy, vw * s, vh * s)
-
-      const imgW = imageDims.w || vw, imgH = imageDims.h || vh
-      const contour = frames![frame]
-      if (!contour) return
-
-      const currentMode = previewMode
-
-      // Draw contour polygon (closed path)
-      if (contour.length >= 2) {
-        ctx.strokeStyle = currentMode === 'anchors'
-          ? 'rgba(255, 100, 100, 0.6)'
-          : 'rgba(255, 200, 0, 0.8)'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        for (let i = 0; i < contour.length; i++) {
-          const px = (contour[i].x / imgW) * vw * s + ox
-          const py = (contour[i].y / imgH) * vh * s + oy
-          if (i === 0) ctx.moveTo(px, py)
-          else ctx.lineTo(px, py)
-        }
-        ctx.closePath()
-        ctx.stroke()
-      }
-
-      if (currentMode === 'anchors') {
-        // Anchors-only: all points are anchors
-        ctx.fillStyle = '#ff3333'
-        for (let i = 0; i < contour.length; i++) {
-          const px = (contour[i].x / imgW) * vw * s + ox
-          const py = (contour[i].y / imgH) * vh * s + oy
-          ctx.beginPath()
-          ctx.arc(px, py, 5, 0, Math.PI * 2)
-          ctx.fill()
-        }
-      } else {
-        // Full mode: distinguish anchors vs subdivision
-        const nAnchors = contourAnchors.length
-        const anchorIndicesInContour = new Set<number>()
-        let idx = 0
-        for (let i = 0; i < nAnchors; i++) {
-          anchorIndicesInContour.add(idx)
-          idx++
-          const segCount = contourSubParams.filter(p => p.segmentIndex === i).length
-          idx += segCount
-        }
-
-        // Draw subdivision points (green, small)
-        ctx.fillStyle = '#22c55e'
-        for (let i = 0; i < contour.length; i++) {
-          if (anchorIndicesInContour.has(i)) continue
-          const px = (contour[i].x / imgW) * vw * s + ox
-          const py = (contour[i].y / imgH) * vh * s + oy
-          ctx.beginPath()
-          ctx.arc(px, py, 2.5, 0, Math.PI * 2)
-          ctx.fill()
-        }
-
-        // Draw anchor points (red, larger)
-        ctx.fillStyle = '#ff3333'
-        for (const ai of anchorIndicesInContour) {
-          if (ai >= contour.length) continue
-          const px = (contour[ai].x / imgW) * vw * s + ox
-          const py = (contour[ai].y / imgH) * vh * s + oy
-          ctx.beginPath()
-          ctx.arc(px, py, 5, 0, Math.PI * 2)
-          ctx.fill()
-        }
-      }
-
-      // Frame counter + mode label
-      const modeLabel = currentMode === 'anchors' ? 'Anchors' : 'Complet'
-      ctx.fillStyle = 'rgba(0,0,0,0.6)'
-      ctx.fillRect(8, 8, 200, 24)
-      ctx.fillStyle = '#fff'
-      ctx.font = '12px monospace'
-      ctx.fillText(`[${modeLabel}] Frame ${frame} / ${frames!.length - 1}`, 14, 24)
-    }
-
-    const handleSeeked = () => draw()
-    video.addEventListener('seeked', handleSeeked)
-    video.currentTime = targetTime
-    if (Math.abs(video.currentTime - targetTime) < 0.02) {
-      draw()
-    }
-    return () => {
-      video.removeEventListener('seeked', handleSeeked)
-    }
-  }, [previewMode, previewVideoReady, previewFrame, previewReady, imageDims])
-
-  // Reset tracking
-  function handleReset() {
-    if (!confirm('Réinitialiser le tracking contour ? Les keyframes seront perdues.')) return
-    setKeyframes([])
-    rawTrackingRef.current = []
-    setSelectedKfIdx(null)
-    setPhase('config')
-  }
-
-  // Prerequisite checks
-  if (!mesh?.cannyParams) {
-    return <div className="placeholder">Validez d&apos;abord les paramètres Canny (étape 2).</div>
-  }
-  if (!mesh?.contourAnchors?.length) {
-    return <div className="placeholder">Définissez d&apos;abord les anchors contour (étape 3).</div>
-  }
-  if (!(mesh?.contourSubdivisionPoints?.length)) {
-    return <div className="placeholder">Définissez d&apos;abord la subdivision contour (étape 4).</div>
-  }
-  if (!project.videoBlob) {
-    return <div className="placeholder">Importez d&apos;abord une vidéo.</div>
-  }
-
-  // Validated phase
-  if (phase === 'validated') {
+  // ─── Render ─────────────────────────────────────────────────────
+  if (!ready) {
     return (
-      <div className="tracking-step">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px' }}>
-          <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '1.1rem' }}>
-            Tracking contour validé
-          </span>
-          <span style={{ color: '#888' }}>
-            {contourAnchors.length} anchors contour trackés sur {mesh.contourAnchorFrames?.length ?? '?'} frames
-          </span>
-          <button className="btn-danger" onClick={handleReset}>
-            Recommencer
-          </button>
+      <div className="triangulation-step">
+        <h3>Etape 5 — Tracking contour (curviligne)</h3>
+        <div className="step-placeholder">
+          {!hasAnchors && <p>Placez au moins 3 anchors contour (etape 3).</p>}
+          {!hasCanny && <p>Validez les parametres Canny (etape 2).</p>}
+          {!hasOrigin && <p>Trackez le point origine P0 (etape 4).</p>}
+          {!hasVideo && <p>Importez une video (etape 1).</p>}
+          {!hasImage && <p>Importez une image (etape 1).</p>}
         </div>
       </div>
     )
   }
-
-  // Config phase
-  if (phase === 'config') {
-    return (
-      <div className="tracking-step">
-        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <h3 style={{ margin: 0 }}>Configuration du tracking contour</h3>
-          <p style={{ color: '#888', margin: 0 }}>
-            {contourAnchors.length} anchors contour à tracker.
-          </p>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label>Intervalle keyframes :</label>
-            <button onClick={() => setInterval_(Math.max(1, interval - 5))} disabled={interval <= 1}>−</button>
-            <span style={{ minWidth: 30, textAlign: 'center' }}>{interval}</span>
-            <button onClick={() => setInterval_(interval + 5)}>+</button>
-            <span style={{ color: '#888', fontSize: '0.85rem' }}>frames</span>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <strong>Contraintes :</strong>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableAntiSaut} onChange={e => setEnableAntiSaut(e.target.checked)} />
-              Anti-saut (clamp déplacement max)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableNeighbor} onChange={e => setEnableNeighbor(e.target.checked)} />
-              Contrainte voisinage (consensus médiane)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableContour} onChange={e => setEnableContour(e.target.checked)} />
-              Contraintes contour (stabilisation curviligne)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableTemporal} onChange={e => setEnableTemporal(e.target.checked)} />
-              Lissage temporel (post-traitement)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableOutlier} onChange={e => setEnableOutlier(e.target.checked)} />
-              Détection outliers (post-traitement)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: enableSnap ? 'bold' : 'normal' }}>
-              <input type="checkbox" checked={enableSnap} onChange={e => setEnableSnap(e.target.checked)} />
-              Snap-to-contour (Canny)
-              {!mesh?.cannyParams && <span style={{ color: '#f59e0b', fontSize: '0.8rem' }}> — validez Canny d&apos;abord</span>}
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableCurvilinearSpring} onChange={e => setEnableCurvilinearSpring(e.target.checked)} />
-              Répulsion ressort curviligne (Canny)
-              {!mesh?.cannyParams && <span style={{ color: '#f59e0b', fontSize: '0.8rem' }}> — validez Canny d&apos;abord</span>}
-            </label>
-          </div>
-
-          <button
-            onClick={handleLaunchTracking}
-            style={{ background: '#2563eb', color: 'white', padding: '8px 24px', alignSelf: 'flex-start' }}
-          >
-            Lancer le tracking
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Tracking phase (in progress)
-  if (phase === 'tracking') {
-    return (
-      <div className="tracking-step">
-        <div style={{ padding: '16px', textAlign: 'center' }}>
-          <h3>Tracking en cours...</h3>
-          <p style={{ fontFamily: 'monospace' }}>{progress}</p>
-          <div style={{ width: '100%', maxWidth: 400, margin: '0 auto', height: 4, background: '#333', borderRadius: 2 }}>
-            <div style={{ width: '50%', height: '100%', background: '#2563eb', borderRadius: 2, transition: 'width 0.3s' }} />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Keyframes phase
-  const selectedKf = selectedKfIdx !== null ? keyframes[selectedKfIdx] : null
 
   return (
-    <div className="tracking-step" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-        <span style={{ fontWeight: 'bold' }}>
-          Keyframes contour ({keyframes.length})
-        </span>
-        <button
-          onClick={handleSaveAndValidate}
-          disabled={saving}
-          style={{ background: '#22c55e', color: 'white' }}
-        >
-          {saving ? 'Sauvegarde...' : 'Valider le tracking contour'}
-        </button>
-        <button className="btn-danger" onClick={handleReset}>
-          Recommencer
-        </button>
-        {keyframes.length >= 2 && (
-          <>
-            <button
-              onClick={() => {
-                if (previewMode === 'anchors') { setPreviewMode('none') }
-                else { handleComputePreviewAnchors() }
-              }}
-              style={{ background: previewMode === 'anchors' ? '#f59e0b' : '#6366f1', color: 'white' }}
-            >
-              {previewMode === 'anchors' ? 'Fermer' : 'Preview anchors'}
-            </button>
-            <button
-              onClick={() => {
-                if (previewMode === 'full') { setPreviewMode('none') }
-                else { handleComputePreviewFull() }
-              }}
-              disabled={previewComputing}
-              style={{ background: previewMode === 'full' ? '#f59e0b' : '#8b5cf6', color: 'white' }}
-            >
-              {previewMode === 'full' ? 'Fermer' : 'Preview complète'}
-            </button>
-          </>
-        )}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginLeft: 'auto', fontSize: '0.85rem' }}>
-          <input type="checkbox" checked={autoSnap} onChange={e => setAutoSnap(e.target.checked)} />
-          Auto-snap Canny
-        </label>
-      </div>
+    <div className="triangulation-step">
+      <h3>Etape 5 — Tracking contour (curviligne)</h3>
+      <p className="step-description">
+        Placement deterministe des anchors par coordonnee curviligne normalisee
+        sur le contour Canny, avec tracking des extrema de courbure frame par frame.
+      </p>
 
-      {previewMode !== 'none' && (
-        <div style={{ padding: '0 16px 8px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            {previewComputing && (
-              <span style={{ color: '#f59e0b', fontSize: '0.85rem', fontFamily: 'monospace' }}>
-                {previewProgress || 'Calcul en cours...'}
-              </span>
-            )}
-            {previewReady && (
-              <>
-                <button
-                  onClick={() => setPreviewPlaying(!previewPlaying)}
-                  style={{ background: previewPlaying ? '#ef4444' : '#22c55e', color: 'white', padding: '4px 12px' }}
-                >
-                  {previewPlaying ? 'Pause' : 'Play'}
-                </button>
-                <button
-                  onClick={() => { setPreviewPlaying(false); setPreviewFrame(0) }}
-                  style={{ padding: '4px 12px' }}
-                >
-                  Restart
-                </button>
-                <button
-                  onClick={previewMode === 'anchors' ? handleComputePreviewAnchors : handleComputePreviewFull}
-                  style={{ padding: '4px 12px' }}
-                >
-                  Recalculer
-                </button>
-                <span style={{ color: '#888', fontSize: '0.85rem' }}>
-                  {previewMode === 'anchors' ? 'Anchors seuls' : 'Contour complet'}
-                  {' — '}
-                  {previewContourFramesRef.current
-                    ? `${previewFrame} / ${previewContourFramesRef.current.length - 1}`
-                    : ''}
-                </span>
-              </>
-            )}
-          </div>
-          {previewReady && (
-            <canvas
-              ref={previewCanvasRef}
-              style={{ width: '100%', height: 300, background: '#111', borderRadius: 4 }}
-            />
-          )}
+      {/* ── Ready ─────────────────────────────────────── */}
+      {phase === 'ready' && (
+        <div className="step-actions">
+          <p>{mesh!.contourAnchors.length} anchors contour a tracker.</p>
+          <button className="btn-primary" onClick={handleCompute}>
+            Tracking contour (s fixe)
+          </button>
+          <button className="btn-primary" onClick={handleComputeStepByStep} style={{ marginLeft: 8 }}>
+            Tracking contour (proche en proche)
+          </button>
         </div>
       )}
 
-      <KeyframeTimeline
-        keyframes={keyframes}
-        totalFrames={totalFramesRef.current}
-        selectedIndex={selectedKfIdx}
-        onSelect={setSelectedKfIdx}
-      />
+      {/* ── Computing ─────────────────────────────────── */}
+      {phase === 'computing' && (
+        <div className="step-progress">
+          <div className="progress-bar">
+            <div className="progress-bar-inner" style={{ width: '100%' }} />
+          </div>
+          <p>{progress}</p>
+        </div>
+      )}
 
-      {selectedKf && (
-        <KeyframeEditor
-          videoBlob={project.videoBlob!}
-          imageWidth={imageDims.w}
-          imageHeight={imageDims.h}
-          frameIndex={selectedKf.frameIndex}
-          anchorPositions={selectedKf.anchorPositions}
-          referencePositions={keyframes[0]?.anchorPositions}
-          totalFrames={totalFramesRef.current}
-          onUpdatePositions={handleUpdatePositions}
-          onPropagateForwardOne={handlePropagateForwardOne}
-          onPropagateForwardAll={handlePropagateForwardAll}
-          onPropagateBidiOne={handlePropagateBidiOne}
-          onPropagateBidiAll={handlePropagateBidiAll}
-          onValidateOnly={handleValidateOnly}
-          propagating={propagating}
-          isFirstKeyframe={selectedKfIdx === 0}
-          isLastKeyframe={selectedKfIdx === keyframes.length - 1}
-          onSnapPoint={autoSnap ? handleSnapPoint : undefined}
-          cannyContourPoints={cannyContourPoints}
-        />
+      {/* ── Preview ───────────────────────────────────── */}
+      {phase === 'preview' && (
+        <div className="step-preview">
+          <div className="preview-controls">
+            <button
+              className="btn-secondary"
+              onClick={() => setPlaying(p => !p)}
+            >
+              {playing ? 'Pause' : 'Play'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => { setPlaying(false); setPreviewFrame(0) }}
+            >
+              Debut
+            </button>
+            <span className="frame-label">
+              Frame {previewFrame + 1} / {totalFramesRef.current}
+            </span>
+          </div>
+
+          <input
+            type="range"
+            min={0}
+            max={totalFramesRef.current - 1}
+            value={previewFrame}
+            onChange={e => {
+              setPlaying(false)
+              setPreviewFrame(Number(e.target.value))
+            }}
+            style={{ width: '100%', margin: '8px 0' }}
+          />
+
+          <canvas
+            ref={canvasRef}
+            style={{ maxWidth: '100%', background: '#111', cursor: draggingIdx !== null ? 'grabbing' : 'default' }}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onMouseLeave={handleCanvasMouseUp}
+          />
+
+          <div className="preview-legend" style={{ fontSize: '0.85em', marginTop: 8, color: '#aaa' }}>
+            <span style={{ color: 'rgba(255,255,0,0.6)' }}>● Jaune</span> = contour Canny
+            {' | '}
+            <span style={{ color: 'rgba(80,140,255,0.8)' }}>— Bleu</span> = polygone anchors
+            {' | '}
+            <span style={{ color: 'rgba(180,180,180,0.8)' }}>● Gris</span> = position brute (s)
+            {' | '}
+            <span style={{ color: 'rgba(50,220,50,0.9)' }}>● Vert</span> = snap extremum
+            {' | '}
+            <span style={{ color: 'rgba(255,160,0,0.9)' }}>● Orange</span> = perdu
+            <br />
+            Glissez un point pour le repositionner, puis cliquez "Propager avant".
+          </div>
+
+          {/* Propagate button */}
+          <div style={{ marginTop: 12 }}>
+            <button
+              className="btn-secondary"
+              onClick={handlePropagate}
+              disabled={propagating || playing}
+              style={{ marginRight: 8 }}
+            >
+              {propagating ? 'Propagation...' : `Propager avant (depuis frame ${previewFrame + 1})`}
+            </button>
+            {hasEdited && <span style={{ color: '#ffa000', fontSize: '0.85em' }}>Points edites — propager pour appliquer</span>}
+            {propagating && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
+          </div>
+
+          <div className="step-actions" style={{ marginTop: 16 }}>
+            <button
+              className="btn-primary"
+              onClick={handleValidate}
+              disabled={saving || propagating}
+            >
+              {saving ? 'Sauvegarde...' : 'Valider le tracking'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={handleReset}
+              disabled={saving || propagating}
+            >
+              Reinitialiser
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Validated ─────────────────────────────────── */}
+      {phase === 'validated' && (
+        <div className="step-validated">
+          <p className="validated-badge">
+            Tracking contour valide ({mesh!.contourAnchors.length} anchors,{' '}
+            {mesh!.contourAnchorFrames?.length ?? '?'} frames)
+          </p>
+          <button
+            className="btn-secondary"
+            onClick={handleReset}
+            disabled={saving}
+          >
+            {saving ? 'Sauvegarde...' : 'Reinitialiser'}
+          </button>
+        </div>
       )}
     </div>
   )

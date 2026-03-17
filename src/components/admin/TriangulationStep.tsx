@@ -7,6 +7,7 @@ import { useTriangulation } from '../triangulation/useTriangulation'
 import { generateAutoMesh } from '../../utils/autoMeshGenerator'
 import { generateTemplatePDF } from '../../utils/pdfGenerator'
 import { computeAllBarycentrics, interpolateInternalPoint } from '../../utils/barycentricUtils'
+import { precomputeARAP, batchSolveARAP } from '../../utils/arapSolver'
 import { pointInPolygon, triangleCentroid } from '../../utils/geometry'
 import { computeAllSubdivisionFrames } from '../../utils/curvilinearContour'
 import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
@@ -71,6 +72,9 @@ export default function TriangulationStep({ project, onSave }: Props) {
   const [videoReady, setVideoReady] = useState(false)
   const animFrameRef = useRef(0)
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null)
+  const [viewMode, setViewMode] = useState<'video' | 'wireframe' | 'gradient'>('video')
+  // Pre-computed gradient colors per triangle (HSL based on centroid at frame 0)
+  const gradientColors = useRef<string[]>([])
 
   const {
     internalPoints,
@@ -272,6 +276,39 @@ export default function TriangulationStep({ project, onSave }: Props) {
     return () => observer.disconnect()
   }, [hasAnimation])
 
+  // Compute gradient colors per triangle from frame 0 positions
+  useEffect(() => {
+    if (!hasAnimation) return
+    const frames = mesh!.videoFramesMesh!
+    const tris = mesh!.triangles
+    const pts0 = frames[0]
+    if (!pts0 || tris.length === 0) return
+
+    // Compute bounding box of frame 0
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const p of pts0) {
+      if (p.x < minX) minX = p.x
+      if (p.y < minY) minY = p.y
+      if (p.x > maxX) maxX = p.x
+      if (p.y > maxY) maxY = p.y
+    }
+    const w = maxX - minX || 1
+    const h = maxY - minY || 1
+
+    // Assign each triangle a color based on its centroid position (2D gradient)
+    gradientColors.current = tris.map(([a, b, c]) => {
+      if (a >= pts0.length || b >= pts0.length || c >= pts0.length) return '#888'
+      const cx = (pts0[a].x + pts0[b].x + pts0[c].x) / 3
+      const cy = (pts0[a].y + pts0[b].y + pts0[c].y) / 3
+      const nx = (cx - minX) / w // 0..1 horizontal
+      const ny = (cy - minY) / h // 0..1 vertical
+      const hue = (nx * 300 + ny * 60) % 360
+      const sat = 70 + ny * 20
+      const light = 45 + nx * 20
+      return `hsl(${hue}, ${sat}%, ${light}%)`
+    })
+  }, [hasAnimation, mesh])
+
   // Animation playback loop
   useEffect(() => {
     if (!hasAnimation || !playing) return
@@ -290,12 +327,15 @@ export default function TriangulationStep({ project, onSave }: Props) {
 
   // Draw animation frame
   useEffect(() => {
-    if (!hasAnimation || !videoReady) return
+    if (!hasAnimation) return
+    // Video mode requires video ready; other modes don't
+    if (viewMode === 'video' && !videoReady) return
     const canvas = animCanvasRef.current
     const video = videoRef.current
     const frames = mesh!.videoFramesMesh!
     const tris = mesh!.triangles
-    if (!canvas || !video || currentFrame >= frames.length) return
+    if (!canvas || currentFrame >= frames.length) return
+    if (viewMode === 'video' && !video) return
 
     // Ensure canvas has dimensions (ResizeObserver may not have fired yet)
     if (canvas.width === 0 || canvas.height === 0) {
@@ -307,36 +347,89 @@ export default function TriangulationStep({ project, onSave }: Props) {
       }
     }
 
-    const frame = currentFrame // capture for closure
+    const frame = currentFrame
     const targetTime = frame / 24
+    const mode = viewMode
+    const colors = gradientColors.current
 
     function draw() {
       const ctx = canvas!.getContext('2d')
       if (!ctx) return
       const dpr = window.devicePixelRatio || 1
+      // Clear at full physical resolution before applying DPR transform
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas!.width, canvas!.height)
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const cssW = canvas!.width / dpr
       const cssH = canvas!.height / dpr
       if (cssW === 0 || cssH === 0) return
-      ctx.clearRect(0, 0, cssW, cssH)
-      const vw = video!.videoWidth, vh = video!.videoHeight
+
+      const vw = video?.videoWidth ?? imageDims?.w ?? 800
+      const vh = video?.videoHeight ?? imageDims?.h ?? 600
       const s = Math.min(cssW / vw, cssH / vh) * 0.95
       const ox = (cssW - vw * s) / 2, oy = (cssH - vh * s) / 2
-      ctx.drawImage(video!, ox, oy, vw * s, vh * s)
       const imgW = imageDims?.w ?? vw, imgH = imageDims?.h ?? vh
       const points = frames[frame]
-      ctx.strokeStyle = 'rgba(0, 255, 100, 0.4)'
-      ctx.lineWidth = 1
-      for (const [a, b, c] of tris) {
-        if (a >= points.length || b >= points.length || c >= points.length) continue
-        const pa = points[a], pb = points[b], pc = points[c]
-        ctx.beginPath()
-        ctx.moveTo((pa.x / imgW) * vw * s + ox, (pa.y / imgH) * vh * s + oy)
-        ctx.lineTo((pb.x / imgW) * vw * s + ox, (pb.y / imgH) * vh * s + oy)
-        ctx.lineTo((pc.x / imgW) * vw * s + ox, (pc.y / imgH) * vh * s + oy)
-        ctx.closePath()
-        ctx.stroke()
+
+      // Background
+      if (mode === 'video' && video) {
+        ctx.drawImage(video, ox, oy, vw * s, vh * s)
+      } else {
+        // Dark background for wireframe and gradient modes
+        ctx.fillStyle = '#1a1a2e'
+        ctx.fillRect(ox, oy, vw * s, vh * s)
       }
+
+      // Helper to convert mesh coords to canvas coords
+      const toCanvas = (p: Point2D) => ({
+        x: (p.x / imgW) * vw * s + ox,
+        y: (p.y / imgH) * vh * s + oy,
+      })
+
+      if (mode === 'gradient') {
+        // Filled triangles with gradient colors
+        for (let ti = 0; ti < tris.length; ti++) {
+          const [a, b, c] = tris[ti]
+          if (a >= points.length || b >= points.length || c >= points.length) continue
+          const pa = toCanvas(points[a]), pb = toCanvas(points[b]), pc = toCanvas(points[c])
+          ctx.fillStyle = colors[ti] ?? '#888'
+          ctx.beginPath()
+          ctx.moveTo(pa.x, pa.y)
+          ctx.lineTo(pb.x, pb.y)
+          ctx.lineTo(pc.x, pc.y)
+          ctx.closePath()
+          ctx.fill()
+        }
+        // Thin wireframe overlay
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'
+        ctx.lineWidth = 0.5
+        for (const [a, b, c] of tris) {
+          if (a >= points.length || b >= points.length || c >= points.length) continue
+          const pa = toCanvas(points[a]), pb = toCanvas(points[b]), pc = toCanvas(points[c])
+          ctx.beginPath()
+          ctx.moveTo(pa.x, pa.y)
+          ctx.lineTo(pb.x, pb.y)
+          ctx.lineTo(pc.x, pc.y)
+          ctx.closePath()
+          ctx.stroke()
+        }
+      } else {
+        // Wireframe (both video and wireframe modes)
+        ctx.strokeStyle = mode === 'video' ? 'rgba(0, 255, 100, 0.4)' : 'rgba(0, 255, 200, 0.7)'
+        ctx.lineWidth = mode === 'video' ? 1 : 1.2
+        for (const [a, b, c] of tris) {
+          if (a >= points.length || b >= points.length || c >= points.length) continue
+          const pa = toCanvas(points[a]), pb = toCanvas(points[b]), pc = toCanvas(points[c])
+          ctx.beginPath()
+          ctx.moveTo(pa.x, pa.y)
+          ctx.lineTo(pb.x, pb.y)
+          ctx.lineTo(pc.x, pc.y)
+          ctx.closePath()
+          ctx.stroke()
+        }
+      }
+
+      // Frame counter
       ctx.fillStyle = 'rgba(0,0,0,0.6)'
       ctx.fillRect(8, 8, 120, 24)
       ctx.fillStyle = '#fff'
@@ -344,17 +437,21 @@ export default function TriangulationStep({ project, onSave }: Props) {
       ctx.fillText(`Frame ${frame} / ${frames.length - 1}`, 14, 24)
     }
 
-    const handleSeeked = () => draw()
-    video.addEventListener('seeked', handleSeeked)
-    video.currentTime = targetTime
-    // Draw immediately if already at target time
-    if (Math.abs(video.currentTime - targetTime) < 0.02) {
+    if (mode === 'video' && video) {
+      const handleSeeked = () => draw()
+      video.addEventListener('seeked', handleSeeked)
+      video.currentTime = targetTime
+      if (Math.abs(video.currentTime - targetTime) < 0.02) {
+        draw()
+      }
+      return () => {
+        video.removeEventListener('seeked', handleSeeked)
+      }
+    } else {
+      // No video seek needed for wireframe/gradient modes
       draw()
     }
-    return () => {
-      video.removeEventListener('seeked', handleSeeked)
-    }
-  }, [hasAnimation, videoReady, currentFrame, mesh, imageDims])
+  }, [hasAnimation, videoReady, currentFrame, mesh, imageDims, viewMode])
 
   async function handleComputeAnimation() {
     if (!mesh || !mesh.contourAnchorFrames || !mesh.anchorFrames) return
@@ -379,7 +476,8 @@ export default function TriangulationStep({ project, onSave }: Props) {
           contourAnchorFrames,
           mesh.contourSubdivisionParams,
           mesh.cannyParams,
-          (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`)
+          (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`),
+          mesh.contourOriginFrames
         )
       }
 
@@ -425,6 +523,94 @@ export default function TriangulationStep({ project, onSave }: Props) {
     } catch (err) {
       console.error('Animation computation failed:', err)
       alert('Erreur : ' + (err instanceof Error ? err.message : err))
+      setComputing(false)
+      setAnimProgress('')
+    }
+  }
+
+  async function handleComputeARAP() {
+    if (!mesh || !mesh.contourAnchorFrames || !mesh.anchorFrames) return
+    const contourAnchorFrames = mesh.contourAnchorFrames
+    const ancFrames = mesh.anchorFrames
+
+    const totalF = Math.min(contourAnchorFrames.length, ancFrames.length)
+    if (totalF === 0) return
+
+    setComputing(true)
+
+    try {
+      // Compute subdivision frames if not already done
+      let contourSubFrames = mesh.contourSubdivisionFrames
+      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams) {
+        setAnimProgress('Calcul positions contour subdivision...')
+        await loadOpenCVWorker()
+        contourSubFrames = await computeAllSubdivisionFrames(
+          project.videoBlob,
+          contourAnchorFrames,
+          mesh.contourSubdivisionParams,
+          mesh.cannyParams,
+          (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`),
+          mesh.contourOriginFrames
+        )
+      }
+
+      // Build frame 0 allPoints for ARAP rest pose — use ORIGINAL mesh positions
+      // (same as the ones used for Delaunay triangulation), not tracked frame 0
+      const allPoints0: Point2D[] = [
+        ...contourAnchors,
+        ...contourSubPts,
+        ...anchorPoints,
+        ...mesh.internalPoints,
+      ]
+
+      // Pinned indices = all except internalPoints (last N)
+      const nPinned = contourAnchors.length + contourSubPts.length + anchorPoints.length
+      const pinnedIndices: number[] = []
+      for (let i = 0; i < nPinned; i++) {
+        pinnedIndices.push(i)
+      }
+
+      setAnimProgress('Pré-calcul ARAP (factorisation)...')
+      await new Promise(r => setTimeout(r, 0))
+      const arapSystem = precomputeARAP(allPoints0, mesh.triangles, pinnedIndices)
+
+      // Build pinned positions per frame
+      setAnimProgress('Calcul ARAP frames...')
+      await new Promise(r => setTimeout(r, 0))
+
+      const allPinnedFrames: Point2D[][] = []
+      for (let f = 0; f < totalF; f++) {
+        const subPositions = contourSubFrames?.[f] ?? mesh.contourSubdivisionPoints
+        allPinnedFrames.push([
+          ...contourAnchorFrames[f],
+          ...subPositions,
+          ...ancFrames[f],
+        ])
+      }
+
+      const videoFramesMesh = batchSolveARAP(
+        arapSystem,
+        allPinnedFrames,
+        3,
+        (frame, total) => setAnimProgress(`ARAP frame ${frame + 1} / ${total}`)
+      )
+
+      // Yield to UI periodically
+      setAnimProgress('Sauvegarde...')
+      await new Promise(r => setTimeout(r, 0))
+
+      const updatedMesh: MeshData = {
+        ...mesh,
+        contourSubdivisionFrames: contourSubFrames,
+        contourSubdivisionValidated: true,
+        videoFramesMesh,
+      }
+      await onSave({ ...project, mesh: updatedMesh }, ['contourSubdivisionFrames', 'videoFramesMesh'])
+      setComputing(false)
+      setAnimProgress('')
+    } catch (err) {
+      console.error('ARAP computation failed:', err)
+      alert('Erreur ARAP : ' + (err instanceof Error ? err.message : err))
       setComputing(false)
       setAnimProgress('')
     }
@@ -571,7 +757,14 @@ export default function TriangulationStep({ project, onSave }: Props) {
                   disabled={computing}
                   style={{ background: '#2563eb', color: 'white', padding: '8px 24px' }}
                 >
-                  {computing ? 'Calcul en cours...' : 'Calculer l\'animation'}
+                  {computing ? 'Calcul en cours...' : 'Barycentrique'}
+                </button>
+                <button
+                  onClick={handleComputeARAP}
+                  disabled={computing}
+                  style={{ background: '#9333ea', color: 'white', padding: '8px 24px' }}
+                >
+                  {computing ? 'Calcul en cours...' : 'Calculer ARAP'}
                 </button>
                 {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
               </>
@@ -582,9 +775,18 @@ export default function TriangulationStep({ project, onSave }: Props) {
                   {mesh.videoFramesMesh!.length} frames, {mesh.videoFramesMesh![0]?.length ?? 0} pts/frame
                 </span>
                 <button onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
+                <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }} title="Frame précédente">
+                  ◀
+                </button>
+                <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }} title="Frame suivante">
+                  ▶
+                </button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
                 <button onClick={handleComputeAnimation} disabled={computing} style={{ marginLeft: 'auto' }}>
-                  Recalculer
+                  Recalculer (Bary)
+                </button>
+                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#9333ea', color: 'white' }}>
+                  Recalculer ARAP
                 </button>
               </>
             )}
@@ -599,9 +801,56 @@ export default function TriangulationStep({ project, onSave }: Props) {
           )}
 
           {hasAnimation && (
-            <div ref={animContainerRef} style={{ height: 400, position: 'relative' }}>
-              <canvas ref={animCanvasRef} style={{ width: '100%', height: '100%' }} />
-            </div>
+            <>
+              <div style={{ padding: '4px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: '#888', fontSize: 12 }}>Vue :</span>
+                <button
+                  onClick={() => setViewMode('video')}
+                  style={{
+                    padding: '4px 12px', fontSize: 12,
+                    background: viewMode === 'video' ? '#2563eb' : '#333',
+                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  }}
+                >
+                  Vidéo + Mesh
+                </button>
+                <button
+                  onClick={() => setViewMode('wireframe')}
+                  style={{
+                    padding: '4px 12px', fontSize: 12,
+                    background: viewMode === 'wireframe' ? '#2563eb' : '#333',
+                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  }}
+                >
+                  Wireframe
+                </button>
+                <button
+                  onClick={() => setViewMode('gradient')}
+                  style={{
+                    padding: '4px 12px', fontSize: 12,
+                    background: viewMode === 'gradient' ? '#2563eb' : '#333',
+                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  }}
+                >
+                  Gradient
+                </button>
+                <span style={{ flex: 1 }} />
+                <input
+                  type="range"
+                  min={0}
+                  max={mesh.videoFramesMesh!.length - 1}
+                  value={currentFrame}
+                  onChange={e => { setPlaying(false); setCurrentFrame(Number(e.target.value)) }}
+                  style={{ width: 200 }}
+                />
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 80 }}>
+                  {currentFrame} / {mesh.videoFramesMesh!.length - 1}
+                </span>
+              </div>
+              <div ref={animContainerRef} style={{ height: 400, position: 'relative' }}>
+                <canvas ref={animCanvasRef} style={{ width: '100%', height: '100%' }} />
+              </div>
+            </>
           )}
         </div>
       )}

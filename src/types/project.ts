@@ -30,7 +30,16 @@ export interface MeshData {
   // Étape 2 : Paramètres Canny validés
   cannyParams: CannyParams | null;
 
-  // Étape 3 : Anchors contour caractéristiques (4-5 points, frame 0, sur Canny)
+  // Étape 3 : Point 0 contour (origine du repère curviligne)
+  contourOrigin: Point2D | null;
+
+  // Étape 4 : Tracking Point 0
+  contourOriginKeyframeInterval: number;
+  contourOriginKeyframes: KeyframeData[];
+  contourOriginFrames: Point2D[][] | null;  // 1 élément par inner array, cohérence pipeline
+  contourOriginTrackingValidated: boolean;
+
+  // Étape 5 : Anchors contour caractéristiques (4-5 points, frame 0, sur Canny)
   contourAnchors: Point2D[];
 
   // Étape 4 : Tracking anchors contour

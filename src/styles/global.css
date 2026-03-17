@@ -864,6 +864,147 @@ input[type="text"]:focus {
   height: 100%;
 }
 
+/* ===== Frame Navigator ===== */
+.frame-navigator {
+  margin: 8px 16px;
+  padding: 8px 12px;
+  background: #1e1e2e;
+  border-radius: var(--radius);
+}
+
+.frame-nav-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.frame-nav-buttons button {
+  min-width: 36px;
+  padding: 4px 8px;
+  font-size: 1rem;
+  background: #3a3a4a;
+  color: #ccc;
+  border: 1px solid #4a4a5a;
+  border-radius: 4px;
+}
+
+.frame-nav-buttons button:hover:not(:disabled) {
+  background: #4a4a5a;
+  color: #fff;
+}
+
+.frame-nav-display {
+  font-family: monospace;
+  font-size: 0.9rem;
+  min-width: 100px;
+  text-align: center;
+  color: #e0e0e0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.frame-nav-current {
+  font-weight: bold;
+  color: #fff;
+}
+
+.frame-nav-separator {
+  color: #666;
+}
+
+.frame-nav-total {
+  color: #888;
+}
+
+.frame-nav-edited-badge {
+  color: #22c55e;
+  margin-left: 4px;
+  font-size: 0.7rem;
+}
+
+.frame-nav-hint {
+  font-size: 0.75rem;
+  color: #888;
+  margin-left: 8px;
+}
+
+.frame-nav-slider-wrap {
+  position: relative;
+  margin-top: 8px;
+  padding-bottom: 12px;
+}
+
+.frame-nav-slider {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #2a2a3a;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.frame-nav-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a90d9;
+  cursor: pointer;
+  border: 2px solid #1e1e2e;
+}
+
+.frame-nav-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a90d9;
+  cursor: pointer;
+  border: 2px solid #1e1e2e;
+}
+
+.frame-nav-markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  pointer-events: none;
+}
+
+.frame-nav-marker {
+  position: absolute;
+  transform: translateX(-50%);
+  top: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f59e0b;
+  border: 2px solid #1e1e2e;
+  padding: 0;
+  min-width: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.1s;
+}
+
+.frame-nav-marker.active {
+  background: #22c55e;
+  transform: translateX(-50%) scale(1.3);
+}
+
+.frame-nav-marker:hover {
+  transform: translateX(-50%) scale(1.2);
+}
+
+.frame-nav-marker.active:hover {
+  transform: translateX(-50%) scale(1.4);
+}
+
 /* Keyframe animations */
 @keyframes flash-fade {
   from { opacity: 1; }

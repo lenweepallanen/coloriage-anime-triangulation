@@ -16,7 +16,7 @@ import {
   computeInitialCannySpacings,
   median,
 } from './trackingConstraints'
-import type { CurvilinearSpringOptions } from './trackingConstraints'
+import type { CurvilinearSpringOptions, CSSSnapConfig } from './trackingConstraints'
 import type { SnapToContourOptions } from './trackingConstraints'
 import { ContourSpatialIndex } from './contourSpatialIndex'
 import {
@@ -24,7 +24,11 @@ import {
   refineContourAnchors,
   DEFAULT_CONTOUR_TRACKING_CONFIG,
 } from './contourAnchorTracker'
-import type { ContourTrackingConfig, ContourTrackingState } from './contourAnchorTracker'
+import type { ContourTrackingConfig, ContourTrackingState, CSSSnapParams } from './contourAnchorTracker'
+import { orderContourPixels, computeArcLengths } from './curvilinearContour'
+import { computeInitialAnchorArcLengths, computeInitialSignatures } from './curvatureScaleSpace'
+import { applyOTSnap, DEFAULT_OT_PARAMS } from './optimalTransportSnap'
+import type { OTSnapParams } from './optimalTransportSnap'
 
 export interface TrackingConstraintParams {
   anchorTriangles: [number, number, number][]
@@ -44,6 +48,11 @@ export interface TrackingConstraintParams {
   enableCurvilinearSpring?: boolean  // default false — spring repulsion along Canny contour
   curvilinearSpringConfig?: Partial<CurvilinearSpringOptions>
   cannyParams?: CannyParams          // Canny params for contour detection during tracking
+  enableCSSSnap?: boolean            // default false — curvature-aware snap (CSS) for contour anchors
+  cssSnapWindowFraction?: number     // default 0.08 — ±8% arc-length window
+  cssSnapSigma?: number              // default 16 — Gaussian scale for curvature
+  enableOTSnap?: boolean             // default false — Optimal Transport snap in (s, κ) space
+  otSnapParams?: Partial<OTSnapParams> // OT params (lambda, beam, sigma, numSamples)
 }
 
 /** Per-frame contour tracking debug data (confidences + contour polyline) */
@@ -131,10 +140,12 @@ export async function trackSegment(
     contourTrackingState = initContourTracking(contourTrackingConfig, startResult.points)
   }
 
-  // Build flow-frame options for snap-to-contour or curvilinear spring
+  // Build flow-frame options for snap-to-contour or curvilinear spring or OT snap
   const useSnap = constraints?.enableSnapToContour && constraints.cannyParams
   const useCurvilinearSpring = constraints?.enableCurvilinearSpring && constraints.contourAnchorOrder?.length && constraints.cannyParams
-  const needContourExtraction = useSnap || useCurvilinearSpring
+  const useOTSnap = constraints?.enableOTSnap && constraints.contourAnchorOrder?.length && constraints.cannyParams
+  const needContourExtraction = useSnap || useCurvilinearSpring || useOTSnap
+  const otParams = useOTSnap ? { ...DEFAULT_OT_PARAMS, ...constraints.otSnapParams } : undefined
   const flowFrameOpts: FlowFrameOptions | undefined = needContourExtraction ? {
     extractContour: true,
     cannyParams: {
@@ -152,6 +163,32 @@ export async function trackSegment(
       initialCannySpacings = computeInitialCannySpacings(
         initVideoPoints, constraints.contourAnchorOrder, startDenseContour
       )
+    }
+  }
+
+  // Compute initial CSS arc-lengths for curvature-aware snap
+  const useCSSSnap = constraints?.enableCSSSnap && constraints.contourAnchorOrder?.length
+  let cssSnapParamsObj: CSSSnapParams | undefined
+  let cssSnapConfigObj: CSSSnapConfig | undefined
+  if (useCSSSnap && constraints.contourAnchorOrder) {
+    const denseContour = await flowExtractContourDense(startFrameData)
+    if (denseContour && denseContour.length >= 10) {
+      const orderedC = orderContourPixels(denseContour)
+      const arcL = computeArcLengths(orderedC)
+      const contourAnchorPositions = constraints.contourAnchorOrder.map(idx => initVideoPoints[idx])
+      const initialArcLengths = computeInitialAnchorArcLengths(contourAnchorPositions, orderedC, arcL)
+      const windowFraction = constraints.cssSnapWindowFraction ?? 0.08
+      const sigma = constraints.cssSnapSigma ?? 16
+      const signatures = computeInitialSignatures(contourAnchorPositions, orderedC, arcL, windowFraction, sigma)
+      cssSnapParamsObj = { initialArcLengths, windowFraction, sigma, signatures }
+      cssSnapConfigObj = {
+        enabled: true,
+        initialArcLengths,
+        contourAnchorIndices: constraints.contourAnchorOrder,
+        windowFraction,
+        sigma,
+        signatures,
+      }
     }
   }
 
@@ -175,7 +212,8 @@ export async function trackSegment(
         })) ?? null
 
         const refinement = refineContourAnchors(
-          points, contourMatches, contourPolyline, contourTrackingState, contourTrackingConfig
+          points, contourMatches, contourPolyline, contourTrackingState, contourTrackingConfig,
+          cssSnapParamsObj
         )
         points = refinement.refined
         contourTrackingState = refinement.state
@@ -209,11 +247,34 @@ export async function trackSegment(
         changed = true
       }
 
-      // 5. Snap-to-contour (snaps onto detected Canny contour)
-      if (useSnap && frameResult.detectedContour?.length) {
+      // 5. Snap-to-contour: OT snap OR geometric/CSS snap (mutually exclusive)
+      if (useOTSnap && frameResult.detectedContour?.length && constraints.contourAnchorOrder) {
+        const cannyPixels = frameResult.detectedContour as Point2D[]
+        const fallbackSnap = (pos: Point2D[], anchorOrder: number[], contour: Point2D[]) => {
+          const idx = new ContourSpatialIndex(contour)
+          const result = pos.map(p => ({ ...p }))
+          for (const ai of anchorOrder) {
+            const nearest = idx.nearest(pos[ai], 30)
+            if (nearest) result[ai] = nearest.point
+          }
+          return result
+        }
+        const otResult = applyOTSnap(points, constraints.contourAnchorOrder, cannyPixels, otParams!, fallbackSnap)
+        points = otResult.snapped
+        changed = true
+      } else if (useSnap && frameResult.detectedContour?.length) {
         const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
         const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
-        const snapResult = applySnapToContour(points, contourIndex, snapOpts)
+
+        // Prepare ordered contour for CSS snap if enabled
+        let orderedContourForCSS: Point2D[] | undefined
+        let arcLengthsForCSS: number[] | undefined
+        if (cssSnapConfigObj) {
+          orderedContourForCSS = orderContourPixels(frameResult.detectedContour as Point2D[])
+          arcLengthsForCSS = computeArcLengths(orderedContourForCSS)
+        }
+
+        const snapResult = applySnapToContour(points, contourIndex, snapOpts, cssSnapConfigObj, orderedContourForCSS, arcLengthsForCSS)
         points = snapResult.snapped
         // Recover lost points with wider radius
         if (snapResult.lostFlags.some(f => f)) {
@@ -393,10 +454,11 @@ export async function precomputeOpticalFlow(
     }
   }
 
-  // Build flow-frame options for snap-to-contour or curvilinear spring
+  // Build flow-frame options for snap-to-contour or curvilinear spring or OT snap
   const useSnap = constraints?.enableSnapToContour && constraints.cannyParams
   const useCurvilinearSpring = constraints?.enableCurvilinearSpring && constraints.contourAnchorOrder?.length && constraints.cannyParams
-  const needContourExtraction = useSnap || useCurvilinearSpring
+  const useOTSnap = constraints?.enableOTSnap && constraints.contourAnchorOrder?.length && constraints.cannyParams
+  const needContourExtraction = useSnap || useCurvilinearSpring || useOTSnap
   const flowFrameOpts: FlowFrameOptions | undefined = needContourExtraction ? {
     extractContour: true,
     cannyParams: {
@@ -406,8 +468,16 @@ export async function precomputeOpticalFlow(
     },
   } : undefined
 
+  // OT snap params
+  const otParams = useOTSnap ? { ...DEFAULT_OT_PARAMS, ...constraints.otSnapParams } : undefined
+
   // Initial Canny spacings will be computed from frame 0
   let initialCannySpacings: number[] = []
+
+  // CSS snap params (computed from frame 0)
+  const useCSSSnapPrecompute = constraints?.enableCSSSnap && constraints.contourAnchorOrder?.length
+  let cssSnapParamsPrecompute: CSSSnapParams | undefined
+  let cssSnapConfigPrecompute: CSSSnapConfig | undefined
 
   for (let i = 0; i < totalFrames; i++) {
     onProgress?.('Extraction & tracking', i + 1, totalFrames)
@@ -436,6 +506,29 @@ export async function precomputeOpticalFlow(
           )
         }
       }
+
+      // Compute initial CSS arc-lengths from frame 0
+      if (useCSSSnapPrecompute && constraints.contourAnchorOrder) {
+        const denseContour = await flowExtractContourDense(frameData)
+        if (denseContour && denseContour.length >= 10) {
+          const orderedC = orderContourPixels(denseContour)
+          const arcL = computeArcLengths(orderedC)
+          const contourAnchorPositions = constraints.contourAnchorOrder.map(idx => points[idx])
+          const initialArcLengths = computeInitialAnchorArcLengths(contourAnchorPositions, orderedC, arcL)
+          const windowFraction = constraints.cssSnapWindowFraction ?? 0.08
+          const sigma = constraints.cssSnapSigma ?? 16
+          const signatures = computeInitialSignatures(contourAnchorPositions, orderedC, arcL, windowFraction, sigma)
+          cssSnapParamsPrecompute = { initialArcLengths, windowFraction, sigma, signatures }
+          cssSnapConfigPrecompute = {
+            enabled: true,
+            initialArcLengths,
+            contourAnchorIndices: constraints.contourAnchorOrder,
+            windowFraction,
+            sigma,
+            signatures,
+          }
+        }
+      }
     }
 
     // Apply per-frame constraints (skip frame 0 — no displacement yet)
@@ -453,7 +546,8 @@ export async function precomputeOpticalFlow(
         })) ?? null
 
         const refinement = refineContourAnchors(
-          points, contourMatches, contourPolyline, contourTrackingState, contourTrackingConfig
+          points, contourMatches, contourPolyline, contourTrackingState, contourTrackingConfig,
+          cssSnapParamsPrecompute
         )
         points = refinement.refined
         contourTrackingState = refinement.state
@@ -493,11 +587,34 @@ export async function precomputeOpticalFlow(
         changed = true
       }
 
-      // 5. Snap-to-contour (snaps onto detected Canny contour)
-      if (useSnap && frameResult.detectedContour?.length) {
+      // 5. Snap-to-contour: OT snap OR geometric/CSS snap (mutually exclusive)
+      if (useOTSnap && frameResult.detectedContour?.length && constraints.contourAnchorOrder) {
+        const cannyPixels = frameResult.detectedContour as Point2D[]
+        const fallbackSnap = (pos: Point2D[], anchorOrder: number[], contour: Point2D[]) => {
+          const idx = new ContourSpatialIndex(contour)
+          const result = pos.map(p => ({ ...p }))
+          for (const ai of anchorOrder) {
+            const nearest = idx.nearest(pos[ai], 30)
+            if (nearest) result[ai] = nearest.point
+          }
+          return result
+        }
+        const otResult = applyOTSnap(points, constraints.contourAnchorOrder, cannyPixels, otParams!, fallbackSnap)
+        points = otResult.snapped
+        changed = true
+      } else if (useSnap && frameResult.detectedContour?.length) {
         const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
         const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
-        const snapResult = applySnapToContour(points, contourIndex, snapOpts)
+
+        // Prepare ordered contour for CSS snap if enabled
+        let orderedContourForCSS: Point2D[] | undefined
+        let arcLengthsForCSS: number[] | undefined
+        if (cssSnapConfigPrecompute) {
+          orderedContourForCSS = orderContourPixels(frameResult.detectedContour as Point2D[])
+          arcLengthsForCSS = computeArcLengths(orderedContourForCSS)
+        }
+
+        const snapResult = applySnapToContour(points, contourIndex, snapOpts, cssSnapConfigPrecompute, orderedContourForCSS, arcLengthsForCSS)
         points = snapResult.snapped
         // Recover lost points with wider radius
         if (snapResult.lostFlags.some(f => f)) {

@@ -135,6 +135,22 @@ export function interpolateAtArcLength(
   }
 }
 
+// ─── Reorder contour from origin point ────────────────────────────
+
+/**
+ * Réordonne un contour ordonné pour que le pixel le plus proche de originPoint
+ * devienne l'index 0. Assure une origine curviligne s=0 déterministe.
+ */
+export function reorderContourFromOrigin(
+  orderedContour: Point2D[],
+  originPoint: Point2D
+): Point2D[] {
+  if (orderedContour.length === 0) return orderedContour
+  const originIdx = findClosestOnPath(orderedContour, originPoint)
+  if (originIdx === 0) return orderedContour
+  return [...orderedContour.slice(originIdx), ...orderedContour.slice(0, originIdx)]
+}
+
 // ─── Snap anchor to contour ────────────────────────────────────────
 
 /**
@@ -327,7 +343,8 @@ export async function computeAllSubdivisionFrames(
   anchorFrames: Point2D[][],
   params: CurvilinearParam[],
   cannyParams: CannyParams,
-  onProgress?: (p: ContourComputationProgress) => void
+  onProgress?: (p: ContourComputationProgress) => void,
+  originFrames?: Point2D[][] | null
 ): Promise<Point2D[][]> {
   const fps = 24
   const totalFrames = anchorFrames.length
@@ -372,7 +389,12 @@ export async function computeAllSubdivisionFrames(
 
     if (contourPixels && contourPixels.length > 0) {
       // Order the contour pixels into a chain
-      const orderedContour = orderContourPixels(contourPixels)
+      let orderedContour = orderContourPixels(contourPixels)
+
+      // Reorder from tracked origin point if available
+      if (originFrames?.[f]?.[0]) {
+        orderedContour = reorderContourFromOrigin(orderedContour, originFrames[f][0])
+      }
 
       // Compute subdivision positions
       const positions = computeSubdivisionForFrame(

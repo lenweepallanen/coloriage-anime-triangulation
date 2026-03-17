@@ -1,4 +1,5 @@
 import type { Point2D } from '../types/project'
+import { cssSnapToContour, cssSnapToContourRegistered, type CurvatureSignature } from './curvatureScaleSpace'
 
 /**
  * Build adjacency map from anchor triangles.
@@ -643,24 +644,80 @@ export interface SnapResult {
   lostFlags: boolean[]
 }
 
+// CSS snap config (optional curvature-aware snap for contour anchors)
+export interface CSSSnapConfig {
+  enabled: boolean
+  initialArcLengths: number[]       // per contour anchor, from frame 0
+  contourAnchorIndices: number[]    // which point indices are contour anchors
+  windowFraction: number            // default 0.08
+  sigma: number                     // default 16
+  signatures?: CurvatureSignature[] // optional curvature signatures for registered snap
+}
+
 /**
  * Snap tracked points onto the detected contour.
  * Should be applied LAST in the constraint cascade, before flowUpdatePoints().
+ *
+ * When cssConfig is provided, contour anchor points use curvature-aware snap
+ * (CSS peak detection within a local arc-length window). Other points and
+ * fallback use geometric snap as before.
  */
 export function applySnapToContour(
   points: Point2D[],
   contourIndex: { nearest(point: Point2D, maxDist: number): { point: Point2D; dist: number } | null },
-  options: SnapToContourOptions = DEFAULT_SNAP_OPTIONS
+  options: SnapToContourOptions = DEFAULT_SNAP_OPTIONS,
+  cssConfig?: CSSSnapConfig,
+  orderedContour?: Point2D[],
+  contourArcLengths?: number[]
 ): SnapResult {
   const snapped: Point2D[] = []
   const confidences: number[] = []
   const lostFlags: boolean[] = []
 
-  for (const p of points) {
+  // Build a Set for fast lookup of contour anchor indices
+  const cssAnchorSet = cssConfig?.enabled ? new Set(cssConfig.contourAnchorIndices) : null
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]
+
+    // Try CSS snap for contour anchor points
+    if (cssAnchorSet?.has(i) && cssConfig && orderedContour && contourArcLengths && orderedContour.length > 10) {
+      const anchorLocalIdx = cssConfig.contourAnchorIndices.indexOf(i)
+      if (anchorLocalIdx >= 0 && anchorLocalIdx < cssConfig.initialArcLengths.length) {
+        const hasSignature = cssConfig.signatures && anchorLocalIdx < cssConfig.signatures.length
+        const cssResult = hasSignature
+          ? cssSnapToContourRegistered(
+              p,
+              cssConfig.initialArcLengths[anchorLocalIdx],
+              cssConfig.signatures![anchorLocalIdx],
+              orderedContour,
+              contourArcLengths,
+              cssConfig.windowFraction,
+              cssConfig.sigma
+            )
+          : cssSnapToContour(
+              p,
+              cssConfig.initialArcLengths[anchorLocalIdx],
+              orderedContour,
+              contourArcLengths,
+              cssConfig.windowFraction,
+              cssConfig.sigma
+            )
+
+        if (!cssResult.usedFallback) {
+          snapped.push({ ...cssResult.position })
+          confidences.push(cssResult.confidence)
+          lostFlags.push(false)
+          continue
+        }
+        // Fallback: continue to geometric snap below
+      }
+    }
+
+    // Geometric snap (default behavior)
     const result = contourIndex.nearest(p, options.lostRadius)
 
     if (!result) {
-      // No contour found within lostRadius → lost
       snapped.push({ x: p.x, y: p.y })
       confidences.push(0)
       lostFlags.push(true)
@@ -670,21 +727,19 @@ export function applySnapToContour(
     const { point: nearest, dist } = result
 
     if (dist <= options.snapRadius) {
-      // Within snap radius → full snap
       snapped.push({
         x: p.x + (nearest.x - p.x) * options.strengthNormal,
         y: p.y + (nearest.y - p.y) * options.strengthNormal,
       })
-      const confidence = 1.0 - (dist / options.snapRadius) * 0.3 // [0.7, 1.0]
+      const confidence = 1.0 - (dist / options.snapRadius) * 0.3
       confidences.push(confidence)
       lostFlags.push(false)
     } else {
-      // Between snapRadius and lostRadius → partial snap
       snapped.push({
         x: p.x + (nearest.x - p.x) * options.strengthPartial,
         y: p.y + (nearest.y - p.y) * options.strengthPartial,
       })
-      const confidence = 1.0 - dist / options.lostRadius // [0, ~0.6]
+      const confidence = 1.0 - dist / options.lostRadius
       confidences.push(Math.max(0, confidence))
       lostFlags.push(false)
     }
