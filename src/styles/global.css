@@ -483,6 +483,29 @@ input[type="text"]:focus {
   height: 100%;
 }
 
+.physics-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 0;
+}
+
+.physics-slider {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 140px;
+  min-width: 140px;
+  font-size: 0.8rem;
+}
+
+.physics-slider span {
+  margin-bottom: 2px;
+}
+
+.physics-slider input[type="range"] {
+  width: 100%;
+}
+
 /* ===== Camera Capture (production scan) ===== */
 .camera-capture {
   display: flex;

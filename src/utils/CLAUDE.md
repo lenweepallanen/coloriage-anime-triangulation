@@ -23,6 +23,8 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `pdfGenerator.ts` | Génération PDF (jsPDF) |
 | `pdfLayout.ts` | Constantes layout A4 partagées + calcul offset centroïde L-marker |
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
+| `meshPhysicsEffects.ts` | Effets physiques interactifs sur le maillage animé (magnétisation tactile) |
+| `loopPlayback.ts` | Playback seamless avec crossfade smoothstep configurable |
 
 ## autoMeshGenerator.ts
 
@@ -485,3 +487,59 @@ Constantes de layout A4 partagées entre la génération PDF et la correction de
 ## pdfGenerator.ts
 
 Génère un PDF avec jsPDF contenant l'image du coloriage, l'overlay du maillage triangulé et les marqueurs L aux 4 coins pour la détection au scan.
+
+## meshPhysicsEffects.ts
+
+Effets physiques interactifs appliqués par-dessus l'animation de base dans `AnimationPlayer`. Le système se superpose au pipeline d'animation existant : `LoopPlayback.getPositions()` → `physics.update()` → `physics.apply()` → vertex buffer GPU.
+
+### Architecture
+
+Classe `MeshPhysicsEffect` avec état interne (déplacements par vertex en `Float32Array`). Conçue pour le chaînage futur d'effets multiples (chatouille, traction, etc.) via composition : `effect1.apply(base, temp); effect2.apply(temp, out)`.
+
+### Effet : Magnétisation
+
+Quand l'utilisateur touche l'écran, le maillage entier se déplace vers le doigt.
+
+**Direction globale** : centroïde du mesh → point de toucher. Tous les sommets partagent la même direction de déplacement (évite l'affaissement quand le doigt est à l'intérieur du mesh).
+
+**Magnitude par vertex** : falloff doux basé sur la distance de chaque sommet au doigt :
+
+```
+strength = 1 / (1 + (dist / radius) ^ concentration)
+```
+
+Pas de cutoff — tous les sommets sont affectés, même les lointains (faiblement).
+
+### PhysicsConfig
+
+| Paramètre | Défaut | Plage UI | Rôle |
+|-----------|--------|----------|------|
+| `force` | 40 | 5–150 | Déplacement max en pixels image |
+| `radius` | 150 | 30–500 | Distance caractéristique : à `radius` px du doigt, l'effet est à 50% |
+| `concentration` | 2 | 0.5–5 | Exposant du falloff. Bas = diffus/uniforme, haut = concentré près du doigt |
+| `returnSpeed` | 0.85 | 0.5–0.98 | Facteur de décroissance par frame (60fps). Bas = retour rapide, haut = retour lent |
+
+La config est modifiable en temps réel via les sliders dans l'UI (panneau "Effets" dans AnimationPlayer).
+
+### API
+
+```typescript
+constructor(numVertices: number, config?: Partial<PhysicsConfig>)
+update(basePositions: Point2D[], touch: TouchState, deltaTicks: number): void
+apply(basePositions: Point2D[], out: Point2D[]): void
+isIdle(): boolean   // true si tous les déplacements sont à zéro
+reset(): void
+```
+
+- `config` est public, modifiable directement entre les frames
+- `update` est frame-rate indépendant via `pow(factor, deltaTicks)`
+- `apply` mutate le tableau `out` sans allocation
+- `isIdle` permet de skip le rendu quand l'animation est en pause et qu'il n'y a pas de déplacement
+
+### Intégration dans AnimationPlayer
+
+- **Pointer events** : `pointerdown/move/up/leave/cancel` sur le canvas PIXI, `touchAction: 'none'`
+- **Conversion coordonnées** : écran → image via `(screenX - offsetX) / scale`
+- **Ticker** : physics tourne même en pause (spring-back fonctionne)
+- **Cas statique** : ticker dédié quand `hasFlow === false` (mesh sans animation vidéo)
+- **UI sliders** : panneau togglable "Effets" avec 4 range inputs, mise à jour via `physicsRef.current.config`
