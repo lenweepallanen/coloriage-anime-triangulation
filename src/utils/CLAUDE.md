@@ -25,6 +25,7 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
 | `meshPhysicsEffects.ts` | Effets physiques interactifs sur le maillage animé (magnétisation tactile) |
 | `loopPlayback.ts` | Playback seamless avec crossfade smoothstep configurable |
+| `deviceParallax.ts` | Wrapper DeviceOrientation API avec gestion permission iOS + smoothing EMA + swap axes landscape |
 
 ## autoMeshGenerator.ts
 
@@ -543,3 +544,35 @@ reset(): void
 - **Ticker** : physics tourne même en pause (spring-back fonctionne)
 - **Cas statique** : ticker dédié quand `hasFlow === false` (mesh sans animation vidéo)
 - **UI sliders** : panneau togglable "Effets" avec 4 range inputs, mise à jour via `physicsRef.current.config`
+
+## deviceParallax.ts
+
+Wrapper pour l'API DeviceOrientation avec gestion de permission iOS et lissage EMA. Fournit des offsets normalisés [-1, 1] à partir de l'inclinaison du téléphone.
+
+### Configuration
+
+| Paramètre | Défaut | Rôle |
+|-----------|--------|------|
+| `sensitivity` | 6 | Angle max (degrés) mappé sur offset ±1. Bas = très réactif |
+| `smoothing` | 0.8 | Facteur EMA (0 = brut, 1 = figé) |
+
+### Gestion des axes en paysage
+
+Détecte `screen.orientation.angle` à chaque événement :
+- **Portrait** (0°) : gamma → X, (beta - 45) → Y
+- **Landscape** (90°/270°) : (beta - 45) → X, -gamma → Y, avec inversion du signe selon le côté de rotation
+
+### API
+
+```typescript
+class DeviceParallax {
+  constructor(options?: { sensitivity?: number, smoothing?: number })
+  requestPermission(): Promise<boolean>  // Requis sur iOS 13+ (geste utilisateur)
+  start(): void
+  stop(): void
+  getOffset(): { offsetX: number, offsetY: number }  // Appeler chaque frame
+  destroy(): void
+  get hasPermission(): boolean
+  static get isAvailable(): boolean
+  static get needsPermission(): boolean  // true sur iOS
+}

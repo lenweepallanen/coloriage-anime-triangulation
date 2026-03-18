@@ -383,11 +383,31 @@ input[type="text"]:focus {
   height: 100%;
 }
 
-/* Scan page */
+/* Scan page — forced landscape fullscreen */
 .scan-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 50;
+  background: var(--color-bg);
+  overflow: auto;
+}
+
+@media screen and (orientation: portrait) {
+  .scan-page {
+    /* CSS rotation fallback if Screen Orientation API is not supported */
+    transform: rotate(90deg);
+    transform-origin: top left;
+    width: 100vh;
+    height: 100vw;
+    top: 0;
+    left: 100vw;
+  }
 }
 
 /* Camera view */
@@ -457,23 +477,23 @@ input[type="text"]:focus {
   gap: 12px;
 }
 
-/* Animation player */
+/* Animation player — landscape layout */
 .animation-player {
   display: flex;
-  flex-direction: column;
-  height: calc(100vh - 80px);
-}
-
-.animation-controls {
-  display: flex;
-  gap: 8px;
-  padding: 8px 0;
+  flex-direction: row;
+  height: 100vh;
+  width: 100vw;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  background: #000;
 }
 
 .animation-canvas {
   flex: 1;
-  background: #fff;
-  border-radius: var(--radius);
+  min-width: 0;
+  background: #000;
   overflow: hidden;
 }
 
@@ -483,19 +503,65 @@ input[type="text"]:focus {
   height: 100%;
 }
 
-.physics-settings {
+.animation-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: #1a1a2e;
+  color: #e0e0e0;
   display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.animation-controls {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
   flex-wrap: wrap;
-  gap: 8px 16px;
+  border-bottom: 1px solid #333;
+}
+
+.animation-controls button {
+  padding: 6px 12px;
+  font-size: 1rem;
+  min-width: 40px;
+}
+
+.animation-settings {
+  flex: 1;
+  padding: 8px 10px;
+  overflow-y: auto;
+}
+
+.animation-settings details {
+  margin-bottom: 8px;
+}
+
+.animation-settings summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 0;
+  border-bottom: 1px solid #333;
+  user-select: none;
+}
+
+.settings-group {
   padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .physics-slider {
   display: flex;
   flex-direction: column;
-  flex: 1 1 140px;
-  min-width: 140px;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
+  color: #ccc;
 }
 
 .physics-slider span {
@@ -504,7 +570,9 @@ input[type="text"]:focus {
 
 .physics-slider input[type="range"] {
   width: 100%;
+  accent-color: var(--color-primary);
 }
+
 
 /* ===== Camera Capture (production scan) ===== */
 .camera-capture {
@@ -1073,7 +1141,12 @@ input[type="text"]:focus {
     min-height: 300px;
   }
 
-  .animation-player {
-    height: calc(100vh - 60px);
+  .animation-sidebar {
+    width: 180px;
+  }
+
+  .animation-controls button {
+    padding: 5px 10px;
+    font-size: 0.9rem;
   }
 }

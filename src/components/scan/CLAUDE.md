@@ -2,6 +2,8 @@
 
 Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traitement → debug → animation.
 
+**Orientation forcée** : `ScanPage` verrouille l'écran en paysage via `screen.orientation.lock('landscape')` au montage (unlock au démontage). Fallback CSS : `.scan-page` est rotationné de 90° en portrait via `@media (orientation: portrait)`. La page entière est `position: fixed` plein écran.
+
 ## Fichiers
 
 | Fichier | Rôle |
@@ -110,6 +112,12 @@ La page ScanPage affiche ces 4 images dans un stage `debug` entre `processing` e
 
 ## AnimationPlayer — Rendu PIXI.js
 
+### Layout
+
+Layout horizontal plein écran (`position: fixed`, `z-index: 100`) :
+- **Gauche** : canvas PIXI (`flex: 1`, fond noir)
+- **Droite** : sidebar 220px (180px mobile) avec boutons (Play/Pause, Fullscreen, Fermer) et sliders dans des `<details>` dépliables (Physique + Effets visuels)
+
 ### Pipeline de rendu
 
 ```
@@ -122,6 +130,10 @@ Image scannée rectifiée
   → PIXI.MeshMaterial(texture)
   → PIXI.Mesh → stage
 ```
+
+### Scaling responsive
+
+Le mesh est affiché en `Math.min(scaleX, scaleY)` (fit sans déformation), centré dans le canvas. S'adapte à toutes les résolutions d'écran et ratios d'image.
 
 ### Boucle d'animation (24 FPS)
 
@@ -136,9 +148,16 @@ verts.update()  // Sync GPU
 // Les UVs ne changent jamais → la texture se déforme avec le maillage
 ```
 
-### Contrôles
+### Parallax gyroscope
 
-- Play / Pause
-- Plein écran
-- Compteur de frames
-- Boucle automatique
+`DeviceParallax` lit le gyroscope et applique un offset sur le sprite background :
+- **Sensitivity** : 6° (angle max pour offset ±1)
+- **Smoothing** : 0.8 (EMA)
+- **Axes landscape** : détection automatique de `screen.orientation.angle` — swap beta↔gamma en mode paysage (90°/270°)
+- **iOS** : bouton "Mouvement" pour `DeviceOrientationEvent.requestPermission()`
+
+### Contrôles (sidebar)
+
+- Play / Pause, Plein écran, Fermer
+- Sliders Physique : Force, Rayon, Concentration, Retour
+- Sliders Visuels : Ombre, Éclairage, Parallax

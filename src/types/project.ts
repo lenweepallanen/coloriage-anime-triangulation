@@ -91,6 +91,7 @@ export interface Project {
   createdAt: number;
   originalImageBlob: Blob | null;
   videoBlob: Blob | null;
+  backgroundVideoBlob: Blob | null;
   mesh: MeshData | null;
   markers: MarkerCorners | null;
 }

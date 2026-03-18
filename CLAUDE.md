@@ -45,11 +45,15 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 
 ## Workflow Scan (utilisateur final)
 
+**Orientation forcée** : toute la page scan est en mode paysage. `screen.orientation.lock('landscape')` au montage de `ScanPage`, avec fallback CSS `transform: rotate(90deg)` en portrait.
+
+**Layout animation** : plein écran fixe en `flex-direction: row` — canvas PIXI à gauche (`flex: 1`), sidebar paramètres à droite (220px).
+
 1. **Caméra** — Détection temps réel des marqueurs L + analyse qualité
 2. **Ajustement coins** — Repositionnement manuel des 4 coins
 3. **Correction perspective** — Homographie OpenCV → image 2048×2048 → crop marges 64px → resize aux dimensions originales
 4. **Debug** — Visualisation 4 étapes du pipeline (photo brute, 2048 avec marges, croppée, overlay mesh)
-5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS
+5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS + parallax gyroscope
 
 ## Structure des fichiers
 

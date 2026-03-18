@@ -77,6 +77,7 @@ interface ProjectDoc {
   createdAt: number
   hasImage: boolean
   hasVideo: boolean
+  hasBackgroundVideo: boolean
   mesh: MeshDoc | null
   markers: Project['markers']
 }
@@ -128,6 +129,7 @@ function toDoc(project: Project): ProjectDoc {
     createdAt: project.createdAt,
     hasImage: project.originalImageBlob != null,
     hasVideo: project.videoBlob != null,
+    hasBackgroundVideo: project.backgroundVideoBlob != null,
     mesh: project.mesh ? {
       cannyParams: project.mesh.cannyParams ?? null,
       contourOrigin: project.mesh.contourOrigin ?? null,
@@ -238,9 +240,10 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
 async function fromDoc(data: ProjectDoc): Promise<Project> {
   const id = data.id
 
-  const [imageBlob, videoBlob] = await Promise.all([
+  const [imageBlob, videoBlob, backgroundVideoBlob] = await Promise.all([
     data.hasImage ? downloadBlob(`projects/${id}/originalImage`) : Promise.resolve(null),
     data.hasVideo ? downloadBlob(`projects/${id}/video`) : Promise.resolve(null),
+    data.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
   ])
 
   let contourOriginKeyframes: KeyframeData[] = []
@@ -283,6 +286,7 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     createdAt: data.createdAt,
     originalImageBlob: imageBlob,
     videoBlob: videoBlob,
+    backgroundVideoBlob,
     mesh: data.mesh ? {
       ...meshFromDoc(data.mesh),
       contourOriginKeyframes,
@@ -306,6 +310,7 @@ export async function createProject(name: string): Promise<Project> {
     createdAt: Date.now(),
     originalImageBlob: null,
     videoBlob: null,
+    backgroundVideoBlob: null,
     mesh: null,
     markers: null,
   }
@@ -331,6 +336,7 @@ export async function getAllProjects(): Promise<Project[]> {
       createdAt: data.createdAt,
       originalImageBlob: null,
       videoBlob: null,
+      backgroundVideoBlob: null,
       mesh: data.mesh ? {
         ...meshFromDoc(data.mesh as MeshDoc | LegacyMeshDoc),
         contourOriginKeyframes: [],
@@ -348,7 +354,7 @@ export async function getAllProjects(): Promise<Project[]> {
   })
 }
 
-export type UploadHint = 'image' | 'video' | 'contourOriginKeyframes' | 'contourOriginFrames' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'contourCannyFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
+export type UploadHint = 'image' | 'video' | 'backgroundVideo' | 'contourOriginKeyframes' | 'contourOriginFrames' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'contourCannyFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -372,6 +378,13 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
     uploads.push(
       uploadBlob(`projects/${id}/video`, project.videoBlob)
         .then(() => console.log('[Storage] Video uploaded'))
+    )
+  }
+  if (uploadOnly?.includes('backgroundVideo') && project.backgroundVideoBlob) {
+    console.log('[Storage] Uploading background video for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/backgroundVideo`, project.backgroundVideoBlob)
+        .then(() => console.log('[Storage] Background video uploaded'))
     )
   }
   if (uploadOnly?.includes('contourOriginKeyframes') && project.mesh?.contourOriginKeyframes.length) {
@@ -467,6 +480,7 @@ export async function deleteProject(id: string): Promise<void> {
   const knownFiles = [
     `projects/${id}/originalImage`,
     `projects/${id}/video`,
+    `projects/${id}/backgroundVideo`,
     `projects/${id}/contourOriginKeyframes.json`,
     `projects/${id}/contourOriginFrames.json`,
     `projects/${id}/contourAnchorKeyframes.json`,

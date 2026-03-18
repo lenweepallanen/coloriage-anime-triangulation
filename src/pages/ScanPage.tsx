@@ -11,6 +11,18 @@ export default function ScanPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const { project, loading } = useProject(projectId!)
 
+  // Force landscape orientation for the entire scan flow
+  useEffect(() => {
+    try {
+      screen.orientation?.lock?.('landscape').catch(() => {})
+    } catch { /* not supported on desktop */ }
+    return () => {
+      try {
+        screen.orientation?.unlock?.()
+      } catch { /* ignore */ }
+    }
+  }, [])
+
   if (loading) return <div className="loading">Chargement...</div>
   if (!project) return <Navigate to="/" replace />
 
