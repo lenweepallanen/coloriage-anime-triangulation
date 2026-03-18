@@ -3,7 +3,6 @@ import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/p
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
 import {
-  orderContourPixels,
   subdivideContour,
   reorderContourFromOrigin,
 } from '../../utils/curvilinearContour'
@@ -48,6 +47,7 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
   const [cannyPixels, setCannyPixels] = useState<Point2D[] | null>(null)
   const [loadingContour, setLoadingContour] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [contourVersion, setContourVersion] = useState(0)
 
   // Canvas + image
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -109,7 +109,8 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
         if (cancelled) return
         if (contourPts && contourPts.length > 0) {
           setCannyPixels(contourPts)
-          let ordered = orderContourPixels(contourPts)
+          // contourPts are already ordered by OpenCV's findContours
+          let ordered = contourPts
           if (mesh?.contourOrigin) {
             ordered = reorderContourFromOrigin(ordered, mesh.contourOrigin)
           }
@@ -124,7 +125,7 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
 
     detect()
     return () => { cancelled = true }
-  }, [project.originalImageBlob, cannyParams])
+  }, [project.originalImageBlob, cannyParams, contourVersion])
 
   // Regenerate subdivision when counts change or contour is ready
   useEffect(() => {
@@ -336,6 +337,13 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
         </span>
 
         <span className="toolbar-separator" />
+
+        <button
+          onClick={() => setContourVersion(v => v + 1)}
+          disabled={loadingContour}
+        >
+          {loadingContour ? 'Calcul...' : 'Recalculer preview contour'}
+        </button>
 
         <button onClick={handleSave} disabled={saving || !orderedContour}>
           {saving ? 'Sauvegarde...' : 'Sauvegarder subdivision'}

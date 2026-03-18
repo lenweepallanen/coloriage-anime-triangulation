@@ -21,7 +21,16 @@ export function orderContourPixels(pixels: Point2D[]): Point2D[] {
 
   const key = (p: Point2D) => `${Math.round(p.x)},${Math.round(p.y)}`
 
-  // Start from first pixel
+  // Build spatial grid (bucket size = 4px, matches max search radius)
+  const BUCKET_SIZE = 4
+  const grid = new Map<string, Point2D[]>()
+  for (const p of pixels) {
+    const bk = `${Math.floor(p.x / BUCKET_SIZE)},${Math.floor(p.y / BUCKET_SIZE)}`
+    let bucket = grid.get(bk)
+    if (!bucket) { bucket = []; grid.set(bk, bucket) }
+    bucket.push(p)
+  }
+
   let bestPath: Point2D[] = []
 
   // Try a few starting points to find the best chain
@@ -35,18 +44,30 @@ export function orderContourPixels(pixels: Point2D[]): Point2D[] {
     path.push(current)
 
     while (true) {
-      // Search for nearest unvisited neighbor within 3px
       let bestNeighbor: Point2D | null = null
       let bestDist = Infinity
 
-      // Search in expanding radius for nearest unvisited neighbor
+      // Search in expanding radius using spatial grid
       for (let radius = 1.5; radius <= 4; radius += 0.5) {
-        const candidates = findNearbyPixels(pixels, current, radius, vis, key)
-        for (const c of candidates) {
-          const d = Math.hypot(c.x - current.x, c.y - current.y)
-          if (d < bestDist) {
-            bestDist = d
-            bestNeighbor = c
+        const bucketRadius = Math.ceil(radius / BUCKET_SIZE)
+        const bx = Math.floor(current.x / BUCKET_SIZE)
+        const by = Math.floor(current.y / BUCKET_SIZE)
+        const r2 = radius * radius
+
+        for (let dx = -bucketRadius; dx <= bucketRadius; dx++) {
+          for (let dy = -bucketRadius; dy <= bucketRadius; dy++) {
+            const candidates = grid.get(`${bx + dx},${by + dy}`)
+            if (!candidates) continue
+            for (const c of candidates) {
+              if (vis.has(key(c))) continue
+              const ddx = c.x - current.x
+              const ddy = c.y - current.y
+              const d2 = ddx * ddx + ddy * ddy
+              if (d2 <= r2 && d2 < bestDist) {
+                bestDist = d2
+                bestNeighbor = c
+              }
+            }
           }
         }
         if (bestNeighbor) break
@@ -64,26 +85,6 @@ export function orderContourPixels(pixels: Point2D[]): Point2D[] {
   }
 
   return bestPath
-}
-
-function findNearbyPixels(
-  pixels: Point2D[],
-  center: Point2D,
-  radius: number,
-  visited: Set<string>,
-  keyFn: (p: Point2D) => string
-): Point2D[] {
-  const result: Point2D[] = []
-  const r2 = radius * radius
-  for (const p of pixels) {
-    if (visited.has(keyFn(p))) continue
-    const dx = p.x - center.x
-    const dy = p.y - center.y
-    if (dx * dx + dy * dy <= r2) {
-      result.push(p)
-    }
-  }
-  return result
 }
 
 // ─── Contour arc-length parameterization ───────────────────────────
@@ -220,7 +221,9 @@ function findClosestOnPath(path: Point2D[], target: Point2D): number {
 
 /**
  * Extrait le sous-chemin du contour entre deux anchors.
- * Le contour est cyclique : on choisit le chemin le plus court.
+ * Le contour est cyclique. On choisit le chemin le plus court (forward ou
+ * backward) pour éviter de traverser la forme quand l'ordonnancement
+ * du contour Canny a des imperfections.
  */
 export function extractPathBetweenAnchors(
   orderedContour: Point2D[],
@@ -233,7 +236,7 @@ export function extractPathBetweenAnchors(
   const idxA = findClosestOnPath(orderedContour, anchorA)
   const idxB = findClosestOnPath(orderedContour, anchorB)
 
-  // Forward path: A → B
+  // Forward path (A → B following contour order)
   const forward: Point2D[] = []
   let i = idxA
   while (true) {
@@ -243,17 +246,17 @@ export function extractPathBetweenAnchors(
     if (forward.length > n) break // safety
   }
 
-  // Backward path: A → ... → B (the other way around)
+  // Backward path (A → B going the other way)
   const backward: Point2D[] = []
   i = idxA
   while (true) {
     backward.push(orderedContour[i])
     if (i === idxB) break
     i = (i - 1 + n) % n
-    if (backward.length > n) break
+    if (backward.length > n) break // safety
   }
 
-  // Pick shorter path
+  // Choose the shorter path
   return forward.length <= backward.length ? forward : backward
 }
 
@@ -364,6 +367,11 @@ export interface ContourComputationProgress {
   total: number
 }
 
+export interface SubdivisionResult {
+  subdivisionFrames: Point2D[][]
+  cannyFrames: Point2D[][]  // Ordered Canny contour per frame (cache for step 7)
+}
+
 /**
  * Calcule les positions de tous les points de subdivision pour toutes les frames.
  *
@@ -381,10 +389,35 @@ export async function computeAllSubdivisionFrames(
   imageWidth: number,
   imageHeight: number,
   onProgress?: (p: ContourComputationProgress) => void,
-  originFrames?: Point2D[][] | null
-): Promise<Point2D[][]> {
+  originFrames?: Point2D[][] | null,
+  cachedCannyFrames?: Point2D[][] | null
+): Promise<SubdivisionResult> {
   const fps = 24
   const totalFrames = anchorFrames.length
+
+  // If cached Canny contours are available, skip video+Canny entirely
+  if (cachedCannyFrames && cachedCannyFrames.length >= totalFrames) {
+    const allFrames: Point2D[][] = []
+    for (let f = 0; f < totalFrames; f++) {
+      const orderedContour = cachedCannyFrames[f]
+      let positions: Point2D[]
+      if (orderedContour && orderedContour.length > 0) {
+        positions = computeSubdivisionForFrame(orderedContour, anchorFrames[f], params)
+      } else {
+        const anchors = anchorFrames[f]
+        const n = anchors.length
+        positions = params.map(param => {
+          const a = anchors[param.segmentIndex]
+          const b = anchors[(param.segmentIndex + 1) % n]
+          return { x: a.x + param.t * (b.x - a.x), y: a.y + param.t * (b.y - a.y) }
+        })
+      }
+      allFrames.push(positions)
+      onProgress?.({ frame: f + 1, total: totalFrames })
+      if (f % 20 === 0) await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    return { subdivisionFrames: allFrames, cannyFrames: cachedCannyFrames }
+  }
 
   // Create video element
   const video = document.createElement('video')
@@ -408,7 +441,14 @@ export async function computeAllSubdivisionFrames(
   const scaleY = imageHeight / canvas.height
 
   const allFrames: Point2D[][] = []
-  let referenceOrientation: number | null = null // signed area of frame 0 contour
+  const allCannyFrames: Point2D[][] = []
+  let referenceOrientation: number | null = null
+
+  // Frame-skip state: reuse previous contour if frame is visually similar
+  const MAX_CONSECUTIVE_SKIPS = 3
+  const SKIP_DIFF_THRESHOLD = 5  // mean pixel difference threshold
+  let prevFrameData: Uint8ClampedArray | null = null
+  let consecutiveSkips = 0
 
   for (let f = 0; f < totalFrames; f++) {
     // Seek to frame
@@ -421,57 +461,94 @@ export async function computeAllSubdivisionFrames(
     ctx.drawImage(video, 0, 0)
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
 
-    // Detect Canny contour
-    const contourPixels = await flowCannyContour(
-      imageData,
-      cannyParams.lowThreshold,
-      cannyParams.highThreshold,
-      cannyParams.blurSize
-    )
-
-    if (contourPixels && contourPixels.length > 0) {
-      // Scale Canny pixels from video coords to image coords
-      const imgContourPixels = contourPixels.map(p => ({
-        x: p.x * scaleX,
-        y: p.y * scaleY
-      }))
-
-      // Order the contour pixels into a chain
-      let orderedContour = orderContourPixels(imgContourPixels)
-
-      // Reorder from tracked origin point if available
-      if (originFrames?.[f]?.[0]) {
-        orderedContour = reorderContourFromOrigin(orderedContour, originFrames[f][0])
+    // Check if we can skip this frame (reuse previous contour)
+    let skipFrame = false
+    if (f > 0 && prevFrameData && consecutiveSkips < MAX_CONSECUTIVE_SKIPS && allCannyFrames[f - 1]?.length > 0) {
+      // Compare subsample of ~200 pixels across the frame
+      const data = imageData.data
+      const step = Math.max(1, Math.floor(data.length / (200 * 4)))
+      let totalDiff = 0
+      let sampleCount = 0
+      for (let i = 0; i < data.length; i += step * 4) {
+        totalDiff += Math.abs(data[i] - prevFrameData[i])       // R
+        totalDiff += Math.abs(data[i + 1] - prevFrameData[i + 1]) // G
+        totalDiff += Math.abs(data[i + 2] - prevFrameData[i + 2]) // B
+        sampleCount++
       }
-
-      // Ensure consistent CW/CCW orientation across frames
-      if (referenceOrientation === null) {
-        referenceOrientation = signedArea(orderedContour)
-      } else {
-        orderedContour = ensureConsistentOrientation(orderedContour, referenceOrientation)
+      const meanDiff = totalDiff / (sampleCount * 3)
+      if (meanDiff < SKIP_DIFF_THRESHOLD) {
+        skipFrame = true
       }
-
-      // Compute subdivision positions
-      const positions = computeSubdivisionForFrame(
-        orderedContour,
-        anchorFrames[f],
-        params
-      )
-      allFrames.push(positions)
-    } else {
-      // Fallback: linear interpolation between anchors
-      const anchors = anchorFrames[f]
-      const n = anchors.length
-      const positions = params.map(param => {
-        const a = anchors[param.segmentIndex]
-        const b = anchors[(param.segmentIndex + 1) % n]
-        return {
-          x: a.x + param.t * (b.x - a.x),
-          y: a.y + param.t * (b.y - a.y),
-        }
-      })
-      allFrames.push(positions)
     }
+
+    // Store current frame data for next comparison
+    prevFrameData = new Uint8ClampedArray(imageData.data)
+
+    let positions: Point2D[]
+
+    if (skipFrame) {
+      // Reuse previous contour but recompute subdivision with current anchor positions
+      consecutiveSkips++
+      const prevContour = allCannyFrames[f - 1]
+      allCannyFrames.push(prevContour)
+      positions = computeSubdivisionForFrame(prevContour, anchorFrames[f], params)
+    } else {
+      consecutiveSkips = 0
+
+      // Detect Canny contour
+      const contourPixels = await flowCannyContour(
+        imageData,
+        cannyParams.lowThreshold,
+        cannyParams.highThreshold,
+        cannyParams.blurSize
+      )
+
+      if (contourPixels && contourPixels.length > 0) {
+        // Scale Canny pixels from video coords to image coords
+        // Note: contourPixels are already ordered by OpenCV's findContours
+        // (RETR_EXTERNAL + CHAIN_APPROX_NONE), so no need to re-order
+        let orderedContour = contourPixels.map(p => ({
+          x: p.x * scaleX,
+          y: p.y * scaleY
+        }))
+
+        // Reorder from tracked origin point if available
+        if (originFrames?.[f]?.[0]) {
+          orderedContour = reorderContourFromOrigin(orderedContour, originFrames[f][0])
+        }
+
+        // Ensure consistent CW/CCW orientation across frames
+        if (referenceOrientation === null) {
+          referenceOrientation = signedArea(orderedContour)
+        } else {
+          orderedContour = ensureConsistentOrientation(orderedContour, referenceOrientation)
+        }
+
+        allCannyFrames.push(orderedContour)
+
+        // Compute subdivision positions
+        positions = computeSubdivisionForFrame(
+          orderedContour,
+          anchorFrames[f],
+          params
+        )
+      } else {
+        allCannyFrames.push([])
+        // Fallback: linear interpolation between anchors
+        const anchors = anchorFrames[f]
+        const n = anchors.length
+        positions = params.map(param => {
+          const a = anchors[param.segmentIndex]
+          const b = anchors[(param.segmentIndex + 1) % n]
+          return {
+            x: a.x + param.t * (b.x - a.x),
+            y: a.y + param.t * (b.y - a.y),
+          }
+        })
+      }
+    }
+
+    allFrames.push(positions)
 
     onProgress?.({ frame: f + 1, total: totalFrames })
 
@@ -482,5 +559,5 @@ export async function computeAllSubdivisionFrames(
   }
 
   URL.revokeObjectURL(url)
-  return allFrames
+  return { subdivisionFrames: allFrames, cannyFrames: allCannyFrames }
 }

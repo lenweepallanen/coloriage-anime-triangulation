@@ -32,6 +32,7 @@ Séparation métadonnées / blobs :
     hasKeyframes: boolean           // Flag, données dans Storage
     hasAnchorFrames: boolean        // Flag, données dans Storage
     hasVideoFramesMesh: boolean     // Flag, données dans Storage
+    hasContourCannyFrames: boolean  // Flag, données dans Storage
   } | null
   markers: MarkerCorners | null
 }
@@ -52,6 +53,7 @@ projects/{projectId}/originalImage        → Blob image
 projects/{projectId}/video                → Blob vidéo
 projects/{projectId}/keyframes.json       → JSON KeyframeData[]
 projects/{projectId}/anchorFrames.json    → JSON Point2D[][]
+projects/{projectId}/contourCannyFrames.json → JSON Point2D[][] (cache contours Canny ordonnés)
 projects/{projectId}/videoFramesMesh.json → JSON Point2D[][]
 scans/{scanId}/scanImage                  → Blob image rectifiée
 ```
@@ -74,6 +76,7 @@ scans/{scanId}/scanImage                  → Blob image rectifiée
 - `'keyframes'` — upload keyframes.json
 - `'anchorFrames'` — upload anchorFrames.json
 - `'videoFramesMesh'` — upload videoFramesMesh.json
+- `'contourCannyFrames'` — upload contourCannyFrames.json
 
 Sans hint, seules les métadonnées Firestore sont mises à jour.
 

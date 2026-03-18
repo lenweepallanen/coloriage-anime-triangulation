@@ -88,6 +88,7 @@ src/
 │   ├── contourSpatialIndex.ts  Index spatial bucket 2D pour snap-to-contour
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
+│   ├── pdfLayout.ts            Constantes layout A4 + calcul offset centroïde L-marker
 │   └── textureExtractor.ts     Calcul UVs pour PIXI
 └── styles/global.css
 public/
@@ -130,6 +131,9 @@ MeshData {
   contourSubdivisionParams: CurvilinearParam[]  // {segmentIndex, t}
   contourSubdivisionFrames: Point2D[][] | null
   contourSubdivisionValidated: boolean
+
+  // Cache contours Canny ordonnés par frame (calculé étape 6, réutilisé étape 7 et 10)
+  contourCannyFrames: Point2D[][] | null
 
   // Ancres internes (étape 8 — features : yeux, ailes, etc.)
   anchorPoints: Point2D[]
@@ -188,6 +192,7 @@ Trois espaces de coordonnées coexistent :
   - `projects/{id}/contourAnchorKeyframes.json` — keyframes anchors contour
   - `projects/{id}/contourAnchorFrames.json` — positions anchors contour par frame
   - `projects/{id}/contourSubdivisionFrames.json` — positions subdivision par frame
+  - `projects/{id}/contourCannyFrames.json` — cache contours Canny ordonnés par frame
   - `projects/{id}/anchorKeyframes.json` — keyframes ancres internes
   - `projects/{id}/anchorFrames.json` — positions ancres internes par frame
   - `projects/{id}/videoFramesMesh.json` — données animation finale
@@ -202,6 +207,8 @@ Trois espaces de coordonnées coexistent :
 - Résolution de sortie perspective : 2048×2048
 - Les triangles Firestore sont sérialisés en objets `{a, b, c}` (limitation arrays imbriqués)
 - Les points sont indexés : contourAnchors 0..A-1, contourSubdivision A..A+S-1, anchorPoints A+S..A+S+M-1, internals après
+- Les pixels retournés par OpenCV `findContours` sont déjà ordonnés — `orderContourPixels()` n'est plus nécessaire dans le pipeline normal
+- Le cache `contourCannyFrames` (calculé étape 6) est propagé aux étapes 7 et 10 pour éviter la re-détection Canny
 
 ## Commandes
 

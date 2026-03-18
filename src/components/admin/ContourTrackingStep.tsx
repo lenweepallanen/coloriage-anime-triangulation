@@ -2,8 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
-import { orderContourPixels, computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames, signedArea, ensureConsistentOrientation } from '../../utils/curvilinearContour'
+import { computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames, signedArea, ensureConsistentOrientation } from '../../utils/curvilinearContour'
 import { trackCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
+import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 
 interface Props {
   project: Project
@@ -116,31 +117,44 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       const originFrames = mesh.contourOriginFrames!
       const cannyParams = mesh.cannyParams!
 
-      await loadOpenCVWorker()
+      // Check for cached Canny contours from step 6
+      const cachedCanny = mesh.contourCannyFrames
+      const useCache = !!(cachedCanny && cachedCanny.length > 0)
+
+      if (!useCache) {
+        await loadOpenCVWorker()
+      }
 
       // 1. Get image dimensions
       const img = await loadImage(project.originalImageBlob!)
       const iw = img.naturalWidth, ih = img.naturalHeight
-      URL.revokeObjectURL(img.src)
       imageDimsRef.current = { w: iw, h: ih }
 
-      // 2. Detect Canny on original image -> compute reference arc-lengths
-      const canvas0 = document.createElement('canvas')
-      canvas0.width = iw; canvas0.height = ih
-      const ctx0 = canvas0.getContext('2d')!
-      ctx0.drawImage(img, 0, 0)
-      const imgData0 = ctx0.getImageData(0, 0, iw, ih)
-      const cannyPts0 = await flowCannyContour(imgData0, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
-      if (!cannyPts0 || cannyPts0.length < 10) {
-        setProgress('Erreur: contour Canny non détecté sur l\'image originale')
-        setPhase('ready')
-        return
+      // 2. Get ordered contour for frame 0
+      let ordered0: Point2D[]
+      if (useCache && cachedCanny[0] && cachedCanny[0].length > 0) {
+        ordered0 = cachedCanny[0]
+      } else {
+        const canvas0 = document.createElement('canvas')
+        canvas0.width = iw; canvas0.height = ih
+        const ctx0 = canvas0.getContext('2d')!
+        ctx0.drawImage(img, 0, 0)
+        const imgData0 = ctx0.getImageData(0, 0, iw, ih)
+        const cannyPts0 = await flowCannyContour(imgData0, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
+        if (!cannyPts0 || cannyPts0.length < 10) {
+          setProgress('Erreur: contour Canny non détecté sur l\'image originale')
+          setPhase('ready')
+          URL.revokeObjectURL(img.src)
+          return
+        }
+        // cannyPts0 are already ordered by OpenCV's findContours
+        ordered0 = cannyPts0
+        if (mesh.contourOrigin) {
+          ordered0 = reorderContourFromOrigin(ordered0, mesh.contourOrigin)
+        }
       }
+      URL.revokeObjectURL(img.src)
 
-      let ordered0 = orderContourPixels(cannyPts0)
-      if (mesh.contourOrigin) {
-        ordered0 = reorderContourFromOrigin(ordered0, mesh.contourOrigin)
-      }
       const arcLengths0 = computeArcLengths(ordered0)
       const totalLen0 = arcLengths0[arcLengths0.length - 1] || 1
 
@@ -168,15 +182,30 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         return bestIdx
       })
 
-      // 3. Create video, get total frames
-      const url = URL.createObjectURL(project.videoBlob!)
-      const video = document.createElement('video')
-      video.src = url
-      video.muted = true
-      video.preload = 'auto'
-      await new Promise<void>(r => { video.onloadeddata = () => r(); video.load() })
-      const vw = video.videoWidth, vh = video.videoHeight
-      const totalFrames = Math.floor(video.duration * 24)
+      // 3. Get total frames
+      let totalFrames: number
+      let video: HTMLVideoElement | null = null
+      let vCanvas: HTMLCanvasElement | null = null
+      let vCtx: CanvasRenderingContext2D | null = null
+      let vw = 0, vh = 0
+      let url = ''
+
+      if (useCache) {
+        totalFrames = cachedCanny.length
+        setProgress(`Mode cache: ${totalFrames} frames (skip Canny)`)
+      } else {
+        url = URL.createObjectURL(project.videoBlob!)
+        video = document.createElement('video')
+        video.src = url
+        video.muted = true
+        video.preload = 'auto'
+        await new Promise<void>(r => { video!.onloadeddata = () => r(); video!.load() })
+        vw = video.videoWidth; vh = video.videoHeight
+        totalFrames = Math.floor(video.duration * 24)
+        vCanvas = document.createElement('canvas')
+        vCanvas.width = vw; vCanvas.height = vh
+        vCtx = vCanvas.getContext('2d')!
+      }
 
       // Reference orientation from frame 0
       const referenceOrientation = signedArea(ordered0)
@@ -193,29 +222,42 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       allLostFlags.push(contourAnchors.map(() => false))
       allCannyFrames.push(ordered0)
 
-      const vCanvas = document.createElement('canvas')
-      vCanvas.width = vw; vCanvas.height = vh
-      const vCtx = vCanvas.getContext('2d')!
+      const t0 = performance.now()
 
       // 5. Process each frame
       for (let f = 1; f < totalFrames; f++) {
         if (f % 5 === 0 || f === 1) {
-          setProgress(`Frame ${f}/${totalFrames}`)
+          setProgress(useCache
+            ? `Frame ${f}/${totalFrames} (cache)`
+            : `Frame ${f}/${totalFrames}`)
           await new Promise(r => setTimeout(r, 0))
         }
 
-        // Seek
-        video.currentTime = f / 24
-        await new Promise<void>(r => { video.onseeked = () => r() })
+        let ordered: Point2D[] | null = null
 
-        // Draw frame
-        vCtx.drawImage(video, 0, 0)
-        const imageData = vCtx.getImageData(0, 0, vw, vh)
+        if (useCache) {
+          // Use cached ordered contour
+          ordered = cachedCanny[f]
+        } else {
+          // Seek + detect Canny
+          video!.currentTime = f / 24
+          await new Promise<void>(r => { video!.onseeked = () => r() })
+          vCtx!.drawImage(video!, 0, 0)
+          const imageData = vCtx!.getImageData(0, 0, vw, vh)
+          const cannyPts = await flowCannyContour(imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
 
-        // Detect Canny
-        const cannyPts = await flowCannyContour(imageData, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
+          if (cannyPts && cannyPts.length >= 10) {
+            // cannyPts already ordered by OpenCV's findContours — just scale
+            ordered = cannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
+            const p0Frame = originFrames[f]?.[0]
+            if (p0Frame) {
+              ordered = reorderContourFromOrigin(ordered, p0Frame)
+            }
+            ordered = ensureConsistentOrientation(ordered, referenceOrientation)
+          }
+        }
 
-        if (!cannyPts || cannyPts.length < 10) {
+        if (!ordered || ordered.length < 10) {
           allFrames.push([...allFrames[f - 1]])
           allRawFrames.push([...allRawFrames[f - 1]])
           allLostFlags.push(contourAnchors.map(() => true))
@@ -223,20 +265,13 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           continue
         }
 
-        // Scale Canny points from video coords to image coords
-        const imgCanny = cannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
-
-        // Order and reorder from P0
-        let ordered = orderContourPixels(imgCanny)
-        const p0Frame = originFrames[f]?.[0]
-        if (p0Frame) {
-          ordered = reorderContourFromOrigin(ordered, p0Frame)
-        }
-        // Ensure consistent CW/CCW orientation with frame 0
-        ordered = ensureConsistentOrientation(ordered, referenceOrientation)
         const arcLengths = computeArcLengths(ordered)
         const totalLen = arcLengths[arcLengths.length - 1] || 1
         allCannyFrames.push(ordered)
+
+        // Build spatial index for O(1) nearest-neighbor lookups
+        const contourIdx = new ContourSpatialIndex(ordered)
+        const p0Frame = originFrames[f]?.[0]
 
         // Detect & track curvature extrema for this frame
         const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
@@ -255,12 +290,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             frameLostFlags.push(false)
             // Step-by-step: update s from P0 position
             if (stepByStep) {
-              let bestIdx = 0, bestDist = Infinity
-              for (let i = 0; i < ordered.length; i++) {
-                const d = Math.hypot(ordered[i].x - p0Frame.x, ordered[i].y - p0Frame.y)
-                if (d < bestDist) { bestDist = d; bestIdx = i }
-              }
-              anchorS[a] = arcLengths[bestIdx] / totalLen
+              const snap = contourIdx.nearestWithIndex(p0Frame, 50)
+              if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
             }
             continue
           }
@@ -279,7 +310,6 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
               // Close enough → snap to extremum
               adjustedPositions.push(trackedExtremum.position)
               frameLostFlags.push(false)
-              // Step-by-step: update s from snapped position
               if (stepByStep) {
                 anchorS[a] = trackedExtremum.arcLengthNorm
               }
@@ -292,45 +322,29 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
               }
               adjustedPositions.push(blended)
               frameLostFlags.push(false)
-              // Step-by-step: update s from blended position
               if (stepByStep) {
-                let bestIdx = 0, bestDist = Infinity
-                for (let i = 0; i < ordered.length; i++) {
-                  const d = Math.hypot(ordered[i].x - blended.x, ordered[i].y - blended.y)
-                  if (d < bestDist) { bestDist = d; bestIdx = i }
-                }
-                anchorS[a] = arcLengths[bestIdx] / totalLen
+                const snap = contourIdx.nearestWithIndex(blended, 50)
+                if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
               }
             } else {
-              // Too far → lost, fallback to raw position
               adjustedPositions.push(rawPos)
               frameLostFlags.push(true)
-              // Step-by-step: still update s from raw position (keep tracking)
-              if (stepByStep) {
-                // Don't update s when lost — keep last good s to avoid cascading drift
-              }
             }
           } else {
-            // No extremum found → fallback
             adjustedPositions.push(rawPos)
             frameLostFlags.push(true)
           }
         }
 
         // Re-snap all non-lost points onto nearest Canny pixel
-        // (fixes blend interpolation and stale extremum positions being off-contour)
         for (let a = 0; a < adjustedPositions.length; a++) {
           if (frameLostFlags[a]) continue
-          const pos = adjustedPositions[a]
-          let bestIdx = 0, bestDist = Infinity
-          for (let i = 0; i < ordered.length; i++) {
-            const d = Math.hypot(ordered[i].x - pos.x, ordered[i].y - pos.y)
-            if (d < bestDist) { bestDist = d; bestIdx = i }
-          }
-          adjustedPositions[a] = ordered[bestIdx]
-          // Also update s to match the snapped position
-          if (stepByStep) {
-            anchorS[a] = arcLengths[bestIdx] / totalLen
+          const snap = contourIdx.nearestWithIndex(adjustedPositions[a], 50)
+          if (snap) {
+            adjustedPositions[a] = snap.point
+            if (stepByStep) {
+              anchorS[a] = arcLengths[snap.index] / totalLen
+            }
           }
         }
 
@@ -339,7 +353,9 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         allLostFlags.push(frameLostFlags)
       }
 
-      URL.revokeObjectURL(url)
+      if (url) URL.revokeObjectURL(url)
+
+      console.log(`[ContourTracking] ${totalFrames} frames in ${((performance.now() - t0) / 1000).toFixed(1)}s (${useCache ? 'cached' : 'live Canny'})`)
 
       // Store results
       computedFramesRef.current = allFrames
@@ -581,13 +597,14 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     const cannyPts = cannyFramesRef.current?.[previewFrame]
 
     if (cannyPts && cannyPts.length > 0) {
-      // Snap: find nearest Canny pixel (orthogonal projection onto contour)
-      let bestIdx = 0, bestDist = Infinity
-      for (let i = 0; i < cannyPts.length; i++) {
-        const d = Math.hypot(cannyPts[i].x - imgX, cannyPts[i].y - imgY)
-        if (d < bestDist) { bestDist = d; bestIdx = i }
+      // Snap: find nearest Canny pixel using spatial index
+      const dragIdx = new ContourSpatialIndex(cannyPts)
+      const snap = dragIdx.nearest({ x: imgX, y: imgY }, 50)
+      if (snap) {
+        computed[previewFrame][draggingIdx] = { ...snap.point }
+      } else {
+        computed[previewFrame][draggingIdx] = { x: imgX, y: imgY }
       }
-      computed[previewFrame][draggingIdx] = { ...cannyPts[bestIdx] }
     } else {
       computed[previewFrame][draggingIdx] = { x: imgX, y: imgY }
     }
@@ -663,22 +680,18 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       let previousExtrema: CSSCandidate[] | null = null
 
       if (startCannyPts && startCannyPts.length >= 10) {
-        const imgCanny = startCannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
-        let ordered = orderContourPixels(imgCanny)
+        // startCannyPts already ordered by OpenCV — just scale
+        let ordered = startCannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
         const p0Frame = originFrames[startFrame]?.[0]
         if (p0Frame) ordered = reorderContourFromOrigin(ordered, p0Frame)
         const arcLengths = computeArcLengths(ordered)
         const totalLen = arcLengths[arcLengths.length - 1] || 1
 
-        // Compute anchorS from positions (all anchors — needed for step-by-step chain)
+        // Compute anchorS from positions using spatial index
+        const startContourIdx = new ContourSpatialIndex(ordered)
         for (let a = 0; a < contourAnchors.length; a++) {
-          const pos = editedPositions[a]
-          let bestIdx = 0, bestDist = Infinity
-          for (let i = 0; i < ordered.length; i++) {
-            const d = Math.hypot(ordered[i].x - pos.x, ordered[i].y - pos.y)
-            if (d < bestDist) { bestDist = d; bestIdx = i }
-          }
-          anchorS[a] = arcLengths[bestIdx] / totalLen
+          const snap = startContourIdx.nearestWithIndex(editedPositions[a], 50)
+          if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
         }
 
         // Detect extrema at startFrame
@@ -730,13 +743,16 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           continue
         }
 
-        const imgCanny = cannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
-        let ordered = orderContourPixels(imgCanny)
+        // cannyPts already ordered by OpenCV — just scale
+        let ordered = cannyPts.map(p => ({ x: (p.x / vw) * iw, y: (p.y / vh) * ih }))
         const p0Frame = originFrames[f]?.[0]
         if (p0Frame) ordered = reorderContourFromOrigin(ordered, p0Frame)
         const arcLengths = computeArcLengths(ordered)
         const totalLen = arcLengths[arcLengths.length - 1] || 1
         if (cannyFramesRef.current) cannyFramesRef.current[f] = ordered
+
+        // Build spatial index for O(1) nearest-neighbor lookups
+        const contourIdx = new ContourSpatialIndex(ordered)
 
         const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
         previousExtrema = extremaResult.extrema
@@ -755,15 +771,9 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         for (let a = 0; a < contourAnchors.length; a++) {
           // Skip non-edited anchors in selective mode
           if (selectiveMode && !editedIndices.has(a)) {
-            // Still update anchorS for step-by-step from existing position
             if (stepByStep) {
-              const existingPos = adjustedPositions[a]
-              let bestIdx = 0, bestDist = Infinity
-              for (let i = 0; i < ordered.length; i++) {
-                const d = Math.hypot(ordered[i].x - existingPos.x, ordered[i].y - existingPos.y)
-                if (d < bestDist) { bestDist = d; bestIdx = i }
-              }
-              anchorS[a] = arcLengths[bestIdx] / totalLen
+              const snap = contourIdx.nearestWithIndex(adjustedPositions[a], 50)
+              if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
             }
             continue
           }
@@ -773,12 +783,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             adjustedPositions[a] = p0Frame
             frameLostFlags[a] = false
             if (stepByStep) {
-              let bestIdx = 0, bestDist = Infinity
-              for (let i = 0; i < ordered.length; i++) {
-                const d = Math.hypot(ordered[i].x - p0Frame.x, ordered[i].y - p0Frame.y)
-                if (d < bestDist) { bestDist = d; bestIdx = i }
-              }
-              anchorS[a] = arcLengths[bestIdx] / totalLen
+              const snap = contourIdx.nearestWithIndex(p0Frame, 50)
+              if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
             }
             continue
           }
@@ -805,12 +811,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
               adjustedPositions[a] = blended
               frameLostFlags[a] = false
               if (stepByStep) {
-                let bestIdx = 0, bestDist = Infinity
-                for (let i = 0; i < ordered.length; i++) {
-                  const d = Math.hypot(ordered[i].x - blended.x, ordered[i].y - blended.y)
-                  if (d < bestDist) { bestDist = d; bestIdx = i }
-                }
-                anchorS[a] = arcLengths[bestIdx] / totalLen
+                const snap = contourIdx.nearestWithIndex(blended, 50)
+                if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
               }
             } else {
               adjustedPositions[a] = rawPos
@@ -822,19 +824,16 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           }
         }
 
-        // Re-snap non-lost points onto nearest Canny pixel (only edited in selective mode)
+        // Re-snap non-lost points onto nearest Canny pixel
         for (let a = 0; a < adjustedPositions.length; a++) {
           if (frameLostFlags[a]) continue
           if (selectiveMode && !editedIndices.has(a)) continue
-          const pos = adjustedPositions[a]
-          let bestIdx = 0, bestDist = Infinity
-          for (let i = 0; i < ordered.length; i++) {
-            const d = Math.hypot(ordered[i].x - pos.x, ordered[i].y - pos.y)
-            if (d < bestDist) { bestDist = d; bestIdx = i }
-          }
-          adjustedPositions[a] = ordered[bestIdx]
-          if (stepByStep) {
-            anchorS[a] = arcLengths[bestIdx] / totalLen
+          const snap = contourIdx.nearestWithIndex(adjustedPositions[a], 50)
+          if (snap) {
+            adjustedPositions[a] = snap.point
+            if (stepByStep) {
+              anchorS[a] = arcLengths[snap.index] / totalLen
+            }
           }
         }
 
@@ -883,7 +882,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       }
 
       await loadOpenCVWorker()
-      const subdivFrames = await computeAllSubdivisionFrames(
+      const subdivResult = await computeAllSubdivisionFrames(
         project.videoBlob,
         computedFramesRef.current,
         params,
@@ -891,9 +890,10 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         imgDims.w,
         imgDims.h,
         (p) => setProgress(`Subdivision frame ${p.frame}/${p.total}`),
-        mesh.contourOriginFrames
+        mesh.contourOriginFrames,
+        cannyFramesRef.current
       )
-      subdivFramesRef.current = subdivFrames
+      subdivFramesRef.current = subdivResult.subdivisionFrames
       setShowFullContour(true)
       setProgress('')
     } catch (err) {
@@ -939,6 +939,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         contourAnchorKeyframes: [],
         contourAnchorFrames: computedFramesRef.current,
         contourAnchorTrackingValidated: true,
+        // Save Canny cache for downstream reuse
+        contourCannyFrames: cannyFramesRef.current,
         // Reset downstream
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
@@ -1005,6 +1007,62 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     setPhase('ready')
   }, [mesh, project, onSave])
 
+  // ─── Re-edit (validated → preview without reset) ────────────────
+  const handleReEdit = useCallback(async () => {
+    if (!mesh?.contourAnchorFrames || !project.videoBlob || !project.originalImageBlob) return
+    setSaving(true)
+    setProgress('Chargement pour réédition...')
+
+    try {
+      // Load image dimensions
+      const img = await loadImage(project.originalImageBlob)
+      imageDimsRef.current = { w: img.naturalWidth, h: img.naturalHeight }
+      URL.revokeObjectURL(img.src)
+
+      // Reload saved frames into refs
+      const frames = mesh.contourAnchorFrames
+      computedFramesRef.current = frames.map(f => [...f])
+      rawFramesRef.current = frames.map(f => [...f])
+      lostFlagsRef.current = frames.map(f => f.map(() => false))
+      totalFramesRef.current = frames.length
+
+      // Load cached Canny contours if available
+      cannyFramesRef.current = mesh.contourCannyFrames ?? frames.map(() => [])
+
+      // Subdivision data not loaded (will be recomputed on demand)
+      subdivFramesRef.current = null
+      setShowFullContour(false)
+
+      // Create video for preview
+      const previewUrl = URL.createObjectURL(project.videoBlob)
+      const previewVideo = document.createElement('video')
+      previewVideo.src = previewUrl
+      previewVideo.muted = true
+      previewVideo.preload = 'auto'
+      await new Promise<void>(r => { previewVideo.onloadeddata = () => r(); previewVideo.load() })
+      videoRef.current = previewVideo
+
+      // Stop contour anim if active
+      if (contourAnimVideoRef.current) {
+        URL.revokeObjectURL(contourAnimVideoRef.current.src)
+        contourAnimVideoRef.current = null
+      }
+      setContourAnimActive(false)
+      setContourAnimPlaying(false)
+
+      setHasEdited(false)
+      editedIndicesRef.current.clear()
+      setPreviewFrame(0)
+      setPhase('preview')
+      setProgress('')
+    } catch (err) {
+      console.error('Re-edit load failed:', err)
+      setProgress(`Erreur: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSaving(false)
+    }
+  }, [mesh, project])
+
   // ─── Contour Animation Preview (validated phase) ────────────────
   const handleStartContourAnim = useCallback(async () => {
     if (!mesh?.contourAnchorFrames || !project.videoBlob || !project.originalImageBlob) return
@@ -1036,7 +1094,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       if (params && params.length > 0 && mesh.cannyParams) {
         setProgress('Calcul subdivision contour...')
         await loadOpenCVWorker()
-        const subdivFrames = await computeAllSubdivisionFrames(
+        const subdivResult = await computeAllSubdivisionFrames(
           project.videoBlob,
           mesh.contourAnchorFrames,
           params,
@@ -1044,9 +1102,10 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           imgDims.w,
           imgDims.h,
           (p) => setProgress(`Subdivision frame ${p.frame}/${p.total}`),
-          mesh.contourOriginFrames
+          mesh.contourOriginFrames,
+          mesh.contourCannyFrames
         )
-        contourAnimSubdivRef.current = subdivFrames
+        contourAnimSubdivRef.current = subdivResult.subdivisionFrames
       }
 
       setContourAnimFrame(0)
@@ -1449,14 +1508,22 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           )}
           {contourAnimComputing && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
 
-          <button
-            className="btn-secondary"
-            onClick={handleReset}
-            disabled={saving || contourAnimComputing}
-            style={{ marginTop: 12 }}
-          >
-            {saving ? 'Sauvegarde...' : 'Reinitialiser'}
-          </button>
+          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+            <button
+              className="btn-primary"
+              onClick={handleReEdit}
+              disabled={saving || contourAnimComputing}
+            >
+              {saving ? 'Chargement...' : 'Reediter frame par frame'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={handleReset}
+              disabled={saving || contourAnimComputing}
+            >
+              Reinitialiser depuis zero
+            </button>
+          </div>
         </div>
       )}
     </div>

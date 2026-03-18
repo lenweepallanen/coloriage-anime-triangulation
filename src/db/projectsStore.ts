@@ -28,6 +28,7 @@ interface MeshDoc {
   contourSubdivisionParams: CurvilinearParam[]
   hasContourSubdivisionFrames: boolean
   contourSubdivisionValidated: boolean
+  hasContourCannyFrames: boolean
   anchorPoints: Point2D[]
   anchorKeyframeInterval: number
   anchorTrackingValidated: boolean
@@ -143,6 +144,7 @@ function toDoc(project: Project): ProjectDoc {
       contourSubdivisionParams: project.mesh.contourSubdivisionParams ?? [],
       hasContourSubdivisionFrames: project.mesh.contourSubdivisionFrames != null,
       contourSubdivisionValidated: project.mesh.contourSubdivisionValidated ?? false,
+      hasContourCannyFrames: project.mesh.contourCannyFrames != null,
       anchorPoints: project.mesh.anchorPoints ?? [],
       anchorKeyframeInterval: project.mesh.anchorKeyframeInterval ?? 10,
       anchorTrackingValidated: project.mesh.anchorTrackingValidated ?? false,
@@ -162,6 +164,7 @@ function toDoc(project: Project): ProjectDoc {
 type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourOriginKeyframes' | 'contourOriginFrames' |
   'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
+  'contourCannyFrames' |
   'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'>
 
 function isLegacyDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
@@ -245,6 +248,7 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
   let contourAnchorKeyframes: KeyframeData[] = []
   let contourAnchorFrames: Point2D[][] | null = null
   let contourSubdivisionFrames: Point2D[][] | null = null
+  let contourCannyFrames: Point2D[][] | null = null
   let anchorKeyframes: KeyframeData[] = []
   let anchorFrames: Point2D[][] | null = null
   let videoFramesMesh: Point2D[][] | null = null
@@ -257,6 +261,7 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
       meshDoc.hasContourAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourAnchorKeyframes.json`) : null,
       meshDoc.hasContourAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourAnchorFrames.json`) : null,
       meshDoc.hasContourSubdivisionFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourSubdivisionFrames.json`) : null,
+      meshDoc.hasContourCannyFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourCannyFrames.json`) : null,
       meshDoc.hasAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/anchorKeyframes.json`) : null,
       meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/anchorFrames.json`) : null,
       meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(`projects/${id}/videoFramesMesh.json`) : null,
@@ -266,9 +271,10 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     contourAnchorKeyframes = downloads[2] ?? []
     contourAnchorFrames = downloads[3]
     contourSubdivisionFrames = downloads[4]
-    anchorKeyframes = downloads[5] ?? []
-    anchorFrames = downloads[6]
-    videoFramesMesh = downloads[7]
+    contourCannyFrames = downloads[5]
+    anchorKeyframes = downloads[6] ?? []
+    anchorFrames = downloads[7]
+    videoFramesMesh = downloads[8]
   }
 
   return {
@@ -284,6 +290,7 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
       contourAnchorKeyframes,
       contourAnchorFrames,
       contourSubdivisionFrames,
+      contourCannyFrames,
       anchorKeyframes,
       anchorFrames,
       videoFramesMesh,
@@ -331,6 +338,7 @@ export async function getAllProjects(): Promise<Project[]> {
         contourAnchorKeyframes: [],
         contourAnchorFrames: null,
         contourSubdivisionFrames: null,
+        contourCannyFrames: null,
         anchorKeyframes: [],
         anchorFrames: null,
         videoFramesMesh: null,
@@ -340,7 +348,7 @@ export async function getAllProjects(): Promise<Project[]> {
   })
 }
 
-export type UploadHint = 'image' | 'video' | 'contourOriginKeyframes' | 'contourOriginFrames' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
+export type UploadHint = 'image' | 'video' | 'contourOriginKeyframes' | 'contourOriginFrames' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'contourCannyFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -411,6 +419,15 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         .then(() => console.log('[Storage] contourSubdivisionFrames uploaded'))
     )
   }
+  if (uploadOnly?.includes('contourCannyFrames') && project.mesh?.contourCannyFrames) {
+    const json = JSON.stringify(project.mesh.contourCannyFrames)
+    const blob = new Blob([json], { type: 'application/json' })
+    console.log('[Storage] Uploading contourCannyFrames for:', id)
+    uploads.push(
+      uploadBlob(`projects/${id}/contourCannyFrames.json`, blob)
+        .then(() => console.log('[Storage] contourCannyFrames uploaded'))
+    )
+  }
   if (uploadOnly?.includes('anchorKeyframes') && project.mesh?.anchorKeyframes.length) {
     const json = JSON.stringify(project.mesh.anchorKeyframes)
     const blob = new Blob([json], { type: 'application/json' })
@@ -455,6 +472,7 @@ export async function deleteProject(id: string): Promise<void> {
     `projects/${id}/contourAnchorKeyframes.json`,
     `projects/${id}/contourAnchorFrames.json`,
     `projects/${id}/contourSubdivisionFrames.json`,
+    `projects/${id}/contourCannyFrames.json`,
     `projects/${id}/anchorKeyframes.json`,
     `projects/${id}/anchorFrames.json`,
     `projects/${id}/videoFramesMesh.json`,

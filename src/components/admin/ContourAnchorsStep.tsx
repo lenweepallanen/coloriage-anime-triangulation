@@ -4,7 +4,7 @@ import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
 import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
-import { orderContourPixels, computeArcLengths } from '../../utils/curvilinearContour'
+import { computeArcLengths } from '../../utils/curvilinearContour'
 import { detectCurvatureExtrema, computeInitialAnchorArcLengths, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 
 interface Props {
@@ -132,7 +132,8 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
         if (contourPts && contourPts.length > 0) {
           setCannyContour(contourPts)
           contourIndexRef.current = new ContourSpatialIndex(contourPts, 8)
-          const ordered = orderContourPixels(contourPts)
+          // contourPts are already ordered by OpenCV's findContours
+          const ordered = contourPts
           orderedContourRef.current = ordered
           contourArcLengthsRef.current = computeArcLengths(ordered)
         }
@@ -162,7 +163,8 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
     if (!cannyContour || cannyContour.length < 50) return
     setDetectingCSS(true)
     try {
-      const orderedPath = orderContourPixels(cannyContour)
+      // cannyContour is already ordered by OpenCV
+      const orderedPath = cannyContour
       const allRaw = detectCurvatureExtrema(orderedPath, MAX_AUTO_CANDIDATES + 5)
       // Filter out candidates too close to Point 0
       const all = contourOrigin
@@ -481,6 +483,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
         contourSubdivisionParams: [],
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
+        contourCannyFrames: null,
         anchorPoints: [],
         anchorKeyframeInterval: 10,
         anchorKeyframes: [],
@@ -504,6 +507,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
         contourSubdivisionParams: [],
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
+        contourCannyFrames: null,
         topologyLocked: false,
         trackedTriangles: [],
         internalBarycentrics: [],

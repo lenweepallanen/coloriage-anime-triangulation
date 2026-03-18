@@ -21,6 +21,7 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `contourSpatialIndex.ts` | Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche |
 | `perspectiveCorrection.ts` | Bridge RPC vers le Worker OpenCV |
 | `pdfGenerator.ts` | Génération PDF (jsPDF) |
+| `pdfLayout.ts` | Constantes layout A4 partagées + calcul offset centroïde L-marker |
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
 
 ## autoMeshGenerator.ts
@@ -411,7 +412,7 @@ Coordonnées curvilignes sur contour Canny. Place des points intermédiaires ent
 
 | Fonction | Rôle |
 |----------|------|
-| `orderContourPixels(pixels)` | Ordonne les pixels Canny en chaîne continue (parcours glouton nearest-neighbor) |
+| `orderContourPixels(pixels)` | Ordonne les pixels Canny en chaîne continue (grille spatiale 4px pour nearest-neighbor O(n)) |
 | `computeArcLengths(path)` | Calcule les longueurs d'arc cumulées le long du chemin |
 | `interpolateAtArcLength(path, arcLengths, t)` | Interpole un point à la position curviligne normalisée `t` ∈ [0,1] |
 | `reorderContourFromOrigin(contour, originPoint)` | Réordonne le contour pour que P0 soit à l'index 0 (s=0) |
@@ -420,39 +421,66 @@ Coordonnées curvilignes sur contour Canny. Place des points intermédiaires ent
 | `subdivideSegment(path, count, segmentIndex)` | Place N points uniformes le long d'un segment → `{ points, params }` |
 | `subdivideContour(orderedContour, anchors, pointsPerSegment)` | Génère tous les points de subdivision pour tous les segments |
 | `computeSubdivisionForFrame(orderedContour, anchorPositions, params)` | Calcule les positions de subdivision pour une frame |
-| `computeAllSubdivisionFrames(videoBlob, anchorFrames, params, cannyParams, imageWidth, imageHeight, onProgress?, originFrames?)` | Pipeline complet : extraction frames vidéo → Canny → conversion coords vidéo→image → ordonnancement → subdivision par frame |
+| `computeAllSubdivisionFrames(videoBlob, anchorFrames, params, cannyParams, imageWidth, imageHeight, onProgress?, originFrames?, cachedCannyFrames?)` | Pipeline complet avec cache Canny optionnel → retourne `SubdivisionResult` |
+
+### Type SubdivisionResult
+
+```typescript
+interface SubdivisionResult {
+  subdivisionFrames: Point2D[][]  // positions de subdivision par frame
+  cannyFrames: Point2D[][]        // contours Canny ordonnés par frame (pour cache)
+}
+```
 
 ### Pipeline par frame (computeAllSubdivisionFrames)
+
+**Fast path** (si `cachedCannyFrames` fourni) : réutilise les contours Canny pré-calculés, skip l'extraction vidéo et la détection Canny. Recompute uniquement la subdivision sur chaque contour.
+
+**Normal path** :
 ```
 1. Extraire frame vidéo sur canvas (coords vidéo)
-2. flowCannyContour() → pixels contour Canny (coords vidéo)
-3. Convertir pixels vidéo → coords image (× imageWidth/videoWidth)
-4. orderContourPixels() → chaîne ordonnée (coords image)
-5. reorderContourFromOrigin() depuis P0 tracké
-6. Pour chaque segment [anchor_i, anchor_{i+1}] :
+2. Frame-skip : si similarité > 95% avec frame précédente (sous-échantillonné ~200px),
+   réutiliser le contour précédent (max 3 frames consécutives)
+3. flowCannyContour() → pixels contour Canny (coords vidéo)
+4. Convertir pixels vidéo → coords image (× imageWidth/videoWidth)
+5. Utiliser directement les pixels (OpenCV findContours retourne déjà un contour ordonné)
+6. reorderContourFromOrigin() depuis P0 tracké
+7. Pour chaque segment [anchor_i, anchor_{i+1}] :
    - extractPathBetweenAnchors() → sous-chemin
    - computeArcLengths() → longueurs d'arc
    - interpolateAtArcLength(t) → position point intermédiaire
-7. Fallback si Canny vide : interpolation linéaire entre anchors
+8. Fallback si Canny vide : interpolation linéaire entre anchors
+9. Stocker le contour Canny ordonné dans cannyFrames[] pour cache
 ```
 
 **Note** : la conversion coords vidéo → image est critique car les `anchorFrames` sont toujours en coordonnées image.
 
+**Note** : `orderContourPixels()` n'est plus appelé dans le pipeline normal car OpenCV `findContours` retourne déjà des pixels ordonnés. La fonction reste disponible pour les cas où un réordonnancement est nécessaire, et utilise une grille spatiale (buckets 4px) pour un parcours nearest-neighbor en O(n) au lieu de O(n²).
+
 ## contourSpatialIndex.ts
 
-Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche.
+Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche. Stocke chaque point avec son index original dans le contour.
 
 ```typescript
 class ContourSpatialIndex {
   constructor(contourPixels: Point2D[], bucketSize = 8)
   nearest(point: Point2D, maxDist: number): { point: Point2D; dist: number } | null
+  nearestWithIndex(point: Point2D, maxDist: number): { point: Point2D; dist: number; index: number } | null
   nearestUnbounded(point: Point2D): { point: Point2D; dist: number } | null  // sans limite de distance
 }
 ```
 
-- Construit une grille de buckets au constructeur (O(n))
+- Construit une grille de buckets au constructeur (O(n)), stocke `{ point, index }` par bucket
 - `nearest()` cherche dans les buckets voisins dans un rayon `maxDist` (O(1) amortie)
-- Utilisé par `applySnapToContour` et `recoverLostPoints` à chaque frame
+- `nearestWithIndex()` idem mais retourne aussi l'index original dans le contour — utilisé par ContourTrackingStep pour retrouver la position curviligne
+- Utilisé par `applySnapToContour`, `recoverLostPoints`, et `ContourTrackingStep` à chaque frame
+
+## pdfLayout.ts
+
+Constantes de layout A4 partagées entre la génération PDF et la correction de perspective :
+- Dimensions A4 en mm et marges
+- Calcul des offsets centroïdes des marqueurs L (pour aligner détection scan et génération PDF)
+- Utilisé par `pdfGenerator.ts` et `ScanProcessor.tsx`
 
 ## pdfGenerator.ts
 

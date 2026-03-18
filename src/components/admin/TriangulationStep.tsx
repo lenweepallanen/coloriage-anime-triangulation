@@ -488,33 +488,37 @@ export default function TriangulationStep({ project, onSave }: Props) {
   }, [hasAnimation, videoReady, currentFrame, mesh, imageDims, viewMode])
 
   async function handleComputeAnimation() {
-    if (!mesh || !mesh.contourAnchorFrames || !mesh.anchorFrames) return
+    if (!mesh || !mesh.contourAnchorFrames) return
     const contourAnchorFrames = mesh.contourAnchorFrames
-    const ancFrames = mesh.anchorFrames
+    const ancFrames = mesh.anchorFrames ?? []
     const trackedTris = mesh.trackedTriangles
     const intBary = mesh.internalBarycentrics
 
-    const totalF = Math.min(contourAnchorFrames.length, ancFrames.length)
+    const totalF = ancFrames.length > 0
+      ? Math.min(contourAnchorFrames.length, ancFrames.length)
+      : contourAnchorFrames.length
     if (totalF === 0) return
 
     setComputing(true)
 
     try {
-      // Compute subdivision frames if not already done
+      // Use cached subdivision frames if available, otherwise recompute
       let contourSubFrames = mesh.contourSubdivisionFrames
-      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams && imageDims) {
+      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && mesh.cannyParams && imageDims) {
         setAnimProgress('Calcul positions contour subdivision...')
-        await loadOpenCVWorker()
-        contourSubFrames = await computeAllSubdivisionFrames(
-          project.videoBlob,
+        if (!mesh.contourCannyFrames) await loadOpenCVWorker()
+        const subdivResult = await computeAllSubdivisionFrames(
+          project.videoBlob!,
           contourAnchorFrames,
           mesh.contourSubdivisionParams,
           mesh.cannyParams,
           imageDims.w,
           imageDims.h,
           (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`),
-          mesh.contourOriginFrames
+          mesh.contourOriginFrames,
+          mesh.contourCannyFrames
         )
+        contourSubFrames = subdivResult.subdivisionFrames
       }
 
       setAnimProgress('Calcul animation...')
@@ -539,7 +543,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
         }
 
         // Tracked positions for barycentric interpolation
-        const trackedPositions = [...contourAnchorFrames[f], ...ancFrames[f]]
+        const trackedPositions = [...contourAnchorFrames[f], ...(ancFrames[f] ?? anchorPoints)]
 
         // Subdivision positions (from curvilinear computation)
         const subPositions = contourSubFrames?.[f] ?? mesh.contourSubdivisionPoints
@@ -601,7 +605,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
         videoFramesMesh.push([
           ...contourAnchorFrames[f],
           ...subPositions,
-          ...ancFrames[f],
+          ...(ancFrames[f] ?? anchorPoints),
           ...internalPositions,
         ])
       }
@@ -634,33 +638,36 @@ export default function TriangulationStep({ project, onSave }: Props) {
   }
 
   async function handleComputeARAP() {
-    if (!mesh || !mesh.contourAnchorFrames || !mesh.anchorFrames) return
+    if (!mesh || !mesh.contourAnchorFrames) return
     const contourAnchorFrames = mesh.contourAnchorFrames
-    const ancFrames = mesh.anchorFrames
+    const ancFrames = mesh.anchorFrames ?? []
 
-    const totalF = Math.min(contourAnchorFrames.length, ancFrames.length)
+    const totalF = ancFrames.length > 0
+      ? Math.min(contourAnchorFrames.length, ancFrames.length)
+      : contourAnchorFrames.length
     if (totalF === 0) return
 
     setComputing(true)
 
     try {
-      // Compute subdivision frames if not already done
+      // Use cached subdivision frames if available, otherwise recompute
       let contourSubFrames = mesh.contourSubdivisionFrames
-      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && project.videoBlob && mesh.cannyParams && imageDims) {
+      if (!contourSubFrames && mesh.contourSubdivisionParams.length > 0 && mesh.cannyParams && imageDims) {
         setAnimProgress('Calcul positions contour subdivision...')
-        await loadOpenCVWorker()
-        contourSubFrames = await computeAllSubdivisionFrames(
-          project.videoBlob,
+        if (!mesh.contourCannyFrames) await loadOpenCVWorker()
+        const subdivResult = await computeAllSubdivisionFrames(
+          project.videoBlob!,
           contourAnchorFrames,
           mesh.contourSubdivisionParams,
           mesh.cannyParams,
           imageDims.w,
           imageDims.h,
           (p) => setAnimProgress(`Subdivision frame ${p.frame}/${p.total}`),
-          mesh.contourOriginFrames
+          mesh.contourOriginFrames,
+          mesh.contourCannyFrames
         )
+        contourSubFrames = subdivResult.subdivisionFrames
       }
-
       // Build frame 0 allPoints for ARAP rest pose — use ORIGINAL mesh positions
       // (same as the ones used for Delaunay triangulation), not tracked frame 0
       const allPoints0: Point2D[] = [
@@ -691,7 +698,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
         allPinnedFrames.push([
           ...contourAnchorFrames[f],
           ...subPositions,
-          ...ancFrames[f],
+          ...(ancFrames[f] ?? anchorPoints),
         ])
       }
 

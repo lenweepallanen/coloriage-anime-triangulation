@@ -239,6 +239,7 @@ export default function CannyValidationStep({ project, onSave }: Props) {
         contourSubdivisionParams: [],
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
+        contourCannyFrames: null,
         anchorPoints: [],
         anchorKeyframeInterval: 10,
         anchorKeyframes: [],
@@ -268,6 +269,7 @@ export default function CannyValidationStep({ project, onSave }: Props) {
         contourSubdivisionParams: [],
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
+        contourCannyFrames: null,
       }
       await onSave({ ...project, mesh })
     } catch (err) {

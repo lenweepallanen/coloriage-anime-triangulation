@@ -54,6 +54,9 @@ export interface MeshData {
   contourSubdivisionFrames: Point2D[][] | null;  // Positions calculées par frame (via Canny)
   contourSubdivisionValidated: boolean;
 
+  // Cache : contours Canny ordonnés par frame (calculés à l'étape 6, réutilisés à l'étape 7)
+  contourCannyFrames: Point2D[][] | null;
+
   // Étape 6 : Anchors internes (features intérieures : yeux, ailes, etc.)
   anchorPoints: Point2D[];
 

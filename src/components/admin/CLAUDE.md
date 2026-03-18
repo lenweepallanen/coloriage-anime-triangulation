@@ -81,18 +81,18 @@ Prérequis : anchors contour définis (étape 5) + Canny validé.
 Définit les points intermédiaires entre les anchors caractéristiques et calcule leur mouvement par coordonnées curvilignes sur le contour Canny de chaque frame.
 
 ### Phases
-1. **define** : Détecte et ordonne le contour Canny sur l'image, génère N points uniformes par segment anchor via `subdivideContour()`
-2. **computing** : Boucle sur toutes les frames vidéo via `computeAllSubdivisionFrames()` — détecte Canny, convertit coords vidéo → image, ordonne pixels, place les points à leur coordonnée curviligne `t`
+1. **define** : Détecte et ordonne le contour Canny sur l'image, génère N points uniformes par segment anchor via `subdivideContour()`. Bouton "Recalculer preview contour" pour forcer la re-détection Canny.
+2. **computing** : Boucle sur toutes les frames vidéo via `computeAllSubdivisionFrames()` — détecte Canny, convertit coords vidéo → image, place les points à leur coordonnée curviligne `t`. Retourne `SubdivisionResult` avec `subdivisionFrames` + `cannyFrames` (cache).
 3. **preview** : Preview frame par frame (anchors rouges + subdivision verts + polygone complet)
-4. **validated** : Sauvegarde `contourSubdivisionPoints`, `contourSubdivisionParams`, `contourSubdivisionFrames`
+4. **validated** : Sauvegarde `contourSubdivisionPoints`, `contourSubdivisionParams`, `contourSubdivisionFrames`, `contourCannyFrames`
 
 ### Algorithme par frame
 ```
 1. Détecter contour Canny sur le frame vidéo (coords vidéo)
+   — OpenCV findContours retourne déjà des pixels ordonnés (pas besoin de orderContourPixels)
 2. Convertir pixels Canny de coords vidéo → coords image
-3. Ordonner les pixels Canny en chaîne continue (orderContourPixels)
-4. Réordonner depuis P0 tracké (reorderContourFromOrigin)
-5. Pour chaque segment [anchor_i, anchor_{i+1}] :
+3. Réordonner depuis P0 tracké (reorderContourFromOrigin)
+4. Pour chaque segment [anchor_i, anchor_{i+1}] :
    a. Extraire le sous-chemin Canny entre les deux anchors (chemin le plus court sur contour cyclique)
    b. Calculer les longueurs d'arc cumulées le long du sous-chemin
    c. Pour chaque point intermédiaire (segmentIndex=i, t) :
@@ -108,31 +108,39 @@ Prérequis : subdivision contour définie (étape 6) + Canny validé + P0 track�
 
 **Approche** : pas d'optical flow. Pour chaque frame, on détecte le contour Canny, on le paramétrise en arc-length depuis P0, et on place chaque anchor à sa coordonnée curviligne `s` normalisée. On snap ensuite vers l'extremum de courbure CSS le plus proche (tracking par identité persistante frame par frame).
 
+### Optimisation : cache Canny
+Si `mesh.contourCannyFrames` est disponible (calculé à l'étape 6), les contours Canny pré-calculés sont réutilisés directement, évitant la détection Canny et le chargement du Worker OpenCV. Gain de performance significatif.
+
+### Optimisation : index spatial
+Utilise `ContourSpatialIndex.nearestWithIndex()` au lieu de recherches linéaires pour le snap-to-contour et la recherche de voisins. Retourne l'index dans le contour pour retrouver la position curviligne.
+
 ### Phases
 1. **Ready** : 2 modes au choix — "s fixe" (anchorS constants) ou "proche en proche" (anchorS mis à jour)
-2. **Computing** : boucle sur frames, détection Canny + extrema CSS + placement + snap
+2. **Computing** : boucle sur frames, détection Canny (ou cache) + extrema CSS + placement + snap
 3. **Preview** : preview frame par frame, drag anchors pour corriger, "Propager avant" depuis une frame éditée
 4. **Validated** : `contourAnchorTrackingValidated = true`, sauvegarde `contourAnchorKeyframes` + `contourAnchorFrames`
+   - Deux boutons post-validation : "Reediter frame par frame" (reprend l'édition sans réinitialiser) et "Reinitialiser depuis zero" (reset complet)
 
 ### Algorithme par frame
 ```
-1. Détecter contour Canny sur frame vidéo
-2. Convertir pixels vidéo → coords image
-3. Ordonner et réordonner depuis P0 tracké
-4. Calculer arc-lengths normalisés
-5. Détecter extrema de courbure CSS (trackCurvatureExtrema)
-6. Pour chaque anchor :
+1. Obtenir contour Canny (cache ou détection live sur frame vidéo)
+2. Si live : convertir pixels vidéo → coords image
+3. Réordonner depuis P0 tracké (OpenCV retourne déjà ordonné)
+4. Construire ContourSpatialIndex pour recherche rapide
+5. Calculer arc-lengths normalisés
+6. Détecter extrema de courbure CSS (trackCurvatureExtrema)
+7. Pour chaque anchor :
    a. Position brute = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
    b. Extremum tracké = extrema[anchorExtremumIdx[a]]
    c. Si distance < 15px → snap complet vers extremum
    d. Si distance < 40px → blend partiel
    e. Sinon → perdu, fallback position brute
-7. Re-snap non-perdus sur pixel Canny le plus proche
-8. Mode step-by-step : mettre à jour anchorS depuis position snappée
+8. Re-snap non-perdus sur pixel Canny le plus proche (via ContourSpatialIndex.nearestWithIndex)
+9. Mode step-by-step : mettre à jour anchorS depuis position snappée
 ```
 
 ### Preview contour complet
-Bouton "Preview contour complet" → appelle `computeAllSubdivisionFrames()` avec les dimensions image pour recalculer les subdivisions sur le contour Canny de chaque frame. Affiche anchors rouges + subdivisions verts + polygone complet jaune.
+Bouton "Preview contour complet" → appelle `computeAllSubdivisionFrames()` avec les dimensions image et le cache Canny pour recalculer les subdivisions. Affiche anchors rouges + subdivisions verts + polygone complet jaune.
 
 ## Étape 8 — Ancres Internes (`AnchorPointsStep.tsx`)
 
@@ -154,7 +162,7 @@ Même structure que les étapes de tracking mais pour les ancres internes :
 
 ## Étape 10 — Triangulation + Animation (`TriangulationStep.tsx`)
 
-Prérequis : tracking ancres validé.
+Prérequis : tracking contour validé. Tracking ancres internes optionnel (si absent, les ancres gardent leur position initiale).
 
 ### Triangulation
 - Points trackés = `[...contourAnchors, ...anchorPoints]` (lecture seule)
@@ -168,9 +176,13 @@ Prérequis : tracking ancres validé.
 - **Bouton PDF** (appelle `generateTemplatePDF`)
 
 ### Animation
-- Bouton "Calculer l'animation" → appelle `computeAllSubdivisionFrames` (avec imageWidth, imageHeight) si pas déjà calculé, puis assemble `videoFramesMesh` par frame :
+- Bouton "Calculer l'animation" :
+  1. Appelle `computeAllSubdivisionFrames` avec cache Canny (`mesh.contourCannyFrames`) si disponible, sinon détection live
+  2. Si `anchorFrames` absent → utilise les positions initiales pour toutes les frames
+  3. Ne charge le Worker OpenCV que si le cache Canny n'est pas disponible
+  4. Assemble `videoFramesMesh` par frame :
   ```
-  allPoints[f] = [...contourAnchorFrames[f], ...contourSubdivisionFrames[f], ...anchorFrames[f], ...interpolatedInternals]
+  allPoints[f] = [...contourAnchorFrames[f], ...contourSubdivisionFrames[f], ...(anchorFrames[f] ?? anchorPoints), ...interpolatedInternals]
   ```
 - Preview : vidéo + overlay maillage animé (play/pause/rewind)
 - Sauvegarde `videoFramesMesh` dans Storage
