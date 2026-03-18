@@ -27,6 +27,9 @@ export class DeviceParallax {
   private listening = false
   private handler: ((e: DeviceOrientationEvent) => void) | null = null
   private permissionGranted = false
+  /** Extra rotation in degrees to apply on top of screen.orientation.angle.
+   *  Set to 90 when CSS transform: rotate(90deg) is used as landscape fallback. */
+  public cssRotationOffset = 0
 
   constructor(options?: ParallaxOptions) {
     this.sensitivity = options?.sensitivity ?? 15
@@ -69,7 +72,9 @@ export class DeviceParallax {
       const beta = e.beta ?? 0
 
       // Detect landscape orientation: swap axes so parallax matches screen
-      const angle = (screen.orientation?.angle ?? (window.orientation as number) ?? 0)
+      // Include CSS rotation offset for cases where landscape is faked via CSS transform
+      const nativeAngle = (screen.orientation?.angle ?? (window.orientation as number) ?? 0)
+      const angle = (nativeAngle + this.cssRotationOffset) % 360
       const isLandscape = angle === 90 || angle === -90 || angle === 270
 
       if (isLandscape) {

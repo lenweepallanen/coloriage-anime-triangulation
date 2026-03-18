@@ -141,40 +141,111 @@ export function applyAntiSaut(
 // ---------------------------------------------------------------------------
 
 /**
- * Smooth anchor trajectories with a centered moving average.
- * Frame 0 and the last frame are preserved as-is.
- * At edges the window shrinks symmetrically.
+ * Compute 2nd-order Butterworth low-pass IIR coefficients via bilinear transform.
+ * @param cutoffHz  cutoff frequency in Hz (e.g. 4)
+ * @param sampleHz  sample rate in Hz (e.g. 24)
+ * @returns { b: [b0,b1,b2], a: [1, a1, a2] }
+ */
+function butterworthCoeffs(cutoffHz: number, sampleHz: number): { b: [number, number, number]; a: [number, number, number] } {
+  const Wn = cutoffHz / (sampleHz / 2) // normalised frequency [0,1]
+  const K = Math.tan(Math.PI * Wn / 2)  // pre-warped analog frequency
+  const K2 = K * K
+  const sqrt2K = Math.SQRT2 * K
+  const norm = 1 / (1 + sqrt2K + K2)
+
+  return {
+    b: [K2 * norm, 2 * K2 * norm, K2 * norm],
+    a: [1, 2 * (K2 - 1) * norm, (1 - sqrt2K + K2) * norm],
+  }
+}
+
+/**
+ * Zero-phase (filtfilt) IIR filter on a 1-D signal.
+ * Applies the filter forward then backward so that phase distortion cancels out.
+ * Uses reflected padding (3× filter order) to reduce edge transients.
+ */
+function filtfilt(signal: Float64Array, b: [number, number, number], a: [number, number, number]): Float64Array {
+  const n = signal.length
+  if (n <= 6) return new Float64Array(signal) // too short to filter
+
+  // Reflect-pad the signal by 3× order (order=2 → pad=6) to reduce edge effects
+  const padLen = 6
+  const padded = new Float64Array(n + 2 * padLen)
+  // left reflection: 2*signal[0] - signal[padLen..1]
+  for (let i = 0; i < padLen; i++) {
+    padded[i] = 2 * signal[0] - signal[padLen - i]
+  }
+  // centre
+  for (let i = 0; i < n; i++) padded[padLen + i] = signal[i]
+  // right reflection: 2*signal[n-1] - signal[n-2..n-2-padLen]
+  for (let i = 0; i < padLen; i++) {
+    padded[padLen + n + i] = 2 * signal[n - 1] - signal[n - 2 - i]
+  }
+
+  const pn = padded.length
+
+  // Forward pass (Direct Form II)
+  const fwd = new Float64Array(pn)
+  fwd[0] = padded[0]
+  fwd[1] = padded[1]
+  for (let i = 2; i < pn; i++) {
+    fwd[i] = b[0] * padded[i] + b[1] * padded[i - 1] + b[2] * padded[i - 2]
+             - a[1] * fwd[i - 1] - a[2] * fwd[i - 2]
+  }
+
+  // Backward pass
+  const bwd = new Float64Array(pn)
+  bwd[pn - 1] = fwd[pn - 1]
+  bwd[pn - 2] = fwd[pn - 2]
+  for (let i = pn - 3; i >= 0; i--) {
+    bwd[i] = b[0] * fwd[i] + b[1] * fwd[i + 1] + b[2] * fwd[i + 2]
+             - a[1] * bwd[i + 1] - a[2] * bwd[i + 2]
+  }
+
+  // Extract the central portion (strip padding)
+  return bwd.slice(padLen, padLen + n) as Float64Array
+}
+
+/**
+ * Smooth anchor trajectories with a zero-phase Butterworth low-pass filter.
+ * Eliminates tracking jitter at the source — both mesh and shadow benefit.
+ *
+ * @param allFrames  per-frame positions (Point2D[][])
+ * @param cutoffHz   cutoff frequency in Hz (default 4 — lower = smoother)
+ * @param sampleHz   frame rate in Hz (default 24)
  */
 export function applyTemporalSmoothing(
   allFrames: Point2D[][],
-  windowSize: number = 3
+  _windowSize?: number,
+  cutoffHz: number = 4,
+  sampleHz: number = 24,
 ): Point2D[][] {
   const totalFrames = allFrames.length
-  if (totalFrames <= 2) return allFrames.map(f => f.map(p => ({ ...p })))
+  if (totalFrames <= 6) return allFrames.map(f => f.map(p => ({ ...p })))
 
-  const halfWin = Math.floor(windowSize / 2)
   const numAnchors = allFrames[0].length
+  const { b, a } = butterworthCoeffs(cutoffHz, sampleHz)
+
+  // Extract per-anchor x/y trajectories, filter, then reassemble
   const result: Point2D[][] = new Array(totalFrames)
+  for (let f = 0; f < totalFrames; f++) {
+    result[f] = new Array(numAnchors)
+  }
 
-  // Keep first and last frame unchanged
-  result[0] = allFrames[0].map(p => ({ ...p }))
-  result[totalFrames - 1] = allFrames[totalFrames - 1].map(p => ({ ...p }))
-
-  for (let f = 1; f < totalFrames - 1; f++) {
-    const lo = Math.max(0, f - halfWin)
-    const hi = Math.min(totalFrames - 1, f + halfWin)
-    const count = hi - lo + 1
-    const positions: Point2D[] = new Array(numAnchors)
-
-    for (let a = 0; a < numAnchors; a++) {
-      let sx = 0, sy = 0
-      for (let k = lo; k <= hi; k++) {
-        sx += allFrames[k][a].x
-        sy += allFrames[k][a].y
-      }
-      positions[a] = { x: sx / count, y: sy / count }
+  for (let ai = 0; ai < numAnchors; ai++) {
+    const xSig = new Float64Array(totalFrames)
+    const ySig = new Float64Array(totalFrames)
+    for (let f = 0; f < totalFrames; f++) {
+      xSig[f] = allFrames[f][ai].x
+      ySig[f] = allFrames[f][ai].y
     }
-    result[f] = positions
+
+    const xSmooth = filtfilt(xSig, b, a)
+    const ySmooth = filtfilt(ySig, b, a)
+
+    for (let f = 0; f < totalFrames; f++) {
+      result[f][ai] = { x: xSmooth[f], y: ySmooth[f] }
+    }
   }
 
   return result

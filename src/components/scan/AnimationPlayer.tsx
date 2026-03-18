@@ -2,7 +2,6 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import type { Project, Point2D } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
-import { computeScanInsets } from '../../utils/pdfLayout'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MeshPhysicsEffect, DEFAULT_PHYSICS_CONFIG } from '../../utils/meshPhysicsEffects'
 import type { TouchState, PhysicsConfig } from '../../utils/meshPhysicsEffects'
@@ -36,13 +35,15 @@ const SLIDERS: SliderDef[] = [
 interface VisualEffectsConfig {
   shadowAlpha: number       // 0 to 0.5
   lightingAlpha: number     // 0 to 1
-  parallaxRange: number     // 0 to 40 px
+  parallaxRangeX: number    // 0 to 60 px — horizontal
+  parallaxRangeY: number    // 0 to 60 px — vertical
 }
 
 const DEFAULT_VISUAL_EFFECTS: VisualEffectsConfig = {
   shadowAlpha: 0.25,
   lightingAlpha: 0.6,
-  parallaxRange: 20,
+  parallaxRangeX: 20,
+  parallaxRangeY: 20,
 }
 
 interface VisualSliderDef {
@@ -56,8 +57,11 @@ interface VisualSliderDef {
 const VISUAL_SLIDERS: VisualSliderDef[] = [
   { key: 'shadowAlpha', label: 'Ombre', min: 0, max: 0.5, step: 0.05 },
   { key: 'lightingAlpha', label: 'Éclairage', min: 0, max: 1, step: 0.05 },
-  { key: 'parallaxRange', label: 'Parallax', min: 0, max: 40, step: 2 },
+  { key: 'parallaxRangeX', label: 'Parallax H', min: 0, max: 60, step: 2 },
+  { key: 'parallaxRangeY', label: 'Parallax V', min: 0, max: 60, step: 2 },
 ]
+
+const LONG_PRESS_DURATION = 3000 // ms
 
 // --- Helper: create lighting gradient texture ---
 
@@ -76,11 +80,90 @@ function createLightingCanvas(): HTMLCanvasElement {
   return c
 }
 
+// --- Long-press close button ---
+
+function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
+  const [progress, setProgress] = useState(0)
+  const [pressing, setPressing] = useState(false)
+  const startTimeRef = useRef<number>(0)
+  const rafRef = useRef<number>(0)
+  const completedRef = useRef(false)
+
+  const animate = useCallback(() => {
+    const elapsed = Date.now() - startTimeRef.current
+    const p = Math.min(elapsed / LONG_PRESS_DURATION, 1)
+    setProgress(p)
+    if (p >= 1 && !completedRef.current) {
+      completedRef.current = true
+      onComplete()
+      return
+    }
+    if (p < 1) {
+      rafRef.current = requestAnimationFrame(animate)
+    }
+  }, [onComplete])
+
+  const startPress = useCallback(() => {
+    completedRef.current = false
+    startTimeRef.current = Date.now()
+    setPressing(true)
+    rafRef.current = requestAnimationFrame(animate)
+  }, [animate])
+
+  const cancelPress = useCallback(() => {
+    cancelAnimationFrame(rafRef.current)
+    setPressing(false)
+    setProgress(0)
+  }, [])
+
+  useEffect(() => {
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // SVG circle progress
+  const radius = 18
+  const circumference = 2 * Math.PI * radius
+  const strokeOffset = circumference * (1 - progress)
+
+  return (
+    <button
+      className="fullscreen-close-btn"
+      onPointerDown={startPress}
+      onPointerUp={cancelPress}
+      onPointerLeave={cancelPress}
+      onPointerCancel={cancelPress}
+      onContextMenu={e => e.preventDefault()}
+    >
+      <svg width="44" height="44" viewBox="0 0 44 44">
+        {/* Background circle */}
+        <circle cx="22" cy="22" r={radius} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
+        {/* Progress arc */}
+        {pressing && (
+          <circle
+            cx="22" cy="22" r={radius}
+            fill="none"
+            stroke="#ff4444"
+            strokeWidth="3"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeOffset}
+            strokeLinecap="round"
+            transform="rotate(-90 22 22)"
+          />
+        )}
+        {/* X icon */}
+        <line x1="16" y1="16" x2="28" y2="28" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="28" y1="16" x2="16" y2="28" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    </button>
+  )
+}
+
 export default function AnimationPlayer({ project, scanCanvas, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
   const [playing, setPlaying] = useState(true)
-  const [showSettings, setShowSettings] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [physicsConfig, setPhysicsConfig] = useState<PhysicsConfig>({ ...DEFAULT_PHYSICS_CONFIG })
   const [visualConfig, setVisualConfig] = useState<VisualEffectsConfig>({ ...DEFAULT_VISUAL_EFFECTS })
   const physicsRef = useRef<MeshPhysicsEffect | null>(null)
@@ -90,6 +173,8 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
   })
   const [needsMotionPermission, setNeedsMotionPermission] = useState(false)
   const parallaxRef = useRef<DeviceParallax | null>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   const updateConfig = useCallback((key: keyof PhysicsConfig, value: number) => {
     setPhysicsConfig(prev => {
@@ -117,6 +202,43 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     }
   }, [])
 
+  // Enter fullscreen + lock landscape on mount
+  useEffect(() => {
+    const el = playerRef.current
+    if (!el) return
+
+    let mounted = true
+
+    const enterFullscreen = async () => {
+      try {
+        await el.requestFullscreen()
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (screen.orientation as any)?.lock?.('landscape')
+        } catch { /* orientation lock not supported */ }
+      } catch { /* fullscreen not supported */ }
+    }
+    enterFullscreen()
+
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && mounted) {
+        try { screen.orientation?.unlock?.() } catch { /* ignore */ }
+        onCloseRef.current()
+      }
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+
+    return () => {
+      mounted = false
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {})
+      }
+      try { screen.orientation?.unlock?.() } catch { /* ignore */ }
+    }
+  }, [])
+
+  // PIXI setup
   useEffect(() => {
     if (!containerRef.current || !project.mesh) return
 
@@ -187,18 +309,30 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
       const bgTexture = PIXI.Texture.from(bgVideoEl, { resourceOptions: { autoPlay: true } })
       bgSprite = new PIXI.Sprite(bgTexture)
 
-      // Cover viewport with 10% oversize for parallax margin
-      const oversize = 1.1
-      bgSprite.width = viewW * oversize
-      bgSprite.height = viewH * oversize
-      bgSprite.x = -(viewW * (oversize - 1)) / 2
-      bgSprite.y = -(viewH * (oversize - 1)) / 2
+      // Cover viewport preserving aspect ratio + oversize for parallax margin
+      const setupBgSize = () => {
+        const vidW = bgVideoEl!.videoWidth || viewW
+        const vidH = bgVideoEl!.videoHeight || viewH
+        const coverScale = Math.max(viewW / vidW, viewH / vidH) * 1.15
+        bgSprite!.width = vidW * coverScale
+        bgSprite!.height = vidH * coverScale
+        bgSprite!.x = (viewW - vidW * coverScale) / 2
+        bgSprite!.y = (viewH - vidH * coverScale) / 2
+      }
+      bgVideoEl.addEventListener('loadedmetadata', setupBgSize, { once: true })
+      setupBgSize() // fallback if metadata already loaded
       bgContainer.addChild(bgSprite)
     }
 
     // --- Parallax ---
     const parallax = new DeviceParallax({ sensitivity: 6, smoothing: 0.8 })
     parallaxRef.current = parallax
+
+    // Detect CSS-rotated landscape (phone physically in portrait but display rotated 90°)
+    const isCSSRotated = window.matchMedia('(orientation: portrait)').matches
+    if (isCSSRotated) {
+      parallax.cssRotationOffset = 90
+    }
 
     if (DeviceParallax.isAvailable) {
       if (DeviceParallax.needsPermission) {
@@ -213,8 +347,7 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
 
     // --- Mesh texture & geometry ---
     const texture = PIXI.Texture.from(scanCanvas)
-    const insets = computeScanInsets(scanCanvas.width, scanCanvas.height)
-    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, insets)
+    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height)
 
     const indices = new Uint16Array(mesh.triangles.length * 3)
     mesh.triangles.forEach((tri, i) => {
@@ -244,25 +377,55 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     const pixiMesh = new PIXI.Mesh(geometry, material)
     meshContainer.addChild(pixiMesh)
 
-    // --- Shadow mesh ---
-    const shadowVertices = new Float32Array(vertices)
-    // Flat UVs (all 0,0) for solid color
-    const shadowUvs = new Float32Array(allPoints.length * 2)
-    const shadowGfx = new PIXI.Graphics()
-    shadowGfx.beginFill(0x000000)
-    shadowGfx.drawRect(0, 0, 1, 1)
-    shadowGfx.endFill()
-    const shadowTexture = app.renderer.generateTexture(shadowGfx)
+    // --- Shadow (filled contour polygon, no triangle mesh) ---
+    const shadowOffsetX = 4
+    const shadowOffsetY = 6
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shadowGeometry = new PIXI.MeshGeometry(shadowVertices as any, shadowUvs as any, indices as any)
-    const shadowMaterial = new PIXI.MeshMaterial(shadowTexture, { alpha: visualRef.current.shadowAlpha })
-    const shadowMesh = new PIXI.Mesh(shadowGeometry, shadowMaterial)
-    shadowContainer.addChild(shadowMesh)
-    shadowContainer.filters = [new PIXI.BlurFilter(4)]
+    // Build ordered contour vertex IDs (indices into allPoints)
+    const numContourAnchors = mesh.contourAnchors.length
+    const contourSubParams = mesh.contourSubdivisionParams ?? []
+    const contourVertexIds: number[] = []
+    for (let i = 0; i < numContourAnchors; i++) {
+      contourVertexIds.push(i)
+      const segPts: { t: number; idx: number }[] = []
+      for (let j = 0; j < contourSubParams.length; j++) {
+        if (contourSubParams[j].segmentIndex === i) {
+          segPts.push({ t: contourSubParams[j].t, idx: numContourAnchors + j })
+        }
+      }
+      segPts.sort((a, b) => a.t - b.t)
+      for (const sp of segPts) contourVertexIds.push(sp.idx)
+    }
 
-    const shadowOffsetX = 3
-    const shadowOffsetY = 5
+    const shadowGraphics = new PIXI.Graphics()
+    shadowContainer.addChild(shadowGraphics)
+    shadowContainer.filters = [new PIXI.BlurFilter(18)]
+
+    // Draw shadow polygon from point positions (image coords)
+    // Polygon is drawn fully opaque; container alpha controls visibility
+    function drawShadow(positions: Point2D[]) {
+      shadowGraphics.clear()
+      shadowContainer.alpha = visualRef.current.shadowAlpha
+      if (shadowContainer.alpha <= 0 || contourVertexIds.length < 3) return
+      shadowGraphics.beginFill(0x000000, 1.0)
+      const first = contourVertexIds[0]
+      shadowGraphics.moveTo(
+        positions[first].x * scale + offsetX + shadowOffsetX,
+        positions[first].y * scale + offsetY + shadowOffsetY
+      )
+      for (let ci = 1; ci < contourVertexIds.length; ci++) {
+        const idx = contourVertexIds[ci]
+        shadowGraphics.lineTo(
+          positions[idx].x * scale + offsetX + shadowOffsetX,
+          positions[idx].y * scale + offsetY + shadowOffsetY
+        )
+      }
+      shadowGraphics.closePath()
+      shadowGraphics.endFill()
+    }
+
+    // Initial shadow draw
+    drawShadow(allPoints)
 
     // --- Lighting overlay ---
     const lightCanvas = createLightingCanvas()
@@ -287,9 +450,14 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
       y: (sy - offsetY) / scale,
     })
 
-    // --- Background video parallax base position ---
-    const bgBaseX = bgSprite ? bgSprite.x : 0
-    const bgBaseY = bgSprite ? bgSprite.y : 0
+    // --- Background video parallax base position (updated on loadedmetadata) ---
+    const bgBase = { x: bgSprite ? bgSprite.x : 0, y: bgSprite ? bgSprite.y : 0 }
+    if (bgVideoEl) {
+      bgVideoEl.addEventListener('loadedmetadata', () => {
+        bgBase.x = bgSprite!.x
+        bgBase.y = bgSprite!.y
+      }, { once: true })
+    }
 
     // --- Animation loop ---
     if (hasFlow) {
@@ -318,24 +486,15 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
         }
         verts.update()
 
-        // Update shadow mesh vertices (with offset)
-        const sVerts = shadowGeometry.getBuffer('aVertexPosition')
-        for (let i = 0; i < modifiedPositions.length; i++) {
-          (sVerts.data as unknown as Float32Array)[i * 2] = modifiedPositions[i].x * scale + offsetX + shadowOffsetX;
-          (sVerts.data as unknown as Float32Array)[i * 2 + 1] = modifiedPositions[i].y * scale + offsetY + shadowOffsetY
-        }
-        sVerts.update()
-
-        // Visual effects live update
-        shadowMaterial.alpha = visualRef.current.shadowAlpha
+        // Update shadow contour polygon
+        drawShadow(modifiedPositions)
         lightSprite.alpha = visualRef.current.lightingAlpha
 
         // Parallax on background
         if (bgSprite) {
           const p = parallax.getOffset()
-          const range = visualRef.current.parallaxRange
-          bgSprite.x = bgBaseX + p.offsetX * range
-          bgSprite.y = bgBaseY + p.offsetY * range
+          bgSprite.x = bgBase.x + p.offsetX * visualRef.current.parallaxRangeX
+          bgSprite.y = bgBase.y + p.offsetY * visualRef.current.parallaxRangeY
         }
       })
     } else {
@@ -347,15 +506,13 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
         physics.update(allPoints, touchState, delta)
 
         // Visual effects live update
-        shadowMaterial.alpha = visualRef.current.shadowAlpha
         lightSprite.alpha = visualRef.current.lightingAlpha
 
         // Parallax (always active)
         if (bgSprite) {
           const p = parallax.getOffset()
-          const range = visualRef.current.parallaxRange
-          bgSprite.x = bgBaseX + p.offsetX * range
-          bgSprite.y = bgBaseY + p.offsetY * range
+          bgSprite.x = bgBase.x + p.offsetX * visualRef.current.parallaxRangeX
+          bgSprite.y = bgBase.y + p.offsetY * visualRef.current.parallaxRangeY
         }
 
         if (physics.isIdle()) return
@@ -369,12 +526,11 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
         }
         verts.update()
 
-        const sVerts = shadowGeometry.getBuffer('aVertexPosition')
-        for (let i = 0; i < modifiedPositions.length; i++) {
-          (sVerts.data as unknown as Float32Array)[i * 2] = modifiedPositions[i].x * scale + offsetX + shadowOffsetX;
-          (sVerts.data as unknown as Float32Array)[i * 2 + 1] = modifiedPositions[i].y * scale + offsetY + shadowOffsetY
-        }
-        sVerts.update()
+        // Update smooth contour mask
+        drawSmoothMask(modifiedPositions)
+
+        // Update shadow contour polygon
+        drawShadow(modifiedPositions)
       })
     }
 
@@ -408,75 +564,88 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     }
   }, [project, scanCanvas]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function toggleFullscreen() {
-    const el = containerRef.current
-    if (!el) return
+  const handleExitFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
-      document.exitFullscreen()
+      document.exitFullscreen().catch(() => {})
+      // onClose will be called via fullscreenchange listener
     } else {
-      el.requestFullscreen()
+      onClose()
     }
-  }
+  }, [onClose])
 
   return (
-    <div className="animation-player">
+    <div className="animation-player" ref={playerRef}>
       <div ref={containerRef} className="animation-canvas" />
-      <div className="animation-sidebar">
-        <div className="animation-controls">
-          <button onClick={() => setPlaying(p => !p)}>
-            {playing ? '⏸' : '▶'}
-          </button>
-          {needsMotionPermission && (
-            <button onClick={handleMotionPermission}>
-              Mouvement
-            </button>
-          )}
-          <button onClick={toggleFullscreen}>
-            ⛶
-          </button>
-          <button onClick={onClose} className="btn-danger">
-            ✕
-          </button>
-        </div>
-        <div className="animation-settings">
-          <details open>
-            <summary>Physique</summary>
-            <div className="settings-group">
-              {SLIDERS.map(({ key, label, min, max, step }) => (
-                <label key={key} className="physics-slider">
-                  <span>{label}: {physicsConfig[key]}</span>
-                  <input
-                    type="range"
-                    min={min}
-                    max={max}
-                    step={step}
-                    value={physicsConfig[key]}
-                    onChange={e => updateConfig(key, parseFloat(e.target.value))}
-                  />
-                </label>
-              ))}
+
+      {/* Floating close button (long-press 3s) */}
+      <LongPressCloseButton onComplete={handleExitFullscreen} />
+
+      {/* Floating settings gear button */}
+      <button
+        className="fullscreen-settings-btn"
+        onClick={() => setSidebarOpen(o => !o)}
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+
+      {/* Retractable sidebar overlay */}
+      {sidebarOpen && (
+        <div className="animation-sidebar-overlay" onClick={() => setSidebarOpen(false)}>
+          <div className="animation-sidebar-panel" onClick={e => e.stopPropagation()}>
+            <div className="animation-controls">
+              <button onClick={() => setPlaying(p => !p)}>
+                {playing ? '⏸' : '▶'}
+              </button>
+              {needsMotionPermission && (
+                <button onClick={handleMotionPermission}>
+                  Mouvement
+                </button>
+              )}
             </div>
-          </details>
-          <details open>
-            <summary>Effets visuels</summary>
-            <div className="settings-group">
-              {VISUAL_SLIDERS.map(({ key, label, min, max, step }) => (
-                <label key={key} className="physics-slider">
-                  <span>{label}: {visualConfig[key]}</span>
-                  <input
-                    type="range"
-                    min={min}
-                    max={max}
-                    step={step}
-                    value={visualConfig[key]}
-                    onChange={e => updateVisualConfig(key, parseFloat(e.target.value))}
-                  />
-                </label>
-              ))}
+            <div className="animation-settings">
+              <details open>
+                <summary>Physique</summary>
+                <div className="settings-group">
+                  {SLIDERS.map(({ key, label, min, max, step }) => (
+                    <label key={key} className="physics-slider">
+                      <span>{label}: {physicsConfig[key]}</span>
+                      <input
+                        type="range"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={physicsConfig[key]}
+                        onChange={e => updateConfig(key, parseFloat(e.target.value))}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </details>
+              <details open>
+                <summary>Effets visuels</summary>
+                <div className="settings-group">
+                  {VISUAL_SLIDERS.map(({ key, label, min, max, step }) => (
+                    <label key={key} className="physics-slider">
+                      <span>{label}: {visualConfig[key]}</span>
+                      <input
+                        type="range"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={visualConfig[key]}
+                        onChange={e => updateVisualConfig(key, parseFloat(e.target.value))}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </details>
             </div>
-          </details>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

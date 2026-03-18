@@ -2,7 +2,6 @@ import { useState, useCallback } from 'react'
 import type { Project } from '../../types/project'
 import type { Point2D } from '../../types/project'
 import { processCapturedImage } from '../../utils/perspectiveCorrection'
-import { computeScanInsets } from '../../utils/pdfLayout'
 import { createScan } from '../../db/scansStore'
 
 // Hook version for cleaner integration
@@ -48,10 +47,8 @@ export function useScanProcessor(project: Project) {
         const ctx = canvas.getContext('2d')!
 
         // Draw the corrected 2048x2048 image scaled to original dimensions.
-        // The homography maps L-marker centroids to (margin, margin) in the 2048 space.
-        // The centroid of an L-shape is ~3.17mm INSIDE the actual image edge,
-        // so the scan content is slightly zoomed in compared to the full image.
-        // This zoom is compensated in UV mapping (AnimationPlayer) and mesh overlay below.
+        // The homography maps L-marker corners to (margin, margin) in the 2048 space.
+        // Crop the margin area and stretch to original image dimensions.
         const margin = 64
         const srcSize = result.imageData.width // 2048
         const contentSize = srcSize - 2 * margin // 1920
@@ -166,14 +163,6 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
   // Draw the rectified image as background
   ctx.drawImage(rectifiedCanvas, 0, 0)
 
-  // The scan texture is slightly zoomed in (L-marker centroids are inside the image edges).
-  // Transform mesh points (image coords) → scan canvas coords.
-  const { insetX, insetY } = computeScanInsets(rectifiedCanvas.width, rectifiedCanvas.height)
-  const scaleX = rectifiedCanvas.width / (rectifiedCanvas.width - 2 * insetX)
-  const scaleY = rectifiedCanvas.height / (rectifiedCanvas.height - 2 * insetY)
-  const toScanX = (x: number) => (x - insetX) * scaleX
-  const toScanY = (y: number) => (y - insetY) * scaleY
-
   // Get frame 0 points (or static points if no animation)
   const allPoints = [...mesh.contourAnchors, ...mesh.contourSubdivisionPoints, ...mesh.anchorPoints, ...mesh.internalPoints]
   const framePoints = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
@@ -188,9 +177,9 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     const b = framePoints[tri[1]]
     const c = framePoints[tri[2]]
     ctx.beginPath()
-    ctx.moveTo(toScanX(a.x), toScanY(a.y))
-    ctx.lineTo(toScanX(b.x), toScanY(b.y))
-    ctx.lineTo(toScanX(c.x), toScanY(c.y))
+    ctx.moveTo(a.x, a.y)
+    ctx.lineTo(b.x, b.y)
+    ctx.lineTo(c.x, c.y)
     ctx.closePath()
     ctx.stroke()
   }
@@ -201,7 +190,7 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     const isAnchor = i < mesh.anchorPoints.length
     ctx.fillStyle = isAnchor ? 'rgba(255, 0, 0, 0.8)' : 'rgba(0, 100, 255, 0.8)'
     ctx.beginPath()
-    ctx.arc(toScanX(p.x), toScanY(p.y), isAnchor ? 4 : 2.5, 0, Math.PI * 2)
+    ctx.arc(p.x, p.y, isAnchor ? 4 : 2.5, 0, Math.PI * 2)
     ctx.fill()
   }
 

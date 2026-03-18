@@ -383,7 +383,7 @@ input[type="text"]:focus {
   height: 100%;
 }
 
-/* Scan page — forced landscape fullscreen */
+/* Scan page — responsive (portrait + landscape) */
 .scan-page {
   display: flex;
   flex-direction: column;
@@ -396,18 +396,6 @@ input[type="text"]:focus {
   z-index: 50;
   background: var(--color-bg);
   overflow: auto;
-}
-
-@media screen and (orientation: portrait) {
-  .scan-page {
-    /* CSS rotation fallback if Screen Orientation API is not supported */
-    transform: rotate(90deg);
-    transform-origin: top left;
-    width: 100vh;
-    height: 100vw;
-    top: 0;
-    left: 100vw;
-  }
 }
 
 /* Camera view */
@@ -477,22 +465,32 @@ input[type="text"]:focus {
   gap: 12px;
 }
 
-/* Animation player — landscape layout */
+/* Animation player — immersive fullscreen */
 .animation-player {
-  display: flex;
-  flex-direction: row;
-  height: 100vh;
-  width: 100vw;
   position: fixed;
   top: 0;
   left: 0;
+  width: 100%;
+  height: 100%;
   z-index: 100;
   background: #000;
 }
 
+/* Force landscape via CSS rotation when in portrait (fallback for iOS) */
+@media screen and (orientation: portrait) {
+  .animation-player {
+    transform: rotate(90deg);
+    transform-origin: top left;
+    width: 100vh;
+    height: 100vw;
+    top: 0;
+    left: 100vw;
+  }
+}
+
 .animation-canvas {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  height: 100%;
   background: #000;
   overflow: hidden;
 }
@@ -503,15 +501,83 @@ input[type="text"]:focus {
   height: 100%;
 }
 
-.animation-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  background: #1a1a2e;
+/* Floating close button (top-right) */
+.fullscreen-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 44px;
+  height: 44px;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fullscreen-close-btn:active {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Floating settings gear (top-left) */
+.fullscreen-settings-btn {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 44px;
+  height: 44px;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fullscreen-settings-btn:active {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Sidebar overlay backdrop */
+.animation-sidebar-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Sidebar panel (slide from left) */
+.animation-sidebar-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 240px;
+  height: 100%;
+  background: rgba(26, 26, 46, 0.95);
   color: #e0e0e0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  animation: sidebar-slide-in 0.2s ease-out;
+}
+
+@keyframes sidebar-slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
 }
 
 .animation-controls {
@@ -1141,8 +1207,8 @@ input[type="text"]:focus {
     min-height: 300px;
   }
 
-  .animation-sidebar {
-    width: 180px;
+  .animation-sidebar-panel {
+    width: 200px;
   }
 
   .animation-controls button {
