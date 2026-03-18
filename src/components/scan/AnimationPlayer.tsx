@@ -3,6 +3,7 @@ import * as PIXI from 'pixi.js'
 import type { Project, Point2D, CurvilinearParam } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import { computeScanInsets } from '../../utils/pdfLayout'
+import { LoopPlayback } from '../../utils/loopPlayback'
 
 interface Props {
   project: Project
@@ -146,33 +147,22 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
     const pixiMesh = new PIXI.Mesh(geometry, material)
     app.stage.addChild(pixiMesh)
 
-    // Animation loop
-    let frameIndex = 0
-    const fps = 24
-    let elapsed = 0
-
+    // Animation loop with seamless crossfade
     if (hasFlow) {
-      const totalFrames = mesh.videoFramesMesh!.length
+      const playback = new LoopPlayback(mesh.videoFramesMesh!, { crossfadeFrames: mesh.crossfadeFrames ?? 7 })
 
       app.ticker.add((delta) => {
         if (!playing) return
 
-        elapsed += delta
-        const frameDuration = 60 / fps // delta is in frames at 60fps
+        playback.advance(delta)
+        const positions = playback.getPositions()
+        const verts = geometry.getBuffer('aVertexPosition')
 
-        if (elapsed >= frameDuration) {
-          elapsed -= frameDuration
-          frameIndex = (frameIndex + 1) % totalFrames
-
-          const framePoints = mesh.videoFramesMesh![frameIndex]
-          const verts = geometry.getBuffer('aVertexPosition')
-
-          for (let i = 0; i < framePoints.length; i++) {
-            (verts.data as Float32Array)[i * 2] = framePoints[i].x * scale + offsetX;
-            (verts.data as Float32Array)[i * 2 + 1] = framePoints[i].y * scale + offsetY
-          }
-          verts.update()
+        for (let i = 0; i < positions.length; i++) {
+          (verts.data as Float32Array)[i * 2] = positions[i].x * scale + offsetX;
+          (verts.data as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
         }
+        verts.update()
       })
     }
 

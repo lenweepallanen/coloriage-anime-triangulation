@@ -12,6 +12,7 @@ import { pointInPolygon, triangleCentroid } from '../../utils/geometry'
 import { computeAllSubdivisionFrames } from '../../utils/curvilinearContour'
 import { loadOpenCVWorker } from '../../utils/perspectiveCorrection'
 import { applyTemporalSmoothing } from '../../utils/trackingConstraints'
+import { LoopPlayback } from '../../utils/loopPlayback'
 import type { PointType } from '../triangulation/drawingUtils'
 
 interface Props {
@@ -73,7 +74,9 @@ export default function TriangulationStep({ project, onSave }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [videoReady, setVideoReady] = useState(false)
   const animFrameRef = useRef(0)
+  const playbackRef = useRef<LoopPlayback | null>(null)
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null)
+  const [crossfadeFrames, setCrossfadeFrames] = useState(mesh?.crossfadeFrames ?? 7)
   const [viewMode, setViewMode] = useState<'video' | 'wireframe' | 'gradient'>('video')
   // Pre-computed gradient colors per triangle (HSL based on centroid at frame 0)
   const gradientColors = useRef<string[]>([])
@@ -311,16 +314,22 @@ export default function TriangulationStep({ project, onSave }: Props) {
     })
   }, [hasAnimation, mesh])
 
-  // Animation playback loop
+  // Initialize playback when animation data or crossfade changes
   useEffect(() => {
-    if (!hasAnimation || !playing) return
-    const frames = mesh!.videoFramesMesh!
+    if (!hasAnimation) { playbackRef.current = null; return }
+    playbackRef.current = new LoopPlayback(mesh!.videoFramesMesh!, { crossfadeFrames })
+  }, [hasAnimation, mesh, crossfadeFrames])
+
+  // Animation playback loop with seamless crossfade
+  useEffect(() => {
+    if (!hasAnimation || !playing || !playbackRef.current) return
     let lastTime = performance.now()
     function tick(now: number) {
-      if (now - lastTime >= 1000 / 24) {
-        lastTime = now
-        setCurrentFrame(f => (f + 1) % frames.length)
-      }
+      const dt = now - lastTime
+      lastTime = now
+      playbackRef.current!.advanceMs(dt)
+      const f = playbackRef.current!.currentFrame
+      setCurrentFrame(prev => prev !== f ? f : prev)
       animFrameRef.current = requestAnimationFrame(tick)
     }
     animFrameRef.current = requestAnimationFrame(tick)
@@ -371,7 +380,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
       const s = Math.min(cssW / vw, cssH / vh) * 0.95
       const ox = (cssW - vw * s) / 2, oy = (cssH - vh * s) / 2
       const imgW = imageDims?.w ?? vw, imgH = imageDims?.h ?? vh
-      const points = frames[frame]
+      const points = playbackRef.current ? playbackRef.current.getPositions() : frames[frame]
 
       // Background
       if (mode === 'video' && video) {
@@ -1053,14 +1062,40 @@ export default function TriangulationStep({ project, onSave }: Props) {
                 <input
                   type="range"
                   min={0}
-                  max={mesh.videoFramesMesh!.length - 1}
+                  max={(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}
                   value={currentFrame}
-                  onChange={e => { setPlaying(false); setCurrentFrame(Number(e.target.value)) }}
+                  onChange={e => { setPlaying(false); const f = Number(e.target.value); setCurrentFrame(f); playbackRef.current?.seekFrame(f) }}
                   style={{ width: 200 }}
                 />
                 <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 80 }}>
-                  {currentFrame} / {mesh.videoFramesMesh!.length - 1}
+                  {currentFrame} / {(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}
                 </span>
+                <span style={{ color: '#888', fontSize: 12, marginLeft: 12 }}>Crossfade :</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.floor(mesh.videoFramesMesh!.length / 2)}
+                  value={crossfadeFrames}
+                  onChange={e => setCrossfadeFrames(Number(e.target.value))}
+                  style={{ width: 80 }}
+                />
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 30 }}>
+                  {crossfadeFrames}
+                </span>
+                <button
+                  onClick={async () => {
+                    const updated = { ...project, mesh: { ...mesh!, crossfadeFrames } }
+                    await onSave(updated)
+                  }}
+                  style={{
+                    padding: '4px 12px', fontSize: 12, marginLeft: 4,
+                    background: crossfadeFrames !== (mesh?.crossfadeFrames ?? 7) ? '#16a34a' : '#555',
+                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  }}
+                  disabled={crossfadeFrames === (mesh?.crossfadeFrames ?? 7)}
+                >
+                  Valider crossfade
+                </button>
               </div>
               <div ref={animContainerRef} style={{ height: 400, position: 'relative' }}>
                 <canvas ref={animCanvasRef} style={{ width: '100%', height: '100%' }} />

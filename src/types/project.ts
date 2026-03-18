@@ -74,6 +74,7 @@ export interface MeshData {
   internalBarycentrics: BarycentricRef[];  // Pour contourSubdivisionPoints + internalPoints
 
   // Sortie finale (consumed by AnimationPlayer)
+  crossfadeFrames?: number;  // Nombre de frames de crossfade pour la boucle seamless (défaut 7)
   videoFramesMesh: Point2D[][] | null;  // allPoints par frame
 }
 
