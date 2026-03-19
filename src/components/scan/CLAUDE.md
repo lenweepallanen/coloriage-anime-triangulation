@@ -98,9 +98,26 @@ Le hook `useScanProcessor` expose un objet `debugImages: DebugImages | null` ave
 | 1 | `capturedUrl` | Photo brute prise par la caméra |
 | 2 | `raw2048Url` | Image 2048×2048 après correction perspective (avec marges 64px) |
 | 3 | `rectifiedUrl` | Image croppée aux dimensions originales (marges retirées) |
-| 4 | `meshOverlayUrl` | Image croppée + overlay triangulation frame 0 (triangles verts, anchors rouges, internes bleus) |
+| 4 | `meshOverlayUrl` | Image croppée + overlay triangulation frame 0 + bboxes d'alignement (cyan=dessin, jaune=mesh mappé) |
 
 La page ScanPage affiche ces 4 images dans un stage `debug` entre `processing` et `animation`, permettant de vérifier visuellement chaque étape du pipeline avant de lancer l'animation.
+
+### Alignement contenu scan ↔ maillage (ContentAlignment)
+
+Après `enhanceContrast`, le processeur détecte automatiquement la bounding box du dessin sur le scan et la compare à la bounding box du maillage pour calculer un mapping UV précis.
+
+**Pipeline** :
+1. `detectDrawingBBox(canvas)` — scanne lignes/colonnes pour trouver la première/dernière contenant ≥3 pixels sombres (lum < 128)
+2. `computeMeshBBox(allPoints)` — min/max sur tous les points du maillage
+3. Validation : scale X et Y dans [0.8, 1.2] sinon skip
+4. `ContentAlignment { drawBBox, meshBBox }` passé à `AnimationPlayer` via `ScanPage`
+
+**Gardes-fous** :
+- Skip si < 0.1% pixels sombres (page blanche)
+- Skip si bbox > 95% du canvas (bruit partout)
+- Skip si ratio scale hors [0.8, 1.2]
+
+**Debug overlay** : l'étape 4 affiche les bboxes en pointillé (cyan = dessin détecté, jaune = mesh mappé) et les triangles/points transformés via l'alignement.
 
 ## CornerAdjustment
 
@@ -123,13 +140,15 @@ Layout horizontal plein écran (`position: fixed`, `z-index: 100`) :
 ```
 Image scannée rectifiée
   → PIXI.Texture
-  → computeUVs(points, width, height) → Float32Array [0,1]
+  → computeUVs(points, width, height, contentAlignment?) → Float32Array [0,1]
   → Vertices en coordonnées écran (scale + offset)
   → Indices triangles → Uint16Array
   → PIXI.MeshGeometry(vertices, uvs, indices)
   → PIXI.MeshMaterial(texture)
   → PIXI.Mesh → stage
 ```
+
+Quand `contentAlignment` est fourni, les UVs mappent la bbox du maillage sur la bbox du dessin détecté sur le scan, au lieu du simple `x/width`.
 
 ### Scaling responsive
 

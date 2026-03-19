@@ -161,6 +161,7 @@ function ScanFlow({ project }: { project: Project }) {
         <AnimationPlayer
           project={project}
           scanCanvas={processor.rectifiedCanvas}
+          contentAlignment={processor.contentAlignment}
           onClose={handleRetake}
         />
       )}

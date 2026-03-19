@@ -3,6 +3,8 @@ import type { Project } from '../../types/project'
 import type { Point2D } from '../../types/project'
 import { processCapturedImage } from '../../utils/perspectiveCorrection'
 import { createScan } from '../../db/scansStore'
+import { detectDrawingBBox, computeMeshBBox } from '../../utils/textureExtractor'
+import type { ContentAlignment } from '../../utils/textureExtractor'
 
 // Hook version for cleaner integration
 export interface DebugImages {
@@ -17,6 +19,7 @@ export function useScanProcessor(project: Project) {
   const [error, setError] = useState<string | null>(null)
   const [rectifiedCanvas, setRectifiedCanvas] = useState<HTMLCanvasElement | null>(null)
   const [debugImages, setDebugImages] = useState<DebugImages | null>(null)
+  const [contentAlignment, setContentAlignment] = useState<ContentAlignment | null>(null)
 
   const handleCapture = useCallback(
     async (blob: Blob, corners: Point2D[] | null) => {
@@ -57,11 +60,38 @@ export function useScanProcessor(project: Project) {
         // Enhance contrast: push dark lines to true black, light areas to white
         enhanceContrast(ctx, imgDims.width, imgDims.height)
 
+        // Detect content alignment: match drawing bbox on scan to mesh bbox
+        let alignment: ContentAlignment | null = null
+        if (project.mesh) {
+          const drawBBox = detectDrawingBBox(canvas)
+          if (drawBBox) {
+            const allMeshPoints = [
+              ...project.mesh.contourAnchors,
+              ...project.mesh.contourSubdivisionPoints,
+              ...project.mesh.anchorPoints,
+              ...project.mesh.internalPoints,
+            ]
+            const meshBBox = computeMeshBBox(allMeshPoints)
+
+            // Sanity check: clamp scale to [0.8, 1.2] to avoid aberrant corrections
+            const meshW = meshBBox.maxX - meshBBox.minX
+            const meshH = meshBBox.maxY - meshBBox.minY
+            const drawW = drawBBox.maxX - drawBBox.minX
+            const drawH = drawBBox.maxY - drawBBox.minY
+            const scaleX = meshW > 0 ? drawW / meshW : 1
+            const scaleY = meshH > 0 ? drawH / meshH : 1
+            if (scaleX >= 0.8 && scaleX <= 1.2 && scaleY >= 0.8 && scaleY <= 1.2) {
+              alignment = { drawBBox, meshBBox }
+            }
+          }
+        }
+        setContentAlignment(alignment)
+
         // 3. Image redressée croppée
         const rectifiedUrl = canvas.toDataURL()
 
         // 4. Image redressée + overlay maillage frame 0
-        const meshOverlayUrl = buildMeshOverlay(canvas, project)
+        const meshOverlayUrl = buildMeshOverlay(canvas, project, alignment)
 
         setDebugImages({ capturedUrl, raw2048Url, rectifiedUrl, meshOverlayUrl })
 
@@ -88,10 +118,11 @@ export function useScanProcessor(project: Project) {
   const reset = useCallback(() => {
     setRectifiedCanvas(null)
     setDebugImages(null)
+    setContentAlignment(null)
     setError(null)
   }, [])
 
-  return { handleCapture, processing, error, rectifiedCanvas, debugImages, reset }
+  return { handleCapture, processing, error, rectifiedCanvas, debugImages, contentAlignment, reset }
 }
 
 /**
@@ -151,7 +182,7 @@ function enhanceContrast(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.putImageData(imageData, 0, 0)
 }
 
-function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project): string {
+function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project, alignment: ContentAlignment | null): string {
   const mesh = project.mesh
   if (!mesh) return rectifiedCanvas.toDataURL()
 
@@ -169,6 +200,22 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     ? mesh.videoFramesMesh[0]
     : allPoints
 
+  // Transform mesh coordinates to scan coordinates using alignment
+  const toScanX = (x: number) => {
+    if (!alignment) return x
+    const { drawBBox, meshBBox } = alignment
+    const meshW = meshBBox.maxX - meshBBox.minX
+    const drawW = drawBBox.maxX - drawBBox.minX
+    return meshW > 0 ? (x - meshBBox.minX) / meshW * drawW + drawBBox.minX : x
+  }
+  const toScanY = (y: number) => {
+    if (!alignment) return y
+    const { drawBBox, meshBBox } = alignment
+    const meshH = meshBBox.maxY - meshBBox.minY
+    const drawH = drawBBox.maxY - drawBBox.minY
+    return meshH > 0 ? (y - meshBBox.minY) / meshH * drawH + drawBBox.minY : y
+  }
+
   // Draw triangles
   ctx.strokeStyle = 'rgba(0, 255, 0, 0.6)'
   ctx.lineWidth = 1
@@ -177,9 +224,9 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     const b = framePoints[tri[1]]
     const c = framePoints[tri[2]]
     ctx.beginPath()
-    ctx.moveTo(a.x, a.y)
-    ctx.lineTo(b.x, b.y)
-    ctx.lineTo(c.x, c.y)
+    ctx.moveTo(toScanX(a.x), toScanY(a.y))
+    ctx.lineTo(toScanX(b.x), toScanY(b.y))
+    ctx.lineTo(toScanX(c.x), toScanY(c.y))
     ctx.closePath()
     ctx.stroke()
   }
@@ -190,8 +237,26 @@ function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project):
     const isAnchor = i < mesh.anchorPoints.length
     ctx.fillStyle = isAnchor ? 'rgba(255, 0, 0, 0.8)' : 'rgba(0, 100, 255, 0.8)'
     ctx.beginPath()
-    ctx.arc(p.x, p.y, isAnchor ? 4 : 2.5, 0, Math.PI * 2)
+    ctx.arc(toScanX(p.x), toScanY(p.y), isAnchor ? 4 : 2.5, 0, Math.PI * 2)
     ctx.fill()
+  }
+
+  // Draw alignment bboxes for debug
+  if (alignment) {
+    const { drawBBox, meshBBox } = alignment
+    // Drawing bbox (cyan)
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)'
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 4])
+    ctx.strokeRect(drawBBox.minX, drawBBox.minY, drawBBox.maxX - drawBBox.minX, drawBBox.maxY - drawBBox.minY)
+    // Mesh bbox mapped to scan (yellow)
+    ctx.strokeStyle = 'rgba(255, 255, 0, 0.8)'
+    ctx.strokeRect(
+      toScanX(meshBBox.minX), toScanY(meshBBox.minY),
+      toScanX(meshBBox.maxX) - toScanX(meshBBox.minX),
+      toScanY(meshBBox.maxY) - toScanY(meshBBox.minY)
+    )
+    ctx.setLineDash([])
   }
 
   return overlay.toDataURL()

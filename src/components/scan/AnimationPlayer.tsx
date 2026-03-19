@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import type { Project, Point2D } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
+import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MeshPhysicsEffect, DEFAULT_PHYSICS_CONFIG } from '../../utils/meshPhysicsEffects'
 import type { TouchState, PhysicsConfig } from '../../utils/meshPhysicsEffects'
@@ -10,6 +11,7 @@ import { DeviceParallax } from '../../utils/deviceParallax'
 interface Props {
   project: Project
   scanCanvas: HTMLCanvasElement
+  contentAlignment?: ContentAlignment | null
   onClose: () => void
 }
 
@@ -158,7 +160,7 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
   )
 }
 
-export default function AnimationPlayer({ project, scanCanvas, onClose }: Props) {
+export default function AnimationPlayer({ project, scanCanvas, contentAlignment, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -347,7 +349,7 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
 
     // --- Mesh texture & geometry ---
     const texture = PIXI.Texture.from(scanCanvas)
-    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height)
+    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
 
     const indices = new Uint16Array(mesh.triangles.length * 3)
     mesh.triangles.forEach((tri, i) => {
@@ -526,9 +528,6 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
         }
         verts.update()
 
-        // Update smooth contour mask
-        drawSmoothMask(modifiedPositions)
-
         // Update shadow contour polygon
         drawShadow(modifiedPositions)
       })
@@ -562,7 +561,7 @@ export default function AnimationPlayer({ project, scanCanvas, onClose }: Props)
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
-  }, [project, scanCanvas]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project, scanCanvas, contentAlignment]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleExitFullscreen = useCallback(() => {
     if (document.fullscreenElement) {

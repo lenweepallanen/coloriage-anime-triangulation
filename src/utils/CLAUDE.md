@@ -151,11 +151,15 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 ## textureExtractor.ts
 
 - `extractTextureCanvas(canvas)` — retourne le canvas rectifié tel quel
-- `computeUVs(points, imageW, imageH)` — normalise les coordonnées `[0,1]` :
-  ```
-  u = point.x / imageWidth
-  v = point.y / imageHeight
-  ```
+- `detectDrawingBBox(canvas)` — détecte la bbox du dessin (pixels sombres lum < 128) par scan lignes/colonnes (≥3 pixels sombres). Gardes-fous : skip si < 0.1% dark pixels ou bbox > 95% canvas
+- `computeMeshBBox(points)` — simple min/max sur tous les points du maillage
+- `computeUVs(points, imageW, imageH, alignment?)` — normalise les coordonnées `[0,1]` :
+  - Sans alignment : `u = x / imageWidth`, `v = y / imageHeight`
+  - Avec `ContentAlignment { drawBBox, meshBBox }` : mappe la bbox mesh sur la bbox dessin
+    ```
+    u = (x - meshMinX) / meshW * drawW / imageW + drawMinX / imageW
+    v = (y - meshMinY) / meshH * drawH / imageH + drawMinY / imageH
+    ```
 
 ## curvatureScaleSpace.ts
 
