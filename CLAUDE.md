@@ -42,6 +42,16 @@ La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints,
 
 Les step components ne connaissent pas le multi-animation. `AdminPage` construit un `ProjectStepView` (projet + videoBlob/mesh de l'animation sélectionnée) et intercepte le save pour merger dans la bonne animation.
 
+### Preview panel (AdminPreview)
+
+Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet droit (preview live PIXI.js). La preview utilise l'image PNG originale comme texture (pas de scan). Affiche l'animation rest en boucle + boutons oneshot + physique tactile + effets visuels.
+
+- **Masquable** : bouton "Masquer/Afficher preview" dans le header
+- **Redimensionnable** : barre de séparation draggable (15% à 60%), défaut ~1/3
+- **Condition** : visible seulement quand la rest animation a un `videoFramesMesh` calculé
+- **Responsive** : pleine largeur avec marges 5vw sur écrans 4K (>2000px) ; empilement vertical sous 900px
+- **Composant** : `AdminPreview.tsx` — PIXI.js léger (~320 lignes), FPS capé à 30, ResizeObserver, pas de fullscreen/parallax
+
 ## Workflow Admin (10 étapes rest / 6 étapes oneshot)
 
 Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 définit le s=0 du contour. Seuls 4-5 points caractéristiques du contour sont trackés par extrema de courbure CSS ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
@@ -92,10 +102,10 @@ src/
 ├── hooks/useProject.ts         Hook chargement/sauvegarde projet
 ├── pages/
 │   ├── HomePage.tsx            Liste projets
-│   ├── AdminPage.tsx           Onglets admin (10 étapes)
+│   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview)
 │   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)

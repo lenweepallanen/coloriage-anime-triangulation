@@ -170,11 +170,85 @@ input[type="text"]:focus {
   gap: 8px;
 }
 
-/* Admin page */
+/* Admin page — split panel layout */
 .admin-page {
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+}
+
+.admin-left-panel {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding-right: 8px;
+}
+
+.admin-splitter {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  align-self: stretch;
+}
+
+.admin-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: #ddd;
+  border-radius: 1px;
+  transition: background 0.15s;
+}
+
+.admin-splitter:hover::after {
+  background: var(--color-primary);
+}
+
+.admin-preview-panel {
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--color-card);
+  border-radius: var(--radius);
+  padding: 12px;
+  position: sticky;
+  top: 16px;
+  align-self: flex-start;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.admin-preview-canvas-wrapper {
+  width: 100%;
+  aspect-ratio: 1;
+  background: #f0f0f0;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.admin-preview-canvas-wrapper canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.preview-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  color: var(--color-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 24px;
 }
 
 .admin-tabs {
@@ -1174,6 +1248,37 @@ input[type="text"]:focus {
 }
 
 /* Mobile responsive */
+/* 4K / ultrawide: use full width with 5% margins */
+@media (min-width: 2000px) {
+  .app-main:has(.admin-page) {
+    max-width: none;
+    padding-left: 5vw;
+    padding-right: 5vw;
+  }
+}
+
+@media (max-width: 900px) {
+  .admin-page {
+    flex-direction: column;
+  }
+
+  .admin-splitter {
+    display: none;
+  }
+
+  .admin-left-panel {
+    padding-right: 0;
+  }
+
+  .admin-preview-panel {
+    width: 100% !important;
+    flex: none !important;
+    min-width: 0;
+    position: static;
+    max-height: none;
+  }
+}
+
 @media (max-width: 768px) {
   .app-main {
     padding: 12px;

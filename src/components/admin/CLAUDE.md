@@ -18,6 +18,7 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 | Fichier | Étape | Rôle |
 |---------|-------|------|
 | `AnimationManager.tsx` | — | Sélecteur/gestion animations (ajout, suppression, renommage, toggle type) |
+| `AdminPreview.tsx` | — | Preview live PIXI.js de l'animation dans le split-panel admin |
 | `ImportStep.tsx` | 1 | Upload image coloriage + vidéo animation (oneshot : vidéo seule) |
 | `CannyValidationStep.tsx` | 2 | Preview edges Canny sur vidéo + réglage seuils |
 | `ContourOriginStep.tsx` | 3 | Placement du point d'origine P0 sur le contour |
@@ -40,6 +41,19 @@ Composant de gestion multi-animation affiché en haut de l'AdminPage :
 - **Renommage** : double-clic pour édition inline
 - **Toggle type** : bascule rest↔oneshot (enforce exactement 1 rest)
 - Exporte `SHARED_GEOMETRY_FIELDS` et `copySharedGeometry()` pour la propagation
+
+## AdminPreview (`AdminPreview.tsx`)
+
+Preview live PIXI.js intégrée dans le split-panel droit de `AdminPage`. Rendu du maillage animé avec l'image PNG originale comme texture (pas de scan nécessaire).
+
+- **Props** : `{ project: Project, style?: CSSProperties }`
+- **Texture** : `originalImageBlob` → Image → canvas offscreen → PIXI.Texture (UVs directs, pas de contentAlignment)
+- **Animation** : `MultiAnimationPlayback` (rest loop + oneshots) ou `LoopPlayback` si pas de oneshots
+- **Physique** : `MeshPhysicsEffect` avec pointer events sur le canvas PIXI
+- **Effets visuels** : ombre (contour polygon + blur), éclairage (gradient overlay), vidéo de fond (sans parallax)
+- **Contrôles** : play/pause, boutons oneshot, sliders physique/visuels en `<details>` dépliables
+- **Performance** : FPS capé à 30 (`app.ticker.maxFPS`), `ResizeObserver` pour le redimensionnement
+- **Pas de** : fullscreen, landscape lock, parallax gyroscope, LongPressCloseButton
 
 ## Étape 1 — Import (`ImportStep.tsx`)
 

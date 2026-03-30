@@ -1,9 +1,10 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
 import type { Project, ProjectStepView } from '../types/project'
 import type { UploadHint, StepUploadHint } from '../db/projectsStore'
 import AnimationManager, { SHARED_GEOMETRY_FIELDS, copySharedGeometry } from '../components/admin/AnimationManager'
+import AdminPreview from '../components/admin/AdminPreview'
 import ImportStep from '../components/admin/ImportStep'
 import CannyValidationStep from '../components/admin/CannyValidationStep'
 import ContourOriginStep from '../components/admin/ContourOriginStep'
@@ -159,70 +160,135 @@ export default function AdminPage() {
     await save(updatedProject, scopedHints)
   }, [project, selectedAnimationId, isRestAnim, save])
 
+  // Preview panel toggle + resizable splitter
+  const [previewVisible, setPreviewVisible] = useState(true)
+  const [previewRatio, setPreviewRatio] = useState(33.3) // % of total width for preview
+  const splitterRef = useRef<HTMLDivElement>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+
+  // Drag-to-resize splitter
+  useEffect(() => {
+    const splitter = splitterRef.current
+    const page = pageRef.current
+    if (!splitter || !page) return
+
+    const onMouseDown = (e: MouseEvent) => {
+      e.preventDefault()
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+
+      const onMouseMove = (e: MouseEvent) => {
+        const rect = page.getBoundingClientRect()
+        const x = e.clientX - rect.left
+        const pct = ((rect.width - x) / rect.width) * 100
+        setPreviewRatio(Math.max(15, Math.min(60, pct)))
+      }
+
+      const onMouseUp = () => {
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        window.removeEventListener('mousemove', onMouseMove)
+        window.removeEventListener('mouseup', onMouseUp)
+      }
+
+      window.addEventListener('mousemove', onMouseMove)
+      window.addEventListener('mouseup', onMouseUp)
+    }
+
+    splitter.addEventListener('mousedown', onMouseDown)
+    return () => splitter.removeEventListener('mousedown', onMouseDown)
+  }, [previewVisible, loading])
+
   if (loading) return <div className="loading">Chargement du projet...</div>
   if (!project) return <Navigate to="/" replace />
 
+  const restAnimForPreview = project.animations.find(a => a.type === 'rest')
+  const canPreview = restAnimForPreview?.mesh?.videoFramesMesh != null
+    && restAnimForPreview.mesh.videoFramesMesh.length > 0
+
   return (
-    <div className="admin-page">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h2>{project.name} — Administration</h2>
-        <Link to={`/scan/${project.id}`}>
-          <button>Tester le scan</button>
-        </Link>
+    <div className="admin-page" ref={pageRef}>
+      <div className="admin-left-panel" style={previewVisible ? { flex: `0 0 ${100 - previewRatio}%` } : undefined}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2>{project.name} — Administration</h2>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setPreviewVisible(v => !v)}>
+              {previewVisible ? 'Masquer preview' : 'Afficher preview'}
+            </button>
+            <Link to={`/scan/${project.id}`}>
+              <button>Tester le scan</button>
+            </Link>
+          </div>
+        </div>
+
+        <AnimationManager
+          project={project}
+          selectedAnimationId={selectedAnimationId}
+          onSelectAnimation={setSelectedAnimationId}
+          onSave={save}
+        />
+
+        <nav className="admin-tabs">
+          {availableSteps.map(step => (
+            <button
+              key={step}
+              className={`tab ${activeStep === step ? 'active' : ''}`}
+              onClick={() => setActiveStep(step)}
+            >
+              {step}
+            </button>
+          ))}
+        </nav>
+
+        {stepView && (
+          <div className="admin-content">
+            {activeStep === 'Import' && (
+              <ImportStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
+            )}
+            {activeStep === 'Canny' && (
+              <CannyValidationStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Point 0 Contour' && (
+              <ContourOriginStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Tracking Point 0' && (
+              <ContourOriginTrackingStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Anchors Contour' && (
+              <ContourAnchorsStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Subdivision' && (
+              <ContourSubdivisionStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Tracking Contour' && (
+              <ContourTrackingStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Ancres Internes' && (
+              <AnchorPointsStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Tracking Ancres' && (
+              <AnchorTrackingStep project={stepView} onSave={stepSave} />
+            )}
+            {activeStep === 'Triangulation' && (
+              <TriangulationStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
+            )}
+          </div>
+        )}
       </div>
 
-      <AnimationManager
-        project={project}
-        selectedAnimationId={selectedAnimationId}
-        onSelectAnimation={setSelectedAnimationId}
-        onSave={save}
-      />
-
-      <nav className="admin-tabs">
-        {availableSteps.map(step => (
-          <button
-            key={step}
-            className={`tab ${activeStep === step ? 'active' : ''}`}
-            onClick={() => setActiveStep(step)}
-          >
-            {step}
-          </button>
-        ))}
-      </nav>
-
-      {stepView && (
-        <div className="admin-content">
-          {activeStep === 'Import' && (
-            <ImportStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
+      {previewVisible && (
+        <>
+          <div className="admin-splitter" ref={splitterRef} />
+          {canPreview ? (
+            <AdminPreview project={project} style={{ flex: `0 0 ${previewRatio}%` }} />
+          ) : (
+            <div className="admin-preview-panel" style={{ flex: `0 0 ${previewRatio}%` }}>
+              <div className="preview-placeholder">
+                Validez l'animation rest (triangulation + calcul animation) pour activer l'apercu
+              </div>
+            </div>
           )}
-          {activeStep === 'Canny' && (
-            <CannyValidationStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Point 0 Contour' && (
-            <ContourOriginStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Tracking Point 0' && (
-            <ContourOriginTrackingStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Anchors Contour' && (
-            <ContourAnchorsStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Subdivision' && (
-            <ContourSubdivisionStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Tracking Contour' && (
-            <ContourTrackingStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Ancres Internes' && (
-            <AnchorPointsStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Tracking Ancres' && (
-            <AnchorTrackingStep project={stepView} onSave={stepSave} />
-          )}
-          {activeStep === 'Triangulation' && (
-            <TriangulationStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
-          )}
-        </div>
+        </>
       )}
     </div>
   )
