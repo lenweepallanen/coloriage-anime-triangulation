@@ -50,8 +50,30 @@ Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet d
 - **Masquable** : bouton "Masquer/Afficher preview" dans le header
 - **Redimensionnable** : barre de séparation draggable (15% à 60%), défaut ~1/3
 - **Condition** : visible seulement quand la rest animation a un `videoFramesMesh` calculé
-- **Responsive** : pleine largeur avec marges 5vw sur écrans 4K (>2000px) ; empilement vertical sous 900px
+- **Responsive** : pleine largeur avec marges 5vw sur écrans 4K (>2000px) ; empilement vertical sous 1024px
 - **Composant** : `AdminPreview.tsx` — PIXI.js léger (~320 lignes), FPS capé à 30, ResizeObserver, pas de fullscreen/parallax
+
+### Design system
+
+Système de design CSS variables dans `global.css` :
+- **Boutons** : hiérarchie `btn-primary` (bleu, actions principales), `btn-secondary` (outlined), `btn-ghost` (transparent), `btn-icon` (carré), `btn-danger` (rouge), `btn-sm`/`btn-lg` (tailles). Le hover par défaut est neutre (pas bleu).
+- **Tokens** : spacing scale (`--space-1` à `--space-8`), typography scale (`--text-xs` à `--text-2xl`), shadows (`--shadow-sm/md/lg`), radius (`--radius-sm/lg/full`)
+- **Responsive** : breakpoints 480px, 768px, 1024px, 2000px
+
+### Pipeline stepper
+
+Navigation admin via **stepper numéroté** (remplace les tabs plats) :
+- Cercles connectés par des lignes, numérotés 1 à 10
+- 3 états visuels : **done** (✓ vert), **active** (● bleu avec glow), **pending** (○ gris)
+- Statut dérivé des champs mesh existants (pas de données supplémentaires)
+- Scroll horizontal sur mobile, labels cachés sur petit écran
+
+### Section actions rapides
+
+Ligne sous le header avec 3 encadrés côte-à-côte :
+- **Animations** : `AnimationManager` (pills sélection animation) — flex: 1
+- **PDF** : encadré orange, icône document, téléchargement PDF imprimable — visible dès l'import de l'image
+- **Scanner** : encadré bleu, icône appareil photo, lien vers la page scan
 
 ## Workflow Admin (10 étapes rest / 6 étapes oneshot / 1 étape physics)
 

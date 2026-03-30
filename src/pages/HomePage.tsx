@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProjects, createProject, deleteProject } from '../db/projectsStore'
+import { getAllProjects, createProject, deleteProject, duplicateProject, getProjectThumbnail } from '../db/projectsStore'
 import type { Project } from '../types/project'
 
 export default function HomePage() {
@@ -39,6 +39,7 @@ export default function HomePage() {
   }
 
   async function handleDelete(id: string) {
+    if (!confirm('Supprimer ce projet ?')) return
     try {
       await deleteProject(id)
       await loadProjects()
@@ -48,21 +49,30 @@ export default function HomePage() {
     }
   }
 
+  async function handleDuplicate(id: string) {
+    try {
+      await duplicateProject(id)
+      await loadProjects()
+    } catch (err) {
+      console.error('Failed to duplicate project:', err)
+      alert('Erreur duplication : ' + (err instanceof Error ? err.message : err))
+    }
+  }
+
   if (loading) return <div className="loading">Chargement...</div>
 
   return (
     <div className="home-page">
-      <section className="create-project">
-        <h2>Nouveau projet</h2>
+      <section className="create-project-section">
         <div className="create-form">
           <input
             type="text"
-            placeholder="Nom du projet"
+            placeholder="Nom du nouveau projet..."
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleCreate()}
           />
-          <button onClick={handleCreate} disabled={!newName.trim()}>
+          <button className="btn-primary" onClick={handleCreate} disabled={!newName.trim()}>
             Créer
           </button>
         </div>
@@ -79,6 +89,7 @@ export default function HomePage() {
                 key={project.id}
                 project={project}
                 onDelete={() => handleDelete(project.id)}
+                onDuplicate={() => handleDuplicate(project.id)}
               />
             ))}
           </div>
@@ -88,20 +99,30 @@ export default function HomePage() {
   )
 }
 
-function ProjectCard({ project, onDelete }: { project: Project; onDelete: () => void }) {
+function ProjectCard({ project, onDelete, onDuplicate }: { project: Project; onDelete: () => void; onDuplicate: () => void }) {
   const navigate = useNavigate()
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (project.originalImageBlob) {
-      const url = URL.createObjectURL(project.originalImageBlob)
-      setThumbUrl(url)
-      return () => URL.revokeObjectURL(url)
-    }
-  }, [project.originalImageBlob])
+    let revoke: string | null = null
+    getProjectThumbnail(project.id).then(blob => {
+      if (blob) {
+        const url = URL.createObjectURL(blob)
+        revoke = url
+        setThumbUrl(url)
+      }
+    })
+    return () => { if (revoke) URL.revokeObjectURL(revoke) }
+  }, [project.id])
 
   return (
-    <div className="project-card">
+    <div
+      className="project-card"
+      onClick={() => navigate(`/admin/${project.id}`)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => e.key === 'Enter' && navigate(`/admin/${project.id}`)}
+    >
       <div className="project-thumb">
         {thumbUrl ? (
           <img src={thumbUrl} alt={project.name} />
@@ -111,19 +132,33 @@ function ProjectCard({ project, onDelete }: { project: Project; onDelete: () => 
       </div>
       <div className="project-info">
         <h3>{project.name}</h3>
-        <span className="project-date">
-          {new Date(project.createdAt).toLocaleDateString('fr-FR')}
-        </span>
-        {project.animations.length > 0 && (
-          <span className="project-anim-count">
-            {project.animations.length} anim{project.animations.length > 1 ? 's' : ''}
+        <div className="project-meta">
+          <span className="project-date">
+            {new Date(project.createdAt).toLocaleDateString('fr-FR')}
           </span>
-        )}
+          {project.animations.length > 0 && (
+            <span className="project-anim-count">
+              {project.animations.length} anim{project.animations.length > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
       </div>
       <div className="project-actions">
-        <button onClick={() => navigate(`/admin/${project.id}`)}>Admin</button>
-        <button onClick={() => navigate(`/scan/${project.id}`)}>Colorier</button>
-        <button className="btn-danger" onClick={onDelete}>Supprimer</button>
+        <button className="btn-icon" onClick={e => { e.stopPropagation(); onDuplicate() }} title="Dupliquer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        </button>
+        <button className="btn-secondary btn-sm" onClick={e => { e.stopPropagation(); navigate(`/admin/${project.id}`) }}>
+          Editer
+        </button>
+        <button className="btn-secondary btn-sm" onClick={e => { e.stopPropagation(); navigate(`/scan/${project.id}`) }}>
+          Colorier
+        </button>
+        <button className="btn-icon btn-sm" onClick={e => { e.stopPropagation(); onDelete() }} title="Supprimer" style={{ color: 'var(--color-danger)' }}>
+          ✕
+        </button>
       </div>
     </div>
   )

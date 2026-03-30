@@ -471,8 +471,9 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
           </p>
 
           <button
+            className="btn-primary"
             onClick={handleLaunchTracking}
-            style={{ background: 'var(--color-primary)', color: 'white', padding: '8px 24px', alignSelf: 'flex-start' }}
+            style={{ alignSelf: 'flex-start' }}
           >
             Lancer le tracking
           </button>
@@ -505,9 +506,9 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
           Point 0 — Édition frame par frame
         </span>
         <button
+          className="btn-primary"
           onClick={handleSaveAndValidate}
           disabled={saving}
-          style={{ background: 'var(--color-success)', color: 'white' }}
         >
           {saving ? 'Sauvegarde...' : 'Valider le tracking Point 0'}
         </button>

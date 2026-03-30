@@ -130,7 +130,7 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
   return (
     <div className="triangulation-step">
       <div className="triangulation-toolbar">
-        <button onClick={() => runAutoAnchors(anchorDensity)} disabled={generating}>
+        <button className="btn-secondary" onClick={() => runAutoAnchors(anchorDensity)} disabled={generating}>
           {generating ? 'Détection...' : 'Auto-détecter ancres'}
         </button>
         <button
@@ -151,7 +151,7 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
 
         <span className="toolbar-separator" />
 
-        <button onClick={handleSave} disabled={saving}>
+        <button className="btn-primary" onClick={handleSave} disabled={saving}>
           {saving ? 'Sauvegarde...' : 'Sauvegarder ancres'}
         </button>
         <button

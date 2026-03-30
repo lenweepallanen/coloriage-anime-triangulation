@@ -228,7 +228,7 @@ for (let i = 0; i < numVertices; i++) {
         )
       })}
       <button
-        className="anim-add-btn"
+        className="anim-add-btn btn-ghost"
         onClick={handleAddOneshot}
         disabled={saving}
         title="Ajouter une animation oneshot (vidéo)"
@@ -236,7 +236,7 @@ for (let i = 0; i < numVertices; i++) {
         + Oneshot
       </button>
       <button
-        className="anim-add-btn physics"
+        className="anim-add-btn btn-ghost physics"
         onClick={handleAddPhysics}
         disabled={saving}
         title="Ajouter une animation physique (code)"

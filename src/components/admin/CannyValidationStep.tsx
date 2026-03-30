@@ -310,16 +310,16 @@ export default function CannyValidationStep({ project, onSave }: Props) {
   return (
     <div className="triangulation-step">
       <div className="triangulation-toolbar">
-        <button onClick={() => setPlaying(!playing)}>
+        <button className="btn-icon" onClick={() => setPlaying(!playing)}>
           {playing ? 'Pause' : 'Play'}
         </button>
-        <button onClick={() => seekToFrame(0)} disabled={playing}>
+        <button className="btn-icon" onClick={() => seekToFrame(0)} disabled={playing}>
           ⏮ Début
         </button>
-        <button onClick={() => seekToFrame(currentFrame - 1)} disabled={playing || currentFrame <= 0}>
+        <button className="btn-icon" onClick={() => seekToFrame(currentFrame - 1)} disabled={playing || currentFrame <= 0}>
           ◀ -1
         </button>
-        <button onClick={() => seekToFrame(currentFrame + 1)} disabled={playing || currentFrame >= totalFrames - 1}>
+        <button className="btn-icon" onClick={() => seekToFrame(currentFrame + 1)} disabled={playing || currentFrame >= totalFrames - 1}>
           +1 ▶
         </button>
 
@@ -334,7 +334,7 @@ export default function CannyValidationStep({ project, onSave }: Props) {
 
         <span className="toolbar-separator" />
 
-        <button onClick={handleValidate} disabled={saving}>
+        <button className="btn-primary" onClick={handleValidate} disabled={saving}>
           {saving ? 'Sauvegarde...' : 'Valider paramètres Canny'}
         </button>
       </div>

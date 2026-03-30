@@ -452,6 +452,10 @@ function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
   }
 }
 
+export async function getProjectThumbnail(projectId: string): Promise<Blob | null> {
+  return downloadBlob(`projects/${projectId}/originalImage`)
+}
+
 export async function createProject(name: string): Promise<Project> {
   const restAnimation: Animation = {
     id: crypto.randomUUID(),
@@ -689,4 +693,57 @@ export async function deleteProject(id: string): Promise<void> {
 
   deletions.push(deleteDoc(projectRef(id)))
   await Promise.all(deletions)
+}
+
+const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
+  'video', 'contourOriginKeyframes', 'contourOriginFrames',
+  'contourAnchorKeyframes', 'contourAnchorFrames',
+  'contourSubdivisionFrames', 'contourCannyFrames',
+  'anchorKeyframes', 'anchorFrames', 'videoFramesMesh',
+]
+
+export async function duplicateProject(sourceId: string): Promise<Project> {
+  const source = await getProject(sourceId)
+  if (!source) throw new Error('Project not found')
+
+  // Build ID mapping for animations
+  const animIdMap = new Map<string, string>()
+  for (const anim of source.animations) {
+    animIdMap.set(anim.id, crypto.randomUUID())
+  }
+
+  const newId = crypto.randomUUID()
+  const duplicate: Project = {
+    ...source,
+    id: newId,
+    name: `${source.name} (copie)`,
+    createdAt: Date.now(),
+    animations: source.animations.map(a => ({
+      ...a,
+      id: animIdMap.get(a.id)!,
+      createdAt: Date.now(),
+    })),
+  }
+
+  // Build upload hints for all blobs
+  const hints: UploadHint[] = []
+  if (duplicate.originalImageBlob) hints.push('image')
+  if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
+  for (const anim of duplicate.animations) {
+    const newAnimId = anim.id
+    for (const field of ANIM_UPLOAD_FIELDS) {
+      if (field === 'video' && anim.videoBlob) {
+        hints.push({ animationId: newAnimId, field })
+      } else if (field !== 'video' && anim.mesh) {
+        const val = anim.mesh[field as keyof typeof anim.mesh]
+        if (val && (Array.isArray(val) ? val.length > 0 : true)) {
+          hints.push({ animationId: newAnimId, field })
+        }
+      }
+    }
+  }
+
+  await updateProject(duplicate, hints)
+  console.log(`[Firebase] Project duplicated: ${sourceId} -> ${newId}`)
+  return duplicate
 }

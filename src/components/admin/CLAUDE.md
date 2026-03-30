@@ -1,6 +1,8 @@
 # Workflow Admin (10 étapes rest / 6 étapes oneshot / 1 étape physics)
 
-Interface à onglets dans `AdminPage.tsx` pour configurer un projet **multi-animation**. Pipeline "contour-first" avec coordonnées curvilignes : un point d'origine P0 définit s=0, on tracke 4-5 points caractéristiques du contour par extrema de courbure CSS, les points intermédiaires sont calculés par coordonnée curviligne sur le contour Canny détecté à chaque frame.
+Interface dans `AdminPage.tsx` pour configurer un projet **multi-animation**. Pipeline "contour-first" avec coordonnées curvilignes : un point d'origine P0 définit s=0, on tracke 4-5 points caractéristiques du contour par extrema de courbure CSS, les points intermédiaires sont calculés par coordonnée curviligne sur le contour Canny détecté à chaque frame.
+
+Navigation via **pipeline stepper numéroté** (cercles connectés, états done/active/pending dérivés du mesh). Ligne d'actions rapides sous le header : encadré Animations (pills), encadré PDF orange (téléchargement dès l'import image), encadré Scanner bleu (lien scan).
 
 ## Multi-animation
 
@@ -36,13 +38,14 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 
 ## AnimationManager (`AnimationManager.tsx`)
 
-Composant de gestion multi-animation affiché en haut de l'AdminPage :
-- Barre de boutons/onglets : une animation par bouton, badge couleur (vert=rest, orange=oneshot, violet=physics)
-- **Ajout** : deux boutons `+ Oneshot` et `+ Physics`, copie la géométrie partagée depuis la rest (`copySharedGeometry`)
-- **Suppression** : uniquement les oneshots (rest est obligatoire), avec confirmation
+Composant de gestion multi-animation dans l'encadré "Animations" de l'AdminPage :
+- Barre de pills : une animation par pill, badge couleur (vert=rest, orange=oneshot, violet=physics)
+- **Ajout** : deux boutons ghost `+ Oneshot` et `+ Physics`, copie la géométrie partagée depuis la rest (`copySharedGeometry`)
+- **Suppression** : uniquement les oneshots/physics (rest est obligatoire), avec confirmation
 - **Renommage** : double-clic pour édition inline
 - **Toggle type** : bascule rest↔oneshot (enforce exactement 1 rest), masqué pour physics
 - Exporte `SHARED_GEOMETRY_FIELDS` et `copySharedGeometry()` pour la propagation
+- Encadré dans une section card avec label "ANIMATIONS" en small caps
 
 ## PhysicsAnimationEditor (`PhysicsAnimationEditor.tsx`)
 

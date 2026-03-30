@@ -334,9 +334,9 @@ export default function ContourOriginStep({ project, onSave }: Props) {
     <div className="triangulation-step">
       <div className="triangulation-toolbar">
         <button
+          className="btn-primary"
           onClick={handleSave}
           disabled={saving || !origin}
-          style={{ background: origin ? 'var(--color-success)' : undefined, color: origin ? 'white' : undefined }}
         >
           {saving ? 'Sauvegarde...' : 'Sauvegarder Point 0'}
         </button>

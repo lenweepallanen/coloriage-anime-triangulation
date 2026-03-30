@@ -345,7 +345,7 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
           {loadingContour ? 'Calcul...' : 'Recalculer preview contour'}
         </button>
 
-        <button onClick={handleSave} disabled={saving || !orderedContour}>
+        <button className="btn-primary" onClick={handleSave} disabled={saving || !orderedContour}>
           {saving ? 'Sauvegarde...' : 'Sauvegarder subdivision'}
         </button>
       </div>

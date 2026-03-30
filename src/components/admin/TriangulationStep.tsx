@@ -886,7 +886,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                 <button
                   onClick={handleComputeARAP}
                   disabled={computing}
-                  style={{ background: 'var(--color-primary)', color: 'white', padding: '8px 24px' }}
+                  className="btn-primary"
                 >
                   {computing ? 'Calcul en cours...' : 'Calculer Animation'}
                 </button>
@@ -898,11 +898,11 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                 <span style={{ color: 'var(--color-muted)' }}>
                   {mesh.videoFramesMesh!.length} frames, {mesh.videoFramesMesh![0]?.length ?? 0} pts/frame
                 </span>
-                <button onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
+                <button className="btn-icon" onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }}>◀</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }}>▶</button>
-                <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <button onClick={handleComputeARAP} disabled={computing} style={{ background: 'var(--color-primary)', color: 'white', marginLeft: 'auto' }}>
+                <button className="btn-icon" onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
+                <button className="btn-primary" onClick={handleComputeARAP} disabled={computing} style={{ marginLeft: 'auto' }}>
                   Recalculer Animation
                 </button>
               </>
@@ -921,9 +921,9 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
             <>
               <div style={{ padding: '4px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ color: 'var(--color-muted)', fontSize: 12 }}>Vue :</span>
-                <button onClick={() => setViewMode('video')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'video' ? 'var(--color-primary)' : 'var(--color-surface-3)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Vidéo + Mesh</button>
-                <button onClick={() => setViewMode('wireframe')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'wireframe' ? 'var(--color-primary)' : 'var(--color-surface-3)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Wireframe</button>
-                <button onClick={() => setViewMode('gradient')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'gradient' ? 'var(--color-primary)' : 'var(--color-surface-3)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Gradient</button>
+                <button className={`btn-sm ${viewMode === 'video' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('video')}>Vidéo + Mesh</button>
+                <button className={`btn-sm ${viewMode === 'wireframe' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('wireframe')}>Wireframe</button>
+                <button className={`btn-sm ${viewMode === 'gradient' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('gradient')}>Gradient</button>
                 <span style={{ flex: 1 }} />
                 <input type="range" min={0} max={(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1} value={currentFrame} onChange={e => { setPlaying(false); const f = Number(e.target.value); setCurrentFrame(f); playbackRef.current?.seekFrame(f) }} style={{ width: 200 }} />
                 <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 80 }}>{currentFrame} / {(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}</span>
@@ -949,7 +949,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
         {!topologyLocked && (
           <>
-            <button onClick={() => runAutoInternalPoints(density)} disabled={generating}>
+            <button className="btn-secondary" onClick={() => runAutoInternalPoints(density)} disabled={generating}>
               {generating ? 'Génération...' : 'Auto points internes'}
             </button>
 
@@ -971,13 +971,13 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
             <span className="toolbar-separator" />
 
-            <button onClick={handleSave} disabled={saving}>
+            <button className="btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? 'Sauvegarde...' : 'Sauvegarder'}
             </button>
             <button
+              className="btn-primary"
               onClick={handleLockTopology}
               disabled={saving || triangles.length === 0}
-              style={{ background: 'var(--color-success)', color: 'white' }}
             >
               Verrouiller la topologie
             </button>
@@ -995,7 +995,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
         <span className="toolbar-separator" />
 
-        <button onClick={handleGeneratePDF}>
+        <button className="btn-secondary" onClick={handleGeneratePDF}>
           Télécharger PDF
         </button>
 
@@ -1046,7 +1046,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                 <button
                   onClick={handleComputeARAP}
                   disabled={computing}
-                  style={{ background: 'var(--color-primary)', color: 'white', padding: '8px 24px' }}
+                  className="btn-primary"
                 >
                   {computing ? 'Calcul en cours...' : 'Calculer Animation'}
                 </button>
@@ -1058,15 +1058,15 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                 <span style={{ color: 'var(--color-muted)' }}>
                   {mesh.videoFramesMesh!.length} frames, {mesh.videoFramesMesh![0]?.length ?? 0} pts/frame
                 </span>
-                <button onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
-                <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }} title="Frame précédente">
+                <button className="btn-icon" onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
+                <button className="btn-icon" onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }} title="Frame précédente">
                   ◀
                 </button>
-                <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }} title="Frame suivante">
+                <button className="btn-icon" onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }} title="Frame suivante">
                   ▶
                 </button>
-                <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <button onClick={handleComputeARAP} disabled={computing} style={{ background: 'var(--color-primary)', color: 'white', marginLeft: 'auto' }}>
+                <button className="btn-icon" onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
+                <button className="btn-primary" onClick={handleComputeARAP} disabled={computing} style={{ marginLeft: 'auto' }}>
                   Recalculer Animation
                 </button>
               </>
@@ -1085,36 +1085,9 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
             <>
               <div style={{ padding: '4px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ color: 'var(--color-muted)', fontSize: 12 }}>Vue :</span>
-                <button
-                  onClick={() => setViewMode('video')}
-                  style={{
-                    padding: '4px 12px', fontSize: 12,
-                    background: viewMode === 'video' ? 'var(--color-primary)' : 'var(--color-surface-3)',
-                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
-                  }}
-                >
-                  Vidéo + Mesh
-                </button>
-                <button
-                  onClick={() => setViewMode('wireframe')}
-                  style={{
-                    padding: '4px 12px', fontSize: 12,
-                    background: viewMode === 'wireframe' ? 'var(--color-primary)' : 'var(--color-surface-3)',
-                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
-                  }}
-                >
-                  Wireframe
-                </button>
-                <button
-                  onClick={() => setViewMode('gradient')}
-                  style={{
-                    padding: '4px 12px', fontSize: 12,
-                    background: viewMode === 'gradient' ? 'var(--color-primary)' : 'var(--color-surface-3)',
-                    color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
-                  }}
-                >
-                  Gradient
-                </button>
+                <button className={`btn-sm ${viewMode === 'video' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('video')}>Vidéo + Mesh</button>
+                <button className={`btn-sm ${viewMode === 'wireframe' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('wireframe')}>Wireframe</button>
+                <button className={`btn-sm ${viewMode === 'gradient' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('gradient')}>Gradient</button>
                 <span style={{ flex: 1 }} />
                 <input
                   type="range"

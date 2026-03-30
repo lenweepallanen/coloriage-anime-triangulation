@@ -548,7 +548,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
   return (
     <div className="triangulation-step">
       <div className="triangulation-toolbar">
-        <button onClick={handleSave} disabled={saving || anchors.length < 3}>
+        <button className="btn-primary" onClick={handleSave} disabled={saving || anchors.length < 3}>
           {saving ? 'Sauvegarde...' : 'Sauvegarder anchors contour'}
         </button>
 
@@ -571,6 +571,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
         </div>
 
         <button
+          className="btn-secondary"
           onClick={handleAutoDetect}
           disabled={!cannyContour || detectingCSS}
         >

@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useParams, Navigate, Link } from 'react-router-dom'
 import { useProject } from '../hooks/useProject'
-import type { Project, ProjectStepView } from '../types/project'
+import type { Project, ProjectStepView, MeshData } from '../types/project'
 import type { UploadHint, StepUploadHint } from '../db/projectsStore'
 import AnimationManager, { SHARED_GEOMETRY_FIELDS, copySharedGeometry } from '../components/admin/AnimationManager'
 import AdminPreview from '../components/admin/AdminPreview'
@@ -16,6 +16,7 @@ import AnchorPointsStep from '../components/admin/AnchorPointsStep'
 import AnchorTrackingStep from '../components/admin/AnchorTrackingStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
 import PhysicsAnimationEditor from '../components/admin/PhysicsAnimationEditor'
+import { generateTemplatePDF } from '../utils/pdfGenerator'
 
 // Full pipeline for rest animation
 const REST_STEPS = [
@@ -49,6 +50,60 @@ const PHYSICS_STEPS = [
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number]
 
 const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo'])
+
+// Short labels for stepper display
+const STEP_SHORT_LABELS: Record<string, string> = {
+  'Import': 'Import',
+  'Canny': 'Canny',
+  'Point 0 Contour': 'Point 0',
+  'Tracking Point 0': 'Track P0',
+  'Anchors Contour': 'Anchors',
+  'Subdivision': 'Subdiv.',
+  'Tracking Contour': 'Track Cont.',
+  'Ancres Internes': 'Ancres Int.',
+  'Tracking Ancres': 'Track Ancres',
+  'Triangulation': 'Triangulation',
+  'Code Editeur': 'Code',
+}
+
+type StepStatus = 'done' | 'active' | 'pending'
+
+function getStepStatus(
+  step: string,
+  activeStep: string,
+  mesh: MeshData | null,
+  hasImage: boolean,
+  hasVideo: boolean
+): StepStatus {
+  if (step === activeStep) return 'active'
+
+  switch (step) {
+    case 'Import':
+      return hasImage && hasVideo ? 'done' : 'pending'
+    case 'Canny':
+      return mesh?.cannyParams != null ? 'done' : 'pending'
+    case 'Point 0 Contour':
+      return mesh?.contourOrigin != null ? 'done' : 'pending'
+    case 'Tracking Point 0':
+      return mesh?.contourOriginTrackingValidated ? 'done' : 'pending'
+    case 'Anchors Contour':
+      return (mesh?.contourAnchors?.length ?? 0) > 0 ? 'done' : 'pending'
+    case 'Subdivision':
+      return mesh?.contourSubdivisionValidated ? 'done' : 'pending'
+    case 'Tracking Contour':
+      return mesh?.contourAnchorTrackingValidated ? 'done' : 'pending'
+    case 'Ancres Internes':
+      return (mesh?.anchorPoints?.length ?? 0) > 0 ? 'done' : 'pending'
+    case 'Tracking Ancres':
+      return mesh?.anchorTrackingValidated ? 'done' : 'pending'
+    case 'Triangulation':
+      return mesh?.videoFramesMesh != null ? 'done' : 'pending'
+    case 'Code Editeur':
+      return mesh?.videoFramesMesh != null ? 'done' : 'pending'
+    default:
+      return 'pending'
+  }
+}
 
 export default function AdminPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -219,32 +274,93 @@ export default function AdminPage() {
         <div className="admin-header">
           <h2>{project.name} — Administration</h2>
           <div className="admin-header-actions">
-            <button onClick={() => setPreviewVisible(v => !v)}>
+            <button className="btn-secondary" onClick={() => setPreviewVisible(v => !v)}>
               {previewVisible ? 'Masquer preview' : 'Afficher preview'}
             </button>
-            <Link to={`/scan/${project.id}`}>
-              <button>Tester le scan</button>
-            </Link>
           </div>
         </div>
 
-        <AnimationManager
-          project={project}
-          selectedAnimationId={selectedAnimationId}
-          onSelectAnimation={setSelectedAnimationId}
-          onSave={save}
-        />
+        <div className="admin-section-row">
+          <section className="anim-manager-section">
+            <div className="anim-manager-section-header">
+              <div className="anim-manager-section-label">Animations</div>
+            </div>
+            <AnimationManager
+              project={project}
+              selectedAnimationId={selectedAnimationId}
+              onSelectAnimation={setSelectedAnimationId}
+              onSave={save}
+            />
+          </section>
 
-        <nav className="admin-tabs">
-          {availableSteps.map(step => (
+          {project.originalImageBlob && (
             <button
-              key={step}
-              className={`tab ${activeStep === step ? 'active' : ''}`}
-              onClick={() => setActiveStep(step)}
+              className="pdf-download-card"
+              onClick={async () => {
+                try {
+                  const blob = await generateTemplatePDF({
+                    ...project,
+                    videoBlob: selectedAnim?.videoBlob ?? null,
+                    mesh: selectedAnim?.mesh ?? null,
+                  })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `${project.name}-template.pdf`
+                  a.click()
+                  URL.revokeObjectURL(url)
+                } catch (err) {
+                  console.error('PDF generation failed:', err)
+                }
+              }}
             >
-              {step}
+              <svg className="pdf-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <path d="M9 15v-2h1.5a1.5 1.5 0 0 1 0 3H9z" />
+              </svg>
+              <span className="pdf-download-label">PDF</span>
             </button>
-          ))}
+          )}
+
+          <Link to={`/scan/${project.id}`} className="scan-card">
+            <svg className="scan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+              <circle cx="12" cy="13" r="4" />
+            </svg>
+            <span className="scan-card-label">Scanner</span>
+          </Link>
+        </div>
+
+        <nav className="pipeline-stepper">
+          {availableSteps.map((step, i) => {
+            const status = getStepStatus(
+              step,
+              activeStep,
+              selectedAnim?.mesh ?? null,
+              project.originalImageBlob != null,
+              selectedAnim?.videoBlob != null
+            )
+            return (
+              <button
+                key={step}
+                className={`pipeline-step pipeline-step--${status}`}
+                onClick={() => setActiveStep(step)}
+              >
+                <span className="pipeline-step-content">
+                  <span className="pipeline-step-circle">
+                    {status === 'done' ? '✓' : i + 1}
+                  </span>
+                  <span className="pipeline-step-label">
+                    {STEP_SHORT_LABELS[step] || step}
+                  </span>
+                </span>
+                {i < availableSteps.length - 1 && (
+                  <span className="pipeline-step-connector" />
+                )}
+              </button>
+            )
+          })}
         </nav>
 
         {stepView && (

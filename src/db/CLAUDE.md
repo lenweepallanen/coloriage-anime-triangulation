@@ -75,8 +75,10 @@ scans/{scanId}/scanImage                                        → Blob image r
 | `createProject(name)` | Crée projet avec UUID + 1 animation rest par défaut |
 | `getProject(id)` | Charge métadonnées + télécharge blobs + JSON Storage par animation |
 | `getAllProjects()` | Liste projets (métadonnées seules, sans blobs) |
+| `getProjectThumbnail(id)` | Télécharge uniquement l'image originale (pour preview cards HomePage) |
 | `updateProject(project, uploadOnly?)` | Sauvegarde sélective avec hints scopés par animation |
 | `deleteProject(id)` | Supprime projet + scans + tous les fichiers Storage par animation |
+| `duplicateProject(sourceId)` | Duplique un projet complet (métadonnées + tous les blobs Storage) avec nouveaux UUIDs |
 
 ### Upload Hints
 

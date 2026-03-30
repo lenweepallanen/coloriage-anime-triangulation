@@ -440,32 +440,24 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
 
       {/* Controls */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button onClick={() => setPlaying(p => !p)} style={{ padding: '6px 16px' }}>
+        <button className="btn-icon" onClick={() => setPlaying(p => !p)}>
           {playing ? 'Pause' : 'Play'}
         </button>
-        <button onClick={handleReset} style={{ padding: '6px 16px' }}>
+        <button className="btn-icon" onClick={handleReset}>
           Reset
         </button>
         <div style={{ flex: 1 }} />
         <button
+          className="btn-secondary"
           onClick={handleSaveCode}
           disabled={saving || computing}
-          style={{ padding: '6px 16px' }}
         >
           {saving ? 'Sauvegarde...' : 'Sauvegarder le code'}
         </button>
         <button
+          className="btn-primary"
           onClick={handleCompute}
           disabled={saving || computing || !!error}
-          style={{
-            padding: '6px 16px',
-            background: 'var(--color-primary)',
-            color: 'white',
-            border: 'none',
-            borderRadius: 4,
-            cursor: (saving || computing || !!error) ? 'default' : 'pointer',
-            opacity: (saving || computing || !!error) ? 0.5 : 1,
-          }}
         >
           {computing ? 'Calcul en cours...' : 'Valider et pre-calculer'}
         </button>
