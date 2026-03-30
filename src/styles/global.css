@@ -89,6 +89,24 @@ body {
   line-height: 1.5;
 }
 
+/* Focus visible — accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-primary-muted);
+  color: var(--color-text);
+}
+
 /* Typography */
 h1 {
   font-size: var(--text-2xl);
@@ -124,10 +142,10 @@ h4 {
 .text-sm { font-size: var(--text-sm); }
 .text-xs { font-size: var(--text-xs); }
 
-/* Scrollbars */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--color-surface-1); }
-::-webkit-scrollbar-thumb { background: var(--color-surface-3); border-radius: 4px; }
+/* Scrollbars — narrow, subtle */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-surface-3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-muted); }
 
 /* Layout */
@@ -141,6 +159,9 @@ h4 {
   background: var(--color-surface-1);
   border-bottom: 1px solid var(--color-border);
   padding: 12px 24px;
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.2);
+  position: relative;
+  z-index: 10;
 }
 
 .app-title {
@@ -163,6 +184,12 @@ h4 {
   text-align: center;
   padding: 48px;
   color: var(--color-muted);
+  animation: pulse-fade 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-fade {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
 /* Buttons — base (neutral hover, no longer turns blue) */
@@ -372,6 +399,9 @@ code {
   font-style: italic;
   text-align: center;
   padding: 48px 24px;
+  background: var(--color-surface-0);
+  border: 1px dashed var(--color-border-hover);
+  border-radius: var(--radius);
 }
 
 .project-grid {
@@ -388,6 +418,12 @@ code {
   border: 1px solid var(--color-border);
   cursor: pointer;
   transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+  animation: fade-in-up 0.3s ease both;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .project-card:hover {
@@ -496,7 +532,7 @@ code {
 }
 
 .admin-splitter {
-  width: 6px;
+  width: 8px;
   flex-shrink: 0;
   cursor: col-resize;
   background: transparent;
@@ -509,15 +545,17 @@ code {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 2px;
+  left: 3px;
   width: 2px;
   background: var(--color-border);
   border-radius: 1px;
-  transition: background var(--transition);
+  transition: background var(--transition), width var(--transition), left var(--transition);
 }
 
 .admin-splitter:hover::after {
   background: var(--color-primary);
+  width: 4px;
+  left: 2px;
 }
 
 .admin-preview-panel {
@@ -525,7 +563,9 @@ code {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--color-card);
+  background: rgba(26, 29, 41, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: 12px;
@@ -641,6 +681,13 @@ code {
   background: var(--color-success);
   border-color: var(--color-success);
   color: white;
+  animation: step-complete 0.3s ease;
+}
+
+@keyframes step-complete {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .pipeline-step--done .pipeline-step-label {
@@ -703,7 +750,7 @@ code {
 }
 
 .admin-content {
-  background: var(--color-card);
+  background: linear-gradient(180deg, var(--color-surface-1) 0%, var(--color-card) 100%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: 24px;
@@ -715,6 +762,9 @@ code {
   text-align: center;
   padding: 48px;
   font-style: italic;
+  border: 1px dashed var(--color-border-hover);
+  border-radius: var(--radius);
+  background: var(--color-surface-0);
 }
 
 /* Animation Manager section */
@@ -2123,5 +2173,14 @@ code {
 
   .triangulation-canvas-container {
     min-height: 250px;
+  }
+}
+
+/* ─── Reduced motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
