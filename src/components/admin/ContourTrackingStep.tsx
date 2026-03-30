@@ -3,7 +3,7 @@ import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/p
 import type { UploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
 import { computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames, signedArea, ensureConsistentOrientation } from '../../utils/curvilinearContour'
-import { trackCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
+import { detectGlobalCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 
 interface Props {
@@ -81,6 +81,10 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
   const editedIndicesRef = useRef<Set<number>>(new Set())
   const [propagating, setPropagating] = useState(false)
 
+  // Snap extremum courbure
+  const [snapExtrema, setSnapExtrema] = useState(false)
+  const extremaCacheRef = useRef<Map<number, CSSCandidate[]>>(new Map())
+
   // Contour animation preview (validated phase)
   const [contourAnimActive, setContourAnimActive] = useState(false)
   const [contourAnimComputing, setContourAnimComputing] = useState(false)
@@ -95,8 +99,6 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
 
   // Extrema tracking constants
   const N_EXTREMA = 20
-  const SNAP_THRESHOLD = 15   // px: distance max gris↔extremum pour snap
-  const LOST_THRESHOLD = 40   // px: au-delà → point perdu
 
   // ─── Prerequisites ──────────────────────────────────────────────
   const hasAnchors = (mesh?.contourAnchors?.length ?? 0) >= 3
@@ -109,6 +111,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
   // ─── Compute (shared logic) ─────────────────────────────────────
   const runCompute = useCallback(async (stepByStep: boolean) => {
     if (!ready || !mesh) return
+    extremaCacheRef.current.clear()
     setPhase('computing')
     setProgress(`Initialisation... (mode ${stepByStep ? 'proche en proche' : 'fixe'})`)
 
@@ -168,19 +171,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         return arcLengths0[bestIdx] / totalLen0
       })
 
-      // 2b. Detect curvature extrema on frame 0 + associate each anchor
-      const extrema0Result = trackCurvatureExtrema(ordered0, N_EXTREMA, null)
-      let previousExtrema: CSSCandidate[] = extrema0Result.extrema
-
-      // For each anchor, find the closest extremum → anchorExtremumIdx[a]
-      const anchorExtremumIdx: number[] = contourAnchors.map(anchor => {
-        let bestIdx = 0, bestDist = Infinity
-        for (let i = 0; i < previousExtrema.length; i++) {
-          const d = Math.hypot(previousExtrema[i].position.x - anchor.x, previousExtrema[i].position.y - anchor.y)
-          if (d < bestDist) { bestDist = d; bestIdx = i }
-        }
-        return bestIdx
-      })
+      // 2b. No longer needed: extrema are detected per-frame and matched by arc-length
 
       // 3. Get total frames
       let totalFrames: number
@@ -273,22 +264,19 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         const contourIdx = new ContourSpatialIndex(ordered)
         const p0Frame = originFrames[f]?.[0]
 
-        // Detect & track curvature extrema for this frame
-        const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
-        previousExtrema = extremaResult.extrema
+        // Detect global curvature extrema for this frame
+        const frameExtrema = detectGlobalCurvatureExtrema(ordered, N_EXTREMA)
 
-        // Place each anchor at its s coordinate, then snap to tracked extremum
+        // Place each anchor, then snap to nearest extremum by arc-length
         const rawPositions: Point2D[] = []
         const adjustedPositions: Point2D[] = []
         const frameLostFlags: boolean[] = []
 
         for (let a = 0; a < contourAnchors.length; a++) {
           if (a === 0 && p0Frame) {
-            // Anchor 0 = P0, use tracked position directly
             rawPositions.push(p0Frame)
             adjustedPositions.push(p0Frame)
             frameLostFlags.push(false)
-            // Step-by-step: update s from P0 position
             if (stepByStep) {
               const snap = contourIdx.nearestWithIndex(p0Frame, 50)
               if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
@@ -299,36 +287,19 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           const rawPos = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
           rawPositions.push(rawPos)
 
-          // Find this anchor's tracked extremum
-          const extIdx = anchorExtremumIdx[a]
-          const trackedExtremum = extremaResult.extrema[extIdx]
-
-          if (trackedExtremum) {
-            const dist = Math.hypot(rawPos.x - trackedExtremum.position.x, rawPos.y - trackedExtremum.position.y)
-
-            if (dist <= SNAP_THRESHOLD) {
-              // Close enough → snap to extremum
-              adjustedPositions.push(trackedExtremum.position)
-              frameLostFlags.push(false)
-              if (stepByStep) {
-                anchorS[a] = trackedExtremum.arcLengthNorm
-              }
-            } else if (dist <= LOST_THRESHOLD) {
-              // Partial snap (blend between raw and extremum)
-              const t = (dist - SNAP_THRESHOLD) / (LOST_THRESHOLD - SNAP_THRESHOLD)
-              const blended = {
-                x: trackedExtremum.position.x * (1 - t) + rawPos.x * t,
-                y: trackedExtremum.position.y * (1 - t) + rawPos.y * t,
-              }
-              adjustedPositions.push(blended)
-              frameLostFlags.push(false)
-              if (stepByStep) {
-                const snap = contourIdx.nearestWithIndex(blended, 50)
-                if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
-              }
-            } else {
-              adjustedPositions.push(rawPos)
-              frameLostFlags.push(true)
+          // Snap to nearest global extremum by arc-length (circular distance)
+          if (frameExtrema.length > 0) {
+            let bestExt = frameExtrema[0]
+            let bestArcDist = Infinity
+            for (const ext of frameExtrema) {
+              let d = Math.abs(ext.arcLengthNorm - anchorS[a])
+              if (d > 0.5) d = 1 - d
+              if (d < bestArcDist) { bestArcDist = d; bestExt = ext }
+            }
+            adjustedPositions.push(bestExt.position)
+            frameLostFlags.push(false)
+            if (stepByStep) {
+              anchorS[a] = bestExt.arcLengthNorm
             }
           } else {
             adjustedPositions.push(rawPos)
@@ -395,6 +366,17 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
   const handleCompute = useCallback(() => runCompute(false), [runCompute])
   const handleComputeStepByStep = useCallback(() => runCompute(true), [runCompute])
 
+  // ─── Extrema cache helper ────────────────────────────────────────
+  const getExtremaForFrame = useCallback((frame: number): CSSCandidate[] => {
+    const cache = extremaCacheRef.current
+    if (cache.has(frame)) return cache.get(frame)!
+    const cannyPts = cannyFramesRef.current?.[frame]
+    if (!cannyPts || cannyPts.length < 10) return []
+    const extrema = detectGlobalCurvatureExtrema(cannyPts, N_EXTREMA)
+    cache.set(frame, extrema)
+    return extrema
+  }, [])
+
   // ─── Preview rendering ──────────────────────────────────────────
   const drawPreview = useCallback(async (frame: number) => {
     const canvas = canvasRef.current
@@ -437,6 +419,54 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         const px = cannyPts[i].x * scaleX
         const py = cannyPts[i].y * scaleY
         ctx.fillRect(px - 0.5, py - 0.5, 1.5, 1.5)
+      }
+    }
+
+    // Draw curvature extrema (perpendicular ticks) when snap mode is active
+    if (snapExtrema && cannyPts && cannyPts.length > 10) {
+      const extrema = getExtremaForFrame(frame)
+      ctx.strokeStyle = 'rgba(255, 0, 255, 0.9)'
+      ctx.lineWidth = 2
+      const halfLen = 12 // half-length of tick in canvas px
+      for (let ei = 0; ei < extrema.length; ei++) {
+        const ext = extrema[ei]
+        // Find nearest contour pixel index to compute local tangent
+        const ep = ext.position
+        let bestIdx = 0, bestDist = Infinity
+        for (let i = 0; i < cannyPts.length; i++) {
+          const d = Math.hypot(cannyPts[i].x - ep.x, cannyPts[i].y - ep.y)
+          if (d < bestDist) { bestDist = d; bestIdx = i }
+        }
+        // Tangent from neighbors (wrap for closed contour)
+        const n = cannyPts.length
+        const prev = cannyPts[(bestIdx - 3 + n) % n]
+        const next = cannyPts[(bestIdx + 3) % n]
+        let tx = (next.x - prev.x) * scaleX
+        let ty = (next.y - prev.y) * scaleY
+        const tLen = Math.hypot(tx, ty)
+        if (tLen < 0.01) continue
+        // Perpendicular = (-ty, tx) normalized
+        const nx = -ty / tLen
+        const ny = tx / tLen
+        const ex = ep.x * scaleX
+        const ey = ep.y * scaleY
+        ctx.beginPath()
+        ctx.moveTo(ex - nx * halfLen, ey - ny * halfLen)
+        ctx.lineTo(ex + nx * halfLen, ey + ny * halfLen)
+        ctx.stroke()
+
+        // Label: rank by |κ| (1 = strongest), in line with the tick
+        const label = `${ei + 1}`
+        ctx.fillStyle = 'rgba(255, 0, 255, 0.9)'
+        ctx.font = 'bold 11px sans-serif'
+        const labelOffset = halfLen + 4
+        const lx = ex + nx * labelOffset
+        const ly = ey + ny * labelOffset
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(label, lx, ly)
+        ctx.textAlign = 'start'
+        ctx.textBaseline = 'alphabetic'
       }
     }
 
@@ -539,7 +569,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         ctx.fillText(`${i}${isLost ? '?' : ''}`, cx + 8, cy - 4)
       }
     }
-  }, [showFullContour, mesh])
+  }, [showFullContour, mesh, snapExtrema, getExtremaForFrame])
 
   // Draw on frame change
   useEffect(() => {
@@ -591,22 +621,34 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     const scaleX = canvas.width / imgDims.w
     const scaleY = canvas.height / imgDims.h
 
-    // Update position in image coords, snapped to nearest Canny pixel
+    // Update position in image coords, snapped to nearest Canny pixel or extremum
     const imgX = cx / scaleX
     const imgY = cy / scaleY
-    const cannyPts = cannyFramesRef.current?.[previewFrame]
 
-    if (cannyPts && cannyPts.length > 0) {
-      // Snap: find nearest Canny pixel using spatial index
-      const dragIdx = new ContourSpatialIndex(cannyPts)
-      const snap = dragIdx.nearest({ x: imgX, y: imgY }, 50)
-      if (snap) {
-        computed[previewFrame][draggingIdx] = { ...snap.point }
+    if (snapExtrema) {
+      // Snap to nearest curvature extremum
+      const extrema = getExtremaForFrame(previewFrame)
+      let bestDist = 50
+      let bestPoint: Point2D | null = null
+      for (const ext of extrema) {
+        const d = Math.hypot(imgX - ext.position.x, imgY - ext.position.y)
+        if (d < bestDist) { bestDist = d; bestPoint = ext.position }
+      }
+      computed[previewFrame][draggingIdx] = bestPoint ? { ...bestPoint } : { x: imgX, y: imgY }
+    } else {
+      const cannyPts = cannyFramesRef.current?.[previewFrame]
+      if (cannyPts && cannyPts.length > 0) {
+        // Snap: find nearest Canny pixel using spatial index
+        const dragIdx = new ContourSpatialIndex(cannyPts)
+        const snap = dragIdx.nearest({ x: imgX, y: imgY }, 50)
+        if (snap) {
+          computed[previewFrame][draggingIdx] = { ...snap.point }
+        } else {
+          computed[previewFrame][draggingIdx] = { x: imgX, y: imgY }
+        }
       } else {
         computed[previewFrame][draggingIdx] = { x: imgX, y: imgY }
       }
-    } else {
-      computed[previewFrame][draggingIdx] = { x: imgX, y: imgY }
     }
 
     // Also clear lost flag for this point
@@ -616,7 +658,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     setHasEdited(true)
     editedIndicesRef.current.add(draggingIdx)
     drawPreview(previewFrame)
-  }, [draggingIdx, previewFrame, drawPreview])
+  }, [draggingIdx, previewFrame, drawPreview, snapExtrema, getExtremaForFrame])
 
   const handleCanvasMouseUp = useCallback(() => {
     setDraggingIdx(null)
@@ -677,7 +719,6 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
 
       // Compute anchorS from edited positions on startFrame's contour
       const anchorS: number[] = new Array(contourAnchors.length).fill(0)
-      let previousExtrema: CSSCandidate[] | null = null
 
       if (startCannyPts && startCannyPts.length >= 10) {
         // startCannyPts already ordered by OpenCV — just scale
@@ -694,21 +735,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
         }
 
-        // Detect extrema at startFrame
-        const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, null)
-        previousExtrema = extremaResult.extrema
       }
-
-      // Re-associate anchors to extrema from edited positions
-      const anchorExtremumIdx: number[] = editedPositions.map(pos => {
-        if (!previousExtrema) return 0
-        let bestIdx = 0, bestDist = Infinity
-        for (let i = 0; i < previousExtrema.length; i++) {
-          const d = Math.hypot(previousExtrema[i].position.x - pos.x, previousExtrema[i].position.y - pos.y)
-          if (d < bestDist) { bestDist = d; bestIdx = i }
-        }
-        return bestIdx
-      })
 
       // Process frames from startFrame+1 to end
       for (let f = startFrame + 1; f < totalFrames; f++) {
@@ -754,8 +781,8 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
         // Build spatial index for O(1) nearest-neighbor lookups
         const contourIdx = new ContourSpatialIndex(ordered)
 
-        const extremaResult = trackCurvatureExtrema(ordered, N_EXTREMA, previousExtrema)
-        previousExtrema = extremaResult.extrema
+        // Detect global curvature extrema for this frame
+        const frameExtrema = detectGlobalCurvatureExtrema(ordered, N_EXTREMA)
 
         // Initialize arrays from existing data (selective) or empty (full)
         const rawPositions: Point2D[] = selectiveMode
@@ -792,31 +819,19 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
           const rawPos = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
           rawPositions[a] = rawPos
 
-          const extIdx = anchorExtremumIdx[a]
-          const trackedExtremum = extremaResult.extrema[extIdx]
-
-          if (trackedExtremum) {
-            const dist = Math.hypot(rawPos.x - trackedExtremum.position.x, rawPos.y - trackedExtremum.position.y)
-
-            if (dist <= SNAP_THRESHOLD) {
-              adjustedPositions[a] = trackedExtremum.position
-              frameLostFlags[a] = false
-              if (stepByStep) anchorS[a] = trackedExtremum.arcLengthNorm
-            } else if (dist <= LOST_THRESHOLD) {
-              const t = (dist - SNAP_THRESHOLD) / (LOST_THRESHOLD - SNAP_THRESHOLD)
-              const blended = {
-                x: trackedExtremum.position.x * (1 - t) + rawPos.x * t,
-                y: trackedExtremum.position.y * (1 - t) + rawPos.y * t,
-              }
-              adjustedPositions[a] = blended
-              frameLostFlags[a] = false
-              if (stepByStep) {
-                const snap = contourIdx.nearestWithIndex(blended, 50)
-                if (snap) anchorS[a] = arcLengths[snap.index] / totalLen
-              }
-            } else {
-              adjustedPositions[a] = rawPos
-              frameLostFlags[a] = true
+          // Snap to nearest global extremum by arc-length
+          if (frameExtrema.length > 0) {
+            let bestExt = frameExtrema[0]
+            let bestArcDist = Infinity
+            for (const ext of frameExtrema) {
+              let d = Math.abs(ext.arcLengthNorm - anchorS[a])
+              if (d > 0.5) d = 1 - d
+              if (d < bestArcDist) { bestArcDist = d; bestExt = ext }
+            }
+            adjustedPositions[a] = bestExt.position
+            frameLostFlags[a] = false
+            if (stepByStep) {
+              anchorS[a] = bestExt.arcLengthNorm
             }
           } else {
             adjustedPositions[a] = rawPos
@@ -974,6 +989,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     setPreviewFrame(0)
     setShowFullContour(false)
     editedIndicesRef.current.clear()
+    extremaCacheRef.current.clear()
 
     if (videoRef.current) {
       URL.revokeObjectURL(videoRef.current.src)
@@ -1335,6 +1351,15 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             <span className="frame-label">
               Frame {previewFrame + 1} / {totalFramesRef.current}
             </span>
+            <label style={{ marginLeft: 16, fontSize: '0.85em', color: '#ccc', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={snapExtrema}
+                onChange={e => setSnapExtrema(e.target.checked)}
+                style={{ marginRight: 4 }}
+              />
+              Snap extremum courbure
+            </label>
           </div>
 
           <input
@@ -1380,6 +1405,12 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
                 <span style={{ color: 'rgba(50,220,50,0.9)' }}>● Vert</span> = snap extremum
                 {' | '}
                 <span style={{ color: 'rgba(255,160,0,0.9)' }}>● Orange</span> = perdu
+                {snapExtrema && (
+                  <>
+                    {' | '}
+                    <span style={{ color: 'rgba(255, 0, 255, 0.9)' }}>| Magenta</span> = extrema courbure
+                  </>
+                )}
                 <br />
                 Glissez un point pour le repositionner, puis cliquez "Propager avant".
               </>

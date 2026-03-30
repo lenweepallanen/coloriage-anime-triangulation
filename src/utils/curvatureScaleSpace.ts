@@ -410,12 +410,99 @@ export function detectCurvatureExtrema(
 
   if (peaks.length === 0) return []
 
-  // Déjà triés par |κ| décroissant par findCurvatureExtrema, prendre les top N
-  return peaks.slice(0, numPoints).map(peak => ({
-    arcLengthNorm: peak.arcLengthNorm,
-    position: points[peak.index],
-    score: peak.absKappa,
-  }))
+  // NMS en arc-length circulaire (espacement min = moitié de l'espacement uniforme)
+  const minArcSpacing = 1 / (numPoints * 2)
+  const accepted: CSSCandidate[] = []
+  for (const peak of peaks) {
+    if (accepted.length >= numPoints) break
+
+    let tooClose = false
+    for (const acc of accepted) {
+      let d = Math.abs(peak.arcLengthNorm - acc.arcLengthNorm)
+      if (d > 0.5) d = 1 - d
+      if (d < minArcSpacing) {
+        tooClose = true
+        break
+      }
+    }
+
+    if (!tooClose) {
+      accepted.push({
+        arcLengthNorm: peak.arcLengthNorm,
+        position: points[peak.index],
+        score: peak.absKappa,
+      })
+    }
+  }
+  return accepted
+}
+
+/**
+ * Détecte les extrema globaux de κ (maxima et minima de la courbure signée).
+ * Contrairement à detectCurvatureExtrema qui utilise |κ|, cette fonction
+ * trouve les vrais pics convexes (κ max) et concaves (κ min), en ignorant
+ * les zones plates (points d'inflexion où κ ≈ 0).
+ */
+export function detectGlobalCurvatureExtrema(
+  path: Point2D[],
+  numPoints: number,
+  sigma: number = 4
+): CSSCandidate[] {
+  if (path.length < 10) return []
+
+  const N = Math.min(path.length, 1024)
+  const { points } = reparameterizeByArcLength(path, N)
+
+  const xs = points.map(p => p.x)
+  const ys = points.map(p => p.y)
+
+  const kappa = computeCurvature(xs, ys, sigma)
+
+  // Trouver les maxima locaux de κ (convexes) et les minima locaux de κ (concaves)
+  const extrema: { index: number; value: number }[] = []
+  for (let i = 0; i < N; i++) {
+    const prev = kappa[(i - 1 + N) % N]
+    const curr = kappa[i]
+    const next = kappa[(i + 1) % N]
+    // Maximum local de κ
+    if (curr > prev && curr > next) {
+      extrema.push({ index: i, value: Math.abs(curr) })
+    }
+    // Minimum local de κ
+    if (curr < prev && curr < next) {
+      extrema.push({ index: i, value: Math.abs(curr) })
+    }
+  }
+
+  // Trier par |κ| décroissant → les vrais extrema en premier, le bruit en dernier
+  extrema.sort((a, b) => b.value - a.value)
+
+  // NMS en arc-length circulaire
+  const minArcSpacing = 1 / (numPoints * 2)
+  const accepted: CSSCandidate[] = []
+  for (const ext of extrema) {
+    if (accepted.length >= numPoints) break
+
+    const arcNorm = ext.index / N
+    let tooClose = false
+    for (const acc of accepted) {
+      let d = Math.abs(arcNorm - acc.arcLengthNorm)
+      if (d > 0.5) d = 1 - d
+      if (d < minArcSpacing) {
+        tooClose = true
+        break
+      }
+    }
+
+    if (!tooClose) {
+      accepted.push({
+        arcLengthNorm: arcNorm,
+        position: points[ext.index],
+        score: ext.value,
+      })
+    }
+  }
+  return accepted
 }
 
 // ─── Tracking d'extrema frame-by-frame ──────────────────────────────
