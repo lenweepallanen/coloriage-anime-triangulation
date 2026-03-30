@@ -22,6 +22,8 @@ Séparation métadonnées / blobs :
   createdAt: number
   hasImage: boolean
   hasBackgroundVideo: boolean
+  hasAmbientSound: boolean
+  ambientSoundEnabled: boolean
   markers: MarkerCorners | null
   animations: AnimationDoc[]    // Remplace mesh/hasVideo au root
 }
@@ -55,6 +57,7 @@ Chaque `AnimationDoc` :
 ```
 projects/{projectId}/originalImage                              → Blob image (niveau projet)
 projects/{projectId}/backgroundVideo                            → Blob vidéo fond (niveau projet)
+projects/{projectId}/ambientSound                               → Blob son d'ambiance (niveau projet)
 projects/{projectId}/animations/{animId}/video                  → Blob vidéo animation
 projects/{projectId}/animations/{animId}/contourOriginKeyframes.json
 projects/{projectId}/animations/{animId}/contourOriginFrames.json
@@ -83,10 +86,10 @@ scans/{scanId}/scanImage                                        → Blob image r
 ### Upload Hints
 
 ```typescript
-UploadHint = 'image' | 'backgroundVideo' | { animationId: string; field: AnimationUploadField }
+UploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | { animationId: string; field: AnimationUploadField }
 
 AnimationUploadField =
-  | 'video' | 'contourOriginKeyframes' | 'contourOriginFrames'
+  | 'video' | 'audio' | 'contourOriginKeyframes' | 'contourOriginFrames'
   | 'contourAnchorKeyframes' | 'contourAnchorFrames'
   | 'contourSubdivisionFrames' | 'contourCannyFrames'
   | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'

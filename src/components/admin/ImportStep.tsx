@@ -9,47 +9,29 @@ interface Props {
 }
 
 export default function ImportStep({ project, onSave, isRestAnimation = true }: Props) {
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [bgVideoUrl, setBgVideoUrl] = useState<string | null>(null)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (project.originalImageBlob) {
-      const url = URL.createObjectURL(project.originalImageBlob)
-      setImageUrl(url)
-      return () => URL.revokeObjectURL(url)
-    }
-  }, [project.originalImageBlob])
 
   useEffect(() => {
     if (project.videoBlob) {
       const url = URL.createObjectURL(project.videoBlob)
       setVideoUrl(url)
       return () => URL.revokeObjectURL(url)
+    } else {
+      setVideoUrl(null)
     }
   }, [project.videoBlob])
 
   useEffect(() => {
-    if (project.backgroundVideoBlob) {
-      const url = URL.createObjectURL(project.backgroundVideoBlob)
-      setBgVideoUrl(url)
+    if (project.audioBlob) {
+      const url = URL.createObjectURL(project.audioBlob)
+      setAudioUrl(url)
       return () => URL.revokeObjectURL(url)
+    } else {
+      setAudioUrl(null)
     }
-  }, [project.backgroundVideoBlob])
-
-  async function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setSaving(true)
-    try {
-      await onSave({ ...project, originalImageBlob: file }, ['image'])
-    } catch (err) {
-      console.error('Failed to save image:', err)
-      alert('Erreur lors de la sauvegarde de l\'image : ' + (err instanceof Error ? err.message : err))
-    }
-    setSaving(false)
-  }
+  }, [project.audioBlob])
 
   async function handleVideoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -64,58 +46,41 @@ export default function ImportStep({ project, onSave, isRestAnimation = true }: 
     setSaving(false)
   }
 
-  async function handleBgVideoChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAudioChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setSaving(true)
     try {
-      await onSave({ ...project, backgroundVideoBlob: file }, ['backgroundVideo'])
+      await onSave({ ...project, audioBlob: file, audioEnabled: true }, ['audio'])
     } catch (err) {
-      console.error('Failed to save background video:', err)
-      alert('Erreur lors de la sauvegarde de la vidéo de fond : ' + (err instanceof Error ? err.message : err))
+      console.error('Failed to save audio:', err)
+      alert('Erreur lors de la sauvegarde du son : ' + (err instanceof Error ? err.message : err))
+    }
+    setSaving(false)
+  }
+
+  async function handleAudioToggle() {
+    setSaving(true)
+    try {
+      await onSave({ ...project, audioEnabled: !project.audioEnabled })
+    } catch (err) {
+      console.error('Failed to toggle audio:', err)
+    }
+    setSaving(false)
+  }
+
+  async function handleAudioRemove() {
+    setSaving(true)
+    try {
+      await onSave({ ...project, audioBlob: null, audioEnabled: false })
+    } catch (err) {
+      console.error('Failed to remove audio:', err)
     }
     setSaving(false)
   }
 
   return (
     <div className="import-step">
-      {isRestAnimation && (
-        <>
-          <div className="import-section">
-            <h3>Image du coloriage (noir & blanc)</h3>
-            <input
-              type="file"
-              accept="image/png,image/jpeg"
-              onChange={handleImageChange}
-              disabled={saving}
-            />
-            {imageUrl && (
-              <div className="preview">
-                <img src={imageUrl} alt="Coloriage" style={{ maxWidth: '100%', maxHeight: 400 }} />
-              </div>
-            )}
-          </div>
-
-          <div className="import-section">
-            <h3>Vidéo de fond (optionnel)</h3>
-            <p style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)', margin: '4px 0 8px' }}>
-              Vidéo affichée en arrière-plan de l'animation. Jouée en boucle.
-            </p>
-            <input
-              type="file"
-              accept="video/mp4,video/webm"
-              onChange={handleBgVideoChange}
-              disabled={saving}
-            />
-            {bgVideoUrl && (
-              <div className="preview">
-                <video src={bgVideoUrl} controls style={{ maxWidth: '100%', maxHeight: 400 }} />
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
       <div className="import-section">
         <h3>Vidéo d'animation (MP4)</h3>
         <input
@@ -131,18 +96,45 @@ export default function ImportStep({ project, onSave, isRestAnimation = true }: 
         )}
       </div>
 
+      {!isRestAnimation && (
+        <div className="import-section">
+          <h3>Son (optionnel)</h3>
+          <p style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)', margin: '4px 0 8px' }}>
+            Son joué avec l'animation. MP3, WAV ou OGG.
+          </p>
+          <input
+            type="file"
+            accept="audio/mpeg,audio/wav,audio/ogg"
+            onChange={handleAudioChange}
+            disabled={saving}
+          />
+          {audioUrl && (
+            <div className="preview" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <audio src={audioUrl} controls style={{ flex: 1 }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                <input
+                  type="checkbox"
+                  checked={project.audioEnabled}
+                  onChange={handleAudioToggle}
+                  disabled={saving}
+                />
+                Activé
+              </label>
+              <button className="btn-ghost btn-sm" onClick={handleAudioRemove} disabled={saving}>
+                Supprimer
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {saving && <p>Sauvegarde en cours...</p>}
 
       <div className="import-status">
         <p>
-          {isRestAnimation && (
-            <>
-              Image : {project.originalImageBlob ? 'OK' : 'Non importée'} |{' '}
-            </>
-          )}
           Vidéo : {project.videoBlob ? 'OK' : 'Non importée'}
-          {isRestAnimation && (
-            <> | Fond : {project.backgroundVideoBlob ? 'OK' : 'Non importé'}</>
+          {!isRestAnimation && (
+            <> | Son : {project.audioBlob ? (project.audioEnabled ? 'OK (activé)' : 'OK (désactivé)') : 'Non importé'}</>
           )}
         </p>
       </div>

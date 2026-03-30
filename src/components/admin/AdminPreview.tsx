@@ -86,12 +86,20 @@ export default function AdminPreview({ project, style }: Props) {
     active: false, screenX: 0, screenY: 0,
   })
   const multiPlaybackRef = useRef<MultiAnimationPlayback | null>(null)
+  const ambientAudioRef = useRef<HTMLAudioElement | null>(null)
   const [playbackState, setPlaybackState] = useState<string>('rest')
 
   const { restAnim, readyOneshots } = getAnimationData(project)
 
-  // Keep playingRef in sync
-  useEffect(() => { playingRef.current = playing }, [playing])
+  // Keep playingRef in sync + control ambient audio
+  useEffect(() => {
+    playingRef.current = playing
+    const audio = ambientAudioRef.current
+    if (audio) {
+      if (playing) audio.play().catch(() => {})
+      else audio.pause()
+    }
+  }, [playing])
 
   const updateConfig = useCallback((key: keyof PhysicsConfig, value: number) => {
     setPhysicsConfig(prev => {
@@ -336,15 +344,46 @@ export default function AdminPreview({ project, style }: Props) {
           overlay: a.physicsOverlay ?? false,
         }))
 
+      // Audio elements (oneshot + physics only, not rest)
+      const audioElements = new Map<string, HTMLAudioElement>()
+      const audioUrls: string[] = []
+      for (const anim of project.animations) {
+        if (anim.type !== 'rest' && anim.audioBlob && anim.audioEnabled) {
+          const url = URL.createObjectURL(anim.audioBlob)
+          audioUrls.push(url)
+          const audio = new Audio(url)
+          audioElements.set(anim.id, audio)
+        }
+      }
+
+      // Ambient sound (project-level, looped continuously)
+      let ambientAudio: HTMLAudioElement | null = null
+      let ambientAudioUrl: string | null = null
+      if (project.ambientSoundBlob && project.ambientSoundEnabled) {
+        ambientAudioUrl = URL.createObjectURL(project.ambientSoundBlob)
+        ambientAudio = new Audio(ambientAudioUrl)
+        ambientAudio.loop = true
+        ambientAudio.play().catch(() => {})
+        ambientAudioRef.current = ambientAudio
+      }
+
       const hasOneshots = oneshotAnims.length > 0
       let getPositions: () => Point2D[]
       let advancePlayback: (delta: number) => void
 
       if (hasOneshots) {
+        const playAudio = (animId: string) => {
+          const audio = audioElements.get(animId)
+          if (audio) { audio.currentTime = 0; audio.play().catch(() => {}) }
+        }
         const multiPlayback = new MultiAnimationPlayback(
           mesh.videoFramesMesh!,
           oneshotAnims,
-          { crossfadeFrames: mesh.crossfadeFrames ?? 7 },
+          {
+            crossfadeFrames: mesh.crossfadeFrames ?? 7,
+            onOneshotStart: playAudio,
+            onOverlayStart: playAudio,
+          },
         )
         multiPlaybackRef.current = multiPlayback
         getPositions = () => multiPlayback.getPositions()
@@ -407,6 +446,12 @@ export default function AdminPreview({ project, style }: Props) {
         canvas.removeEventListener('pointercancel', onPointerUp)
         if (bgVideoEl) { bgVideoEl.pause(); bgVideoEl.src = '' }
         if (bgVideoUrl) URL.revokeObjectURL(bgVideoUrl)
+        // Cleanup audio
+        for (const audio of audioElements.values()) { audio.pause(); audio.src = '' }
+        for (const url of audioUrls) URL.revokeObjectURL(url)
+        if (ambientAudio) { ambientAudio.pause(); ambientAudio.src = '' }
+        if (ambientAudioUrl) URL.revokeObjectURL(ambientAudioUrl)
+        ambientAudioRef.current = null
         app!.destroy(true, { children: true, texture: true })
         appRef.current = null
         physicsRef.current = null

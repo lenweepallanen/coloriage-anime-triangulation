@@ -194,6 +194,10 @@ verts.update()  // Sync GPU
 - **Axes landscape** : détection automatique de `screen.orientation.angle` — swap beta↔gamma en mode paysage (90°/270°)
 - **iOS** : bouton "Mouvement" pour `DeviceOrientationEvent.requestPermission()`
 
+### Son d'ambiance
+
+Si `project.ambientSoundBlob` et `project.ambientSoundEnabled` : un `HTMLAudioElement` en boucle est créé au montage, stocké dans `ambientAudioRef`. Synchronisé avec le bouton play/pause via un `useEffect` sur `playing`. Nettoyé (pause + revokeObjectURL) au démontage.
+
 ### Contrôles (sidebar)
 
 - Play / Pause, Plein écran, Fermer

@@ -768,6 +768,45 @@ code {
 }
 
 /* Animation Manager section */
+/* Project import section (image, bg video, ambient sound) */
+.project-import-section {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.project-import-grid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.project-import-slot {
+  flex: 1;
+  min-width: 180px;
+}
+
+.project-import-slot-label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.project-import-optional {
+  font-weight: 400;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.project-import-empty {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-top: 8px;
+}
+
 .anim-manager-section {
   background: var(--color-card);
   border: 1px solid var(--color-border);

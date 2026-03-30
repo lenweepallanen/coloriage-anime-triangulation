@@ -97,6 +97,8 @@ export interface Animation {
   physicsCode: string | null;
   physicsDuration: number | null;
   physicsOverlay: boolean;
+  audioBlob: Blob | null;
+  audioEnabled: boolean;
 }
 
 export interface Project {
@@ -105,6 +107,8 @@ export interface Project {
   createdAt: number;
   originalImageBlob: Blob | null;
   backgroundVideoBlob: Blob | null;
+  ambientSoundBlob: Blob | null;
+  ambientSoundEnabled: boolean;
   animations: Animation[];
   markers: MarkerCorners | null;
 }
@@ -116,9 +120,13 @@ export interface ProjectStepView {
   createdAt: number;
   originalImageBlob: Blob | null;
   backgroundVideoBlob: Blob | null;
+  ambientSoundBlob: Blob | null;
+  ambientSoundEnabled: boolean;
   markers: MarkerCorners | null;
   videoBlob: Blob | null;
   mesh: MeshData | null;
+  audioBlob: Blob | null;
+  audioEnabled: boolean;
 }
 
 export interface TextureTriangle {

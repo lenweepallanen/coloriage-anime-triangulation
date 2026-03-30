@@ -43,6 +43,15 @@ La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints,
 
 Les step components ne connaissent pas le multi-animation. `AdminPage` construit un `ProjectStepView` (projet + videoBlob/mesh de l'animation sélectionnée) et intercepte le save pour merger dans la bonne animation. Les physics animations utilisent un composant dédié (`PhysicsAnimationEditor`) qui reçoit directement le projet et l'animation.
 
+### Import projet (ProjectImportSection)
+
+Section dédiée au-dessus de la barre animations dans `AdminPage`. Carte avec 3 zones d'import :
+- **Image coloriage** (PNG/JPEG) — obligatoire
+- **Vidéo de fond** (MP4/WebM) — optionnelle, jouée en boucle en arrière-plan
+- **Son d'ambiance** (MP3/WAV/OGG) — optionnel, joué en boucle continue dans le player, avec toggle activer/désactiver
+
+Ces assets sont au **niveau projet** (partagés par toutes les animations). Le composant `ProjectImportSection.tsx` reçoit le `Project` directement et sauvegarde avec les hints `'image'`, `'backgroundVideo'`, `'ambientSound'`.
+
 ### Preview panel (AdminPreview)
 
 Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet droit (preview live PIXI.js). La preview utilise l'image PNG originale comme texture (pas de scan). Affiche l'animation rest en boucle + boutons oneshot/physics + physique tactile + effets visuels.
@@ -70,7 +79,7 @@ Navigation admin via **stepper numéroté** (remplace les tabs plats) :
 
 ### Section actions rapides
 
-Ligne sous le header avec 3 encadrés côte-à-côte :
+Ligne sous la section import projet avec 3 encadrés côte-à-côte :
 - **Animations** : `AnimationManager` (pills sélection animation) — flex: 1
 - **PDF** : encadré orange, icône document, téléchargement PDF imprimable — visible dès l'import de l'image
 - **Scanner** : encadré bleu, icône appareil photo, lien vers la page scan
@@ -80,7 +89,7 @@ Ligne sous le header avec 3 encadrés côte-à-côte :
 Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 définit le s=0 du contour. Seuls 4-5 points caractéristiques du contour sont trackés par extrema de courbure CSS ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
 ### Pipeline rest (10 étapes)
-1. **Import** — Upload image PNG/JPEG + vidéo MP4/WebM
+1. **Vidéo** — Upload vidéo d'animation MP4/WebM (image et assets projet importés dans la section projet)
 2. **Canny** — Preview contour externe Canny sur vidéo + réglage seuils
 3. **Point 0 Contour** — Placement du point d'origine P0 sur le contour (définit s=0)
 4. **Tracking Point 0** — Optical flow + snap-to-contour Canny sur P0 frame par frame
@@ -92,7 +101,7 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 10. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF + animation finale
 
 ### Pipeline oneshot (6 étapes)
-1. **Import** — Upload vidéo uniquement (pas d'image, héritée du projet)
+1. **Vidéo** — Upload vidéo d'animation (image héritée du projet)
 2. **Canny** — Preview contour Canny sur la vidéo oneshot
 3. **Tracking Point 0** — Tracking P0 sur la vidéo oneshot
 4. **Tracking Contour** — Placement curviligne sur la vidéo oneshot
@@ -131,7 +140,7 @@ src/
 │   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + PhysicsAnimationEditor)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + ProjectImportSection + PhysicsAnimationEditor)
 │   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -181,6 +190,8 @@ Project {
   id, name, createdAt
   originalImageBlob: Blob | null     // Image coloriage (niveau projet)
   backgroundVideoBlob: Blob | null   // Vidéo fond (niveau projet)
+  ambientSoundBlob: Blob | null      // Son d'ambiance (niveau projet, boucle continue)
+  ambientSoundEnabled: boolean       // Toggle activer/désactiver le son
   animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics
   markers: MarkerCorners | null      // 4 coins marqueurs L
 }
@@ -272,6 +283,7 @@ Trois espaces de coordonnées coexistent :
 - **Cloud Storage** — chemins scopés par animation :
   - `projects/{id}/originalImage` — blob image (niveau projet)
   - `projects/{id}/backgroundVideo` — vidéo fond (niveau projet)
+  - `projects/{id}/ambientSound` — son d'ambiance (niveau projet)
   - `projects/{id}/animations/{animId}/video` — vidéo animation
   - `projects/{id}/animations/{animId}/contourOriginKeyframes.json`
   - `projects/{id}/animations/{animId}/contourOriginFrames.json`
@@ -291,7 +303,7 @@ Les projets existants (sans `animations` au root, avec `mesh`/`hasVideo` directe
 ### Upload Hints
 
 ```typescript
-UploadHint = 'image' | 'backgroundVideo' | { animationId: string; field: AnimationUploadField }
+UploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | { animationId: string; field: AnimationUploadField }
 StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
 ```
 

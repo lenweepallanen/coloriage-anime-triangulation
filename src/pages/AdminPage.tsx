@@ -5,6 +5,7 @@ import type { Project, ProjectStepView, MeshData } from '../types/project'
 import type { UploadHint, StepUploadHint } from '../db/projectsStore'
 import AnimationManager, { SHARED_GEOMETRY_FIELDS, copySharedGeometry } from '../components/admin/AnimationManager'
 import AdminPreview from '../components/admin/AdminPreview'
+import ProjectImportSection from '../components/admin/ProjectImportSection'
 import ImportStep from '../components/admin/ImportStep'
 import CannyValidationStep from '../components/admin/CannyValidationStep'
 import ContourOriginStep from '../components/admin/ContourOriginStep'
@@ -20,7 +21,7 @@ import { generateTemplatePDF } from '../utils/pdfGenerator'
 
 // Full pipeline for rest animation
 const REST_STEPS = [
-  'Import',
+  'Vidéo',
   'Canny',
   'Point 0 Contour',
   'Tracking Point 0',
@@ -34,7 +35,7 @@ const REST_STEPS = [
 
 // Reduced pipeline for oneshot animations (no geometry placement steps)
 const ONESHOT_STEPS = [
-  'Import',
+  'Vidéo',
   'Canny',
   'Tracking Point 0',
   'Tracking Contour',
@@ -49,11 +50,11 @@ const PHYSICS_STEPS = [
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number]
 
-const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo'])
+const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound'])
 
 // Short labels for stepper display
 const STEP_SHORT_LABELS: Record<string, string> = {
-  'Import': 'Import',
+  'Vidéo': 'Vidéo',
   'Canny': 'Canny',
   'Point 0 Contour': 'Point 0',
   'Tracking Point 0': 'Track P0',
@@ -72,14 +73,13 @@ function getStepStatus(
   step: string,
   activeStep: string,
   mesh: MeshData | null,
-  hasImage: boolean,
   hasVideo: boolean
 ): StepStatus {
   if (step === activeStep) return 'active'
 
   switch (step) {
-    case 'Import':
-      return hasImage && hasVideo ? 'done' : 'pending'
+    case 'Vidéo':
+      return hasVideo ? 'done' : 'pending'
     case 'Canny':
       return mesh?.cannyParams != null ? 'done' : 'pending'
     case 'Point 0 Contour':
@@ -108,7 +108,7 @@ function getStepStatus(
 export default function AdminPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const { project, loading, save } = useProject(projectId!)
-  const [activeStep, setActiveStep] = useState<Step>('Import')
+  const [activeStep, setActiveStep] = useState<Step>('Vidéo')
   const [selectedAnimationId, setSelectedAnimationId] = useState<string>('')
 
   // Initialize selectedAnimationId from first animation
@@ -137,9 +137,13 @@ export default function AdminPage() {
       createdAt: project.createdAt,
       originalImageBlob: project.originalImageBlob,
       backgroundVideoBlob: project.backgroundVideoBlob,
+      ambientSoundBlob: project.ambientSoundBlob,
+      ambientSoundEnabled: project.ambientSoundEnabled,
       markers: project.markers,
       videoBlob: selectedAnim.videoBlob,
       mesh: selectedAnim.mesh,
+      audioBlob: selectedAnim.audioBlob,
+      audioEnabled: selectedAnim.audioEnabled,
     }
   }, [project, selectedAnim])
 
@@ -165,7 +169,7 @@ export default function AdminPage() {
     // Update the selected animation's video + mesh
     let newAnims = project.animations.map(a => {
       if (a.id === selectedAnimationId) {
-        return { ...a, videoBlob: updated.videoBlob, mesh: updatedMesh }
+        return { ...a, videoBlob: updated.videoBlob, mesh: updatedMesh, audioBlob: updated.audioBlob, audioEnabled: updated.audioEnabled }
       }
       return a
     })
@@ -215,6 +219,8 @@ export default function AdminPage() {
       ...project,
       originalImageBlob: updated.originalImageBlob,
       backgroundVideoBlob: updated.backgroundVideoBlob,
+      ambientSoundBlob: updated.ambientSoundBlob,
+      ambientSoundEnabled: updated.ambientSoundEnabled,
       markers: updated.markers,
       animations: newAnims,
     }
@@ -280,6 +286,8 @@ export default function AdminPage() {
           </div>
         </div>
 
+        <ProjectImportSection project={project} onSave={save} />
+
         <div className="admin-section-row">
           <section className="anim-manager-section">
             <div className="anim-manager-section-header">
@@ -302,6 +310,8 @@ export default function AdminPage() {
                     ...project,
                     videoBlob: selectedAnim?.videoBlob ?? null,
                     mesh: selectedAnim?.mesh ?? null,
+                    audioBlob: selectedAnim?.audioBlob ?? null,
+                    audioEnabled: selectedAnim?.audioEnabled ?? false,
                   })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
@@ -338,7 +348,6 @@ export default function AdminPage() {
               step,
               activeStep,
               selectedAnim?.mesh ?? null,
-              project.originalImageBlob != null,
               selectedAnim?.videoBlob != null
             )
             return (
@@ -365,7 +374,7 @@ export default function AdminPage() {
 
         {stepView && (
           <div className="admin-content">
-            {activeStep === 'Import' && (
+            {activeStep === 'Vidéo' && (
               <ImportStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
             )}
             {activeStep === 'Canny' && (

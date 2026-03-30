@@ -2,7 +2,7 @@
 
 Interface dans `AdminPage.tsx` pour configurer un projet **multi-animation**. Pipeline "contour-first" avec coordonnées curvilignes : un point d'origine P0 définit s=0, on tracke 4-5 points caractéristiques du contour par extrema de courbure CSS, les points intermédiaires sont calculés par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
-Navigation via **pipeline stepper numéroté** (cercles connectés, états done/active/pending dérivés du mesh). Ligne d'actions rapides sous le header : encadré Animations (pills), encadré PDF orange (téléchargement dès l'import image), encadré Scanner bleu (lien scan).
+Navigation via **pipeline stepper numéroté** (cercles connectés, états done/active/pending dérivés du mesh). Section import projet (image, vidéo fond, son ambiance) au-dessus de la ligne d'actions rapides. Ligne d'actions rapides : encadré Animations (pills), encadré PDF orange (téléchargement dès l'import image), encadré Scanner bleu (lien scan).
 
 ## Multi-animation
 
@@ -20,10 +20,11 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 
 | Fichier | Étape | Rôle |
 |---------|-------|------|
+| `ProjectImportSection.tsx` | — | Import assets projet (image, vidéo fond, son ambiance) avec toggle activer/désactiver |
 | `AnimationManager.tsx` | — | Sélecteur/gestion animations (ajout oneshot/physics, suppression, renommage, toggle type) |
-| `AdminPreview.tsx` | — | Preview live PIXI.js de l'animation dans le split-panel admin |
+| `AdminPreview.tsx` | — | Preview live PIXI.js de l'animation dans le split-panel admin + son ambiance sync play/pause |
 | `PhysicsAnimationEditor.tsx` | Code Editeur | Éditeur code JS + preview PIXI temps réel + pré-calcul frames |
-| `ImportStep.tsx` | 1 | Upload image coloriage + vidéo animation (oneshot : vidéo seule) |
+| `ImportStep.tsx` | 1 | Upload vidéo d'animation (+ son optionnel pour oneshot) |
 | `CannyValidationStep.tsx` | 2 | Preview edges Canny sur vidéo + réglage seuils |
 | `ContourOriginStep.tsx` | 3 | Placement du point d'origine P0 sur le contour |
 | `ContourOriginTrackingStep.tsx` | 4 | Tracking P0 par optical flow + snap-to-contour |
@@ -81,14 +82,24 @@ Preview live PIXI.js intégrée dans le split-panel droit de `AdminPage`. Rendu 
 - **Physique** : `MeshPhysicsEffect` avec pointer events sur le canvas PIXI
 - **Effets visuels** : ombre (contour polygon + blur), éclairage (gradient overlay), vidéo de fond (sans parallax)
 - **Contrôles** : play/pause, boutons oneshot/physics, sliders physique/visuels en `<details>` dépliables
+- **Son ambiance** : joué en boucle si `project.ambientSoundBlob` et `ambientSoundEnabled`, synchronisé avec play/pause via `ambientAudioRef`
 - **Performance** : FPS capé à 30 (`app.ticker.maxFPS`), `ResizeObserver` pour le redimensionnement
 - **Pas de** : fullscreen, landscape lock, parallax gyroscope, LongPressCloseButton
 
-## Étape 1 — Import (`ImportStep.tsx`)
+## Import projet (`ProjectImportSection.tsx`)
 
-- **Rest** : Upload image (PNG/JPEG) → `project.originalImageBlob` + vidéo (MP4/WebM) → `animation.videoBlob`
-- **Oneshot** : Upload vidéo uniquement (image et background héritées du projet)
-- Prop `isRestAnimation?: boolean` contrôle la visibilité des champs projet-level
+Carte au-dessus de la barre animations. Import des assets niveau projet :
+- **Image coloriage** (PNG/JPEG) → `project.originalImageBlob`
+- **Vidéo de fond** (MP4/WebM, optionnel) → `project.backgroundVideoBlob`
+- **Son d'ambiance** (MP3/WAV/OGG, optionnel) → `project.ambientSoundBlob` + checkbox `ambientSoundEnabled`
+
+Props : `{ project: Project, onSave }`. Sauvegarde directe avec hints `'image'`, `'backgroundVideo'`, `'ambientSound'`.
+
+## Étape 1 — Vidéo (`ImportStep.tsx`)
+
+- Upload vidéo d'animation (MP4/WebM) → `animation.videoBlob`
+- **Oneshot** : + section son optionnel (MP3/WAV/OGG) → `animation.audioBlob`
+- Prop `isRestAnimation?: boolean` contrôle la visibilité de la section audio
 
 ## Étape 2 — Validation Canny (`CannyValidationStep.tsx`)
 

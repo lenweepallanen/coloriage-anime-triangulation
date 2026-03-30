@@ -77,6 +77,8 @@ interface AnimationDoc {
   type: AnimationType
   createdAt: number
   hasVideo: boolean
+  hasAudio: boolean
+  audioEnabled: boolean
   mesh: MeshDoc | null
   physicsCode: string | null
   physicsDuration: number | null
@@ -89,6 +91,8 @@ interface ProjectDoc {
   createdAt: number
   hasImage: boolean
   hasBackgroundVideo: boolean
+  hasAmbientSound: boolean
+  ambientSoundEnabled: boolean
   animations: AnimationDoc[]
   markers: Project['markers']
 }
@@ -197,6 +201,8 @@ function animToDoc(anim: Animation): AnimationDoc {
     type: anim.type,
     createdAt: anim.createdAt,
     hasVideo: anim.videoBlob != null,
+    hasAudio: anim.audioBlob != null,
+    audioEnabled: anim.audioEnabled ?? false,
     mesh: anim.mesh ? meshToDoc(anim.mesh) : null,
     physicsCode: anim.physicsCode ?? null,
     physicsDuration: anim.physicsDuration ?? null,
@@ -211,6 +217,8 @@ function toDoc(project: Project): ProjectDoc {
     createdAt: project.createdAt,
     hasImage: project.originalImageBlob != null,
     hasBackgroundVideo: project.backgroundVideoBlob != null,
+    hasAmbientSound: project.ambientSoundBlob != null,
+    ambientSoundEnabled: project.ambientSoundEnabled ?? false,
     animations: project.animations.map(animToDoc),
     markers: project.markers,
   }
@@ -346,17 +354,19 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   const projDoc = data as unknown as ProjectDoc
   const id = projDoc.id
 
-  const [imageBlob, backgroundVideoBlob] = await Promise.all([
+  const [imageBlob, backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
     projDoc.hasImage ? downloadBlob(`projects/${id}/originalImage`) : Promise.resolve(null),
     projDoc.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
+    (projDoc as ProjectDoc).hasAmbientSound ? downloadBlob(`projects/${id}/ambientSound`) : Promise.resolve(null),
   ])
 
   // Load all animations in parallel
   const animations = await Promise.all(
     projDoc.animations.map(async (animDoc): Promise<Animation> => {
-      const videoBlob = animDoc.hasVideo
-        ? await downloadBlob(animStoragePath(id, animDoc.id, 'video'))
-        : null
+      const [videoBlob, audioBlob] = await Promise.all([
+        animDoc.hasVideo ? downloadBlob(animStoragePath(id, animDoc.id, 'video')) : Promise.resolve(null),
+        animDoc.hasAudio ? downloadBlob(animStoragePath(id, animDoc.id, 'audio')) : Promise.resolve(null),
+      ])
 
       let mesh: MeshData | null = null
       if (animDoc.mesh) {
@@ -377,6 +387,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         physicsCode: animDoc.physicsCode ?? null,
         physicsDuration: animDoc.physicsDuration ?? null,
         physicsOverlay: animDoc.physicsOverlay ?? false,
+        audioBlob,
+        audioEnabled: animDoc.audioEnabled ?? false,
       }
     })
   )
@@ -387,6 +399,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     createdAt: projDoc.createdAt,
     originalImageBlob: imageBlob,
     backgroundVideoBlob,
+    ambientSoundBlob,
+    ambientSoundEnabled: (projDoc as ProjectDoc).ambientSoundEnabled ?? false,
     animations,
     markers: projDoc.markers,
   }
@@ -424,6 +438,8 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     physicsCode: null,
     physicsDuration: null,
     physicsOverlay: false,
+    audioBlob: null,
+    audioEnabled: false,
   }
 
   return {
@@ -432,6 +448,8 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     createdAt: data.createdAt,
     originalImageBlob: imageBlob,
     backgroundVideoBlob,
+    ambientSoundBlob: null,
+    ambientSoundEnabled: false,
     animations: [legacyAnimation],
     markers: data.markers,
   }
@@ -467,6 +485,8 @@ export async function createProject(name: string): Promise<Project> {
     physicsCode: null,
     physicsDuration: null,
     physicsOverlay: false,
+    audioBlob: null,
+    audioEnabled: false,
   }
   const project: Project = {
     id: crypto.randomUUID(),
@@ -474,6 +494,8 @@ export async function createProject(name: string): Promise<Project> {
     createdAt: Date.now(),
     originalImageBlob: null,
     backgroundVideoBlob: null,
+    ambientSoundBlob: null,
+    ambientSoundEnabled: false,
     animations: [restAnimation],
     markers: null,
   }
@@ -507,6 +529,8 @@ export async function getAllProjects(): Promise<Project[]> {
         physicsCode: null,
         physicsDuration: null,
         physicsOverlay: false,
+        audioBlob: null,
+        audioEnabled: false,
       }
       return {
         id: legacy.id,
@@ -514,6 +538,8 @@ export async function getAllProjects(): Promise<Project[]> {
         createdAt: legacy.createdAt,
         originalImageBlob: null,
         backgroundVideoBlob: null,
+        ambientSoundBlob: null,
+        ambientSoundEnabled: false,
         animations: [legacyAnim],
         markers: legacy.markers,
       }
@@ -526,6 +552,8 @@ export async function getAllProjects(): Promise<Project[]> {
       createdAt: projDoc.createdAt,
       originalImageBlob: null,
       backgroundVideoBlob: null,
+      ambientSoundBlob: null,
+      ambientSoundEnabled: projDoc.ambientSoundEnabled ?? false,
       animations: projDoc.animations.map(animDoc => ({
         id: animDoc.id,
         name: animDoc.name,
@@ -536,6 +564,8 @@ export async function getAllProjects(): Promise<Project[]> {
         physicsCode: animDoc.physicsCode ?? null,
         physicsDuration: animDoc.physicsDuration ?? null,
         physicsOverlay: animDoc.physicsOverlay ?? false,
+        audioBlob: null,
+        audioEnabled: animDoc.audioEnabled ?? false,
       })),
       markers: projDoc.markers,
     }
@@ -543,7 +573,7 @@ export async function getAllProjects(): Promise<Project[]> {
 }
 
 export type AnimationUploadField =
-  | 'video'
+  | 'video' | 'audio'
   | 'contourOriginKeyframes' | 'contourOriginFrames'
   | 'contourAnchorKeyframes' | 'contourAnchorFrames'
   | 'contourSubdivisionFrames' | 'contourCannyFrames'
@@ -551,11 +581,11 @@ export type AnimationUploadField =
   | 'videoFramesMesh'
 
 export type UploadHint =
-  | 'image' | 'backgroundVideo'
+  | 'image' | 'backgroundVideo' | 'ambientSound'
   | { animationId: string; field: AnimationUploadField }
 
 /** Flat upload hint used by step components (legacy-compatible strings) */
-export type StepUploadHint = 'image' | 'backgroundVideo' | AnimationUploadField
+export type StepUploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | AnimationUploadField
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -582,12 +612,18 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         uploadBlob(`projects/${id}/backgroundVideo`, project.backgroundVideoBlob)
           .then(() => console.log('[Storage] Background video uploaded'))
       )
+    } else if (hint === 'ambientSound' && project.ambientSoundBlob) {
+      console.log('[Storage] Uploading ambient sound for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/ambientSound`, project.ambientSoundBlob)
+          .then(() => console.log('[Storage] Ambient sound uploaded'))
+      )
     } else if (typeof hint === 'object') {
       const { animationId, field } = hint
       const anim = project.animations.find(a => a.id === animationId)
       if (!anim) continue
 
-      const storagePath = animStoragePath(id, animationId, field === 'video' ? 'video' : `${field}.json`)
+      const storagePath = animStoragePath(id, animationId, field === 'video' ? 'video' : field === 'audio' ? 'audio' : `${field}.json`)
 
       if (field === 'video' && anim.videoBlob) {
         console.log(`[Storage] Uploading video for animation ${animationId}`)
@@ -595,7 +631,13 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           uploadBlob(storagePath, anim.videoBlob)
             .then(() => console.log(`[Storage] Video uploaded for animation ${animationId}`))
         )
-      } else if (field !== 'video' && anim.mesh) {
+      } else if (field === 'audio' && anim.audioBlob) {
+        console.log(`[Storage] Uploading audio for animation ${animationId}`)
+        uploads.push(
+          uploadBlob(storagePath, anim.audioBlob)
+            .then(() => console.log(`[Storage] Audio uploaded for animation ${animationId}`))
+        )
+      } else if (field !== 'video' && field !== 'audio' && anim.mesh) {
         const jsonFieldMap: Record<string, unknown> = {
           contourOriginKeyframes: anim.mesh.contourOriginKeyframes,
           contourOriginFrames: anim.mesh.contourOriginFrames,
@@ -626,6 +668,7 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
 
 const ANIM_JSON_FILES = [
   'video',
+  'audio',
   'contourOriginKeyframes.json',
   'contourOriginFrames.json',
   'contourAnchorKeyframes.json',
@@ -649,6 +692,7 @@ export async function deleteProject(id: string): Promise<void> {
   const projectFiles = [
     `projects/${id}/originalImage`,
     `projects/${id}/backgroundVideo`,
+    `projects/${id}/ambientSound`,
   ]
   for (const path of projectFiles) {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
@@ -696,7 +740,7 @@ export async function deleteProject(id: string): Promise<void> {
 }
 
 const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
-  'video', 'contourOriginKeyframes', 'contourOriginFrames',
+  'video', 'audio', 'contourOriginKeyframes', 'contourOriginFrames',
   'contourAnchorKeyframes', 'contourAnchorFrames',
   'contourSubdivisionFrames', 'contourCannyFrames',
   'anchorKeyframes', 'anchorFrames', 'videoFramesMesh',
@@ -729,12 +773,15 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   const hints: UploadHint[] = []
   if (duplicate.originalImageBlob) hints.push('image')
   if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
+  if (duplicate.ambientSoundBlob) hints.push('ambientSound')
   for (const anim of duplicate.animations) {
     const newAnimId = anim.id
     for (const field of ANIM_UPLOAD_FIELDS) {
       if (field === 'video' && anim.videoBlob) {
         hints.push({ animationId: newAnimId, field })
-      } else if (field !== 'video' && anim.mesh) {
+      } else if (field === 'audio' && anim.audioBlob) {
+        hints.push({ animationId: newAnimId, field })
+      } else if (field !== 'video' && field !== 'audio' && anim.mesh) {
         const val = anim.mesh[field as keyof typeof anim.mesh]
         if (val && (Array.isArray(val) ? val.length > 0 : true)) {
           hints.push({ animationId: newAnimId, field })
