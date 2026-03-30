@@ -186,23 +186,6 @@ export async function flowCannyContour(
   return result.contourPoints || null
 }
 
-export async function flowCannyEdges(
-  imageData: ImageData,
-  lowThreshold = 50,
-  highThreshold = 150,
-  blurSize = 5
-): Promise<{ x: number; y: number }[] | null> {
-  if (!workerReady) await loadOpenCVWorker()
-  const result = await workerRpc({
-    type: 'canny-edges',
-    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
-    lowThreshold,
-    highThreshold,
-    blurSize
-  }, 'canny-edges-result')
-  return result.edgePoints || null
-}
-
 export async function flowCleanup(): Promise<void> {
   if (!workerReady || !worker) return
   await workerRpc({ type: 'flow-cleanup' }, 'flow-cleanup-done')

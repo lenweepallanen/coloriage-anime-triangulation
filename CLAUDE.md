@@ -141,26 +141,26 @@ src/
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
 │   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + ProjectImportSection + PhysicsAnimationEditor)
-│   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
+│   ├── keyframes/              Éditeur de keyframes (éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
 ├── utils/
 │   ├── autoMeshGenerator.ts    Détection contour + génération grille interne
 │   ├── barycentricUtils.ts     Coordonnées barycentriques (calcul, recherche triangle, interpolation)
-│   ├── geometry.ts             Point-in-polygon, distance, centroïde
-│   ├── keyframePropagation.ts  Interpolation linéaire entre keyframes + extraction
+│   ├── geometry.ts             Point-in-polygon, distanceSq, centroïde
+│   ├── keyframePropagation.ts  Interpolation linéaire entre keyframes
 │   ├── markerGenerator.ts      Dessin marqueurs L
 │   ├── opticalFlowComputer.ts  Pipeline extraction frames + tracking + segment re-tracking
 │   ├── trackingConstraints.ts  Contraintes voisinage + snap-to-contour + spring curviligne
-│   ├── contourAnchorTracker.ts Raffinement hybride LK + template matching + snap contour
+│   ├── contourAnchorTracker.ts Raffinement hybride LK + template matching + snap contour (utilisé par opticalFlowComputer)
 │   ├── curvilinearContour.ts   Coordonnées curvilignes sur contour Canny
-│   ├── curvatureScaleSpace.ts  Détection extrema courbure CSS + tracking frame par frame
+│   ├── curvatureScaleSpace.ts  Détection extrema courbure (single-scale + global) + snap anchor par courbure
 │   ├── arapSolver.ts           Déformation ARAP (As-Rigid-As-Possible) du maillage
 │   ├── optimalTransportSnap.ts Assignment optimal (transport) pour snap contour robuste
 │   ├── contourSpatialIndex.ts  Index spatial bucket 2D pour snap-to-contour
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
-│   ├── pdfLayout.ts            Constantes layout A4 + calcul offset centroïde L-marker
+│   ├── pdfLayout.ts            Constantes layout A4
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
 │   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css

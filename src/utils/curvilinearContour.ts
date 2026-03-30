@@ -6,7 +6,6 @@
  */
 
 import type { Point2D, CurvilinearParam, CannyParams } from '../types/project'
-import { ContourSpatialIndex } from './contourSpatialIndex'
 import { flowCannyContour } from './perspectiveCorrection'
 
 // ─── Contour path extraction ───────────────────────────────────────
@@ -185,20 +184,6 @@ export function reorderContourFromOrigin(
   const originIdx = findClosestOnPath(orderedContour, originPoint)
   if (originIdx === 0) return orderedContour
   return [...orderedContour.slice(originIdx), ...orderedContour.slice(0, originIdx)]
-}
-
-// ─── Snap anchor to contour ────────────────────────────────────────
-
-/**
- * Snap un point sur le contour Canny le plus proche.
- */
-export function snapToContour(
-  point: Point2D,
-  contourIndex: ContourSpatialIndex,
-  maxDist = 30
-): Point2D {
-  const nearest = contourIndex.nearest(point, maxDist)
-  return nearest ? nearest.point : point
 }
 
 // ─── Find path between anchors on contour ──────────────────────────

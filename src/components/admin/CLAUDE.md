@@ -33,7 +33,7 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 | `ContourTrackingStep.tsx` | 7 | Placement déterministe par coordonnée curviligne + snap extrema courbure CSS |
 | `AnchorPointsStep.tsx` | 8 | Placement points d'ancrage intérieurs (features) |
 | `AnchorTrackingStep.tsx` | 9 | Tracking ancres par optical flow + keyframes |
-| `TriangulationStep.tsx` | 10 | Triangulation + animation finale (Delaunay + barycentrics + preview) |
+| `TriangulationStep.tsx` | 10 | Triangulation + animation finale (Delaunay + ARAP + preview) |
 | `MarkerStep.tsx` | support | Placement des 4 marqueurs L pour le scan |
 | `PdfStep.tsx` | support | Génération et téléchargement du PDF coloriage |
 
@@ -209,7 +209,7 @@ Utilise `ContourSpatialIndex.nearestWithIndex()` au lieu de recherches linéaire
 3. Réordonner depuis P0 tracké (OpenCV retourne déjà ordonné)
 4. Construire ContourSpatialIndex pour recherche rapide
 5. Calculer arc-lengths normalisés
-6. Détecter extrema de courbure CSS (trackCurvatureExtrema)
+6. Détecter extrema de courbure CSS (detectGlobalCurvatureExtrema)
 7. Pour chaque anchor :
    a. Position brute = interpolateAtArcLength(ordered, arcLengths, anchorS[a])
    b. Extremum tracké = extrema[anchorExtremumIdx[a]]
@@ -267,8 +267,6 @@ Bouton "Calculer Animation" → `handleComputeARAP` :
   6. `precomputeARAP(allPoints0, triangles, pinnedIndices)` — poids cotangent + factorisation Cholesky
   7. `batchSolveARAP(system, pinnedFrames)` — résolution itérative par frame (rotation polaire + Cholesky)
   8. Lissage temporel optionnel (`applyTemporalSmoothing`, fenêtre configurable slider, défaut 3)
-
-Note : `handleComputeAnimation` (barycentrics) existe encore dans le code mais n'est plus appelé par l'UI.
 
 ### Preview
 - 3 modes d'affichage : **vidéo** (wireframe vert sur vidéo), **wireframe** (fond sombre), **gradient** (triangles colorés HSL par centroïde)

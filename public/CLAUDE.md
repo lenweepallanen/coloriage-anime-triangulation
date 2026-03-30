@@ -323,8 +323,6 @@ Le bouton "Calculer Animation" utilise la déformation **ARAP (As-Rigid-As-Possi
 7. Résultat : positions des internes qui minimisent la distorsion locale du maillage
 8. Lissage temporel optionnel (`applyTemporalSmoothing`, fenêtre configurable, défaut 3)
 
-Note : une méthode par barycentrics (`handleComputeAnimation`) existe encore dans le code mais n'est plus exposée dans l'UI. L'ARAP produit des résultats supérieurs car il préserve la rigidité locale des triangles au lieu de simplement interpoler linéairement.
-
 **Preview animation :**
 - 3 modes d'affichage : **vidéo** (wireframe vert sur vidéo), **wireframe** (sur fond sombre), **gradient** (triangles colorés par position HSL du centroïde)
 - Loop seamless via `LoopPlayback` avec **crossfade configurable** (slider 0-20 frames, défaut 7)
@@ -481,10 +479,10 @@ scans/{id}/scanImage                   — image rectifiée
 |--------|------|
 | `barycentricUtils.ts` | Coordonnées barycentriques (calcul, recherche triangle, interpolation) |
 | `curvilinearContour.ts` | Coordonnées curvilignes sur contour Canny (subdivision, calcul par frame) |
-| `curvatureScaleSpace.ts` | Détection extrema de courbure multi-échelle + tracking frame par frame |
+| `curvatureScaleSpace.ts` | Détection extrema de courbure (single-scale `detectCurvatureExtrema`, global `detectGlobalCurvatureExtrema`) + snap anchor par courbure (`cssSnap*`) + arc-lengths/signatures initiales |
 | `opticalFlowComputer.ts` | Pipeline extraction frames + tracking + re-tracking par segment |
 | `trackingConstraints.ts` | 7 couches de stabilisation du tracking (anti-saut, voisinage, contour, etc.) |
-| `contourAnchorTracker.ts` | Raffinement hybride LK + template matching + snap contour (legacy, non utilisé dans le pipeline actuel) |
+| `contourAnchorTracker.ts` | Raffinement hybride LK + template matching + snap contour (utilisé par opticalFlowComputer.ts quand contour refinement est activé) |
 | `arapSolver.ts` | Déformation ARAP (As-Rigid-As-Possible) du maillage |
 | `multiAnimationPlayback.ts` | Machine d'états playback (rest loop + oneshot transitions + overlay) |
 | `loopPlayback.ts` | Loop seamless avec crossfade smoothstep configurable |

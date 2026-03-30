@@ -13,17 +13,6 @@ export interface ContentAlignment {
 }
 
 /**
- * Extract the colored texture from a rectified scan image.
- * Returns a canvas containing just the scan image, ready to be used as a PIXI texture.
- * The mesh UV coordinates map directly to this canvas.
- */
-export function extractTextureCanvas(
-  rectifiedCanvas: HTMLCanvasElement
-): HTMLCanvasElement {
-  return rectifiedCanvas
-}
-
-/**
  * Detect the bounding box of drawn content (dark pixels) on the scan canvas.
  * Scans rows and columns to find the first/last that contain enough dark pixels,
  * so thin extremities (wing tips, tails) are not cut off.

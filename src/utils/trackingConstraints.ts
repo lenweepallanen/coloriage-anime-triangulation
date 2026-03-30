@@ -501,9 +501,6 @@ export function stabilizeContourAnchors(
   return corrected
 }
 
-// Legacy alias
-export const applyContourConstraints = stabilizeContourAnchors
-
 // ---------------------------------------------------------------------------
 // 4. Min separation: anti-agglutination repulsion force
 // ---------------------------------------------------------------------------

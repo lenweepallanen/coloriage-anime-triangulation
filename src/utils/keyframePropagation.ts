@@ -57,34 +57,3 @@ export function propagateKeyframes(
 
   return result
 }
-
-/**
- * Extract keyframes from full per-frame anchor tracking at regular intervals.
- * Always includes first and last frame.
- */
-export function extractKeyframes(
-  allFrameAnchors: Point2D[][],
-  interval: number
-): KeyframeData[] {
-  if (allFrameAnchors.length === 0) return []
-
-  const keyframes: KeyframeData[] = []
-  const lastFrame = allFrameAnchors.length - 1
-
-  for (let f = 0; f <= lastFrame; f += interval) {
-    keyframes.push({
-      frameIndex: f,
-      anchorPositions: allFrameAnchors[f],
-    })
-  }
-
-  // Always include last frame
-  if (keyframes[keyframes.length - 1].frameIndex !== lastFrame) {
-    keyframes.push({
-      frameIndex: lastFrame,
-      anchorPositions: allFrameAnchors[lastFrame],
-    })
-  }
-
-  return keyframes
-}

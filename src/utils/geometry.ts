@@ -17,10 +17,6 @@ export function distanceSq(a: Point2D, b: Point2D): number {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
-export function distance(a: Point2D, b: Point2D): number {
-  return Math.sqrt(distanceSq(a, b))
-}
-
 export function triangleCentroid(
   a: Point2D,
   b: Point2D,

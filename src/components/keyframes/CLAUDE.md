@@ -6,18 +6,7 @@
 
 | Fichier | Rôle |
 |---------|------|
-| `KeyframeTimeline.tsx` | Barre timeline avec marqueurs de keyframes cliquables |
 | `KeyframeEditor.tsx` | Éditeur canvas d'une keyframe avec drag des anchors |
-
-## KeyframeTimeline
-
-Barre horizontale affichant les keyframes proportionnellement à leur position dans la vidéo.
-
-- Marqueurs positionnés à `(frameIndex / (totalFrames - 1)) * 100%`
-- Clic sur un marqueur → `onSelect(index)`
-- Marqueur sélectionné visuellement distinct (classe `selected`)
-- Labels avec numéro de frame sous chaque marqueur
-- Bornes 0 et totalFrames-1 affichées
 
 ## KeyframeEditor
 

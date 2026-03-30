@@ -8,20 +8,20 @@ Fonctions pures et modules de traitement utilisés par les composants.
 |---------|------|
 | `autoMeshGenerator.ts` | Génération automatique de maillage (contour + points internes) |
 | `barycentricUtils.ts` | Coordonnées barycentriques (calcul, recherche triangle, interpolation) |
-| `geometry.ts` | Fonctions géométriques (point-in-polygon, distance, centroïde) |
-| `keyframePropagation.ts` | Interpolation linéaire entre keyframes + extraction depuis tracking brut |
+| `geometry.ts` | Fonctions géométriques (point-in-polygon, distanceSq, centroïde) |
+| `keyframePropagation.ts` | Interpolation linéaire entre keyframes |
 | `markerGenerator.ts` | Dessin des marqueurs L aux coins |
 | `opticalFlowComputer.ts` | Orchestration du pré-calcul optical flow + tracking par segment |
 | `trackingConstraints.ts` | Contraintes de voisinage + snap-to-contour + spring curviligne pour stabiliser le tracking |
-| `contourAnchorTracker.ts` | Raffinement hybride LK + template matching + snap contour pour anchors contour |
+| `contourAnchorTracker.ts` | Raffinement hybride LK + template matching + snap contour pour anchors contour (utilisé par opticalFlowComputer.ts) |
 | `curvilinearContour.ts` | Coordonnées curvilignes sur contour Canny (ordonnancement pixels, subdivision, calcul par frame) |
-| `curvatureScaleSpace.ts` | Détection multi-échelle des extrema de courbure + tracking CSS frame par frame |
+| `curvatureScaleSpace.ts` | Détection extrema de courbure (single-scale + global) + snap anchor par courbure + arc-lengths/signatures initiales |
 | `arapSolver.ts` | Déformation ARAP (As-Rigid-As-Possible) du maillage 2D |
 | `optimalTransportSnap.ts` | Assignment optimal (transport) pour snap contour robuste |
 | `contourSpatialIndex.ts` | Index spatial bucket 2D pour recherche rapide du pixel contour le plus proche |
 | `perspectiveCorrection.ts` | Bridge RPC vers le Worker OpenCV |
 | `pdfGenerator.ts` | Génération PDF (jsPDF) |
-| `pdfLayout.ts` | Constantes layout A4 partagées + calcul offset centroïde L-marker |
+| `pdfLayout.ts` | Constantes layout A4 partagées |
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
 | `meshPhysicsEffects.ts` | Effets physiques interactifs sur le maillage animé (magnétisation tactile) |
 | `loopPlayback.ts` | Playback seamless avec crossfade smoothstep configurable |
@@ -48,20 +48,19 @@ Utilitaires pour piloter les points internes à partir des anchor points via coo
 | `computeAllBarycentrics(internals, anchors, triangles)` | Calcule les BarycentricRef pour tous les points internes |
 
 Utilisé par :
-- `TriangulationStep` (verrouillage topologie → calcul des barycentrics, puis calcul animation finale)
+- `TriangulationStep` (verrouillage topologie → calcul des barycentrics)
 
 ## keyframePropagation.ts
 
 | Fonction | Rôle |
 |----------|------|
-| `extractKeyframes(allFrameAnchors, interval)` | Extrait des keyframes à intervalles réguliers depuis le tracking brut. Inclut toujours la première et dernière frame. |
 | `propagateKeyframes(keyframes, totalFrames)` | Interpole linéairement les positions anchors entre keyframes pour toutes les frames. Hold en dehors des keyframes. |
 
 ## geometry.ts
 
 - `pointInPolygon(point, polygon)` — ray-casting algorithm
 - `triangleCentroid(a, b, c)` — moyenne des 3 sommets
-- `distance(a, b)` / `distanceSq(a, b)` — distance euclidienne
+- `distanceSq(a, b)` — distance euclidienne au carré
 
 ## markerGenerator.ts
 
@@ -151,7 +150,6 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 
 ## textureExtractor.ts
 
-- `extractTextureCanvas(canvas)` — retourne le canvas rectifié tel quel
 - `detectDrawingBBox(canvas)` — détecte la bbox du dessin (pixels sombres lum < 128) par scan lignes/colonnes (≥3 pixels sombres). Gardes-fous : skip si < 0.1% dark pixels ou bbox > 95% canvas
 - `computeMeshBBox(points)` — simple min/max sur tous les points du maillage
 - `computeUVs(points, imageW, imageH, alignment?)` — normalise les coordonnées `[0,1]` :
@@ -164,24 +162,22 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 
 ## curvatureScaleSpace.ts
 
-Détection multi-échelle des extrema de courbure et tracking frame par frame via Curvature Scale Space (CSS).
+Détection des extrema de courbure et snap anchor par courbure via Curvature Scale Space (CSS).
 
 ### Fonctions principales
 
 | Fonction | Rôle |
 |----------|------|
-| `detectCSSCandidates(contour, N)` | Détection multi-échelle (5 σ) : courbure κ via dérivées gaussiennes, scoring par persistance, NMS en arc-length, top-N |
-| `detectCurvatureExtrema(contour, N)` | Version single-scale : top-N points de plus forte \|κ\| sur contour rééchantillonné |
-| `trackCurvatureExtrema(contour, N, previousExtrema)` | Matching frame-par-frame des extrema par assignation gloutonne nearest-neighbor, identité persistante |
+| `detectCurvatureExtrema(contour, N)` | Single-scale : top-N points de plus forte \|κ\| sur contour rééchantillonné |
+| `detectGlobalCurvatureExtrema(contour, N)` | Détection globale des extrema de courbure (top-N) |
 | `cssSnapToContour(pos, contour, arcLengths, window)` | Snap anchor vers le pic κ le plus fort dans une fenêtre locale |
 | `cssSnapToContourRegistered(pos, contour, arcLengths, window, signature)` | Snap avec matching de signature de courbure (signe, magnitude, prominence) |
 | `computeInitialAnchorArcLengths(anchors, contour)` | Arc-length de référence de chaque anchor à frame 0 |
 | `computeInitialSignatures(anchors, contour)` | Signature de courbure (signe, \|κ\|, prominence, rang local) de chaque anchor à frame 0 |
-| `computeContourSignatureField(contour)` | Champ dense de signature intrinsèque (s, κ, dκ/ds) sur le contour rééchantillonné |
-| `matchAnchorsIntrinsic(anchors, field, prevField)` | Matching par minimisation `(Δs)² + λ₁(Δκ)² + λ₂(Δκ')²` |
 
 ### Utilisé par
-- `ContourTrackingStep` (étape 7) : `trackCurvatureExtrema` pour tracking des extrema frame par frame, snap anchors vers les pics de courbure persistants
+- `ContourAnchorsStep` (étape 5) : `detectCurvatureExtrema` pour auto-détection des points caractéristiques
+- `ContourTrackingStep` (étape 7) : `detectGlobalCurvatureExtrema` pour snap anchors vers les pics de courbure
 
 ## arapSolver.ts
 
@@ -200,7 +196,7 @@ Déformation ARAP (As-Rigid-As-Possible) du maillage 2D avec sommets pinnés.
 2. **Étape globale** : construire RHS depuis rotations + contraintes pinnées → résoudre via Cholesky
 
 ### Utilisé par
-- `TriangulationStep` (étape 10) : option alternative aux barycentrics pour les points internes, minimise la distorsion locale lors de la déformation
+- `TriangulationStep` (étape 10) : seule méthode de calcul des points internes, minimise la distorsion locale lors de la déformation
 
 ## optimalTransportSnap.ts
 
@@ -271,7 +267,7 @@ Détecte les anchors dont le déplacement dévie de la médiane de leurs voisins
 | `thresholdRelative` | 3.0 | Déviation en multiples de la dispersion voisins |
 | `blendFactor` | 0.6 | Force de correction |
 
-### stabilizeContourAnchors (alias: applyContourConstraints)
+### stabilizeContourAnchors
 
 `stabilizeContourAnchors(currentPositions, previousPositions, contourAnchorOrder, initialSpacings, options?)` → `Point2D[]`
 
@@ -424,7 +420,6 @@ Coordonnées curvilignes sur contour Canny. Place des points intermédiaires ent
 | `computeArcLengths(path)` | Calcule les longueurs d'arc cumulées le long du chemin |
 | `interpolateAtArcLength(path, arcLengths, t)` | Interpole un point à la position curviligne normalisée `t` ∈ [0,1] |
 | `reorderContourFromOrigin(contour, originPoint)` | Réordonne le contour pour que P0 soit à l'index 0 (s=0) |
-| `snapToContour(point, contourIndex, maxDist)` | Snap un point sur le pixel Canny le plus proche via `ContourSpatialIndex` |
 | `extractPathBetweenAnchors(orderedContour, anchorA, anchorB)` | Extrait le sous-chemin le plus court entre deux anchors sur le contour fermé |
 | `subdivideSegment(path, count, segmentIndex)` | Place N points uniformes le long d'un segment → `{ points, params }` |
 | `subdivideContour(orderedContour, anchors, pointsPerSegment)` | Génère tous les points de subdivision pour tous les segments |
@@ -487,7 +482,6 @@ class ContourSpatialIndex {
 
 Constantes de layout A4 partagées entre la génération PDF et la correction de perspective :
 - Dimensions A4 en mm et marges
-- Calcul des offsets centroïdes des marqueurs L (pour aligner détection scan et génération PDF)
 - Utilisé par `pdfGenerator.ts` et `ScanProcessor.tsx`
 
 ## pdfGenerator.ts
