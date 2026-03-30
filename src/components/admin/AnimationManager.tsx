@@ -71,7 +71,21 @@ export default function AnimationManager({ project, selectedAnimationId, onSelec
 
   const restAnim = project.animations.find(a => a.type === 'rest')
 
-  async function handleAdd() {
+  const DEFAULT_PHYSICS_CODE = `// Tourbillon — modifiez ce code !
+const cx = 300, cy = 300;
+const angle = progress * Math.PI * 4;
+const strength = Math.sin(progress * Math.PI) * 20;
+for (let i = 0; i < numVertices; i++) {
+  const dx = positions[i].x - cx;
+  const dy = positions[i].y - cy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const falloff = Math.exp(-dist / 200);
+  const a = angle * falloff;
+  positions[i].x += Math.sin(a) * strength * falloff;
+  positions[i].y += Math.cos(a) * strength * falloff;
+}`
+
+  async function handleAddOneshot() {
     const newAnim: Animation = {
       id: crypto.randomUUID(),
       name: `Animation ${project.animations.length + 1}`,
@@ -79,6 +93,28 @@ export default function AnimationManager({ project, selectedAnimationId, onSelec
       createdAt: Date.now(),
       videoBlob: null,
       mesh: restAnim?.mesh ? { ...createEmptyMesh(), ...copySharedGeometry(restAnim.mesh) } : null,
+      physicsCode: null,
+      physicsDuration: null,
+      physicsOverlay: false,
+    }
+    const updated = { ...project, animations: [...project.animations, newAnim] }
+    setSaving(true)
+    await onSave(updated)
+    setSaving(false)
+    onSelectAnimation(newAnim.id)
+  }
+
+  async function handleAddPhysics() {
+    const newAnim: Animation = {
+      id: crypto.randomUUID(),
+      name: `Physics ${project.animations.filter(a => a.type === 'physics').length + 1}`,
+      type: 'physics',
+      createdAt: Date.now(),
+      videoBlob: null,
+      mesh: restAnim?.mesh ? { ...createEmptyMesh(), ...copySharedGeometry(restAnim.mesh) } : null,
+      physicsCode: DEFAULT_PHYSICS_CODE,
+      physicsDuration: 2,
+      physicsOverlay: false,
     }
     const updated = { ...project, animations: [...project.animations, newAnim] }
     setSaving(true)
@@ -161,10 +197,10 @@ export default function AnimationManager({ project, selectedAnimationId, onSelec
                 display: 'inline-block',
                 width: 8, height: 8,
                 borderRadius: '50%',
-                background: anim.type === 'rest' ? '#4caf50' : '#ff9800',
+                background: anim.type === 'rest' ? '#4caf50' : anim.type === 'physics' ? '#9c27b0' : '#ff9800',
                 flexShrink: 0,
               }}
-              title={anim.type === 'rest' ? 'Rest (boucle)' : 'One-shot'}
+              title={anim.type === 'rest' ? 'Rest (boucle)' : anim.type === 'physics' ? 'Physics (code)' : 'One-shot'}
             />
             {isEditing ? (
               <input
@@ -183,14 +219,16 @@ export default function AnimationManager({ project, selectedAnimationId, onSelec
             )}
             {isSelected && (
               <span style={{ display: 'flex', gap: 2, marginLeft: 4 }}>
-                <button
-                  onClick={e => { e.stopPropagation(); handleToggleType(anim.id) }}
-                  title={anim.type === 'rest' ? 'Passer en oneshot' : 'Définir comme rest'}
-                  style={{ fontSize: '0.7em', padding: '1px 4px', cursor: 'pointer' }}
-                  disabled={saving}
-                >
-                  {anim.type === 'rest' ? '∞' : '▶'}
-                </button>
+                {anim.type !== 'physics' && (
+                  <button
+                    onClick={e => { e.stopPropagation(); handleToggleType(anim.id) }}
+                    title={anim.type === 'rest' ? 'Passer en oneshot' : 'Définir comme rest'}
+                    style={{ fontSize: '0.7em', padding: '1px 4px', cursor: 'pointer' }}
+                    disabled={saving}
+                  >
+                    {anim.type === 'rest' ? '∞' : '▶'}
+                  </button>
+                )}
                 {anim.type !== 'rest' && (
                   <button
                     onClick={e => { e.stopPropagation(); handleDelete(anim.id) }}
@@ -207,12 +245,20 @@ export default function AnimationManager({ project, selectedAnimationId, onSelec
         )
       })}
       <button
-        onClick={handleAdd}
+        onClick={handleAddOneshot}
         disabled={saving}
         style={{ fontSize: '0.85em', padding: '4px 10px', cursor: 'pointer' }}
-        title="Ajouter une animation"
+        title="Ajouter une animation oneshot (vidéo)"
       >
-        + Anim
+        + Oneshot
+      </button>
+      <button
+        onClick={handleAddPhysics}
+        disabled={saving}
+        style={{ fontSize: '0.85em', padding: '4px 10px', cursor: 'pointer', color: '#9c27b0' }}
+        title="Ajouter une animation physique (code)"
+      >
+        + Physics
       </button>
     </div>
   )

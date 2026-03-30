@@ -1,24 +1,26 @@
-# Workflow Admin (10 étapes rest / 6 étapes oneshot)
+# Workflow Admin (10 étapes rest / 6 étapes oneshot / 1 étape physics)
 
 Interface à onglets dans `AdminPage.tsx` pour configurer un projet **multi-animation**. Pipeline "contour-first" avec coordonnées curvilignes : un point d'origine P0 définit s=0, on tracke 4-5 points caractéristiques du contour par extrema de courbure CSS, les points intermédiaires sont calculés par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
 ## Multi-animation
 
-`AdminPage` gère un sélecteur d'animation (`AnimationManager`) en haut de la page. Les step components reçoivent un `ProjectStepView` (adapter pattern) et ne connaissent pas le multi-animation.
+`AdminPage` gère un sélecteur d'animation (`AnimationManager`) en haut de la page. Les step components reçoivent un `ProjectStepView` (adapter pattern) et ne connaissent pas le multi-animation. Les physics animations utilisent un composant dédié (`PhysicsAnimationEditor`).
 
 - **Rest animation** : pipeline complet 10 étapes, seule autorisée à modifier la géométrie
 - **Oneshot animations** : pipeline réduit 6 étapes (Import vidéo + tracking uniquement), géométrie héritée de rest
+- **Physics animations** : 1 seule étape (Code Editeur), code JS qui transforme les vertices, pré-calcul à la validation
 
 ### Propagation géométrie partagée
 
-Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology), les champs partagés (`SHARED_GEOMETRY_FIELDS`) sont copiés vers les oneshots et leur tracking est invalidé.
+Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology), les champs partagés (`SHARED_GEOMETRY_FIELDS`) sont copiés vers les oneshots/physics et leur tracking est invalidé (les frames pré-calculées des physics sont effacées).
 
 ## Fichiers
 
 | Fichier | Étape | Rôle |
 |---------|-------|------|
-| `AnimationManager.tsx` | — | Sélecteur/gestion animations (ajout, suppression, renommage, toggle type) |
+| `AnimationManager.tsx` | — | Sélecteur/gestion animations (ajout oneshot/physics, suppression, renommage, toggle type) |
 | `AdminPreview.tsx` | — | Preview live PIXI.js de l'animation dans le split-panel admin |
+| `PhysicsAnimationEditor.tsx` | Code Editeur | Éditeur code JS + preview PIXI temps réel + pré-calcul frames |
 | `ImportStep.tsx` | 1 | Upload image coloriage + vidéo animation (oneshot : vidéo seule) |
 | `CannyValidationStep.tsx` | 2 | Preview edges Canny sur vidéo + réglage seuils |
 | `ContourOriginStep.tsx` | 3 | Placement du point d'origine P0 sur le contour |
@@ -35,12 +37,36 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 ## AnimationManager (`AnimationManager.tsx`)
 
 Composant de gestion multi-animation affiché en haut de l'AdminPage :
-- Barre de boutons/onglets : une animation par bouton, badge couleur (vert=rest, orange=oneshot)
-- **Ajout** : crée une animation oneshot, copie la géométrie partagée depuis la rest (`copySharedGeometry`)
+- Barre de boutons/onglets : une animation par bouton, badge couleur (vert=rest, orange=oneshot, violet=physics)
+- **Ajout** : deux boutons `+ Oneshot` et `+ Physics`, copie la géométrie partagée depuis la rest (`copySharedGeometry`)
 - **Suppression** : uniquement les oneshots (rest est obligatoire), avec confirmation
 - **Renommage** : double-clic pour édition inline
-- **Toggle type** : bascule rest↔oneshot (enforce exactement 1 rest)
+- **Toggle type** : bascule rest↔oneshot (enforce exactement 1 rest), masqué pour physics
 - Exporte `SHARED_GEOMETRY_FIELDS` et `copySharedGeometry()` pour la propagation
+
+## PhysicsAnimationEditor (`PhysicsAnimationEditor.tsx`)
+
+Éditeur de code JS pour les animations physiques. Reçoit `{ project, animation, onSave }` directement (pas le pattern adapter).
+
+### Layout
+- **Textarea** monospace pour le code JS
+- **Erreur** compilation/exécution en rouge sous le textarea
+- **Durée** : slider 0.5–5s (défaut 2s), 24fps fixe
+- **Checkbox overlay** : "Superposer rest loop" — si coché, l'animation se superpose instantanément à la rest loop
+- **Preview** : canvas PIXI avec le maillage rest, code appliqué en temps réel (debounce 300ms)
+- **Boutons** : Play/Pause, Reset, Sauvegarder le code, Valider et pré-calculer
+
+### Modèle d'exécution
+
+Le code est le body d'une fonction avec les paramètres : `positions` (Point2D[] à muter), `time` (secondes), `frameIndex`, `totalFrames`, `numVertices`, `progress` (0 à 1). Exécuté via `new Function()`.
+
+### Pré-calcul
+
+"Valider et pré-calculer" exécute le code pour `duration × 24` frames, stocke le résultat dans `mesh.videoFramesMesh`. Après pré-calcul, l'animation est identique à un oneshot pour le playback.
+
+### Prérequis
+
+La rest animation doit avoir une triangulation calculée (topologie verrouillée) pour que les positions de base et les triangles soient disponibles.
 
 ## AdminPreview (`AdminPreview.tsx`)
 
@@ -48,10 +74,10 @@ Preview live PIXI.js intégrée dans le split-panel droit de `AdminPage`. Rendu 
 
 - **Props** : `{ project: Project, style?: CSSProperties }`
 - **Texture** : `originalImageBlob` → Image → canvas offscreen → PIXI.Texture (UVs directs, pas de contentAlignment)
-- **Animation** : `MultiAnimationPlayback` (rest loop + oneshots) ou `LoopPlayback` si pas de oneshots
+- **Animation** : `MultiAnimationPlayback` (rest loop + oneshots + physics overlays) ou `LoopPlayback` si aucun
 - **Physique** : `MeshPhysicsEffect` avec pointer events sur le canvas PIXI
 - **Effets visuels** : ombre (contour polygon + blur), éclairage (gradient overlay), vidéo de fond (sans parallax)
-- **Contrôles** : play/pause, boutons oneshot, sliders physique/visuels en `<details>` dépliables
+- **Contrôles** : play/pause, boutons oneshot/physics, sliders physique/visuels en `<details>` dépliables
 - **Performance** : FPS capé à 30 (`app.ticker.maxFPS`), `ResizeObserver` pour le redimensionnement
 - **Pas de** : fullscreen, landscape lock, parallax gyroscope, LongPressCloseButton
 

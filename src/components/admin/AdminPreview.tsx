@@ -68,7 +68,7 @@ function createLightingCanvas(): HTMLCanvasElement {
 function getAnimationData(project: Project) {
   const restAnim = project.animations.find(a => a.type === 'rest')
   const readyOneshots: Animation[] = project.animations.filter(
-    a => a.type === 'oneshot' && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
+    a => (a.type === 'oneshot' || a.type === 'physics') && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
   )
   return { restAnim, readyOneshots }
 }
@@ -333,6 +333,7 @@ export default function AdminPreview({ project, style }: Props) {
           id: a.id,
           name: a.name,
           frames: a.mesh!.videoFramesMesh!,
+          overlay: a.physicsOverlay ?? false,
         }))
 
       const hasOneshots = oneshotAnims.length > 0
@@ -445,21 +446,26 @@ export default function AdminPreview({ project, style }: Props) {
       {/* Oneshot trigger buttons */}
       {readyOneshots.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {readyOneshots.map(anim => (
-            <button
-              key={anim.id}
-              onClick={() => handleOneshotTrigger(anim.id)}
-              disabled={playbackState !== 'rest' && playbackState !== 'wait'}
-              style={{
-                padding: '4px 12px',
-                fontSize: '0.8rem',
-                borderRadius: 8,
-                opacity: (playbackState !== 'rest' && playbackState !== 'wait') ? 0.5 : 1,
-              }}
-            >
-              {anim.name}
-            </button>
-          ))}
+          {readyOneshots.map(anim => {
+            const isOverlay = anim.physicsOverlay ?? false
+            const disabled = !isOverlay && playbackState !== 'rest' && playbackState !== 'wait'
+            return (
+              <button
+                key={anim.id}
+                onClick={() => handleOneshotTrigger(anim.id)}
+                disabled={disabled}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '0.8rem',
+                  borderRadius: 8,
+                  opacity: disabled ? 0.5 : 1,
+                  borderColor: isOverlay ? '#9c27b0' : undefined,
+                }}
+              >
+                {anim.name}
+              </button>
+            )
+          })}
         </div>
       )}
 

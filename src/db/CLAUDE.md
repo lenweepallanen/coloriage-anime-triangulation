@@ -32,10 +32,13 @@ Chaque `AnimationDoc` :
 {
   id: string
   name: string
-  type: 'rest' | 'oneshot'
+  type: 'rest' | 'oneshot' | 'physics'
   createdAt: number
   hasVideo: boolean
   mesh: MeshDoc | null          // Même structure qu'avant, mais par animation
+  physicsCode: string | null    // Code JS pour physics animations
+  physicsDuration: number | null // Durée en secondes
+  physicsOverlay: boolean       // Si true, overlay sur rest loop
 }
 ```
 

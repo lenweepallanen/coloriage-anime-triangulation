@@ -12,6 +12,7 @@ export interface OneshotAnimation {
   id: string
   name: string
   frames: Point2D[][]
+  overlay?: boolean
 }
 
 export interface MultiAnimationPlaybackOptions {
@@ -41,6 +42,13 @@ export class MultiAnimationPlayback {
   private fps: number
   private _speed: number
 
+  // Overlay state (physics animations that play on top of rest)
+  private overlayIds: Set<string> = new Set()
+  private overlayBasePositions: Map<string, Point2D[]> = new Map() // frame 0 of overlay anim
+  private activeOverlayId: string | null = null
+  private overlayCursor: number = 0
+  private overlayTotalFrames: number = 0
+
   constructor(
     restFrames: Point2D[][],
     oneshotAnimations: OneshotAnimation[],
@@ -61,11 +69,24 @@ export class MultiAnimationPlayback {
     for (const anim of oneshotAnimations) {
       this.oneshotData.set(anim.id, anim.frames)
       this.oneshotNames.set(anim.id, anim.name)
+      if (anim.overlay) {
+        this.overlayIds.add(anim.id)
+        this.overlayBasePositions.set(anim.id, anim.frames[0])
+      }
     }
   }
 
   requestOneshot(animId: string): void {
     if (!this.oneshotData.has(animId)) return
+
+    // Overlay animations start immediately on top of rest
+    if (this.overlayIds.has(animId)) {
+      this.activeOverlayId = animId
+      this.overlayCursor = 0
+      this.overlayTotalFrames = this.oneshotData.get(animId)!.length
+      return
+    }
+
     // If already playing or transitioning, queue
     if (this._state === 'rest') {
       this.pendingOneshotId = animId
@@ -79,6 +100,16 @@ export class MultiAnimationPlayback {
 
   advance(deltaTicks: number): void {
     const deltaSeconds = deltaTicks / 60
+
+    // Advance overlay independently
+    if (this.activeOverlayId) {
+      const advance = this.fps * this._speed * deltaSeconds
+      this.overlayCursor += advance
+      if (this.overlayCursor >= this.overlayTotalFrames - 1) {
+        this.activeOverlayId = null
+        this.overlayCursor = 0
+      }
+    }
 
     switch (this._state) {
       case 'rest':
@@ -132,33 +163,46 @@ export class MultiAnimationPlayback {
   }
 
   getPositions(): Point2D[] {
+    let positions: Point2D[]
+
     switch (this._state) {
       case 'rest':
       case 'wait':
-        return this.restPlayback.getPositions()
+        positions = this.restPlayback.getPositions()
+        break
 
       case 'trans-out':
-        return this.blend(
+        positions = this.blend(
           this.transitionFrom,
           this.transitionTo,
           smoothstep(this.transitionCursor / this.transitionFrames)
         )
+        break
 
       case 'oneshot': {
         const frames = this.oneshotData.get(this.activeOneshotId!)!
         const f0 = Math.min(Math.floor(this.oneshotCursor), frames.length - 1)
         const f1 = Math.min(f0 + 1, frames.length - 1)
         const frac = this.oneshotCursor - Math.floor(this.oneshotCursor)
-        return this.blend(frames[f0], frames[f1], frac)
+        positions = this.blend(frames[f0], frames[f1], frac)
+        break
       }
 
       case 'trans-in':
-        return this.blend(
+        positions = this.blend(
           this.transitionFrom,
           this.transitionTo,
           smoothstep(this.transitionCursor / this.transitionFrames)
         )
+        break
     }
+
+    // Apply overlay displacement on top
+    if (this.activeOverlayId) {
+      positions = this.applyOverlay(positions)
+    }
+
+    return positions
   }
 
   get currentState(): PlaybackState {
@@ -206,6 +250,32 @@ export class MultiAnimationPlayback {
     // Actually, get rest frame 0 positions directly
     this.restPlayback.seekFrame(0)
     this.transitionTo = this.restPlayback.getPositions()
+  }
+
+  get isOverlayActive(): boolean {
+    return this.activeOverlayId !== null
+  }
+
+  private applyOverlay(positions: Point2D[]): Point2D[] {
+    const overlayFrames = this.oneshotData.get(this.activeOverlayId!)!
+    const basePos = this.overlayBasePositions.get(this.activeOverlayId!)!
+    const f0 = Math.min(Math.floor(this.overlayCursor), overlayFrames.length - 1)
+    const f1 = Math.min(f0 + 1, overlayFrames.length - 1)
+    const frac = this.overlayCursor - Math.floor(this.overlayCursor)
+
+    const len = Math.min(positions.length, basePos.length)
+    const out: Point2D[] = new Array(len)
+    for (let i = 0; i < len; i++) {
+      // Interpolate overlay frame
+      const ox = overlayFrames[f0][i].x * (1 - frac) + overlayFrames[f1][i].x * frac
+      const oy = overlayFrames[f0][i].y * (1 - frac) + overlayFrames[f1][i].y * frac
+      // displacement = overlay position - base position
+      out[i] = {
+        x: positions[i].x + (ox - basePos[i].x),
+        y: positions[i].y + (oy - basePos[i].y),
+      }
+    }
+    return out
   }
 
   private blend(a: Point2D[], b: Point2D[], t: number): Point2D[] {

@@ -552,7 +552,7 @@ reset(): void
 
 ## multiAnimationPlayback.ts
 
-Machine d'états pour le playback multi-animation : rest en boucle + oneshots déclenchés à la demande avec transitions fluides.
+Machine d'états pour le playback multi-animation : rest en boucle + oneshots déclenchés à la demande avec transitions fluides + physics overlays superposés.
 
 ### Machine d'états (5 états)
 
@@ -568,16 +568,26 @@ rest → (requestOneshot) → wait → (loop point) → trans-out → (N frames 
 | `oneshot` | Lecture linéaire frame par frame (pas de loop, pas de crossfade) |
 | `trans-in` | Blend smoothstep sur `transitionFrames` : oneshot dernière frame → rest frame 0 |
 
+### Overlay (physics animations)
+
+Les animations marquées `overlay: true` dans `OneshotAnimation` sont traitées séparément de la machine d'états principale :
+- `requestOneshot()` démarre l'overlay **immédiatement** (pas de wait/transition)
+- L'overlay avance en parallèle de l'état principal (rest/oneshot continue normalement)
+- `getPositions()` calcule les **déplacements** (position overlay − position base frame 0) et les ajoute aux positions courantes
+- Quand l'overlay atteint sa dernière frame, il s'arrête
+- Les boutons overlay restent cliquables même pendant un oneshot classique
+
 ### API
 
 ```typescript
 class MultiAnimationPlayback {
   constructor(restFrames: Point2D[][], oneshotAnimations: OneshotAnimation[], options?)
-  requestOneshot(animId: string): void   // Queue une oneshot (remplace si déjà en wait)
-  advance(deltaTicks: number): void      // Avance la machine d'états
-  getPositions(): Point2D[]              // Positions courantes (avec blend si transition)
+  requestOneshot(animId: string): void   // Queue une oneshot ou démarre un overlay immédiatement
+  advance(deltaTicks: number): void      // Avance la machine d'états + overlay
+  getPositions(): Point2D[]              // Positions courantes (avec blend si transition, + overlay si actif)
   get currentState(): PlaybackState
   get isPlayingOneshot(): boolean
+  get isOverlayActive(): boolean
   get activeOneshotName(): string | null
   speed: number                          // Getter/setter, propagé à LoopPlayback
 }

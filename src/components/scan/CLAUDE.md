@@ -134,11 +134,11 @@ Après `enhanceContrast`, le processeur détecte automatiquement la bounding box
 Layout horizontal plein écran (`position: fixed`, `z-index: 100`) :
 - **Gauche** : canvas PIXI (`flex: 1`, fond noir)
 - **Droite** : sidebar 220px (180px mobile) avec boutons (Play/Pause, Fullscreen, Fermer) et sliders dans des `<details>` dépliables (Physique + Effets visuels)
-- **Bas centre** : boutons oneshot flottants (un par animation oneshot prête)
+- **Bas centre** : boutons oneshot/physics flottants (un par animation oneshot ou physics prête, bordure violette pour les physics overlay)
 
 ### Multi-animation playback
 
-Prop `animations: Animation[]` reçue de ScanPage. Si des oneshots ont un `videoFramesMesh`, utilise `MultiAnimationPlayback` au lieu de `LoopPlayback`.
+Prop `animations: Animation[]` reçue de ScanPage. Si des oneshots ou physics ont un `videoFramesMesh`, utilise `MultiAnimationPlayback` au lieu de `LoopPlayback`. Les physics overlay passent `overlay: true` à `OneshotAnimation`.
 
 **Machine d'états** (`multiAnimationPlayback.ts`) :
 ```
@@ -199,4 +199,4 @@ verts.update()  // Sync GPU
 - Play / Pause, Plein écran, Fermer
 - Sliders Physique : Force, Rayon, Concentration, Retour
 - Sliders Visuels : Ombre, Éclairage, Parallax
-- Boutons oneshot : un par animation oneshot avec `videoFramesMesh` prêt
+- Boutons oneshot/physics : un par animation oneshot ou physics avec `videoFramesMesh` prêt (les boutons overlay restent cliquables même pendant un oneshot)

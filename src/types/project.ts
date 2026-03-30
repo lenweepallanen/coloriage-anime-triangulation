@@ -85,7 +85,7 @@ export interface MarkerCorners {
   bottomRight: Point2D;
 }
 
-export type AnimationType = 'rest' | 'oneshot';
+export type AnimationType = 'rest' | 'oneshot' | 'physics';
 
 export interface Animation {
   id: string;
@@ -94,6 +94,9 @@ export interface Animation {
   createdAt: number;
   videoBlob: Blob | null;
   mesh: MeshData | null;
+  physicsCode: string | null;
+  physicsDuration: number | null;
+  physicsOverlay: boolean;
 }
 
 export interface Project {

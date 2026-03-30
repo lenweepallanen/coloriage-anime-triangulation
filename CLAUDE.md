@@ -33,18 +33,19 @@ L'utilisateur crée un projet avec une image de coloriage et **plusieurs animati
 Un projet contient **plusieurs animations** partageant la même image et géométrie :
 - **Rest** (exactement 1) : animation en boucle infinie (idle). Pipeline complet 10 étapes. Seule animation autorisée à modifier la géométrie.
 - **Oneshot** (0+) : animations à la demande (wave, jump...). Pipeline réduit 6 étapes (tracking seul, géométrie héritée de rest).
+- **Physics** (0+) : animations procédurales par code JS. Pas de vidéo ni tracking — l'utilisateur écrit du code qui transforme les vertices du maillage. Les frames sont pré-calculées à la validation et stockées comme `videoFramesMesh`, ce qui les rend identiques aux oneshots pour le playback. Option **overlay** : si activée, l'animation se superpose instantanément à la rest loop (déplacements additifs) sans attendre la fin du cycle.
 
 ### Topologie partagée
 
-La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints, anchorPoints, internalPoints, triangles, trackedTriangles, internalBarycentrics) est définie sur la rest animation et **propagée** aux oneshots. Si la géométrie rest change, le tracking des oneshots est invalidé.
+La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints, anchorPoints, internalPoints, triangles, trackedTriangles, internalBarycentrics) est définie sur la rest animation et **propagée** aux oneshots et physics. Si la géométrie rest change, le tracking des oneshots est invalidé et les frames pré-calculées des physics sont effacées.
 
 ### Adapter pattern
 
-Les step components ne connaissent pas le multi-animation. `AdminPage` construit un `ProjectStepView` (projet + videoBlob/mesh de l'animation sélectionnée) et intercepte le save pour merger dans la bonne animation.
+Les step components ne connaissent pas le multi-animation. `AdminPage` construit un `ProjectStepView` (projet + videoBlob/mesh de l'animation sélectionnée) et intercepte le save pour merger dans la bonne animation. Les physics animations utilisent un composant dédié (`PhysicsAnimationEditor`) qui reçoit directement le projet et l'animation.
 
 ### Preview panel (AdminPreview)
 
-Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet droit (preview live PIXI.js). La preview utilise l'image PNG originale comme texture (pas de scan). Affiche l'animation rest en boucle + boutons oneshot + physique tactile + effets visuels.
+Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet droit (preview live PIXI.js). La preview utilise l'image PNG originale comme texture (pas de scan). Affiche l'animation rest en boucle + boutons oneshot/physics + physique tactile + effets visuels.
 
 - **Masquable** : bouton "Masquer/Afficher preview" dans le header
 - **Redimensionnable** : barre de séparation draggable (15% à 60%), défaut ~1/3
@@ -52,7 +53,7 @@ Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet d
 - **Responsive** : pleine largeur avec marges 5vw sur écrans 4K (>2000px) ; empilement vertical sous 900px
 - **Composant** : `AdminPreview.tsx` — PIXI.js léger (~320 lignes), FPS capé à 30, ResizeObserver, pas de fullscreen/parallax
 
-## Workflow Admin (10 étapes rest / 6 étapes oneshot)
+## Workflow Admin (10 étapes rest / 6 étapes oneshot / 1 étape physics)
 
 Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 définit le s=0 du contour. Seuls 4-5 points caractéristiques du contour sont trackés par extrema de courbure CSS ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
@@ -75,6 +76,9 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 4. **Tracking Contour** — Placement curviligne sur la vidéo oneshot
 5. **Tracking Ancres** — Optical flow ancres internes sur la vidéo oneshot
 6. **Triangulation** — Calcul animation finale (géométrie héritée, lecture seule)
+
+### Pipeline physics (1 étape)
+1. **Code Editeur** — Éditeur de code JS avec preview PIXI temps réel + pré-calcul des frames
 
 ## Workflow Scan (utilisateur final)
 
@@ -105,7 +109,7 @@ src/
 │   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + PhysicsAnimationEditor)
 │   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -127,7 +131,7 @@ src/
 │   ├── pdfGenerator.ts         Génération PDF
 │   ├── pdfLayout.ts            Constantes layout A4 + calcul offset centroïde L-marker
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
-│   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions)
+│   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css
 public/
 ├── opencv.js                   Bibliothèque OpenCV.js compilée
@@ -137,22 +141,25 @@ public/
 ## Modèle de données
 
 ```typescript
-AnimationType = 'rest' | 'oneshot'
+AnimationType = 'rest' | 'oneshot' | 'physics'
 
 Animation {
   id: string                         // crypto.randomUUID()
-  name: string                       // "Idle", "Wave", "Jump"
+  name: string                       // "Idle", "Wave", "Jump", "Tourbillon"
   type: AnimationType
   createdAt: number
-  videoBlob: Blob | null             // Vidéo propre à cette animation
+  videoBlob: Blob | null             // Vidéo propre (rest/oneshot), null pour physics
   mesh: MeshData | null              // Pipeline complet propre (géométrie partagée, tracking indépendant)
+  physicsCode: string | null         // Code JS pour physics animations
+  physicsDuration: number | null     // Durée en secondes (défaut 2)
+  physicsOverlay: boolean            // Si true, se superpose à la rest loop sans attendre la fin du cycle
 }
 
 Project {
   id, name, createdAt
   originalImageBlob: Blob | null     // Image coloriage (niveau projet)
   backgroundVideoBlob: Blob | null   // Vidéo fond (niveau projet)
-  animations: Animation[]            // Exactement 1 rest + 0..N oneshots
+  animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics
   markers: MarkerCorners | null      // 4 coins marqueurs L
 }
 

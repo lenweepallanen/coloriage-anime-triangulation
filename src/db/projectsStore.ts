@@ -78,6 +78,9 @@ interface AnimationDoc {
   createdAt: number
   hasVideo: boolean
   mesh: MeshDoc | null
+  physicsCode: string | null
+  physicsDuration: number | null
+  physicsOverlay: boolean
 }
 
 interface ProjectDoc {
@@ -195,6 +198,9 @@ function animToDoc(anim: Animation): AnimationDoc {
     createdAt: anim.createdAt,
     hasVideo: anim.videoBlob != null,
     mesh: anim.mesh ? meshToDoc(anim.mesh) : null,
+    physicsCode: anim.physicsCode ?? null,
+    physicsDuration: anim.physicsDuration ?? null,
+    physicsOverlay: anim.physicsOverlay ?? false,
   }
 }
 
@@ -368,6 +374,9 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         createdAt: animDoc.createdAt,
         videoBlob,
         mesh,
+        physicsCode: animDoc.physicsCode ?? null,
+        physicsDuration: animDoc.physicsDuration ?? null,
+        physicsOverlay: animDoc.physicsOverlay ?? false,
       }
     })
   )
@@ -412,6 +421,9 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     createdAt: data.createdAt,
     videoBlob,
     mesh,
+    physicsCode: null,
+    physicsDuration: null,
+    physicsOverlay: false,
   }
 
   return {
@@ -448,6 +460,9 @@ export async function createProject(name: string): Promise<Project> {
     createdAt: Date.now(),
     videoBlob: null,
     mesh: null,
+    physicsCode: null,
+    physicsDuration: null,
+    physicsOverlay: false,
   }
   const project: Project = {
     id: crypto.randomUUID(),
@@ -485,6 +500,9 @@ export async function getAllProjects(): Promise<Project[]> {
         createdAt: legacy.createdAt,
         videoBlob: null,
         mesh: legacy.mesh ? meshShellFromDoc(legacy.mesh as MeshDoc | LegacyMeshDoc) : null,
+        physicsCode: null,
+        physicsDuration: null,
+        physicsOverlay: false,
       }
       return {
         id: legacy.id,
@@ -511,6 +529,9 @@ export async function getAllProjects(): Promise<Project[]> {
         createdAt: animDoc.createdAt,
         videoBlob: null,
         mesh: animDoc.mesh ? meshShellFromDoc(animDoc.mesh as MeshDoc) : null,
+        physicsCode: animDoc.physicsCode ?? null,
+        physicsDuration: animDoc.physicsDuration ?? null,
+        physicsOverlay: animDoc.physicsOverlay ?? false,
       })),
       markers: projDoc.markers,
     }

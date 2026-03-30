@@ -167,7 +167,7 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
 function getAnimationData(project: Project) {
   const restAnim = project.animations.find(a => a.type === 'rest')
   const readyOneshots: Animation[] = project.animations.filter(
-    a => a.type === 'oneshot' && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
+    a => (a.type === 'oneshot' || a.type === 'physics') && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
   )
   return { restAnim, readyOneshots }
 }
@@ -489,6 +489,7 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
           id: a.id,
           name: a.name,
           frames: a.mesh!.videoFramesMesh!,
+          overlay: a.physicsOverlay ?? false,
         }))
 
       const hasOneshots = oneshotAnims.length > 0
@@ -641,29 +642,33 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
           gap: 10,
           zIndex: 110,
         }}>
-          {readyOneshots.map(anim => (
-            <button
-              key={anim.id}
-              onClick={() => handleOneshotTrigger(anim.id)}
-              disabled={playbackState !== 'rest' && playbackState !== 'wait'}
-              style={{
-                padding: '10px 20px',
-                fontSize: '1em',
-                borderRadius: 12,
-                border: 'none',
-                background: (playbackState !== 'rest' && playbackState !== 'wait')
-                  ? 'rgba(255,255,255,0.3)'
-                  : 'rgba(255,255,255,0.85)',
-                color: '#333',
-                cursor: (playbackState !== 'rest' && playbackState !== 'wait') ? 'default' : 'pointer',
-                fontWeight: 600,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                backdropFilter: 'blur(8px)',
-              }}
-            >
-              {anim.name}
-            </button>
-          ))}
+          {readyOneshots.map(anim => {
+            const isOverlay = anim.physicsOverlay ?? false
+            const disabled = !isOverlay && playbackState !== 'rest' && playbackState !== 'wait'
+            return (
+              <button
+                key={anim.id}
+                onClick={() => handleOneshotTrigger(anim.id)}
+                disabled={disabled}
+                style={{
+                  padding: '10px 20px',
+                  fontSize: '1em',
+                  borderRadius: 12,
+                  border: isOverlay ? '2px solid #9c27b0' : 'none',
+                  background: disabled
+                    ? 'rgba(255,255,255,0.3)'
+                    : 'rgba(255,255,255,0.85)',
+                  color: '#333',
+                  cursor: disabled ? 'default' : 'pointer',
+                  fontWeight: 600,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                  backdropFilter: 'blur(8px)',
+                }}
+              >
+                {anim.name}
+              </button>
+            )
+          })}
         </div>
       )}
 

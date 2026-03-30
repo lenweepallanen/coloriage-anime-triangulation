@@ -15,6 +15,7 @@ import ContourTrackingStep from '../components/admin/ContourTrackingStep'
 import AnchorPointsStep from '../components/admin/AnchorPointsStep'
 import AnchorTrackingStep from '../components/admin/AnchorTrackingStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
+import PhysicsAnimationEditor from '../components/admin/PhysicsAnimationEditor'
 
 // Full pipeline for rest animation
 const REST_STEPS = [
@@ -40,7 +41,12 @@ const ONESHOT_STEPS = [
   'Triangulation',
 ] as const
 
-type Step = (typeof REST_STEPS)[number]
+// Physics animations: code editor only
+const PHYSICS_STEPS = [
+  'Code Editeur',
+] as const
+
+type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number]
 
 const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo'])
 
@@ -57,13 +63,14 @@ export default function AdminPage() {
 
   const selectedAnim = project?.animations.find(a => a.id === selectedAnimationId)
   const isRestAnim = selectedAnim?.type === 'rest'
+  const isPhysicsAnim = selectedAnim?.type === 'physics'
 
   // Steps available for the current animation type
-  const availableSteps = isRestAnim ? REST_STEPS : ONESHOT_STEPS
+  const availableSteps = isRestAnim ? REST_STEPS : isPhysicsAnim ? PHYSICS_STEPS : ONESHOT_STEPS
 
-  // If current step isn't available for this animation type, reset to Import
+  // If current step isn't available for this animation type, reset to first available step
   if (!availableSteps.includes(activeStep as never)) {
-    setActiveStep('Import')
+    setActiveStep(availableSteps[0] as Step)
   }
 
   // Build a ProjectStepView for step components (adapter pattern)
@@ -271,6 +278,13 @@ export default function AdminPage() {
             )}
             {activeStep === 'Triangulation' && (
               <TriangulationStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
+            )}
+            {activeStep === 'Code Editeur' && selectedAnim && (
+              <PhysicsAnimationEditor
+                project={project}
+                animation={selectedAnim}
+                onSave={save}
+              />
             )}
           </div>
         )}
