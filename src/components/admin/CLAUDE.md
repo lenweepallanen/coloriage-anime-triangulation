@@ -143,27 +143,31 @@ Post-traitement : snap sur Canny toutes les 5 frames pour robustesse.
 
 Prérequis : Canny validé + P0 tracké.
 
-Place 4-5 points **caractéristiques** sur le contour (bout d'aile, pli, sommet). Seuls ces points seront trackés.
+Place des points **caractéristiques** sur le contour (bout d'aile, pli, sommet). **P0 est automatiquement inclus comme premier anchor** à la sauvegarde — l'admin ne voit et ne place que les anchors supplémentaires.
 
-- Détecte le contour Canny sur l'image originale au montage
-- Construit un `ContourSpatialIndex` pour snap rapide
-- Auto-snap sur le contour Canny à chaque clic/drag (rayon 30px)
-- Sauvegarde → `mesh.contourAnchors`
-- Réinitialise les étapes suivantes si les anchors changent
+- Détecte le contour Canny sur l'image originale au montage, calcule les arc-lengths
+- **Auto-snap unbounded** : chaque clic/drag est snappé au pixel Canny le plus proche (sans limite de distance, `nearestUnbounded`)
+- **Auto-détection par courbure** : `detectCurvatureExtrema` (single-scale, top N). Slider nombre de points (4-20, défaut 6). Candidats trop proches de P0 (< 20px) filtrés. Candidats restants affichés en orange (taille/opacité proportionnelle au score).
+- **Tri par ordre contour** : les anchors sont automatiquement triés par position le long du contour ordonné (`computeInitialAnchorArcLengths`)
+- Sauvegarde → `mesh.contourAnchors` = `[P0, ...anchors]`
+- Réinitialise les étapes suivantes si les anchors changent (subdivision, tracking contour, topologie)
 
 ## Étape 6 — Subdivision Contour (`ContourSubdivisionStep.tsx`)
 
 Prérequis : anchors contour définis (étape 5) + Canny validé.
 
-Définit les points intermédiaires entre les anchors caractéristiques et calcule leur mouvement par coordonnées curvilignes sur le contour Canny de chaque frame.
+Définit les points intermédiaires entre les anchors caractéristiques. **Placement statique seulement** (frame 0 sur l'image) — le calcul par frame via `computeAllSubdivisionFrames` est fait à l'étape 10.
 
-### Phases
-1. **define** : Détecte et ordonne le contour Canny sur l'image, génère N points uniformes par segment anchor via `subdivideContour()`. Bouton "Recalculer preview contour" pour forcer la re-détection Canny.
-2. **computing** : Boucle sur toutes les frames vidéo via `computeAllSubdivisionFrames()` — détecte Canny, convertit coords vidéo → image, place les points à leur coordonnée curviligne `t`. Retourne `SubdivisionResult` avec `subdivisionFrames` + `cannyFrames` (cache).
-3. **preview** : Preview frame par frame (anchors rouges + subdivision verts + polygone complet)
-4. **validated** : Sauvegarde `contourSubdivisionPoints`, `contourSubdivisionParams`, `contourSubdivisionFrames`, `contourCannyFrames`
+- Détection Canny sur l'image originale, réordonnancement depuis P0 via `reorderContourFromOrigin`
+- `subdivideContour(orderedContour, contourAnchors, countsPerSegment)` génère N points uniformes par segment (en arc-length)
+- **Compteur par segment** : +/- individuel pour chaque segment `[anchor_i → anchor_{i+1}]`, défaut 3 par segment
+- **Compteur global** : +/- pour tous les segments simultanément
+- Clic sur un segment = surbrillance verte
+- Bouton "Recalculer preview contour" pour forcer la re-détection Canny
+- Sauvegarde → `contourSubdivisionPoints`, `contourSubdivisionParams` (les `{segmentIndex, t}`)
+- Ne sauvegarde PAS de frames — les `contourSubdivisionFrames` et `contourCannyFrames` sont calculées et sauvegardées à l'étape 10
 
-### Algorithme par frame
+### Algorithme de subdivision par frame (utilisé à l'étape 10 via `computeAllSubdivisionFrames`)
 ```
 1. Détecter contour Canny sur le frame vidéo (coords vidéo)
    — OpenCV findContours retourne déjà des pixels ordonnés (pas besoin de orderContourPixels)
@@ -233,9 +237,9 @@ Prérequis : tracking contour validé (`contourAnchorTrackingValidated`).
 Prérequis : tracking contour validé + ancres définies.
 
 Même structure que les étapes de tracking mais pour les ancres internes :
-- Config contraintes (anti-saut, voisinage, temporel, outliers — pas de contour)
-- Tracking → keyframes → édition → validation
-- Sauvegarde `anchorKeyframes` + `anchorFrames`
+- Contraintes **hardcodées** (pas de config UI) : anti-saut ON, voisinage ON (topologie chaînée `[i, i+1, i+2]`), temporel OFF, outliers OFF
+- Tracking (`precomputeOpticalFlow`) → keyframes → édition frame par frame → propagation (`trackSegment`) → validation
+- Sauvegarde `anchorKeyframes` + `anchorFrames` (interpolés via `propagateKeyframes`)
 
 ## Étape 10 — Triangulation + Animation (`TriangulationStep.tsx`)
 
@@ -252,16 +256,25 @@ Prérequis : tracking contour validé. Tracking ancres internes optionnel (si ab
   3. Met `topologyLocked = true`
 - **Bouton PDF** (appelle `generateTemplatePDF`)
 
-### Animation
-- Bouton "Calculer l'animation" :
+### Animation (ARAP uniquement)
+
+Bouton "Calculer Animation" → `handleComputeARAP` :
   1. Appelle `computeAllSubdivisionFrames` avec cache Canny (`mesh.contourCannyFrames`) si disponible, sinon détection live
   2. Si `anchorFrames` absent → utilise les positions initiales pour toutes les frames
   3. Ne charge le Worker OpenCV que si le cache Canny n'est pas disponible
-  4. Assemble `videoFramesMesh` par frame :
-  ```
-  allPoints[f] = [...contourAnchorFrames[f], ...contourSubdivisionFrames[f], ...(anchorFrames[f] ?? anchorPoints), ...interpolatedInternals]
-  ```
-- Preview : vidéo + overlay maillage animé (play/pause/rewind)
+  4. Pose de repos = positions frame 0 originales de `allPoints` (pas les positions trackées)
+  5. Points pinnés = tous sauf `internalPoints` (contourAnchors + subdivision + anchorPoints)
+  6. `precomputeARAP(allPoints0, triangles, pinnedIndices)` — poids cotangent + factorisation Cholesky
+  7. `batchSolveARAP(system, pinnedFrames)` — résolution itérative par frame (rotation polaire + Cholesky)
+  8. Lissage temporel optionnel (`applyTemporalSmoothing`, fenêtre configurable slider, défaut 3)
+
+Note : `handleComputeAnimation` (barycentrics) existe encore dans le code mais n'est plus appelé par l'UI.
+
+### Preview
+- 3 modes d'affichage : **vidéo** (wireframe vert sur vidéo), **wireframe** (fond sombre), **gradient** (triangles colorés HSL par centroïde)
+- Loop seamless via `LoopPlayback` avec **crossfade configurable** (slider 0-20 frames, défaut 7)
+- Play/pause + slider frame + rewind
+- Vertices colorés par catégorie : rouge (contour anchors), jaune (subdivision), cyan (anchors internes), blanc (internes)
 - Sauvegarde `videoFramesMesh` dans Storage
 
 ## Composants support

@@ -89,24 +89,24 @@ Ligne sous la section import projet avec 3 encadrés côte-à-côte :
 Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 définit le s=0 du contour. Seuls 4-5 points caractéristiques du contour sont trackés par extrema de courbure CSS ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
 ### Pipeline rest (10 étapes)
-1. **Vidéo** — Upload vidéo d'animation MP4/WebM (image et assets projet importés dans la section projet)
-2. **Canny** — Preview contour externe Canny sur vidéo + réglage seuils
-3. **Point 0 Contour** — Placement du point d'origine P0 sur le contour (définit s=0)
-4. **Tracking Point 0** — Optical flow + snap-to-contour Canny sur P0 frame par frame
-5. **Anchors Contour** — Placement 4-5 points caractéristiques sur le contour (auto-snap Canny)
-6. **Subdivision** — Points intermédiaires entre anchors + calcul par frame via coordonnées curvilignes Canny
-7. **Tracking Contour** — Placement déterministe par coordonnée curviligne normalisée + snap extrema courbure CSS
-8. **Ancres Internes** — Placement points features intérieurs (contour en overlay lecture seule)
-9. **Tracking Ancres** — Optical flow sur ancres internes + keyframes
-10. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF + animation finale
+1. **Vidéo** — Upload vidéo d'animation MP4/WebM + son optionnel pour oneshot (image importée dans la section projet)
+2. **Canny** — Preview contour externe Canny sur vidéo + réglage 3 seuils (low, high, blur)
+3. **Point 0 Contour** — Placement du point d'origine P0 sur le contour Canny de l'image (auto-snap 30px, définit s=0)
+4. **Tracking Point 0** — Optical flow + snap-to-contour Canny sur P0 frame par frame, édition keyframes
+5. **Anchors Contour** — Placement points caractéristiques sur le contour (auto-snap unbounded Canny) + auto-détection par extrema de courbure (`detectCurvatureExtrema`, 4-20 pts). P0 inclus automatiquement en premier anchor. Tri par ordre contour.
+6. **Subdivision** — Points intermédiaires entre anchors (placement statique frame 0 seulement). Compteur +/- par segment et global. Le calcul par frame est fait à l'étape 10.
+7. **Tracking Contour** — Placement déterministe par coordonnée curviligne normalisée + snap extrema courbure CSS (`detectGlobalCurvatureExtrema`). Pas d'optical flow. 2 modes : s fixe ou proche en proche.
+8. **Ancres Internes** — Placement points features intérieurs (contour en overlay lecture seule) + auto-détection par grille
+9. **Tracking Ancres** — Optical flow sur ancres internes + keyframes. Contraintes hardcodées : anti-saut + voisinage ON, temporel + outlier OFF.
+10. **Triangulation** — Points internes + Delaunay + verrouillage topologie + calcul animation ARAP (As-Rigid-As-Possible) + lissage temporel + preview 3 modes (vidéo/wireframe/gradient) + crossfade configurable
 
 ### Pipeline oneshot (6 étapes)
-1. **Vidéo** — Upload vidéo d'animation (image héritée du projet)
-2. **Canny** — Preview contour Canny sur la vidéo oneshot
-3. **Tracking Point 0** — Tracking P0 sur la vidéo oneshot
-4. **Tracking Contour** — Placement curviligne sur la vidéo oneshot
-5. **Tracking Ancres** — Optical flow ancres internes sur la vidéo oneshot
-6. **Triangulation** — Calcul animation finale (géométrie héritée, lecture seule)
+1. **Vidéo** — Upload vidéo d'animation + son optionnel (image héritée du projet)
+2. **Canny** — Preview contour Canny sur la vidéo oneshot (géométrie héritée de rest en lecture seule)
+3. **Tracking Point 0** — Tracking P0 sur la vidéo oneshot (optical flow + snap Canny)
+4. **Tracking Contour** — Placement curviligne + snap extrema courbure sur la vidéo oneshot
+5. **Tracking Ancres** — Optical flow ancres internes sur la vidéo oneshot (anti-saut + voisinage)
+6. **Triangulation** — Calcul animation finale ARAP (géométrie héritée, lecture seule)
 
 ### Pipeline physics (1 étape)
 1. **Code Editeur** — Éditeur de code JS avec preview PIXI temps réel + pré-calcul des frames

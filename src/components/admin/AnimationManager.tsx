@@ -96,6 +96,8 @@ for (let i = 0; i < numVertices; i++) {
       physicsCode: null,
       physicsDuration: null,
       physicsOverlay: false,
+      audioBlob: null,
+      audioEnabled: false,
     }
     const updated = { ...project, animations: [...project.animations, newAnim] }
     setSaving(true)
@@ -115,6 +117,8 @@ for (let i = 0; i < numVertices; i++) {
       physicsCode: DEFAULT_PHYSICS_CODE,
       physicsDuration: 2,
       physicsOverlay: false,
+      audioBlob: null,
+      audioEnabled: false,
     }
     const updated = { ...project, animations: [...project.animations, newAnim] }
     setSaving(true)

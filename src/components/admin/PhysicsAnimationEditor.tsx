@@ -87,6 +87,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [computing, setComputing] = useState(false)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
 
   // Preview state
   const containerRef = useRef<HTMLDivElement>(null)
@@ -98,6 +99,17 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
 
   // Sync playing ref
   useEffect(() => { playingRef.current = playing }, [playing])
+
+  // Audio URL management
+  useEffect(() => {
+    if (animation.audioBlob) {
+      const url = URL.createObjectURL(animation.audioBlob)
+      setAudioUrl(url)
+      return () => URL.revokeObjectURL(url)
+    } else {
+      setAudioUrl(null)
+    }
+  }, [animation.audioBlob])
 
   // Debounce code → function compilation
   useEffect(() => {
@@ -353,6 +365,51 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
     timeRef.current = 0
   }, [])
 
+  const handleAudioChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setSaving(true)
+    try {
+      const updatedAnims = project.animations.map(a =>
+        a.id === animation.id ? { ...a, audioBlob: file, audioEnabled: true } : a
+      )
+      await onSave(
+        { ...project, animations: updatedAnims },
+        [{ animationId: animation.id, field: 'audio' }],
+      )
+    } catch (err) {
+      console.error('Failed to save audio:', err)
+      alert('Erreur lors de la sauvegarde du son : ' + (err instanceof Error ? err.message : err))
+    }
+    setSaving(false)
+  }, [project, animation.id, onSave])
+
+  const handleAudioToggle = useCallback(async () => {
+    setSaving(true)
+    try {
+      const updatedAnims = project.animations.map(a =>
+        a.id === animation.id ? { ...a, audioEnabled: !a.audioEnabled } : a
+      )
+      await onSave({ ...project, animations: updatedAnims })
+    } catch (err) {
+      console.error('Failed to toggle audio:', err)
+    }
+    setSaving(false)
+  }, [project, animation.id, onSave])
+
+  const handleAudioRemove = useCallback(async () => {
+    setSaving(true)
+    try {
+      const updatedAnims = project.animations.map(a =>
+        a.id === animation.id ? { ...a, audioBlob: null, audioEnabled: false } : a
+      )
+      await onSave({ ...project, animations: updatedAnims })
+    } catch (err) {
+      console.error('Failed to remove audio:', err)
+    }
+    setSaving(false)
+  }, [project, animation.id, onSave])
+
   if (!basePositions || triangles.length === 0) {
     return (
       <div style={{ padding: 20, color: 'var(--color-muted)' }}>
@@ -424,6 +481,39 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
         />
         Superposer rest loop — l'animation s'applique instantanement par-dessus la boucle rest, sans attendre la fin du cycle
       </label>
+
+      {/* Audio */}
+      <div>
+        <label style={{ fontWeight: 600, display: 'block', marginBottom: 4, fontSize: '0.85em' }}>
+          Son (optionnel)
+        </label>
+        <p style={{ fontSize: '0.75em', color: 'var(--color-text-secondary)', margin: '0 0 6px' }}>
+          Son joué quand l'animation est déclenchée. MP3, WAV ou OGG.
+        </p>
+        <input
+          type="file"
+          accept="audio/mpeg,audio/wav,audio/ogg"
+          onChange={handleAudioChange}
+          disabled={saving || computing}
+        />
+        {audioUrl && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+            <audio src={audioUrl} controls style={{ flex: 1, height: 32 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', fontSize: '0.85em' }}>
+              <input
+                type="checkbox"
+                checked={animation.audioEnabled}
+                onChange={handleAudioToggle}
+                disabled={saving}
+              />
+              Activé
+            </label>
+            <button className="btn-ghost btn-sm" onClick={handleAudioRemove} disabled={saving}>
+              Supprimer
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Preview */}
       <div

@@ -20,6 +20,8 @@ export interface MultiAnimationPlaybackOptions {
   crossfadeFrames?: number
   transitionFrames?: number
   speed?: number
+  onOneshotStart?: (animId: string) => void
+  onOverlayStart?: (animId: string) => void
 }
 
 export class MultiAnimationPlayback {
@@ -49,6 +51,10 @@ export class MultiAnimationPlayback {
   private overlayCursor: number = 0
   private overlayTotalFrames: number = 0
 
+  // Audio callbacks
+  private onOneshotStart?: (animId: string) => void
+  private onOverlayStart?: (animId: string) => void
+
   constructor(
     restFrames: Point2D[][],
     oneshotAnimations: OneshotAnimation[],
@@ -57,6 +63,8 @@ export class MultiAnimationPlayback {
     this.fps = options?.fps ?? 24
     this._speed = options?.speed ?? 1.0
     this.transitionFrames = options?.transitionFrames ?? 7
+    this.onOneshotStart = options?.onOneshotStart
+    this.onOverlayStart = options?.onOverlayStart
 
     this.restPlayback = new LoopPlayback(restFrames, {
       fps: this.fps,
@@ -84,6 +92,7 @@ export class MultiAnimationPlayback {
       this.activeOverlayId = animId
       this.overlayCursor = 0
       this.overlayTotalFrames = this.oneshotData.get(animId)!.length
+      this.onOverlayStart?.(animId)
       return
     }
 
@@ -135,6 +144,7 @@ export class MultiAnimationPlayback {
         if (this.transitionCursor >= this.transitionFrames) {
           this._state = 'oneshot'
           this.oneshotCursor = 0
+          this.onOneshotStart?.(this.activeOneshotId!)
         }
         break
       }
