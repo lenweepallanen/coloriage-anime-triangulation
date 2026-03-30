@@ -25,6 +25,7 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `textureExtractor.ts` | Calcul des coordonnées UV pour PIXI.js |
 | `meshPhysicsEffects.ts` | Effets physiques interactifs sur le maillage animé (magnétisation tactile) |
 | `loopPlayback.ts` | Playback seamless avec crossfade smoothstep configurable |
+| `multiAnimationPlayback.ts` | Machine d'états playback multi-animation (rest loop + oneshot transitions) |
 | `deviceParallax.ts` | Wrapper DeviceOrientation API avec gestion permission iOS + smoothing EMA + swap axes landscape |
 
 ## autoMeshGenerator.ts
@@ -548,6 +549,53 @@ reset(): void
 - **Ticker** : physics tourne même en pause (spring-back fonctionne)
 - **Cas statique** : ticker dédié quand `hasFlow === false` (mesh sans animation vidéo)
 - **UI sliders** : panneau togglable "Effets" avec 4 range inputs, mise à jour via `physicsRef.current.config`
+
+## multiAnimationPlayback.ts
+
+Machine d'états pour le playback multi-animation : rest en boucle + oneshots déclenchés à la demande avec transitions fluides.
+
+### Machine d'états (5 états)
+
+```
+rest → (requestOneshot) → wait → (loop point) → trans-out → (N frames blend) → oneshot → (dernière frame) → trans-in → (N frames blend) → rest
+```
+
+| État | Comportement |
+|------|-------------|
+| `rest` | Rest animation en boucle via `LoopPlayback` (crossfade seamless) |
+| `wait` | Rest continue, attend le loop point (cursor repasse à 0) |
+| `trans-out` | Blend smoothstep sur `transitionFrames` : rest positions → oneshot frame 0 |
+| `oneshot` | Lecture linéaire frame par frame (pas de loop, pas de crossfade) |
+| `trans-in` | Blend smoothstep sur `transitionFrames` : oneshot dernière frame → rest frame 0 |
+
+### API
+
+```typescript
+class MultiAnimationPlayback {
+  constructor(restFrames: Point2D[][], oneshotAnimations: OneshotAnimation[], options?)
+  requestOneshot(animId: string): void   // Queue une oneshot (remplace si déjà en wait)
+  advance(deltaTicks: number): void      // Avance la machine d'états
+  getPositions(): Point2D[]              // Positions courantes (avec blend si transition)
+  get currentState(): PlaybackState
+  get isPlayingOneshot(): boolean
+  get activeOneshotName(): string | null
+  speed: number                          // Getter/setter, propagé à LoopPlayback
+}
+```
+
+### Options
+
+| Paramètre | Défaut | Rôle |
+|-----------|--------|------|
+| `fps` | 24 | FPS de référence |
+| `crossfadeFrames` | 7 | Crossfade pour le loop rest (passé à LoopPlayback) |
+| `transitionFrames` | 7 | Nombre de frames de blend pour les transitions rest↔oneshot |
+| `speed` | 1.0 | Vitesse de lecture |
+
+### Différence crossfade vs transition
+
+- **Crossfade** (rest loop) : blend des N dernières frames avec les N premières pour un loop seamless
+- **Transition** (rest↔oneshot) : blend linéaire smoothstep entre deux positions statiques sur N frames
 
 ## deviceParallax.ts
 

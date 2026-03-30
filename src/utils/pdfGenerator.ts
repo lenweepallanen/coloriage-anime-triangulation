@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf'
-import type { Project } from '../types/project'
+import type { ProjectStepView } from '../types/project'
 import { A4_W, A4_H, MARGIN, MARKER_SIZE, MARKER_THICK, MARKER_MARGIN } from './pdfLayout'
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -39,7 +39,7 @@ function drawPdfLMarker(
   }
 }
 
-export async function generateTemplatePDF(project: Project): Promise<Blob> {
+export async function generateTemplatePDF(project: ProjectStepView): Promise<Blob> {
   if (!project.originalImageBlob) {
     throw new Error('No image in project')
   }

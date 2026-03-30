@@ -1,9 +1,11 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Point2D } from '../../types/project'
+import type { Project, Animation, Point2D } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
+import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
+import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { MeshPhysicsEffect, DEFAULT_PHYSICS_CONFIG } from '../../utils/meshPhysicsEffects'
 import type { TouchState, PhysicsConfig } from '../../utils/meshPhysicsEffects'
 import { DeviceParallax } from '../../utils/deviceParallax'
@@ -160,6 +162,16 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
   )
 }
 
+// --- Helper: get rest animation and ready oneshot animations ---
+
+function getAnimationData(project: Project) {
+  const restAnim = project.animations.find(a => a.type === 'rest')
+  const readyOneshots: Animation[] = project.animations.filter(
+    a => a.type === 'oneshot' && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
+  )
+  return { restAnim, readyOneshots }
+}
+
 export default function AnimationPlayer({ project, scanCanvas, contentAlignment, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
@@ -177,6 +189,10 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
   const parallaxRef = useRef<DeviceParallax | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const multiPlaybackRef = useRef<MultiAnimationPlayback | null>(null)
+  const [playbackState, setPlaybackState] = useState<string>('rest')
+
+  const { restAnim, readyOneshots } = getAnimationData(project)
 
   const updateConfig = useCallback((key: keyof PhysicsConfig, value: number) => {
     setPhysicsConfig(prev => {
@@ -202,6 +218,10 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
       p.start()
       setNeedsMotionPermission(false)
     }
+  }, [])
+
+  const handleOneshotTrigger = useCallback((animId: string) => {
+    multiPlaybackRef.current?.requestOneshot(animId)
   }, [])
 
   // Enter fullscreen + lock landscape on mount
@@ -242,9 +262,9 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
 
   // PIXI setup
   useEffect(() => {
-    if (!containerRef.current || !project.mesh) return
+    if (!containerRef.current || !restAnim?.mesh) return
 
-    const mesh = project.mesh
+    const mesh = restAnim.mesh
     const allPoints = [...mesh.contourAnchors, ...mesh.contourSubdivisionPoints, ...mesh.anchorPoints, ...mesh.internalPoints]
     const hasFlow = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
     const hasBgVideo = !!project.backgroundVideoBlob
@@ -404,7 +424,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
     shadowContainer.filters = [new PIXI.BlurFilter(18)]
 
     // Draw shadow polygon from point positions (image coords)
-    // Polygon is drawn fully opaque; container alpha controls visibility
     function drawShadow(positions: Point2D[]) {
       shadowGraphics.clear()
       shadowContainer.alpha = visualRef.current.shadowAlpha
@@ -463,12 +482,43 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
 
     // --- Animation loop ---
     if (hasFlow) {
-      const playback = new LoopPlayback(mesh.videoFramesMesh!, { crossfadeFrames: mesh.crossfadeFrames ?? 7 })
+      // Build oneshot animation data for MultiAnimationPlayback
+      const oneshotAnims: OneshotAnimation[] = readyOneshots
+        .filter(a => a.mesh?.videoFramesMesh)
+        .map(a => ({
+          id: a.id,
+          name: a.name,
+          frames: a.mesh!.videoFramesMesh!,
+        }))
+
+      const hasOneshots = oneshotAnims.length > 0
+
+      // Use MultiAnimationPlayback if there are oneshot animations, otherwise plain LoopPlayback
+      let getPositions: () => Point2D[]
+      let advancePlayback: (delta: number) => void
+
+      if (hasOneshots) {
+        const multiPlayback = new MultiAnimationPlayback(
+          mesh.videoFramesMesh!,
+          oneshotAnims,
+          { crossfadeFrames: mesh.crossfadeFrames ?? 7 }
+        )
+        multiPlaybackRef.current = multiPlayback
+        getPositions = () => multiPlayback.getPositions()
+        advancePlayback = (delta) => {
+          multiPlayback.advance(delta)
+          setPlaybackState(multiPlayback.currentState)
+        }
+      } else {
+        const playback = new LoopPlayback(mesh.videoFramesMesh!, { crossfadeFrames: mesh.crossfadeFrames ?? 7 })
+        getPositions = () => playback.getPositions()
+        advancePlayback = (delta) => playback.advance(delta)
+      }
 
       app.ticker.add((delta) => {
-        if (playing) playback.advance(delta)
+        if (playing) advancePlayback(delta)
 
-        const positions = playback.getPositions()
+        const positions = getPositions()
 
         // Physics
         const t = touchRef.current
@@ -545,6 +595,7 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
 
     return () => {
       physicsRef.current = null
+      multiPlaybackRef.current = null
       parallax.destroy()
       parallaxRef.current = null
       canvas.removeEventListener('pointerdown', onPointerDown)
@@ -578,6 +629,43 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
 
       {/* Floating close button (long-press 3s) */}
       <LongPressCloseButton onComplete={handleExitFullscreen} />
+
+      {/* Oneshot animation trigger buttons */}
+      {readyOneshots.length > 0 && (
+        <div className="oneshot-buttons" style={{
+          position: 'absolute',
+          bottom: 20,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          display: 'flex',
+          gap: 10,
+          zIndex: 110,
+        }}>
+          {readyOneshots.map(anim => (
+            <button
+              key={anim.id}
+              onClick={() => handleOneshotTrigger(anim.id)}
+              disabled={playbackState !== 'rest' && playbackState !== 'wait'}
+              style={{
+                padding: '10px 20px',
+                fontSize: '1em',
+                borderRadius: 12,
+                border: 'none',
+                background: (playbackState !== 'rest' && playbackState !== 'wait')
+                  ? 'rgba(255,255,255,0.3)'
+                  : 'rgba(255,255,255,0.85)',
+                color: '#333',
+                cursor: (playbackState !== 'rest' && playbackState !== 'wait') ? 'default' : 'pointer',
+                fontWeight: 600,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              {anim.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Floating settings gear button */}
       <button

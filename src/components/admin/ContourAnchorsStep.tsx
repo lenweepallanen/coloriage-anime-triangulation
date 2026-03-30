@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Project, Point2D, MeshData } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, Point2D, MeshData } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
 import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
@@ -8,8 +8,8 @@ import { computeArcLengths } from '../../utils/curvilinearContour'
 import { detectCurvatureExtrema, computeInitialAnchorArcLengths, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
 }
 
 const POINT_RADIUS = 7

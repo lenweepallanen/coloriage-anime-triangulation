@@ -14,7 +14,8 @@ export default function ScanPage() {
   if (loading) return <div className="loading">Chargement...</div>
   if (!project) return <Navigate to="/" replace />
 
-  const hasMesh = project.mesh && project.mesh.triangles.length > 0
+  const restAnim = project.animations.find(a => a.type === 'rest')
+  const hasMesh = restAnim?.mesh && restAnim.mesh.triangles.length > 0
 
   if (!project.originalImageBlob || !hasMesh) {
     return (

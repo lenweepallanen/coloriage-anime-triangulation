@@ -293,7 +293,7 @@ export function applyOTSnap(
   // 3. Project anchors onto contour → (s_anchor, κ_anchor)
   const anchorPoints = contourAnchorOrder.map(idx => positions[idx])
   const anchorS = projectAnchorsOntoContour(anchorPoints, contourPts, sNorm)
-  const anchorKappa = anchorS.map((s, i) => {
+  const anchorKappa = anchorS.map((s) => {
     // Find nearest contour point to get curvature
     const idx = Math.round(s * N) % N
     return kappa[idx]

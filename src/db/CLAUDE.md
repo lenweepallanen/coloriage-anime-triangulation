@@ -3,8 +3,8 @@
 ## Architecture
 
 Séparation métadonnées / blobs :
-- **Firestore** : documents légers (métadonnées, géométrie maillage, marqueurs)
-- **Cloud Storage** : fichiers lourds (images, vidéos, JSON keyframes/animation)
+- **Firestore** : documents légers (métadonnées, géométrie maillage, marqueurs, `animations[]`)
+- **Cloud Storage** : fichiers lourds (images, vidéos, JSON keyframes/animation) **scopés par animation**
 
 ## Configuration
 
@@ -20,21 +20,22 @@ Séparation métadonnées / blobs :
 {
   name: string
   createdAt: number
-  mesh: {
-    anchorPoints: Point2D[]
-    contourIndices: number[]
-    internalPoints: Point2D[]
-    triangles: { a: number, b: number, c: number }[]
-    topologyLocked: boolean
-    anchorTriangles: { a, b, c }[]
-    internalBarycentrics: BarycentricRef[]
-    keyframeInterval: number
-    hasKeyframes: boolean           // Flag, données dans Storage
-    hasAnchorFrames: boolean        // Flag, données dans Storage
-    hasVideoFramesMesh: boolean     // Flag, données dans Storage
-    hasContourCannyFrames: boolean  // Flag, données dans Storage
-  } | null
+  hasImage: boolean
+  hasBackgroundVideo: boolean
   markers: MarkerCorners | null
+  animations: AnimationDoc[]    // Remplace mesh/hasVideo au root
+}
+```
+
+Chaque `AnimationDoc` :
+```typescript
+{
+  id: string
+  name: string
+  type: 'rest' | 'oneshot'
+  createdAt: number
+  hasVideo: boolean
+  mesh: MeshDoc | null          // Même structure qu'avant, mais par animation
 }
 ```
 
@@ -46,39 +47,53 @@ Séparation métadonnées / blobs :
 }
 ```
 
-## Chemins Cloud Storage
+## Chemins Cloud Storage — scopés par animation
 
 ```
-projects/{projectId}/originalImage        → Blob image
-projects/{projectId}/video                → Blob vidéo
-projects/{projectId}/keyframes.json       → JSON KeyframeData[]
-projects/{projectId}/anchorFrames.json    → JSON Point2D[][]
-projects/{projectId}/contourCannyFrames.json → JSON Point2D[][] (cache contours Canny ordonnés)
-projects/{projectId}/videoFramesMesh.json → JSON Point2D[][]
-scans/{scanId}/scanImage                  → Blob image rectifiée
+projects/{projectId}/originalImage                              → Blob image (niveau projet)
+projects/{projectId}/backgroundVideo                            → Blob vidéo fond (niveau projet)
+projects/{projectId}/animations/{animId}/video                  → Blob vidéo animation
+projects/{projectId}/animations/{animId}/contourOriginKeyframes.json
+projects/{projectId}/animations/{animId}/contourOriginFrames.json
+projects/{projectId}/animations/{animId}/contourAnchorKeyframes.json
+projects/{projectId}/animations/{animId}/contourAnchorFrames.json
+projects/{projectId}/animations/{animId}/contourSubdivisionFrames.json
+projects/{projectId}/animations/{animId}/contourCannyFrames.json
+projects/{projectId}/animations/{animId}/anchorKeyframes.json
+projects/{projectId}/animations/{animId}/anchorFrames.json
+projects/{projectId}/animations/{animId}/videoFramesMesh.json
+scans/{scanId}/scanImage                                        → Blob image rectifiée
 ```
 
 ## API (projectsStore.ts)
 
 | Fonction | Description |
 |----------|-------------|
-| `createProject(name)` | Crée projet avec UUID |
-| `getProject(id)` | Charge métadonnées + télécharge blobs + JSON Storage |
-| `getAllProjects()` | Liste projets (métadonnées seules) |
-| `updateProject(project, uploadOnly?)` | Sauvegarde sélective avec hints |
-| `deleteProject(id)` | Supprime projet + scans + fichiers Storage |
+| `createProject(name)` | Crée projet avec UUID + 1 animation rest par défaut |
+| `getProject(id)` | Charge métadonnées + télécharge blobs + JSON Storage par animation |
+| `getAllProjects()` | Liste projets (métadonnées seules, sans blobs) |
+| `updateProject(project, uploadOnly?)` | Sauvegarde sélective avec hints scopés par animation |
+| `deleteProject(id)` | Supprime projet + scans + tous les fichiers Storage par animation |
 
 ### Upload Hints
 
-`updateProject` accepte un tableau `uploadOnly` pour éviter les re-uploads inutiles :
-- `'image'` — upload uniquement l'image
-- `'video'` — upload uniquement la vidéo
-- `'keyframes'` — upload keyframes.json
-- `'anchorFrames'` — upload anchorFrames.json
-- `'videoFramesMesh'` — upload videoFramesMesh.json
-- `'contourCannyFrames'` — upload contourCannyFrames.json
+```typescript
+UploadHint = 'image' | 'backgroundVideo' | { animationId: string; field: AnimationUploadField }
+
+AnimationUploadField =
+  | 'video' | 'contourOriginKeyframes' | 'contourOriginFrames'
+  | 'contourAnchorKeyframes' | 'contourAnchorFrames'
+  | 'contourSubdivisionFrames' | 'contourCannyFrames'
+  | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
+```
+
+`StepUploadHint` (utilisé par les step components) = string simple, scopé automatiquement par `AdminPage` qui ajoute l'`animationId`.
 
 Sans hint, seules les métadonnées Firestore sont mises à jour.
+
+### Migration legacy (projets v4 et antérieurs)
+
+`isLegacyProjectDoc()` détecte les anciens formats (mesh/hasVideo au root, pas de `animations`). `fromLegacyDoc()` wrappe automatiquement les données existantes dans une animation rest. Les anciens chemins Storage sont lus tels quels ; à la prochaine sauvegarde, le nouveau format est écrit.
 
 ## API (scansStore.ts)
 

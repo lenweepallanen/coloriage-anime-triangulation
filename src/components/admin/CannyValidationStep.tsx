@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Project, CannyParams } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, CannyParams } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
 }
 
 const DEFAULT_PARAMS: CannyParams = {
@@ -252,10 +252,31 @@ export default function CannyValidationStep({ project, onSave }: Props) {
         internalBarycentrics: [],
         videoFramesMesh: null,
       }
-      const mesh = {
+      // If shared geometry exists (from rest animation), only reset tracking data.
+      // If no geometry yet (rest animation first setup), reset everything downstream.
+      const hasSharedGeometry = baseMesh.contourAnchors.length > 0 || baseMesh.contourOrigin != null
+      const mesh = hasSharedGeometry ? {
         ...baseMesh,
         cannyParams: params,
-        // Reset downstream origin data when Canny params change
+        // Reset only tracking data, keep shared geometry intact
+        contourOriginKeyframeInterval: 10,
+        contourOriginKeyframes: [],
+        contourOriginFrames: null,
+        contourOriginTrackingValidated: false,
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: null,
+        contourAnchorTrackingValidated: false,
+        contourSubdivisionFrames: null,
+        contourSubdivisionValidated: false,
+        contourCannyFrames: null,
+        anchorKeyframes: [],
+        anchorFrames: null,
+        anchorTrackingValidated: false,
+        videoFramesMesh: null,
+      } : {
+        ...baseMesh,
+        cannyParams: params,
+        // No geometry yet — reset everything downstream
         contourOrigin: null,
         contourOriginKeyframeInterval: 10,
         contourOriginKeyframes: [],

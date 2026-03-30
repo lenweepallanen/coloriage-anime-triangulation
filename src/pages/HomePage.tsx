@@ -114,6 +114,11 @@ function ProjectCard({ project, onDelete }: { project: Project; onDelete: () => 
         <span className="project-date">
           {new Date(project.createdAt).toLocaleDateString('fr-FR')}
         </span>
+        {project.animations.length > 0 && (
+          <span style={{ fontSize: '0.8em', color: '#666', marginLeft: 8 }}>
+            {project.animations.length} anim{project.animations.length > 1 ? 's' : ''}
+          </span>
+        )}
       </div>
       <div className="project-actions">
         <button onClick={() => navigate(`/admin/${project.id}`)}>Admin</button>

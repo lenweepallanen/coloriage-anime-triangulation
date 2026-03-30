@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
-import type { Project } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
+  isRestAnimation?: boolean
 }
 
-export default function ImportStep({ project, onSave }: Props) {
+export default function ImportStep({ project, onSave, isRestAnimation = true }: Props) {
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [bgVideoUrl, setBgVideoUrl] = useState<string | null>(null)
@@ -78,20 +79,42 @@ export default function ImportStep({ project, onSave }: Props) {
 
   return (
     <div className="import-step">
-      <div className="import-section">
-        <h3>Image du coloriage (noir & blanc)</h3>
-        <input
-          type="file"
-          accept="image/png,image/jpeg"
-          onChange={handleImageChange}
-          disabled={saving}
-        />
-        {imageUrl && (
-          <div className="preview">
-            <img src={imageUrl} alt="Coloriage" style={{ maxWidth: '100%', maxHeight: 400 }} />
+      {isRestAnimation && (
+        <>
+          <div className="import-section">
+            <h3>Image du coloriage (noir & blanc)</h3>
+            <input
+              type="file"
+              accept="image/png,image/jpeg"
+              onChange={handleImageChange}
+              disabled={saving}
+            />
+            {imageUrl && (
+              <div className="preview">
+                <img src={imageUrl} alt="Coloriage" style={{ maxWidth: '100%', maxHeight: 400 }} />
+              </div>
+            )}
           </div>
-        )}
-      </div>
+
+          <div className="import-section">
+            <h3>Vidéo de fond (optionnel)</h3>
+            <p style={{ fontSize: '0.85em', color: '#666', margin: '4px 0 8px' }}>
+              Vidéo affichée en arrière-plan de l'animation. Jouée en boucle.
+            </p>
+            <input
+              type="file"
+              accept="video/mp4,video/webm"
+              onChange={handleBgVideoChange}
+              disabled={saving}
+            />
+            {bgVideoUrl && (
+              <div className="preview">
+                <video src={bgVideoUrl} controls style={{ maxWidth: '100%', maxHeight: 400 }} />
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="import-section">
         <h3>Vidéo d'animation (MP4)</h3>
@@ -108,31 +131,19 @@ export default function ImportStep({ project, onSave }: Props) {
         )}
       </div>
 
-      <div className="import-section">
-        <h3>Vidéo de fond (optionnel)</h3>
-        <p style={{ fontSize: '0.85em', color: '#666', margin: '4px 0 8px' }}>
-          Vidéo affichée en arrière-plan de l'animation. Jouée en boucle.
-        </p>
-        <input
-          type="file"
-          accept="video/mp4,video/webm"
-          onChange={handleBgVideoChange}
-          disabled={saving}
-        />
-        {bgVideoUrl && (
-          <div className="preview">
-            <video src={bgVideoUrl} controls style={{ maxWidth: '100%', maxHeight: 400 }} />
-          </div>
-        )}
-      </div>
-
       {saving && <p>Sauvegarde en cours...</p>}
 
       <div className="import-status">
         <p>
-          Image : {project.originalImageBlob ? 'OK' : 'Non importée'} |
-          Vidéo : {project.videoBlob ? 'OK' : 'Non importée'} |
-          Fond : {project.backgroundVideoBlob ? 'OK' : 'Non importé'}
+          {isRestAnimation && (
+            <>
+              Image : {project.originalImageBlob ? 'OK' : 'Non importée'} |{' '}
+            </>
+          )}
+          Vidéo : {project.videoBlob ? 'OK' : 'Non importée'}
+          {isRestAnimation && (
+            <> | Fond : {project.backgroundVideoBlob ? 'OK' : 'Non importé'}</>
+          )}
         </p>
       </div>
     </div>

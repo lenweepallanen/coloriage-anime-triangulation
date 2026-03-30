@@ -1,14 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { Project, Point2D, MeshData, CurvilinearParam } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, Point2D, MeshData, CurvilinearParam } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorrection'
 import { computeArcLengths, interpolateAtArcLength, reorderContourFromOrigin, computeAllSubdivisionFrames, signedArea, ensureConsistentOrientation } from '../../utils/curvilinearContour'
 import { detectGlobalCurvatureExtrema, type CSSCandidate } from '../../utils/curvatureScaleSpace'
 import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
 }
 
 type Phase = 'ready' | 'computing' | 'preview' | 'validated'
@@ -107,6 +107,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
   const hasVideo = !!project.videoBlob
   const hasImage = !!project.originalImageBlob
   const ready = hasAnchors && hasCanny && hasOrigin && hasVideo && hasImage
+
 
   // ─── Compute (shared logic) ─────────────────────────────────────
   const runCompute = useCallback(async (stepByStep: boolean) => {

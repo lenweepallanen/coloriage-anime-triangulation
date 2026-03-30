@@ -4,7 +4,7 @@ Application web de livres de coloriage animés avec triangulation de maillage et
 
 ## Concept
 
-L'utilisateur crée un projet avec une image de coloriage et une vidéo d'animation. L'admin définit des **anchor points** (points structurels trackés) sur l'image, puis un maillage triangulé avec des points internes. Le suivi optique est pré-calculé sur les anchors seuls, avec validation par keyframes. Les points internes suivent via coordonnées barycentriques. L'utilisateur final scanne son coloriage colorié, et l'app injecte ses couleurs dans le maillage animé via PIXI.js.
+L'utilisateur crée un projet avec une image de coloriage et **plusieurs animations** (une "rest" en boucle infinie + des "oneshot" déclenchées à la demande). L'admin définit des **anchor points** (points structurels trackés) sur l'image, puis un maillage triangulé avec des points internes. Le suivi optique est pré-calculé sur les anchors seuls, avec validation par keyframes. Les points internes suivent via coordonnées barycentriques. Toutes les animations partagent la même géométrie (topologie mesh) mais ont chacune leur propre vidéo et tracking. L'utilisateur final scanne son coloriage colorié, et l'app injecte ses couleurs dans le maillage animé via PIXI.js avec transitions fluides entre animations.
 
 ## Stack technique
 
@@ -28,10 +28,25 @@ L'utilisateur crée un projet avec une image de coloriage et une vidéo d'animat
 /scan/:projectId     → ScanPage    (scan + animation)
 ```
 
-## Workflow Admin (10 étapes)
+## Multi-Animation
+
+Un projet contient **plusieurs animations** partageant la même image et géométrie :
+- **Rest** (exactement 1) : animation en boucle infinie (idle). Pipeline complet 10 étapes. Seule animation autorisée à modifier la géométrie.
+- **Oneshot** (0+) : animations à la demande (wave, jump...). Pipeline réduit 6 étapes (tracking seul, géométrie héritée de rest).
+
+### Topologie partagée
+
+La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints, anchorPoints, internalPoints, triangles, trackedTriangles, internalBarycentrics) est définie sur la rest animation et **propagée** aux oneshots. Si la géométrie rest change, le tracking des oneshots est invalidé.
+
+### Adapter pattern
+
+Les step components ne connaissent pas le multi-animation. `AdminPage` construit un `ProjectStepView` (projet + videoBlob/mesh de l'animation sélectionnée) et intercepte le save pour merger dans la bonne animation.
+
+## Workflow Admin (10 étapes rest / 6 étapes oneshot)
 
 Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 définit le s=0 du contour. Seuls 4-5 points caractéristiques du contour sont trackés par extrema de courbure CSS ; les points intermédiaires sont calculés déterministiquement par coordonnée curviligne sur le contour Canny détecté à chaque frame.
 
+### Pipeline rest (10 étapes)
 1. **Import** — Upload image PNG/JPEG + vidéo MP4/WebM
 2. **Canny** — Preview contour externe Canny sur vidéo + réglage seuils
 3. **Point 0 Contour** — Placement du point d'origine P0 sur le contour (définit s=0)
@@ -43,6 +58,14 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 9. **Tracking Ancres** — Optical flow sur ancres internes + keyframes
 10. **Triangulation** — Points internes + Delaunay + verrouillage topologie + PDF + animation finale
 
+### Pipeline oneshot (6 étapes)
+1. **Import** — Upload vidéo uniquement (pas d'image, héritée du projet)
+2. **Canny** — Preview contour Canny sur la vidéo oneshot
+3. **Tracking Point 0** — Tracking P0 sur la vidéo oneshot
+4. **Tracking Contour** — Placement curviligne sur la vidéo oneshot
+5. **Tracking Ancres** — Optical flow ancres internes sur la vidéo oneshot
+6. **Triangulation** — Calcul animation finale (géométrie héritée, lecture seule)
+
 ## Workflow Scan (utilisateur final)
 
 **Orientation forcée** : toute la page scan est en mode paysage. `screen.orientation.lock('landscape')` au montage de `ScanPage`, avec fallback CSS `transform: rotate(90deg)` en portrait.
@@ -53,7 +76,7 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 2. **Ajustement coins** — Repositionnement manuel des 4 coins
 3. **Correction perspective** — Homographie OpenCV → image 2048×2048 → crop marges 64px → resize aux dimensions originales
 4. **Debug** — Visualisation 4 étapes du pipeline (photo brute, 2048 avec marges, croppée, overlay mesh)
-5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS + parallax gyroscope
+5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS + parallax gyroscope + boutons oneshot
 
 ## Structure des fichiers
 
@@ -61,7 +84,7 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 src/
 ├── main.tsx                    Point d'entrée
 ├── App.tsx                     Router
-├── types/project.ts            Types (Point2D, BarycentricRef, KeyframeData, MeshData, Project, Scan)
+├── types/project.ts            Types (Point2D, Animation, AnimationType, ProjectStepView, MeshData, Project, Scan)
 ├── db/
 │   ├── firebase.ts             Init Firebase
 │   ├── projectsStore.ts        CRUD projets (Firestore + Storage)
@@ -72,7 +95,7 @@ src/
 │   ├── AdminPage.tsx           Onglets admin (10 étapes)
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager)
 │   ├── keyframes/              Éditeur de keyframes (timeline, éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -93,7 +116,8 @@ src/
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
 │   ├── pdfLayout.ts            Constantes layout A4 + calcul offset centroïde L-marker
-│   └── textureExtractor.ts     Calcul UVs pour PIXI
+│   ├── textureExtractor.ts     Calcul UVs pour PIXI
+│   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions)
 └── styles/global.css
 public/
 ├── opencv.js                   Bibliothèque OpenCV.js compilée
@@ -103,12 +127,30 @@ public/
 ## Modèle de données
 
 ```typescript
+AnimationType = 'rest' | 'oneshot'
+
+Animation {
+  id: string                         // crypto.randomUUID()
+  name: string                       // "Idle", "Wave", "Jump"
+  type: AnimationType
+  createdAt: number
+  videoBlob: Blob | null             // Vidéo propre à cette animation
+  mesh: MeshData | null              // Pipeline complet propre (géométrie partagée, tracking indépendant)
+}
+
 Project {
   id, name, createdAt
-  originalImageBlob: Blob | null     // Image coloriage
-  videoBlob: Blob | null             // Vidéo animation
-  mesh: MeshData | null
+  originalImageBlob: Blob | null     // Image coloriage (niveau projet)
+  backgroundVideoBlob: Blob | null   // Vidéo fond (niveau projet)
+  animations: Animation[]            // Exactement 1 rest + 0..N oneshots
   markers: MarkerCorners | null      // 4 coins marqueurs L
+}
+
+// Adapter pattern — vue pour les step components (ne connaissent pas le multi-animation)
+ProjectStepView {
+  ...Project fields
+  videoBlob: Blob | null             // = animation sélectionnée .videoBlob
+  mesh: MeshData | null              // = animation sélectionnée .mesh
 }
 
 MeshData {
@@ -187,20 +229,32 @@ Trois espaces de coordonnées coexistent :
 
 ## Stockage Firebase
 
-- **Firestore** : métadonnées projet (nom, dates, mesh geometry sauf gros JSON)
-- **Cloud Storage** :
-  - `projects/{id}/originalImage` — blob image
-  - `projects/{id}/video` — blob vidéo
-  - `projects/{id}/contourOriginKeyframes.json` — keyframes point d'origine
-  - `projects/{id}/contourOriginFrames.json` — positions P0 par frame
-  - `projects/{id}/contourAnchorKeyframes.json` — keyframes anchors contour
-  - `projects/{id}/contourAnchorFrames.json` — positions anchors contour par frame
-  - `projects/{id}/contourSubdivisionFrames.json` — positions subdivision par frame
-  - `projects/{id}/contourCannyFrames.json` — cache contours Canny ordonnés par frame
-  - `projects/{id}/anchorKeyframes.json` — keyframes ancres internes
-  - `projects/{id}/anchorFrames.json` — positions ancres internes par frame
-  - `projects/{id}/videoFramesMesh.json` — données animation finale
+- **Firestore** : métadonnées projet (nom, dates, `animations: AnimationDoc[]` avec mesh geometry sauf gros JSON)
+- **Cloud Storage** — chemins scopés par animation :
+  - `projects/{id}/originalImage` — blob image (niveau projet)
+  - `projects/{id}/backgroundVideo` — vidéo fond (niveau projet)
+  - `projects/{id}/animations/{animId}/video` — vidéo animation
+  - `projects/{id}/animations/{animId}/contourOriginKeyframes.json`
+  - `projects/{id}/animations/{animId}/contourOriginFrames.json`
+  - `projects/{id}/animations/{animId}/contourAnchorKeyframes.json`
+  - `projects/{id}/animations/{animId}/contourAnchorFrames.json`
+  - `projects/{id}/animations/{animId}/contourSubdivisionFrames.json`
+  - `projects/{id}/animations/{animId}/contourCannyFrames.json`
+  - `projects/{id}/animations/{animId}/anchorKeyframes.json`
+  - `projects/{id}/animations/{animId}/anchorFrames.json`
+  - `projects/{id}/animations/{animId}/videoFramesMesh.json`
   - `scans/{id}/scanImage` — image rectifiée
+
+### Migration legacy
+
+Les projets existants (sans `animations` au root, avec `mesh`/`hasVideo` directement) sont automatiquement migrés en mémoire : une animation rest est créée avec les données existantes. Les anciens chemins Storage sont lus tels quels. À la prochaine sauvegarde, le nouveau format est écrit.
+
+### Upload Hints
+
+```typescript
+UploadHint = 'image' | 'backgroundVideo' | { animationId: string; field: AnimationUploadField }
+StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
+```
 
 ## Conventions
 

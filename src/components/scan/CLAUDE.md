@@ -127,13 +127,32 @@ Après `enhanceContrast`, le processeur détecte automatiquement la bounding box
 - Reset vers coins auto-détectés
 - Valider pour lancer la correction perspective
 
-## AnimationPlayer — Rendu PIXI.js
+## AnimationPlayer — Rendu PIXI.js + Multi-Animation
 
 ### Layout
 
 Layout horizontal plein écran (`position: fixed`, `z-index: 100`) :
 - **Gauche** : canvas PIXI (`flex: 1`, fond noir)
 - **Droite** : sidebar 220px (180px mobile) avec boutons (Play/Pause, Fullscreen, Fermer) et sliders dans des `<details>` dépliables (Physique + Effets visuels)
+- **Bas centre** : boutons oneshot flottants (un par animation oneshot prête)
+
+### Multi-animation playback
+
+Prop `animations: Animation[]` reçue de ScanPage. Si des oneshots ont un `videoFramesMesh`, utilise `MultiAnimationPlayback` au lieu de `LoopPlayback`.
+
+**Machine d'états** (`multiAnimationPlayback.ts`) :
+```
+REST_LOOPING → (requestOneshot) → WAIT_LOOP_END → (loop point) → TRANSITION_OUT
+TRANSITION_OUT → (7 frames smoothstep blend) → ONESHOT_PLAYING
+ONESHOT_PLAYING → (dernière frame) → TRANSITION_IN
+TRANSITION_IN → (7 frames smoothstep blend) → REST_LOOPING
+```
+
+- **Rest** : boucle infinie via `LoopPlayback` (avec crossfade seamless)
+- **Oneshot** : lecture linéaire une seule fois (pas de crossfade interne, pas de loop)
+- **Transitions** : blend smoothstep sur `transitionFrames` (défaut 7) entre les positions rest et oneshot
+- Boutons oneshot désactivés pendant transition/oneshot (actifs uniquement en `rest` ou `wait`)
+- Indicateur visuel de l'état courant
 
 ### Pipeline de rendu
 
@@ -158,8 +177,8 @@ Le mesh est affiché en `Math.min(scaleX, scaleY)` (fit sans déformation), cent
 
 ```typescript
 // À chaque frame :
-const framePoints = videoFramesMesh[frameIndex]
-for (point in framePoints) {
+const positions = multiPlayback.getPositions()  // ou loopPlayback.getPositions()
+for (point in positions) {
   verts[i*2]   = point.x * scale + offsetX
   verts[i*2+1] = point.y * scale + offsetY
 }
@@ -180,3 +199,4 @@ verts.update()  // Sync GPU
 - Play / Pause, Plein écran, Fermer
 - Sliders Physique : Force, Rayon, Concentration, Retour
 - Sliders Visuels : Ombre, Éclairage, Parallax
+- Boutons oneshot : un par animation oneshot avec `videoFramesMesh` prêt

@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Project, Point2D } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, Point2D } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import TriangulationCanvas from '../triangulation/TriangulationCanvas'
 import { useTriangulation } from '../triangulation/useTriangulation'
 import { generateAutoMesh } from '../../utils/autoMeshGenerator'
 import type { PointType } from '../triangulation/drawingUtils'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
 }
 
 export default function AnchorPointsStep({ project, onSave }: Props) {

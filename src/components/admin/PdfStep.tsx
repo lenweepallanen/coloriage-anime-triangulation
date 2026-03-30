@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import type { Project } from '../../types/project'
+import type { ProjectStepView } from '../../types/project'
 import { generateTemplatePDF } from '../../utils/pdfGenerator'
 
 interface Props {
-  project: Project
+  project: ProjectStepView
 }
 
 export default function PdfStep({ project }: Props) {

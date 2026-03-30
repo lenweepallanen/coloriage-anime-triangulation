@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Project, MarkerCorners, Point2D } from '../../types/project'
+import type { ProjectStepView, MarkerCorners, Point2D } from '../../types/project'
 import { drawAllMarkers } from '../../utils/markerGenerator'
 
 interface Props {
-  project: Project
-  onSave: (project: Project) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView) => Promise<void>
 }
 
 const CORNER_NAMES = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'] as const

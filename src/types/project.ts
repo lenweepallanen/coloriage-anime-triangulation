@@ -85,15 +85,37 @@ export interface MarkerCorners {
   bottomRight: Point2D;
 }
 
+export type AnimationType = 'rest' | 'oneshot';
+
+export interface Animation {
+  id: string;
+  name: string;
+  type: AnimationType;
+  createdAt: number;
+  videoBlob: Blob | null;
+  mesh: MeshData | null;
+}
+
 export interface Project {
   id: string;
   name: string;
   createdAt: number;
   originalImageBlob: Blob | null;
-  videoBlob: Blob | null;
   backgroundVideoBlob: Blob | null;
-  mesh: MeshData | null;
+  animations: Animation[];
   markers: MarkerCorners | null;
+}
+
+/** View of a project for step components — includes current animation's video + mesh */
+export interface ProjectStepView {
+  id: string;
+  name: string;
+  createdAt: number;
+  originalImageBlob: Blob | null;
+  backgroundVideoBlob: Blob | null;
+  markers: MarkerCorners | null;
+  videoBlob: Blob | null;
+  mesh: MeshData | null;
 }
 
 export interface TextureTriangle {

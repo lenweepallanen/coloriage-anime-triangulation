@@ -1,12 +1,24 @@
-# Workflow Admin (10 étapes)
+# Workflow Admin (10 étapes rest / 6 étapes oneshot)
 
-Interface à onglets dans `AdminPage.tsx` pour configurer un projet. Pipeline "contour-first" avec coordonnées curvilignes : un point d'origine P0 définit s=0, on tracke 4-5 points caractéristiques du contour par extrema de courbure CSS, les points intermédiaires sont calculés par coordonnée curviligne sur le contour Canny détecté à chaque frame.
+Interface à onglets dans `AdminPage.tsx` pour configurer un projet **multi-animation**. Pipeline "contour-first" avec coordonnées curvilignes : un point d'origine P0 définit s=0, on tracke 4-5 points caractéristiques du contour par extrema de courbure CSS, les points intermédiaires sont calculés par coordonnée curviligne sur le contour Canny détecté à chaque frame.
+
+## Multi-animation
+
+`AdminPage` gère un sélecteur d'animation (`AnimationManager`) en haut de la page. Les step components reçoivent un `ProjectStepView` (adapter pattern) et ne connaissent pas le multi-animation.
+
+- **Rest animation** : pipeline complet 10 étapes, seule autorisée à modifier la géométrie
+- **Oneshot animations** : pipeline réduit 6 étapes (Import vidéo + tracking uniquement), géométrie héritée de rest
+
+### Propagation géométrie partagée
+
+Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology), les champs partagés (`SHARED_GEOMETRY_FIELDS`) sont copiés vers les oneshots et leur tracking est invalidé.
 
 ## Fichiers
 
 | Fichier | Étape | Rôle |
 |---------|-------|------|
-| `ImportStep.tsx` | 1 | Upload image coloriage + vidéo animation |
+| `AnimationManager.tsx` | — | Sélecteur/gestion animations (ajout, suppression, renommage, toggle type) |
+| `ImportStep.tsx` | 1 | Upload image coloriage + vidéo animation (oneshot : vidéo seule) |
 | `CannyValidationStep.tsx` | 2 | Preview edges Canny sur vidéo + réglage seuils |
 | `ContourOriginStep.tsx` | 3 | Placement du point d'origine P0 sur le contour |
 | `ContourOriginTrackingStep.tsx` | 4 | Tracking P0 par optical flow + snap-to-contour |
@@ -19,10 +31,21 @@ Interface à onglets dans `AdminPage.tsx` pour configurer un projet. Pipeline "c
 | `MarkerStep.tsx` | support | Placement des 4 marqueurs L pour le scan |
 | `PdfStep.tsx` | support | Génération et téléchargement du PDF coloriage |
 
+## AnimationManager (`AnimationManager.tsx`)
+
+Composant de gestion multi-animation affiché en haut de l'AdminPage :
+- Barre de boutons/onglets : une animation par bouton, badge couleur (vert=rest, orange=oneshot)
+- **Ajout** : crée une animation oneshot, copie la géométrie partagée depuis la rest (`copySharedGeometry`)
+- **Suppression** : uniquement les oneshots (rest est obligatoire), avec confirmation
+- **Renommage** : double-clic pour édition inline
+- **Toggle type** : bascule rest↔oneshot (enforce exactement 1 rest)
+- Exporte `SHARED_GEOMETRY_FIELDS` et `copySharedGeometry()` pour la propagation
+
 ## Étape 1 — Import (`ImportStep.tsx`)
 
-- Upload image (PNG/JPEG) → `project.originalImageBlob`
-- Upload vidéo (MP4/WebM) → `project.videoBlob`
+- **Rest** : Upload image (PNG/JPEG) → `project.originalImageBlob` + vidéo (MP4/WebM) → `animation.videoBlob`
+- **Oneshot** : Upload vidéo uniquement (image et background héritées du projet)
+- Prop `isRestAnimation?: boolean` contrôle la visibilité des champs projet-level
 
 ## Étape 2 — Validation Canny (`CannyValidationStep.tsx`)
 

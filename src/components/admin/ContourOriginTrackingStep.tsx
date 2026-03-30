@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo } from 'react'
-import type { Project, Point2D, MeshData, KeyframeData } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, Point2D, MeshData, KeyframeData } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import type { TrackingConstraintParams } from '../../utils/opticalFlowComputer'
 import { precomputeOpticalFlow, trackSegment } from '../../utils/opticalFlowComputer'
 import { propagateKeyframes } from '../../utils/keyframePropagation'
@@ -10,8 +10,8 @@ import { loadOpenCVWorker, flowCannyContour } from '../../utils/perspectiveCorre
 import { ContourSpatialIndex } from '../../utils/contourSpatialIndex'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
 }
 
 type Phase = 'config' | 'tracking' | 'editing' | 'validated'
@@ -362,13 +362,33 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
         }
       }
 
-      const updatedMesh: MeshData = {
+      // If shared geometry exists (from rest animation), only reset tracking data.
+      // If no geometry yet (rest animation first setup), reset everything downstream.
+      const hasSharedGeometry = mesh.contourAnchors.length > 0
+      const updatedMesh: MeshData = hasSharedGeometry ? {
         ...mesh,
         contourOriginKeyframeInterval: 0,
         contourOriginKeyframes: keyframes,
         contourOriginFrames,
         contourOriginTrackingValidated: true,
-        // Reset downstream
+        // Reset only tracking data, keep shared geometry intact
+        contourAnchorKeyframes: [],
+        contourAnchorFrames: null,
+        contourAnchorTrackingValidated: false,
+        contourSubdivisionFrames: null,
+        contourSubdivisionValidated: false,
+        contourCannyFrames: null,
+        anchorKeyframes: [],
+        anchorFrames: null,
+        anchorTrackingValidated: false,
+        videoFramesMesh: null,
+      } : {
+        ...mesh,
+        contourOriginKeyframeInterval: 0,
+        contourOriginKeyframes: keyframes,
+        contourOriginFrames,
+        contourOriginTrackingValidated: true,
+        // No geometry yet — reset everything downstream
         contourAnchors: [],
         contourAnchorKeyframes: [],
         contourAnchorFrames: null,
@@ -377,6 +397,7 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
         contourSubdivisionParams: [],
         contourSubdivisionFrames: null,
         contourSubdivisionValidated: false,
+        contourCannyFrames: null,
         anchorPoints: [],
         anchorKeyframes: [],
         anchorFrames: null,

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo } from 'react'
-import type { Project, Point2D, MeshData, KeyframeData } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, Point2D, MeshData, KeyframeData } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import type { TrackingConstraintParams } from '../../utils/opticalFlowComputer'
 import { precomputeOpticalFlow, trackSegment } from '../../utils/opticalFlowComputer'
 import { propagateKeyframes } from '../../utils/keyframePropagation'
@@ -8,8 +8,8 @@ import KeyframeEditor from '../keyframes/KeyframeEditor'
 import FrameNavigator from '../keyframes/FrameNavigator'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
 }
 
 type Phase = 'config' | 'tracking' | 'editing' | 'validated'

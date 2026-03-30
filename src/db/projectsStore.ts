@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -71,14 +71,34 @@ interface LegacyMeshDoc {
   trackedTriangles?: TriangleDoc[]
 }
 
+interface AnimationDoc {
+  id: string
+  name: string
+  type: AnimationType
+  createdAt: number
+  hasVideo: boolean
+  mesh: MeshDoc | null
+}
+
 interface ProjectDoc {
+  id: string
+  name: string
+  createdAt: number
+  hasImage: boolean
+  hasBackgroundVideo: boolean
+  animations: AnimationDoc[]
+  markers: Project['markers']
+}
+
+// Legacy project doc (v4 format — single mesh + video at root)
+interface LegacyProjectDoc {
   id: string
   name: string
   createdAt: number
   hasImage: boolean
   hasVideo: boolean
   hasBackgroundVideo: boolean
-  mesh: MeshDoc | null
+  mesh: MeshDoc | LegacyMeshDoc | null
   markers: Project['markers']
 }
 
@@ -122,43 +142,70 @@ function docToTri(docs: TriangleDoc[]): [number, number, number][] {
   return docs.map(t => [t.a, t.b, t.c] as [number, number, number])
 }
 
+// --- Animation storage path helpers ---
+
+function animStoragePath(projectId: string, animId: string, file: string): string {
+  return `projects/${projectId}/animations/${animId}/${file}`
+}
+
+// Legacy storage paths (root-level, before multi-animation)
+function legacyStoragePath(projectId: string, file: string): string {
+  return `projects/${projectId}/${file}`
+}
+
+// --- MeshDoc conversion ---
+
+function meshToDoc(mesh: MeshData): MeshDoc {
+  return {
+    cannyParams: mesh.cannyParams ?? null,
+    contourOrigin: mesh.contourOrigin ?? null,
+    contourOriginKeyframeInterval: mesh.contourOriginKeyframeInterval ?? 10,
+    contourOriginTrackingValidated: mesh.contourOriginTrackingValidated ?? false,
+    hasContourOriginKeyframes: (mesh.contourOriginKeyframes?.length ?? 0) > 0,
+    hasContourOriginFrames: mesh.contourOriginFrames != null,
+    contourAnchors: mesh.contourAnchors ?? [],
+    contourAnchorKeyframeInterval: mesh.contourAnchorKeyframeInterval ?? 10,
+    contourAnchorTrackingValidated: mesh.contourAnchorTrackingValidated ?? false,
+    hasContourAnchorKeyframes: (mesh.contourAnchorKeyframes?.length ?? 0) > 0,
+    hasContourAnchorFrames: mesh.contourAnchorFrames != null,
+    contourSubdivisionPoints: mesh.contourSubdivisionPoints ?? [],
+    contourSubdivisionParams: mesh.contourSubdivisionParams ?? [],
+    hasContourSubdivisionFrames: mesh.contourSubdivisionFrames != null,
+    contourSubdivisionValidated: mesh.contourSubdivisionValidated ?? false,
+    hasContourCannyFrames: mesh.contourCannyFrames != null,
+    anchorPoints: mesh.anchorPoints ?? [],
+    anchorKeyframeInterval: mesh.anchorKeyframeInterval ?? 10,
+    anchorTrackingValidated: mesh.anchorTrackingValidated ?? false,
+    hasAnchorKeyframes: (mesh.anchorKeyframes?.length ?? 0) > 0,
+    hasAnchorFrames: mesh.anchorFrames != null,
+    internalPoints: mesh.internalPoints ?? [],
+    triangles: triToDoc(mesh.triangles ?? []),
+    topologyLocked: mesh.topologyLocked ?? false,
+    trackedTriangles: triToDoc(mesh.trackedTriangles ?? []),
+    internalBarycentrics: mesh.internalBarycentrics ?? [],
+    hasVideoFramesMesh: mesh.videoFramesMesh != null,
+  }
+}
+
+function animToDoc(anim: Animation): AnimationDoc {
+  return {
+    id: anim.id,
+    name: anim.name,
+    type: anim.type,
+    createdAt: anim.createdAt,
+    hasVideo: anim.videoBlob != null,
+    mesh: anim.mesh ? meshToDoc(anim.mesh) : null,
+  }
+}
+
 function toDoc(project: Project): ProjectDoc {
   return {
     id: project.id,
     name: project.name,
     createdAt: project.createdAt,
     hasImage: project.originalImageBlob != null,
-    hasVideo: project.videoBlob != null,
     hasBackgroundVideo: project.backgroundVideoBlob != null,
-    mesh: project.mesh ? {
-      cannyParams: project.mesh.cannyParams ?? null,
-      contourOrigin: project.mesh.contourOrigin ?? null,
-      contourOriginKeyframeInterval: project.mesh.contourOriginKeyframeInterval ?? 10,
-      contourOriginTrackingValidated: project.mesh.contourOriginTrackingValidated ?? false,
-      hasContourOriginKeyframes: (project.mesh.contourOriginKeyframes?.length ?? 0) > 0,
-      hasContourOriginFrames: project.mesh.contourOriginFrames != null,
-      contourAnchors: project.mesh.contourAnchors ?? [],
-      contourAnchorKeyframeInterval: project.mesh.contourAnchorKeyframeInterval ?? 10,
-      contourAnchorTrackingValidated: project.mesh.contourAnchorTrackingValidated ?? false,
-      hasContourAnchorKeyframes: (project.mesh.contourAnchorKeyframes?.length ?? 0) > 0,
-      hasContourAnchorFrames: project.mesh.contourAnchorFrames != null,
-      contourSubdivisionPoints: project.mesh.contourSubdivisionPoints ?? [],
-      contourSubdivisionParams: project.mesh.contourSubdivisionParams ?? [],
-      hasContourSubdivisionFrames: project.mesh.contourSubdivisionFrames != null,
-      contourSubdivisionValidated: project.mesh.contourSubdivisionValidated ?? false,
-      hasContourCannyFrames: project.mesh.contourCannyFrames != null,
-      anchorPoints: project.mesh.anchorPoints ?? [],
-      anchorKeyframeInterval: project.mesh.anchorKeyframeInterval ?? 10,
-      anchorTrackingValidated: project.mesh.anchorTrackingValidated ?? false,
-      hasAnchorKeyframes: (project.mesh.anchorKeyframes?.length ?? 0) > 0,
-      hasAnchorFrames: project.mesh.anchorFrames != null,
-      internalPoints: project.mesh.internalPoints ?? [],
-      triangles: triToDoc(project.mesh.triangles ?? []),
-      topologyLocked: project.mesh.topologyLocked ?? false,
-      trackedTriangles: triToDoc(project.mesh.trackedTriangles ?? []),
-      internalBarycentrics: project.mesh.internalBarycentrics ?? [],
-      hasVideoFramesMesh: project.mesh.videoFramesMesh != null,
-    } : null,
+    animations: project.animations.map(animToDoc),
     markers: project.markers,
   }
 }
@@ -169,22 +216,19 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourCannyFrames' |
   'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'>
 
-function isLegacyDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
+function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
-  // Legacy if has old-style fields and NOT new v4 contourAnchors
   return (!('contourAnchors' in meshDoc)) &&
     !!(legacy.contourIndices || legacy.contourPath || legacy.contourVertices)
 }
 
 function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
-  if (isLegacyDoc(meshDoc)) {
+  if (isLegacyMeshDoc(meshDoc)) {
     console.log('[Migration] Converting legacy mesh format → v4 (curvilinear contour)')
     const legacy = meshDoc
 
-    // Try to extract some contour anchor points from old data
     let contourAnchors: Point2D[] = []
     if (legacy.contourVertices?.length) {
-      // v3 format: take a few evenly spaced points as anchors
       const cv = legacy.contourVertices
       const step = Math.max(1, Math.floor(cv.length / 5))
       for (let i = 0; i < cv.length; i += step) {
@@ -237,7 +281,110 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
   }
 }
 
-async function fromDoc(data: ProjectDoc): Promise<Project> {
+// Load large JSON data for a single animation
+async function loadAnimationJSON(
+  projectId: string,
+  animId: string,
+  meshDoc: MeshDoc,
+  isLegacy: boolean,
+): Promise<{
+  contourOriginKeyframes: KeyframeData[]
+  contourOriginFrames: Point2D[][] | null
+  contourAnchorKeyframes: KeyframeData[]
+  contourAnchorFrames: Point2D[][] | null
+  contourSubdivisionFrames: Point2D[][] | null
+  contourCannyFrames: Point2D[][] | null
+  anchorKeyframes: KeyframeData[]
+  anchorFrames: Point2D[][] | null
+  videoFramesMesh: Point2D[][] | null
+}> {
+  // Legacy projects store files at root level, new ones under animations/{animId}/
+  const path = (file: string) =>
+    isLegacy ? legacyStoragePath(projectId, file) : animStoragePath(projectId, animId, file)
+
+  const downloads = await Promise.all([
+    meshDoc.hasContourOriginKeyframes ? downloadJSON<KeyframeData[]>(path('contourOriginKeyframes.json')) : null,
+    meshDoc.hasContourOriginFrames ? downloadJSON<Point2D[][]>(path('contourOriginFrames.json')) : null,
+    meshDoc.hasContourAnchorKeyframes ? downloadJSON<KeyframeData[]>(path('contourAnchorKeyframes.json')) : null,
+    meshDoc.hasContourAnchorFrames ? downloadJSON<Point2D[][]>(path('contourAnchorFrames.json')) : null,
+    meshDoc.hasContourSubdivisionFrames ? downloadJSON<Point2D[][]>(path('contourSubdivisionFrames.json')) : null,
+    meshDoc.hasContourCannyFrames ? downloadJSON<Point2D[][]>(path('contourCannyFrames.json')) : null,
+    meshDoc.hasAnchorKeyframes ? downloadJSON<KeyframeData[]>(path('anchorKeyframes.json')) : null,
+    meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(path('anchorFrames.json')) : null,
+    meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(path('videoFramesMesh.json')) : null,
+  ])
+
+  return {
+    contourOriginKeyframes: downloads[0] ?? [],
+    contourOriginFrames: downloads[1],
+    contourAnchorKeyframes: downloads[2] ?? [],
+    contourAnchorFrames: downloads[3],
+    contourSubdivisionFrames: downloads[4],
+    contourCannyFrames: downloads[5],
+    anchorKeyframes: downloads[6] ?? [],
+    anchorFrames: downloads[7],
+    videoFramesMesh: downloads[8],
+  }
+}
+
+function isLegacyProjectDoc(data: Record<string, unknown>): boolean {
+  // Legacy format has 'mesh' or 'hasVideo' at root, no 'animations' array
+  return !('animations' in data) && ('mesh' in data || 'hasVideo' in data)
+}
+
+async function fromDoc(data: Record<string, unknown>): Promise<Project> {
+  if (isLegacyProjectDoc(data)) {
+    return fromLegacyDoc(data as unknown as LegacyProjectDoc)
+  }
+
+  const projDoc = data as unknown as ProjectDoc
+  const id = projDoc.id
+
+  const [imageBlob, backgroundVideoBlob] = await Promise.all([
+    projDoc.hasImage ? downloadBlob(`projects/${id}/originalImage`) : Promise.resolve(null),
+    projDoc.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
+  ])
+
+  // Load all animations in parallel
+  const animations = await Promise.all(
+    projDoc.animations.map(async (animDoc): Promise<Animation> => {
+      const videoBlob = animDoc.hasVideo
+        ? await downloadBlob(animStoragePath(id, animDoc.id, 'video'))
+        : null
+
+      let mesh: MeshData | null = null
+      if (animDoc.mesh) {
+        const jsonData = await loadAnimationJSON(id, animDoc.id, animDoc.mesh as MeshDoc, false)
+        mesh = {
+          ...meshFromDoc(animDoc.mesh as MeshDoc),
+          ...jsonData,
+        }
+      }
+
+      return {
+        id: animDoc.id,
+        name: animDoc.name,
+        type: animDoc.type,
+        createdAt: animDoc.createdAt,
+        videoBlob,
+        mesh,
+      }
+    })
+  )
+
+  return {
+    id: projDoc.id,
+    name: projDoc.name,
+    createdAt: projDoc.createdAt,
+    originalImageBlob: imageBlob,
+    backgroundVideoBlob,
+    animations,
+    markers: projDoc.markers,
+  }
+}
+
+async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
+  console.log('[Migration] Converting legacy project doc → multi-animation format')
   const id = data.id
 
   const [imageBlob, videoBlob, backgroundVideoBlob] = await Promise.all([
@@ -246,38 +393,25 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     data.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
   ])
 
-  let contourOriginKeyframes: KeyframeData[] = []
-  let contourOriginFrames: Point2D[][] | null = null
-  let contourAnchorKeyframes: KeyframeData[] = []
-  let contourAnchorFrames: Point2D[][] | null = null
-  let contourSubdivisionFrames: Point2D[][] | null = null
-  let contourCannyFrames: Point2D[][] | null = null
-  let anchorKeyframes: KeyframeData[] = []
-  let anchorFrames: Point2D[][] | null = null
-  let videoFramesMesh: Point2D[][] | null = null
-
+  let mesh: MeshData | null = null
   if (data.mesh) {
     const meshDoc = data.mesh as MeshDoc
-    const downloads = await Promise.all([
-      meshDoc.hasContourOriginKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourOriginKeyframes.json`) : null,
-      meshDoc.hasContourOriginFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourOriginFrames.json`) : null,
-      meshDoc.hasContourAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/contourAnchorKeyframes.json`) : null,
-      meshDoc.hasContourAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourAnchorFrames.json`) : null,
-      meshDoc.hasContourSubdivisionFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourSubdivisionFrames.json`) : null,
-      meshDoc.hasContourCannyFrames ? downloadJSON<Point2D[][]>(`projects/${id}/contourCannyFrames.json`) : null,
-      meshDoc.hasAnchorKeyframes ? downloadJSON<KeyframeData[]>(`projects/${id}/anchorKeyframes.json`) : null,
-      meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(`projects/${id}/anchorFrames.json`) : null,
-      meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(`projects/${id}/videoFramesMesh.json`) : null,
-    ])
-    contourOriginKeyframes = downloads[0] ?? []
-    contourOriginFrames = downloads[1]
-    contourAnchorKeyframes = downloads[2] ?? []
-    contourAnchorFrames = downloads[3]
-    contourSubdivisionFrames = downloads[4]
-    contourCannyFrames = downloads[5]
-    anchorKeyframes = downloads[6] ?? []
-    anchorFrames = downloads[7]
-    videoFramesMesh = downloads[8]
+    // Legacy files are at root level
+    const jsonData = await loadAnimationJSON(id, '', meshDoc, true)
+    mesh = {
+      ...meshFromDoc(data.mesh),
+      ...jsonData,
+    }
+  }
+
+  // Create a single rest animation from legacy data
+  const legacyAnimation: Animation = {
+    id: crypto.randomUUID(),
+    name: 'Animation',
+    type: 'rest',
+    createdAt: data.createdAt,
+    videoBlob,
+    mesh,
   }
 
   return {
@@ -285,33 +419,43 @@ async function fromDoc(data: ProjectDoc): Promise<Project> {
     name: data.name,
     createdAt: data.createdAt,
     originalImageBlob: imageBlob,
-    videoBlob: videoBlob,
     backgroundVideoBlob,
-    mesh: data.mesh ? {
-      ...meshFromDoc(data.mesh),
-      contourOriginKeyframes,
-      contourOriginFrames,
-      contourAnchorKeyframes,
-      contourAnchorFrames,
-      contourSubdivisionFrames,
-      contourCannyFrames,
-      anchorKeyframes,
-      anchorFrames,
-      videoFramesMesh,
-    } : null,
+    animations: [legacyAnimation],
     markers: data.markers,
   }
 }
 
+function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
+  return {
+    ...meshFromDoc(meshDoc),
+    contourOriginKeyframes: [],
+    contourOriginFrames: null,
+    contourAnchorKeyframes: [],
+    contourAnchorFrames: null,
+    contourSubdivisionFrames: null,
+    contourCannyFrames: null,
+    anchorKeyframes: [],
+    anchorFrames: null,
+    videoFramesMesh: null,
+  }
+}
+
 export async function createProject(name: string): Promise<Project> {
+  const restAnimation: Animation = {
+    id: crypto.randomUUID(),
+    name: 'Animation',
+    type: 'rest',
+    createdAt: Date.now(),
+    videoBlob: null,
+    mesh: null,
+  }
   const project: Project = {
     id: crypto.randomUUID(),
     name,
     createdAt: Date.now(),
     originalImageBlob: null,
-    videoBlob: null,
     backgroundVideoBlob: null,
-    mesh: null,
+    animations: [restAnimation],
     markers: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
@@ -323,38 +467,70 @@ export async function getProject(id: string): Promise<Project | undefined> {
   const snap = await getDoc(projectRef(id))
   if (!snap.exists()) return undefined
   console.log('[Firebase] Loading project:', id)
-  return fromDoc(snap.data() as ProjectDoc)
+  return fromDoc(snap.data() as Record<string, unknown>)
 }
 
 export async function getAllProjects(): Promise<Project[]> {
   const snap = await getDocs(projectsCol())
   return snap.docs.map(d => {
-    const data = d.data() as ProjectDoc
+    const data = d.data()
+
+    // Handle legacy format in listing
+    if (isLegacyProjectDoc(data)) {
+      const legacy = data as unknown as LegacyProjectDoc
+      const legacyAnim: Animation = {
+        id: 'legacy-placeholder',
+        name: 'Animation',
+        type: 'rest',
+        createdAt: legacy.createdAt,
+        videoBlob: null,
+        mesh: legacy.mesh ? meshShellFromDoc(legacy.mesh as MeshDoc | LegacyMeshDoc) : null,
+      }
+      return {
+        id: legacy.id,
+        name: legacy.name,
+        createdAt: legacy.createdAt,
+        originalImageBlob: null,
+        backgroundVideoBlob: null,
+        animations: [legacyAnim],
+        markers: legacy.markers,
+      }
+    }
+
+    const projDoc = data as unknown as ProjectDoc
     return {
-      id: data.id,
-      name: data.name,
-      createdAt: data.createdAt,
+      id: projDoc.id,
+      name: projDoc.name,
+      createdAt: projDoc.createdAt,
       originalImageBlob: null,
-      videoBlob: null,
       backgroundVideoBlob: null,
-      mesh: data.mesh ? {
-        ...meshFromDoc(data.mesh as MeshDoc | LegacyMeshDoc),
-        contourOriginKeyframes: [],
-        contourOriginFrames: null,
-        contourAnchorKeyframes: [],
-        contourAnchorFrames: null,
-        contourSubdivisionFrames: null,
-        contourCannyFrames: null,
-        anchorKeyframes: [],
-        anchorFrames: null,
-        videoFramesMesh: null,
-      } : null,
-      markers: data.markers,
+      animations: projDoc.animations.map(animDoc => ({
+        id: animDoc.id,
+        name: animDoc.name,
+        type: animDoc.type,
+        createdAt: animDoc.createdAt,
+        videoBlob: null,
+        mesh: animDoc.mesh ? meshShellFromDoc(animDoc.mesh as MeshDoc) : null,
+      })),
+      markers: projDoc.markers,
     }
   })
 }
 
-export type UploadHint = 'image' | 'video' | 'backgroundVideo' | 'contourOriginKeyframes' | 'contourOriginFrames' | 'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' | 'contourCannyFrames' | 'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'
+export type AnimationUploadField =
+  | 'video'
+  | 'contourOriginKeyframes' | 'contourOriginFrames'
+  | 'contourAnchorKeyframes' | 'contourAnchorFrames'
+  | 'contourSubdivisionFrames' | 'contourCannyFrames'
+  | 'anchorKeyframes' | 'anchorFrames'
+  | 'videoFramesMesh'
+
+export type UploadHint =
+  | 'image' | 'backgroundVideo'
+  | { animationId: string; field: AnimationUploadField }
+
+/** Flat upload hint used by step components (legacy-compatible strings) */
+export type StepUploadHint = 'image' | 'backgroundVideo' | AnimationUploadField
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -363,124 +539,111 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
   console.log('[Firebase] Saving project metadata:', id)
   await setDoc(projectRef(id), toDoc(project))
 
-  // Then upload blobs to Storage (only what's specified, or nothing if not specified)
+  // Then upload blobs to Storage (only what's specified)
   const uploads: Promise<void>[] = []
 
-  if (uploadOnly?.includes('image') && project.originalImageBlob) {
-    console.log('[Storage] Uploading image for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/originalImage`, project.originalImageBlob)
-        .then(() => console.log('[Storage] Image uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('video') && project.videoBlob) {
-    console.log('[Storage] Uploading video for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/video`, project.videoBlob)
-        .then(() => console.log('[Storage] Video uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('backgroundVideo') && project.backgroundVideoBlob) {
-    console.log('[Storage] Uploading background video for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/backgroundVideo`, project.backgroundVideoBlob)
-        .then(() => console.log('[Storage] Background video uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('contourOriginKeyframes') && project.mesh?.contourOriginKeyframes.length) {
-    const json = JSON.stringify(project.mesh.contourOriginKeyframes)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourOriginKeyframes for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/contourOriginKeyframes.json`, blob)
-        .then(() => console.log('[Storage] contourOriginKeyframes uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('contourOriginFrames') && project.mesh?.contourOriginFrames) {
-    const json = JSON.stringify(project.mesh.contourOriginFrames)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourOriginFrames for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/contourOriginFrames.json`, blob)
-        .then(() => console.log('[Storage] contourOriginFrames uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('contourAnchorKeyframes') && project.mesh?.contourAnchorKeyframes.length) {
-    const json = JSON.stringify(project.mesh.contourAnchorKeyframes)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourAnchorKeyframes for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/contourAnchorKeyframes.json`, blob)
-        .then(() => console.log('[Storage] contourAnchorKeyframes uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('contourAnchorFrames') && project.mesh?.contourAnchorFrames) {
-    const json = JSON.stringify(project.mesh.contourAnchorFrames)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourAnchorFrames for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/contourAnchorFrames.json`, blob)
-        .then(() => console.log('[Storage] contourAnchorFrames uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('contourSubdivisionFrames') && project.mesh?.contourSubdivisionFrames) {
-    const json = JSON.stringify(project.mesh.contourSubdivisionFrames)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourSubdivisionFrames for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/contourSubdivisionFrames.json`, blob)
-        .then(() => console.log('[Storage] contourSubdivisionFrames uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('contourCannyFrames') && project.mesh?.contourCannyFrames) {
-    const json = JSON.stringify(project.mesh.contourCannyFrames)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading contourCannyFrames for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/contourCannyFrames.json`, blob)
-        .then(() => console.log('[Storage] contourCannyFrames uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('anchorKeyframes') && project.mesh?.anchorKeyframes.length) {
-    const json = JSON.stringify(project.mesh.anchorKeyframes)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading anchorKeyframes for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/anchorKeyframes.json`, blob)
-        .then(() => console.log('[Storage] anchorKeyframes uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('anchorFrames') && project.mesh?.anchorFrames) {
-    const json = JSON.stringify(project.mesh.anchorFrames)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading anchorFrames for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/anchorFrames.json`, blob)
-        .then(() => console.log('[Storage] anchorFrames uploaded'))
-    )
-  }
-  if (uploadOnly?.includes('videoFramesMesh') && project.mesh?.videoFramesMesh) {
-    const json = JSON.stringify(project.mesh.videoFramesMesh)
-    const blob = new Blob([json], { type: 'application/json' })
-    console.log('[Storage] Uploading videoFramesMesh for:', id)
-    uploads.push(
-      uploadBlob(`projects/${id}/videoFramesMesh.json`, blob)
-        .then(() => console.log('[Storage] videoFramesMesh uploaded'))
-    )
+  if (!uploadOnly) return
+
+  for (const hint of uploadOnly) {
+    if (hint === 'image' && project.originalImageBlob) {
+      console.log('[Storage] Uploading image for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/originalImage`, project.originalImageBlob)
+          .then(() => console.log('[Storage] Image uploaded'))
+      )
+    } else if (hint === 'backgroundVideo' && project.backgroundVideoBlob) {
+      console.log('[Storage] Uploading background video for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/backgroundVideo`, project.backgroundVideoBlob)
+          .then(() => console.log('[Storage] Background video uploaded'))
+      )
+    } else if (typeof hint === 'object') {
+      const { animationId, field } = hint
+      const anim = project.animations.find(a => a.id === animationId)
+      if (!anim) continue
+
+      const storagePath = animStoragePath(id, animationId, field === 'video' ? 'video' : `${field}.json`)
+
+      if (field === 'video' && anim.videoBlob) {
+        console.log(`[Storage] Uploading video for animation ${animationId}`)
+        uploads.push(
+          uploadBlob(storagePath, anim.videoBlob)
+            .then(() => console.log(`[Storage] Video uploaded for animation ${animationId}`))
+        )
+      } else if (field !== 'video' && anim.mesh) {
+        const jsonFieldMap: Record<string, unknown> = {
+          contourOriginKeyframes: anim.mesh.contourOriginKeyframes,
+          contourOriginFrames: anim.mesh.contourOriginFrames,
+          contourAnchorKeyframes: anim.mesh.contourAnchorKeyframes,
+          contourAnchorFrames: anim.mesh.contourAnchorFrames,
+          contourSubdivisionFrames: anim.mesh.contourSubdivisionFrames,
+          contourCannyFrames: anim.mesh.contourCannyFrames,
+          anchorKeyframes: anim.mesh.anchorKeyframes,
+          anchorFrames: anim.mesh.anchorFrames,
+          videoFramesMesh: anim.mesh.videoFramesMesh,
+        }
+        const data = jsonFieldMap[field]
+        if (data && (Array.isArray(data) ? data.length > 0 : true)) {
+          const json = JSON.stringify(data)
+          const blob = new Blob([json], { type: 'application/json' })
+          console.log(`[Storage] Uploading ${field} for animation ${animationId}`)
+          uploads.push(
+            uploadBlob(storagePath, blob)
+              .then(() => console.log(`[Storage] ${field} uploaded for animation ${animationId}`))
+          )
+        }
+      }
+    }
   }
 
   await Promise.all(uploads)
 }
 
+const ANIM_JSON_FILES = [
+  'video',
+  'contourOriginKeyframes.json',
+  'contourOriginFrames.json',
+  'contourAnchorKeyframes.json',
+  'contourAnchorFrames.json',
+  'contourSubdivisionFrames.json',
+  'contourCannyFrames.json',
+  'anchorKeyframes.json',
+  'anchorFrames.json',
+  'videoFramesMesh.json',
+]
+
 export async function deleteProject(id: string): Promise<void> {
+  // First load the project doc to get animation IDs
+  const snap = await getDoc(projectRef(id))
+  const data = snap.exists() ? snap.data() : null
+
   const scansSnap = await getDocs(query(collection(db, 'scans'), where('projectId', '==', id)))
   const deletions: Promise<void>[] = scansSnap.docs.map(d => deleteDoc(d.ref))
 
-  // Delete known storage files (no listAll — avoids CORS issues)
-  const knownFiles = [
+  // Delete project-level storage files
+  const projectFiles = [
     `projects/${id}/originalImage`,
-    `projects/${id}/video`,
     `projects/${id}/backgroundVideo`,
+  ]
+  for (const path of projectFiles) {
+    deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
+  }
+
+  // Delete animation storage files
+  if (data && 'animations' in data) {
+    const projDoc = data as unknown as ProjectDoc
+    for (const animDoc of projDoc.animations) {
+      for (const file of ANIM_JSON_FILES) {
+        deletions.push(
+          deleteObject(ref(storage, animStoragePath(id, animDoc.id, file))).catch(() => {})
+        )
+      }
+    }
+  }
+
+  // Also clean up legacy paths
+  const legacyFiles = [
+    `projects/${id}/video`,
     `projects/${id}/contourOriginKeyframes.json`,
     `projects/${id}/contourOriginFrames.json`,
     `projects/${id}/contourAnchorKeyframes.json`,
@@ -490,15 +653,15 @@ export async function deleteProject(id: string): Promise<void> {
     `projects/${id}/anchorKeyframes.json`,
     `projects/${id}/anchorFrames.json`,
     `projects/${id}/videoFramesMesh.json`,
-    // Legacy paths (cleanup)
     `projects/${id}/keyframes.json`,
     `projects/${id}/contourKeyframes.json`,
     `projects/${id}/contourFrames.json`,
   ]
-  for (const path of knownFiles) {
+  for (const path of legacyFiles) {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
   }
 
+  // Delete scan images
   for (const scanDoc of scansSnap.docs) {
     deletions.push(deleteObject(ref(storage, `scans/${scanDoc.id}/scanImage`)).catch(() => {}))
   }

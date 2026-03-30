@@ -1,10 +1,16 @@
 import { useState, useCallback } from 'react'
-import type { Project } from '../../types/project'
+import type { Project, MeshData } from '../../types/project'
 import type { Point2D } from '../../types/project'
 import { processCapturedImage } from '../../utils/perspectiveCorrection'
 import { createScan } from '../../db/scansStore'
 import { detectDrawingBBox, computeMeshBBox } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
+
+/** Get the rest animation's mesh from a project */
+function getRestMesh(project: Project): MeshData | null {
+  const restAnim = project.animations.find(a => a.type === 'rest')
+  return restAnim?.mesh ?? null
+}
 
 // Hook version for cleaner integration
 export interface DebugImages {
@@ -62,14 +68,15 @@ export function useScanProcessor(project: Project) {
 
         // Detect content alignment: match drawing bbox on scan to mesh bbox
         let alignment: ContentAlignment | null = null
-        if (project.mesh) {
+        const restMesh = getRestMesh(project)
+        if (restMesh) {
           const drawBBox = detectDrawingBBox(canvas)
           if (drawBBox) {
             const allMeshPoints = [
-              ...project.mesh.contourAnchors,
-              ...project.mesh.contourSubdivisionPoints,
-              ...project.mesh.anchorPoints,
-              ...project.mesh.internalPoints,
+              ...restMesh.contourAnchors,
+              ...restMesh.contourSubdivisionPoints,
+              ...restMesh.anchorPoints,
+              ...restMesh.internalPoints,
             ]
             const meshBBox = computeMeshBBox(allMeshPoints)
 
@@ -183,7 +190,7 @@ function enhanceContrast(ctx: CanvasRenderingContext2D, w: number, h: number) {
 }
 
 function buildMeshOverlay(rectifiedCanvas: HTMLCanvasElement, project: Project, alignment: ContentAlignment | null): string {
-  const mesh = project.mesh
+  const mesh = getRestMesh(project)
   if (!mesh) return rectifiedCanvas.toDataURL()
 
   const overlay = document.createElement('canvas')

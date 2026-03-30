@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Delaunator from 'delaunator'
-import type { Project, Point2D, MeshData } from '../../types/project'
-import type { UploadHint } from '../../db/projectsStore'
+import type { ProjectStepView, Point2D, MeshData } from '../../types/project'
+import type { StepUploadHint } from '../../db/projectsStore'
 import TriangulationCanvas from '../triangulation/TriangulationCanvas'
 import { useTriangulation } from '../triangulation/useTriangulation'
 import { generateAutoMesh } from '../../utils/autoMeshGenerator'
@@ -16,11 +16,12 @@ import { LoopPlayback } from '../../utils/loopPlayback'
 import type { PointType } from '../triangulation/drawingUtils'
 
 interface Props {
-  project: Project
-  onSave: (project: Project, uploadOnly?: UploadHint[]) => Promise<void>
+  project: ProjectStepView
+  onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
+  isRestAnimation?: boolean
 }
 
-export default function TriangulationStep({ project, onSave }: Props) {
+export default function TriangulationStep({ project, onSave, isRestAnimation = true }: Props) {
   const [saving, setSaving] = useState(false)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [density, setDensity] = useState(5)
@@ -566,7 +567,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
           console.log(`  trackedPositions.length:`, trackedPositions.length)
 
           // Check for NaN/undefined in tracked positions
-          const badTracked = trackedPositions.filter((p, i) =>
+          const badTracked = trackedPositions.filter(p =>
             !p || isNaN(p.x) || isNaN(p.y)
           )
           if (badTracked.length > 0) {
@@ -837,7 +838,7 @@ export default function TriangulationStep({ project, onSave }: Props) {
     }
   }
 
-  if (!mesh?.anchorTrackingValidated) {
+  if (isRestAnimation && !mesh?.anchorTrackingValidated) {
     return (
       <div className="placeholder">
         Validez d&apos;abord le tracking des ancres (étape 7).
@@ -845,10 +846,119 @@ export default function TriangulationStep({ project, onSave }: Props) {
     )
   }
 
-  if (trackedPoints.length < 3) {
+  if (!isRestAnimation && !mesh?.anchorTrackingValidated) {
+    return (
+      <div className="placeholder">
+        Validez d&apos;abord le tracking des ancres.
+      </div>
+    )
+  }
+
+  if (isRestAnimation && trackedPoints.length < 3) {
     return (
       <div className="placeholder">
         Il faut au minimum 3 points trackés (contour + ancres) pour trianguler.
+      </div>
+    )
+  }
+
+  // For oneshot animations: skip topology editing, show only animation compute
+  if (!isRestAnimation) {
+    return (
+      <div className="triangulation-step">
+        <div className="triangulation-toolbar">
+          <span style={{ color: '#22c55e', fontWeight: 'bold', marginRight: 8 }}>
+            Topologie héritée de la rest animation
+          </span>
+          <span className="toolbar-info">
+            Contour: {contourAnchors.length}+{contourSubPts.length} |
+            Ancres: {anchorPoints.length} |
+            Internes: {mesh.internalPoints.length} |
+            Triangles: {mesh.triangles.length}
+          </span>
+        </div>
+
+        {/* Animation compute section */}
+        <div style={{ borderTop: '2px solid #333', marginTop: 8 }}>
+          <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            {!hasAnimation ? (
+              <>
+                <button
+                  onClick={handleComputeAnimation}
+                  disabled={computing}
+                  style={{ background: '#2563eb', color: 'white', padding: '8px 24px' }}
+                >
+                  {computing ? 'Calcul en cours...' : 'Barycentrique'}
+                </button>
+                <button
+                  onClick={handleComputeARAP}
+                  disabled={computing}
+                  style={{ background: '#9333ea', color: 'white', padding: '8px 24px' }}
+                >
+                  {computing ? 'Calcul en cours...' : 'Calculer ARAP'}
+                </button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa' }}>
+                  Lissage :
+                  <input type="range" min={1} max={11} step={2}
+                    value={smoothingWindow}
+                    onChange={e => setSmoothingWindow(Number(e.target.value))}
+                    disabled={computing}
+                    style={{ width: 80 }} />
+                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
+                </label>
+                {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
+              </>
+            ) : (
+              <>
+                <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Animation calculée</span>
+                <span style={{ color: '#888' }}>
+                  {mesh.videoFramesMesh!.length} frames, {mesh.videoFramesMesh![0]?.length ?? 0} pts/frame
+                </span>
+                <button onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
+                <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }}>◀</button>
+                <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }}>▶</button>
+                <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa', marginLeft: 'auto' }}>
+                  Lissage :
+                  <input type="range" min={1} max={11} step={2}
+                    value={smoothingWindow}
+                    onChange={e => setSmoothingWindow(Number(e.target.value))}
+                    disabled={computing}
+                    style={{ width: 80 }} />
+                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
+                </label>
+                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#9333ea', color: 'white' }}>
+                  Recalculer ARAP
+                </button>
+              </>
+            )}
+          </div>
+
+          {computing && (
+            <div style={{ padding: '0 16px' }}>
+              <div style={{ width: '100%', height: 4, background: '#333', borderRadius: 2 }}>
+                <div style={{ width: '50%', height: '100%', background: '#2563eb', borderRadius: 2 }} />
+              </div>
+            </div>
+          )}
+
+          {hasAnimation && (
+            <>
+              <div style={{ padding: '4px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: '#888', fontSize: 12 }}>Vue :</span>
+                <button onClick={() => setViewMode('video')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'video' ? '#2563eb' : '#333', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Vidéo + Mesh</button>
+                <button onClick={() => setViewMode('wireframe')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'wireframe' ? '#2563eb' : '#333', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Wireframe</button>
+                <button onClick={() => setViewMode('gradient')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'gradient' ? '#2563eb' : '#333', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Gradient</button>
+                <span style={{ flex: 1 }} />
+                <input type="range" min={0} max={(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1} value={currentFrame} onChange={e => { setPlaying(false); const f = Number(e.target.value); setCurrentFrame(f); playbackRef.current?.seekFrame(f) }} style={{ width: 200 }} />
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 80 }}>{currentFrame} / {(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}</span>
+              </div>
+              <div ref={animContainerRef} style={{ height: 400, position: 'relative' }}>
+                <canvas ref={animCanvasRef} style={{ width: '100%', height: '100%' }} />
+              </div>
+            </>
+          )}
+        </div>
       </div>
     )
   }
