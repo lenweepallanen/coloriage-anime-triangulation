@@ -29,11 +29,11 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
   const [saving, setSaving] = useState(false)
   const [propagating, setPropagating] = useState(false)
 
-  // Constraint toggles
-  const [enableAntiSaut, setEnableAntiSaut] = useState(true)
-  const [enableNeighbor, setEnableNeighbor] = useState(true)
-  const [enableTemporal, setEnableTemporal] = useState(false)
-  const [enableOutlier, setEnableOutlier] = useState(false)
+  // Constraints hardcoded
+  const enableAntiSaut = true
+  const enableNeighbor = true
+  const enableTemporal = false
+  const enableOutlier = false
 
   const rawTrackingRef = useRef<Point2D[][]>([])
 
@@ -315,13 +315,13 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
 
   // Prerequisites
   if (!mesh?.contourAnchorTrackingValidated) {
-    return <div className="placeholder">Validez d&apos;abord le tracking contour (étape 5).</div>
+    return <div className="placeholder">Validez d'abord le tracking contour (étape 5).</div>
   }
   if (!mesh?.anchorPoints?.length) {
-    return <div className="placeholder">Définissez d&apos;abord les ancres internes (étape 6).</div>
+    return <div className="placeholder">Définissez d'abord les ancres internes (étape 6).</div>
   }
   if (!project.videoBlob) {
-    return <div className="placeholder">Importez d&apos;abord une vidéo.</div>
+    return <div className="placeholder">Importez d'abord une vidéo.</div>
   }
 
   if (phase === 'validated') {
@@ -346,30 +346,10 @@ export default function AnchorTrackingStep({ project, onSave }: Props) {
     return (
       <div className="tracking-step">
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <h3 style={{ margin: 0 }}>Configuration du tracking des ancres</h3>
+          <h3 style={{ margin: 0 }}>Tracking des ancres internes</h3>
           <p style={{ color: '#888', margin: 0 }}>
-            {anchorPoints.length} points d&apos;ancrage à tracker.
+            {anchorPoints.length} points d'ancrage à tracker.
           </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <strong>Contraintes :</strong>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableAntiSaut} onChange={e => setEnableAntiSaut(e.target.checked)} />
-              Anti-saut (clamp déplacement max)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableNeighbor} onChange={e => setEnableNeighbor(e.target.checked)} />
-              Contrainte voisinage (consensus médiane)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableTemporal} onChange={e => setEnableTemporal(e.target.checked)} />
-              Lissage temporel (post-traitement)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={enableOutlier} onChange={e => setEnableOutlier(e.target.checked)} />
-              Détection outliers (post-traitement)
-            </label>
-          </div>
 
           <button
             onClick={handleLaunchTracking}

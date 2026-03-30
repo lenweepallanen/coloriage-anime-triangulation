@@ -300,11 +300,11 @@ export default function CannyValidationStep({ project, onSave }: Props) {
   }
 
   if (!project.videoBlob) {
-    return <div className="placeholder">Importez d&apos;abord une vidéo dans l&apos;onglet Import.</div>
+    return <div className="placeholder">Importez d'abord une vidéo dans l'onglet Import.</div>
   }
 
   if (!project.originalImageBlob) {
-    return <div className="placeholder">Importez d&apos;abord une image dans l&apos;onglet Import.</div>
+    return <div className="placeholder">Importez d'abord une image dans l'onglet Import.</div>
   }
 
   return (
@@ -339,54 +339,6 @@ export default function CannyValidationStep({ project, onSave }: Props) {
         </button>
       </div>
 
-      {/* Canny parameter sliders */}
-      <div style={{ display: 'flex', gap: '24px', padding: '8px 12px', background: '#f5f5f5', borderBottom: '1px solid #ddd', alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          Seuil bas:
-          <input
-            type="range"
-            min={10}
-            max={200}
-            value={params.lowThreshold}
-            onChange={e => setParams(p => ({ ...p, lowThreshold: +e.target.value }))}
-            style={{ width: '120px' }}
-          />
-          <span style={{ minWidth: '30px' }}>{params.lowThreshold}</span>
-        </label>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          Seuil haut:
-          <input
-            type="range"
-            min={50}
-            max={400}
-            value={params.highThreshold}
-            onChange={e => setParams(p => ({ ...p, highThreshold: +e.target.value }))}
-            style={{ width: '120px' }}
-          />
-          <span style={{ minWidth: '30px' }}>{params.highThreshold}</span>
-        </label>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          Blur:
-          {[3, 5, 7].map(size => (
-            <button
-              key={size}
-              onClick={() => setParams(p => ({ ...p, blurSize: size }))}
-              style={{
-                padding: '2px 8px',
-                background: params.blurSize === size ? '#4a90d9' : '#fff',
-                color: params.blurSize === size ? '#fff' : '#333',
-                border: '1px solid #ccc',
-                borderRadius: '3px',
-                cursor: 'pointer',
-              }}
-            >
-              {size}
-            </button>
-          ))}
-        </label>
-      </div>
 
       {/* Frame slider */}
       <div style={{ padding: '4px 12px', background: '#fafafa', borderBottom: '1px solid #eee' }}>

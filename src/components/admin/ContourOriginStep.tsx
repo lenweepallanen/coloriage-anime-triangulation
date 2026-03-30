@@ -317,7 +317,7 @@ export default function ContourOriginStep({ project, onSave }: Props) {
   if (!cannyParams) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord les paramètres Canny (étape 2).
+        Validez d'abord les paramètres Canny (étape 2).
       </div>
     )
   }
@@ -325,7 +325,7 @@ export default function ContourOriginStep({ project, onSave }: Props) {
   if (!project.originalImageBlob) {
     return (
       <div className="placeholder">
-        Importez d&apos;abord une image (étape 1).
+        Importez d'abord une image (étape 1).
       </div>
     )
   }

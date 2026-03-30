@@ -524,7 +524,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
   if (!cannyParams) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord les param&egrave;tres Canny (&eacute;tape 2).
+        Validez d'abord les paramètres Canny (étape 2).
       </div>
     )
   }
@@ -532,7 +532,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
   if (!project.mesh?.contourOriginTrackingValidated) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord le tracking du Point 0 (&eacute;tape 4).
+        Validez d'abord le tracking du Point 0 (étape 4).
       </div>
     )
   }
@@ -540,7 +540,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
   if (!project.originalImageBlob) {
     return (
       <div className="placeholder">
-        Importez d&apos;abord une image dans l&apos;onglet Import.
+        Importez d'abord une image dans l'onglet Import.
       </div>
     )
   }
@@ -597,7 +597,7 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
       <div className="triangulation-help">
         <span>
           Clic gauche = placer un anchor (auto-snap contour Canny) |
-          Glisser = d&eacute;placer (auto-snap) | Clic droit = supprimer |
+          Glisser = déplacer (auto-snap) | Clic droit = supprimer |
           Molette = zoom | Espace+glisser = pan |
           Min 3 anchors.
         </span>

@@ -841,7 +841,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
   if (isRestAnimation && !mesh?.anchorTrackingValidated) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord le tracking des ancres (étape 7).
+        Validez d'abord le tracking des ancres (étape 7).
       </div>
     )
   }
@@ -849,7 +849,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
   if (!isRestAnimation && !mesh?.anchorTrackingValidated) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord le tracking des ancres.
+        Validez d'abord le tracking des ancres.
       </div>
     )
   }
@@ -884,28 +884,12 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
             {!hasAnimation ? (
               <>
                 <button
-                  onClick={handleComputeAnimation}
+                  onClick={handleComputeARAP}
                   disabled={computing}
                   style={{ background: '#2563eb', color: 'white', padding: '8px 24px' }}
                 >
-                  {computing ? 'Calcul en cours...' : 'Barycentrique'}
+                  {computing ? 'Calcul en cours...' : 'Calculer Animation'}
                 </button>
-                <button
-                  onClick={handleComputeARAP}
-                  disabled={computing}
-                  style={{ background: '#9333ea', color: 'white', padding: '8px 24px' }}
-                >
-                  {computing ? 'Calcul en cours...' : 'Calculer ARAP'}
-                </button>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa' }}>
-                  Lissage :
-                  <input type="range" min={1} max={11} step={2}
-                    value={smoothingWindow}
-                    onChange={e => setSmoothingWindow(Number(e.target.value))}
-                    disabled={computing}
-                    style={{ width: 80 }} />
-                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
-                </label>
                 {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
               </>
             ) : (
@@ -918,17 +902,8 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                 <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }}>◀</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }}>▶</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa', marginLeft: 'auto' }}>
-                  Lissage :
-                  <input type="range" min={1} max={11} step={2}
-                    value={smoothingWindow}
-                    onChange={e => setSmoothingWindow(Number(e.target.value))}
-                    disabled={computing}
-                    style={{ width: 80 }} />
-                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
-                </label>
-                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#9333ea', color: 'white' }}>
-                  Recalculer ARAP
+                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#2563eb', color: 'white', marginLeft: 'auto' }}>
+                  Recalculer Animation
                 </button>
               </>
             )}
@@ -1035,7 +1010,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
       <div className="triangulation-help">
         {topologyLocked ? (
           <span>
-            La topologie est verrouillée. Calculez l&apos;animation ci-dessous.
+            La topologie est verrouillée. Calculez l'animation ci-dessous.
           </span>
         ) : (
           <span>
@@ -1069,28 +1044,12 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
             {!hasAnimation ? (
               <>
                 <button
-                  onClick={handleComputeAnimation}
+                  onClick={handleComputeARAP}
                   disabled={computing}
                   style={{ background: '#2563eb', color: 'white', padding: '8px 24px' }}
                 >
-                  {computing ? 'Calcul en cours...' : 'Barycentrique'}
+                  {computing ? 'Calcul en cours...' : 'Calculer Animation'}
                 </button>
-                <button
-                  onClick={handleComputeARAP}
-                  disabled={computing}
-                  style={{ background: '#9333ea', color: 'white', padding: '8px 24px' }}
-                >
-                  {computing ? 'Calcul en cours...' : 'Calculer ARAP'}
-                </button>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa' }}>
-                  Lissage :
-                  <input type="range" min={1} max={11} step={2}
-                    value={smoothingWindow}
-                    onChange={e => setSmoothingWindow(Number(e.target.value))}
-                    disabled={computing}
-                    style={{ width: 80 }} />
-                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
-                </label>
                 {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
               </>
             ) : (
@@ -1107,20 +1066,8 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   ▶
                 </button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#aaa', marginLeft: 'auto' }}>
-                  Lissage :
-                  <input type="range" min={1} max={11} step={2}
-                    value={smoothingWindow}
-                    onChange={e => setSmoothingWindow(Number(e.target.value))}
-                    disabled={computing}
-                    style={{ width: 80 }} />
-                  <span style={{ fontFamily: 'monospace', minWidth: 16 }}>{smoothingWindow}</span>
-                </label>
-                <button onClick={handleComputeAnimation} disabled={computing}>
-                  Recalculer (Bary)
-                </button>
-                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#9333ea', color: 'white' }}>
-                  Recalculer ARAP
+                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#2563eb', color: 'white', marginLeft: 'auto' }}>
+                  Recalculer Animation
                 </button>
               </>
             )}

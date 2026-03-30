@@ -364,7 +364,6 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
     }
   }, [ready, mesh, project])
 
-  const handleCompute = useCallback(() => runCompute(false), [runCompute])
   const handleComputeStepByStep = useCallback(() => runCompute(true), [runCompute])
 
   // ─── Extrema cache helper ────────────────────────────────────────
@@ -1313,12 +1312,9 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       {/* ── Ready ─────────────────────────────────────── */}
       {phase === 'ready' && (
         <div className="step-actions">
-          <p>{mesh!.contourAnchors.length} anchors contour a tracker.</p>
-          <button className="btn-primary" onClick={handleCompute}>
-            Tracking contour (s fixe)
-          </button>
-          <button className="btn-primary" onClick={handleComputeStepByStep} style={{ marginLeft: 8 }}>
-            Tracking contour (proche en proche)
+          <p>{mesh!.contourAnchors.length} anchors contour à tracker.</p>
+          <button className="btn-primary" onClick={handleComputeStepByStep}>
+            Tracking Contour
           </button>
         </div>
       )}

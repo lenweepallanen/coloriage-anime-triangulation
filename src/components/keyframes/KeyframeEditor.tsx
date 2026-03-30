@@ -432,7 +432,7 @@ export default function KeyframeEditor({
             style={{ background: '#7c3aed', color: 'white' }}
             title="Re-track vers la frame éditée précédente"
           >
-            {propagating ? '...' : '\u2190 1 seg'}
+            {propagating ? '...' : '← 1 seg'}
           </button>
           <button
             onClick={() => onPropagateBackward?.('all')}
@@ -440,7 +440,7 @@ export default function KeyframeEditor({
             style={{ background: '#6d28d9', color: 'white' }}
             title="Re-track en arrière jusqu'au début"
           >
-            \u2190 tout
+            ← tout
           </button>
           <span className="toolbar-separator" />
           <button
@@ -449,7 +449,7 @@ export default function KeyframeEditor({
             style={{ background: '#2563eb', color: 'white' }}
             title="Re-track 1 segment dans les 2 directions"
           >
-            \u2194 1 seg
+            ↔ 1 seg
           </button>
           <button
             onClick={() => onPropagateBidi?.('all')}
@@ -457,7 +457,7 @@ export default function KeyframeEditor({
             style={{ background: '#1d4ed8', color: 'white' }}
             title="Re-track dans les 2 directions jusqu'aux extrémités"
           >
-            \u2194 tout
+            ↔ tout
           </button>
           <span className="toolbar-separator" />
           <button
@@ -466,7 +466,7 @@ export default function KeyframeEditor({
             style={{ background: '#22c55e', color: 'white' }}
             title="Re-track vers la frame éditée suivante"
           >
-            {propagating ? 'Propagation...' : '\u2192 1 seg'}
+            {propagating ? 'Propagation...' : '→ 1 seg'}
           </button>
           <button
             onClick={() => onPropagateForward?.('all')}
@@ -474,7 +474,7 @@ export default function KeyframeEditor({
             style={{ background: '#16a34a', color: 'white' }}
             title="Re-track en avant jusqu'à la fin"
           >
-            \u2192 tout
+            → tout
           </button>
           {contourDebug && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginLeft: 8 }}>
@@ -487,7 +487,7 @@ export default function KeyframeEditor({
             </label>
           )}
           <span style={{ fontSize: '0.75rem', color: '#888' }}>
-            Glissez les points pour corriger | \u2190 arrière | \u2194 bidi | \u2192 avant
+            Glissez les points pour corriger | ← arrière | ↔ bidi | → avant
           </span>
         </div>
       ) : (

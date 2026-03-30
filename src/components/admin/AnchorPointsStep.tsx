@@ -114,7 +114,7 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
   if (!project.mesh?.contourAnchorTrackingValidated) {
     return (
       <div className="placeholder">
-        Validez d&apos;abord le tracking contour (étape 5).
+        Validez d'abord le tracking contour (étape 5).
       </div>
     )
   }
@@ -122,7 +122,7 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
   if (!project.originalImageBlob) {
     return (
       <div className="placeholder">
-        Importez d&apos;abord une image dans l&apos;onglet Import.
+        Importez d'abord une image dans l'onglet Import.
       </div>
     )
   }
@@ -169,7 +169,7 @@ export default function AnchorPointsStep({ project, onSave }: Props) {
 
       <div className="triangulation-help">
         <span>
-          Clic gauche = ajouter un point d&apos;ancrage (yeux, ailes, queue...) |
+          Clic gauche = ajouter un point d'ancrage (yeux, ailes, queue...) |
           Glisser = déplacer | Clic droit = supprimer |
           Le contour (bleu) est en lecture seule.
         </span>

@@ -305,10 +305,10 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
 
   // Prerequisites
   if (!cannyParams) {
-    return <div className="placeholder">Validez d&apos;abord les param&egrave;tres Canny (&eacute;tape 2).</div>
+    return <div className="placeholder">Validez d'abord les paramètres Canny (étape 2).</div>
   }
   if (contourAnchors.length < 3) {
-    return <div className="placeholder">Placez d&apos;abord au moins 3 anchors contour (&eacute;tape 3).</div>
+    return <div className="placeholder">Placez d'abord au moins 3 anchors contour (étape 3).</div>
   }
 
   const totalPoints = countsPerSegment.reduce((s, c) => s + c, 0)
@@ -400,7 +400,7 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
 
       <div className="triangulation-help">
         <span>
-          Cliquez sur un segment pour le s&eacute;lectionner et le voir en surbrillance |
+          Cliquez sur un segment pour le sélectionner et le voir en surbrillance |
           + / − par segment ou global |
           Molette = zoom | Espace+glisser = pan
         </span>

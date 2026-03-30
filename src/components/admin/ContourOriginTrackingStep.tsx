@@ -432,13 +432,13 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
 
   // ===== Prerequisites =====
   if (!cannyParams) {
-    return <div className="placeholder">Validez d&apos;abord les paramètres Canny (étape 2).</div>
+    return <div className="placeholder">Validez d'abord les paramètres Canny (étape 2).</div>
   }
   if (!contourOrigin) {
-    return <div className="placeholder">Définissez d&apos;abord le Point 0 du contour (étape 3).</div>
+    return <div className="placeholder">Définissez d'abord le Point 0 du contour (étape 3).</div>
   }
   if (!project.videoBlob) {
-    return <div className="placeholder">Importez d&apos;abord une vidéo (étape 1).</div>
+    return <div className="placeholder">Importez d'abord une vidéo (étape 1).</div>
   }
 
   // ===== Render =====
