@@ -216,9 +216,9 @@ export default function AdminPage() {
   return (
     <div className="admin-page" ref={pageRef}>
       <div className="admin-left-panel" style={previewVisible ? { flex: `0 0 ${100 - previewRatio}%` } : undefined}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="admin-header">
           <h2>{project.name} — Administration</h2>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="admin-header-actions">
             <button onClick={() => setPreviewVisible(v => !v)}>
               {previewVisible ? 'Masquer preview' : 'Afficher preview'}
             </button>

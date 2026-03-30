@@ -447,10 +447,10 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
     return (
       <div className="tracking-step">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px' }}>
-          <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '1.1rem' }}>
+          <span style={{ color: 'var(--color-success)', fontWeight: 'bold', fontSize: '1.1rem' }}>
             Tracking Point 0 validé
           </span>
-          <span style={{ color: '#888' }}>
+          <span style={{ color: 'var(--color-muted)' }}>
             1 point tracké sur {mesh.contourOriginFrames?.length ?? '?'} frames
           </span>
           <button className="btn-danger" onClick={handleReset}>
@@ -466,13 +466,13 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
       <div className="tracking-step">
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <h3 style={{ margin: 0 }}>Tracking du Point 0 (origine curviligne)</h3>
-          <p style={{ color: '#888', margin: 0 }}>
+          <p style={{ color: 'var(--color-muted)', margin: 0 }}>
             Le Point 0 sera tracké par optical flow avec snap automatique sur le contour Canny.
           </p>
 
           <button
             onClick={handleLaunchTracking}
-            style={{ background: '#2563eb', color: 'white', padding: '8px 24px', alignSelf: 'flex-start' }}
+            style={{ background: 'var(--color-primary)', color: 'white', padding: '8px 24px', alignSelf: 'flex-start' }}
           >
             Lancer le tracking
           </button>
@@ -487,7 +487,7 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
         <div style={{ padding: '16px', textAlign: 'center' }}>
           <h3>Tracking Point 0 en cours...</h3>
           <p style={{ fontFamily: 'monospace' }}>{progress}</p>
-          <div style={{ width: '100%', maxWidth: 400, margin: '0 auto', height: 4, background: '#333', borderRadius: 2 }}>
+          <div style={{ width: '100%', maxWidth: 400, margin: '0 auto', height: 4, background: 'var(--color-surface-3)', borderRadius: 2 }}>
             <div style={{ width: '50%', height: '100%', background: '#ec4899', borderRadius: 2, transition: 'width 0.3s' }} />
           </div>
         </div>
@@ -507,7 +507,7 @@ export default function ContourOriginTrackingStep({ project, onSave }: Props) {
         <button
           onClick={handleSaveAndValidate}
           disabled={saving}
-          style={{ background: '#22c55e', color: 'white' }}
+          style={{ background: 'var(--color-success)', color: 'white' }}
         >
           {saving ? 'Sauvegarde...' : 'Valider le tracking Point 0'}
         </button>

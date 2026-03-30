@@ -1348,7 +1348,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
             <span className="frame-label">
               Frame {previewFrame + 1} / {totalFramesRef.current}
             </span>
-            <label style={{ marginLeft: 16, fontSize: '0.85em', color: '#ccc', cursor: 'pointer' }}>
+            <label style={{ marginLeft: 16, fontSize: '0.85em', color: 'var(--color-text-secondary)', cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={snapExtrema}
@@ -1373,14 +1373,14 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
 
           <canvas
             ref={canvasRef}
-            style={{ maxWidth: '100%', background: '#111', cursor: draggingIdx !== null ? 'grabbing' : 'default' }}
+            style={{ maxWidth: '100%', background: 'var(--color-bg)', cursor: draggingIdx !== null ? 'grabbing' : 'default' }}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={handleCanvasMouseUp}
           />
 
-          <div className="preview-legend" style={{ fontSize: '0.85em', marginTop: 8, color: '#aaa' }}>
+          <div className="preview-legend" style={{ fontSize: '0.85em', marginTop: 8, color: 'var(--color-text-secondary)' }}>
             {showFullContour ? (
               <>
                 <span style={{ color: 'rgba(255,255,0,0.6)' }}>● Jaune</span> = contour Canny
@@ -1444,7 +1444,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
                   : 'Points edites'}
               </span>
             )}
-            {propagating && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
+            {propagating && <p style={{ marginTop: 4, fontSize: '0.85em', color: 'var(--color-text-secondary)' }}>{progress}</p>}
           </div>
 
           {/* Full contour preview */}
@@ -1466,7 +1466,7 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
                   Preview anchors seuls
                 </button>
               )}
-              {computingSubdiv && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
+              {computingSubdiv && <p style={{ marginTop: 4, fontSize: '0.85em', color: 'var(--color-text-secondary)' }}>{progress}</p>}
             </div>
           )}
 
@@ -1528,13 +1528,13 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
                 onChange={e => { setContourAnimPlaying(false); setContourAnimFrame(Number(e.target.value)) }}
                 style={{ width: '100%' }}
               />
-              <p style={{ fontSize: '0.85em', color: '#aaa', margin: '4px 0' }}>
+              <p style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)', margin: '4px 0' }}>
                 Frame {contourAnimFrame + 1} / {contourAnimTotalRef.current}
               </p>
               <canvas ref={contourAnimCanvasRef} style={{ width: '100%', border: '1px solid #444', borderRadius: 4 }} />
             </div>
           )}
-          {contourAnimComputing && <p style={{ marginTop: 4, fontSize: '0.85em', color: '#aaa' }}>{progress}</p>}
+          {contourAnimComputing && <p style={{ marginTop: 4, fontSize: '0.85em', color: 'var(--color-text-secondary)' }}>{progress}</p>}
 
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
             <button

@@ -357,8 +357,8 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
         gap: 4,
         flexWrap: 'wrap',
         alignItems: 'center',
-        borderBottom: '1px solid #eee',
-        background: '#fafafa',
+        borderBottom: '1px solid var(--color-border)',
+        background: 'var(--color-surface-2)',
       }}>
         {Array.from({ length: numSegments }, (_, i) => {
           const isSelected = selectedSegment === i
@@ -374,12 +374,12 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
                 padding: '3px 8px',
                 borderRadius: 6,
                 cursor: 'pointer',
-                background: isSelected ? '#dcfce7' : '#f3f4f6',
-                border: isSelected ? '2px solid #22c55e' : '1px solid #d1d5db',
+                background: isSelected ? 'var(--color-success-muted)' : 'var(--color-surface-3)',
+                border: isSelected ? '2px solid var(--color-success)' : '1px solid var(--color-border)',
                 fontSize: '0.85rem',
               }}
             >
-              <span style={{ fontWeight: 600, color: '#374151', minWidth: 36 }}>
+              <span style={{ fontWeight: 600, color: 'var(--color-text)', minWidth: 36 }}>
                 {i + 1}→{nextAnchor}
               </span>
               <button

@@ -303,7 +303,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
     // Assign each triangle a color based on its centroid position (2D gradient)
     gradientColors.current = tris.map(([a, b, c]) => {
-      if (a >= pts0.length || b >= pts0.length || c >= pts0.length) return '#888'
+      if (a >= pts0.length || b >= pts0.length || c >= pts0.length) return 'var(--color-muted)'
       const cx = (pts0[a].x + pts0[b].x + pts0[c].x) / 3
       const cy = (pts0[a].y + pts0[b].y + pts0[c].y) / 3
       const nx = (cx - minX) / w // 0..1 horizontal
@@ -404,7 +404,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
           const [a, b, c] = tris[ti]
           if (a >= points.length || b >= points.length || c >= points.length) continue
           const pa = toCanvas(points[a]), pb = toCanvas(points[b]), pc = toCanvas(points[c])
-          ctx.fillStyle = colors[ti] ?? '#888'
+          ctx.fillStyle = colors[ti] ?? '#6b7084'
           ctx.beginPath()
           ctx.moveTo(pa.x, pa.y)
           ctx.lineTo(pb.x, pb.y)
@@ -867,7 +867,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
     return (
       <div className="triangulation-step">
         <div className="triangulation-toolbar">
-          <span style={{ color: '#22c55e', fontWeight: 'bold', marginRight: 8 }}>
+          <span style={{ color: 'var(--color-success)', fontWeight: 'bold', marginRight: 8 }}>
             Topologie héritée de la rest animation
           </span>
           <span className="toolbar-info">
@@ -879,30 +879,30 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
         </div>
 
         {/* Animation compute section */}
-        <div style={{ borderTop: '2px solid #333', marginTop: 8 }}>
+        <div style={{ borderTop: '1px solid var(--color-border)', marginTop: 8 }}>
           <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
             {!hasAnimation ? (
               <>
                 <button
                   onClick={handleComputeARAP}
                   disabled={computing}
-                  style={{ background: '#2563eb', color: 'white', padding: '8px 24px' }}
+                  style={{ background: 'var(--color-primary)', color: 'white', padding: '8px 24px' }}
                 >
                   {computing ? 'Calcul en cours...' : 'Calculer Animation'}
                 </button>
-                {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
+                {computing && <span style={{ fontFamily: 'monospace', color: 'var(--color-muted)' }}>{animProgress}</span>}
               </>
             ) : (
               <>
-                <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Animation calculée</span>
-                <span style={{ color: '#888' }}>
+                <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>Animation calculée</span>
+                <span style={{ color: 'var(--color-muted)' }}>
                   {mesh.videoFramesMesh!.length} frames, {mesh.videoFramesMesh![0]?.length ?? 0} pts/frame
                 </span>
                 <button onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.max(0, f - 1)) }}>◀</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(f => Math.min(mesh!.videoFramesMesh!.length - 1, f + 1)) }}>▶</button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#2563eb', color: 'white', marginLeft: 'auto' }}>
+                <button onClick={handleComputeARAP} disabled={computing} style={{ background: 'var(--color-primary)', color: 'white', marginLeft: 'auto' }}>
                   Recalculer Animation
                 </button>
               </>
@@ -911,8 +911,8 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
           {computing && (
             <div style={{ padding: '0 16px' }}>
-              <div style={{ width: '100%', height: 4, background: '#333', borderRadius: 2 }}>
-                <div style={{ width: '50%', height: '100%', background: '#2563eb', borderRadius: 2 }} />
+              <div style={{ width: '100%', height: 4, background: 'var(--color-surface-3)', borderRadius: 2 }}>
+                <div style={{ width: '50%', height: '100%', background: 'var(--color-primary)', borderRadius: 2 }} />
               </div>
             </div>
           )}
@@ -920,13 +920,13 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
           {hasAnimation && (
             <>
               <div style={{ padding: '4px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: '#888', fontSize: 12 }}>Vue :</span>
-                <button onClick={() => setViewMode('video')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'video' ? '#2563eb' : '#333', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Vidéo + Mesh</button>
-                <button onClick={() => setViewMode('wireframe')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'wireframe' ? '#2563eb' : '#333', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Wireframe</button>
-                <button onClick={() => setViewMode('gradient')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'gradient' ? '#2563eb' : '#333', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Gradient</button>
+                <span style={{ color: 'var(--color-muted)', fontSize: 12 }}>Vue :</span>
+                <button onClick={() => setViewMode('video')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'video' ? 'var(--color-primary)' : 'var(--color-surface-3)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Vidéo + Mesh</button>
+                <button onClick={() => setViewMode('wireframe')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'wireframe' ? 'var(--color-primary)' : 'var(--color-surface-3)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Wireframe</button>
+                <button onClick={() => setViewMode('gradient')} style={{ padding: '4px 12px', fontSize: 12, background: viewMode === 'gradient' ? 'var(--color-primary)' : 'var(--color-surface-3)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Gradient</button>
                 <span style={{ flex: 1 }} />
                 <input type="range" min={0} max={(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1} value={currentFrame} onChange={e => { setPlaying(false); const f = Number(e.target.value); setCurrentFrame(f); playbackRef.current?.seekFrame(f) }} style={{ width: 200 }} />
-                <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 80 }}>{currentFrame} / {(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 80 }}>{currentFrame} / {(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}</span>
               </div>
               <div ref={animContainerRef} style={{ height: 400, position: 'relative' }}>
                 <canvas ref={animCanvasRef} style={{ width: '100%', height: '100%' }} />
@@ -942,7 +942,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
     <div className="triangulation-step">
       <div className="triangulation-toolbar">
         {topologyLocked && (
-          <span style={{ color: '#22c55e', fontWeight: 'bold', marginRight: 8 }}>
+          <span style={{ color: 'var(--color-success)', fontWeight: 'bold', marginRight: 8 }}>
             Topologie verrouillée
           </span>
         )}
@@ -977,7 +977,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
             <button
               onClick={handleLockTopology}
               disabled={saving || triangles.length === 0}
-              style={{ background: '#22c55e', color: 'white' }}
+              style={{ background: 'var(--color-success)', color: 'white' }}
             >
               Verrouiller la topologie
             </button>
@@ -1039,23 +1039,23 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
       {/* Animation section (when topology locked) */}
       {topologyLocked && (
-        <div style={{ borderTop: '2px solid #333', marginTop: 8 }}>
+        <div style={{ borderTop: '1px solid var(--color-border)', marginTop: 8 }}>
           <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
             {!hasAnimation ? (
               <>
                 <button
                   onClick={handleComputeARAP}
                   disabled={computing}
-                  style={{ background: '#2563eb', color: 'white', padding: '8px 24px' }}
+                  style={{ background: 'var(--color-primary)', color: 'white', padding: '8px 24px' }}
                 >
                   {computing ? 'Calcul en cours...' : 'Calculer Animation'}
                 </button>
-                {computing && <span style={{ fontFamily: 'monospace', color: '#888' }}>{animProgress}</span>}
+                {computing && <span style={{ fontFamily: 'monospace', color: 'var(--color-muted)' }}>{animProgress}</span>}
               </>
             ) : (
               <>
-                <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Animation calculée</span>
-                <span style={{ color: '#888' }}>
+                <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>Animation calculée</span>
+                <span style={{ color: 'var(--color-muted)' }}>
                   {mesh.videoFramesMesh!.length} frames, {mesh.videoFramesMesh![0]?.length ?? 0} pts/frame
                 </span>
                 <button onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
@@ -1066,7 +1066,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   ▶
                 </button>
                 <button onClick={() => { setPlaying(false); setCurrentFrame(0) }}>Rewind</button>
-                <button onClick={handleComputeARAP} disabled={computing} style={{ background: '#2563eb', color: 'white', marginLeft: 'auto' }}>
+                <button onClick={handleComputeARAP} disabled={computing} style={{ background: 'var(--color-primary)', color: 'white', marginLeft: 'auto' }}>
                   Recalculer Animation
                 </button>
               </>
@@ -1075,8 +1075,8 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
 
           {computing && (
             <div style={{ padding: '0 16px' }}>
-              <div style={{ width: '100%', height: 4, background: '#333', borderRadius: 2 }}>
-                <div style={{ width: '50%', height: '100%', background: '#2563eb', borderRadius: 2 }} />
+              <div style={{ width: '100%', height: 4, background: 'var(--color-surface-3)', borderRadius: 2 }}>
+                <div style={{ width: '50%', height: '100%', background: 'var(--color-primary)', borderRadius: 2 }} />
               </div>
             </div>
           )}
@@ -1084,12 +1084,12 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
           {hasAnimation && (
             <>
               <div style={{ padding: '4px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: '#888', fontSize: 12 }}>Vue :</span>
+                <span style={{ color: 'var(--color-muted)', fontSize: 12 }}>Vue :</span>
                 <button
                   onClick={() => setViewMode('video')}
                   style={{
                     padding: '4px 12px', fontSize: 12,
-                    background: viewMode === 'video' ? '#2563eb' : '#333',
+                    background: viewMode === 'video' ? 'var(--color-primary)' : 'var(--color-surface-3)',
                     color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
                   }}
                 >
@@ -1099,7 +1099,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   onClick={() => setViewMode('wireframe')}
                   style={{
                     padding: '4px 12px', fontSize: 12,
-                    background: viewMode === 'wireframe' ? '#2563eb' : '#333',
+                    background: viewMode === 'wireframe' ? 'var(--color-primary)' : 'var(--color-surface-3)',
                     color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
                   }}
                 >
@@ -1109,7 +1109,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   onClick={() => setViewMode('gradient')}
                   style={{
                     padding: '4px 12px', fontSize: 12,
-                    background: viewMode === 'gradient' ? '#2563eb' : '#333',
+                    background: viewMode === 'gradient' ? 'var(--color-primary)' : 'var(--color-surface-3)',
                     color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
                   }}
                 >
@@ -1124,10 +1124,10 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   onChange={e => { setPlaying(false); const f = Number(e.target.value); setCurrentFrame(f); playbackRef.current?.seekFrame(f) }}
                   style={{ width: 200 }}
                 />
-                <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 80 }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 80 }}>
                   {currentFrame} / {(playbackRef.current?.effectiveLength ?? mesh.videoFramesMesh!.length) - 1}
                 </span>
-                <span style={{ color: '#888', fontSize: 12, marginLeft: 12 }}>Crossfade :</span>
+                <span style={{ color: 'var(--color-muted)', fontSize: 12, marginLeft: 12 }}>Crossfade :</span>
                 <input
                   type="range"
                   min={0}
@@ -1136,7 +1136,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   onChange={e => setCrossfadeFrames(Number(e.target.value))}
                   style={{ width: 80 }}
                 />
-                <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#aaa', minWidth: 30 }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 30 }}>
                   {crossfadeFrames}
                 </span>
                 <button
@@ -1146,7 +1146,7 @@ export default function TriangulationStep({ project, onSave, isRestAnimation = t
                   }}
                   style={{
                     padding: '4px 12px', fontSize: 12, marginLeft: 4,
-                    background: crossfadeFrames !== (mesh?.crossfadeFrames ?? 7) ? '#16a34a' : '#555',
+                    background: crossfadeFrames !== (mesh?.crossfadeFrames ?? 7) ? 'var(--color-success)' : 'var(--color-surface-3)',
                     color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer',
                   }}
                   disabled={crossfadeFrames === (mesh?.crossfadeFrames ?? 7)}

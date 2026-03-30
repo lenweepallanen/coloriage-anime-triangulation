@@ -459,7 +459,7 @@ export default function AdminPreview({ project, style }: Props) {
                   fontSize: '0.8rem',
                   borderRadius: 8,
                   opacity: disabled ? 0.5 : 1,
-                  borderColor: isOverlay ? '#9c27b0' : undefined,
+                  borderColor: isOverlay ? 'var(--color-type-physics)' : undefined,
                 }}
               >
                 {anim.name}

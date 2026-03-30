@@ -55,7 +55,7 @@ export default function PdfStep({ project }: Props) {
         </button>
       </div>
 
-      <p style={{ fontSize: '0.875rem', color: '#888', marginTop: 8 }}>
+      <p style={{ fontSize: '0.875rem', color: 'var(--color-muted)', marginTop: 8 }}>
         Le PDF contiendra l'image du coloriage avec les 4 markers L aux coins,
         prêt à imprimer en A4.
       </p>
@@ -65,7 +65,7 @@ export default function PdfStep({ project }: Props) {
           <iframe
             src={previewUrl}
             title="PDF Preview"
-            style={{ width: '100%', height: 600, border: '1px solid #ddd', borderRadius: 8 }}
+            style={{ width: '100%', height: 600, border: '1px solid var(--color-border)', borderRadius: 8 }}
           />
         </div>
       )}

@@ -172,34 +172,18 @@ for (let i = 0; i < numVertices; i++) {
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+    <div className="anim-manager">
       {project.animations.map(anim => {
         const isSelected = anim.id === selectedAnimationId
         const isEditing = editingNameId === anim.id
         return (
           <div
             key={anim.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '4px 10px',
-              borderRadius: 6,
-              border: isSelected ? '2px solid #4a90d9' : '1px solid #aaa',
-              background: isSelected ? '#e8f0fe' : '#f5f5f5',
-              cursor: 'pointer',
-              fontSize: '0.9em',
-            }}
+            className={`anim-pill ${isSelected ? 'selected' : ''}`}
             onClick={() => !isEditing && onSelectAnimation(anim.id)}
           >
             <span
-              style={{
-                display: 'inline-block',
-                width: 8, height: 8,
-                borderRadius: '50%',
-                background: anim.type === 'rest' ? '#4caf50' : anim.type === 'physics' ? '#9c27b0' : '#ff9800',
-                flexShrink: 0,
-              }}
+              className={`anim-pill-dot ${anim.type}`}
               title={anim.type === 'rest' ? 'Rest (boucle)' : anim.type === 'physics' ? 'Physics (code)' : 'One-shot'}
             />
             {isEditing ? (
@@ -218,12 +202,11 @@ for (let i = 0; i < numVertices; i++) {
               </span>
             )}
             {isSelected && (
-              <span style={{ display: 'flex', gap: 2, marginLeft: 4 }}>
+              <span className="anim-pill-actions">
                 {anim.type !== 'physics' && (
                   <button
                     onClick={e => { e.stopPropagation(); handleToggleType(anim.id) }}
                     title={anim.type === 'rest' ? 'Passer en oneshot' : 'Définir comme rest'}
-                    style={{ fontSize: '0.7em', padding: '1px 4px', cursor: 'pointer' }}
                     disabled={saving}
                   >
                     {anim.type === 'rest' ? '∞' : '▶'}
@@ -231,9 +214,9 @@ for (let i = 0; i < numVertices; i++) {
                 )}
                 {anim.type !== 'rest' && (
                   <button
+                    className="btn-delete"
                     onClick={e => { e.stopPropagation(); handleDelete(anim.id) }}
                     title="Supprimer"
-                    style={{ fontSize: '0.7em', padding: '1px 4px', cursor: 'pointer', color: '#c00' }}
                     disabled={saving}
                   >
                     ✕
@@ -245,17 +228,17 @@ for (let i = 0; i < numVertices; i++) {
         )
       })}
       <button
+        className="anim-add-btn"
         onClick={handleAddOneshot}
         disabled={saving}
-        style={{ fontSize: '0.85em', padding: '4px 10px', cursor: 'pointer' }}
         title="Ajouter une animation oneshot (vidéo)"
       >
         + Oneshot
       </button>
       <button
+        className="anim-add-btn physics"
         onClick={handleAddPhysics}
         disabled={saving}
-        style={{ fontSize: '0.85em', padding: '4px 10px', cursor: 'pointer', color: '#9c27b0' }}
         title="Ajouter une animation physique (code)"
       >
         + Physics

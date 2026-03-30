@@ -98,7 +98,7 @@ export default function ImportStep({ project, onSave, isRestAnimation = true }: 
 
           <div className="import-section">
             <h3>Vidéo de fond (optionnel)</h3>
-            <p style={{ fontSize: '0.85em', color: '#666', margin: '4px 0 8px' }}>
+            <p style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)', margin: '4px 0 8px' }}>
               Vidéo affichée en arrière-plan de l'animation. Jouée en boucle.
             </p>
             <input

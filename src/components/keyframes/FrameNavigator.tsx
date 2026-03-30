@@ -74,7 +74,7 @@ export default function FrameNavigator({ currentFrame, totalFrames, editedFrames
             <span className="frame-nav-current">KF {currentKFIdx + 1}</span>
             <span className="frame-nav-separator"> / </span>
             <span className="frame-nav-total">{sortedKF.length}</span>
-            <span style={{ fontSize: '0.7rem', color: '#888', marginLeft: 4 }}>
+            <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', marginLeft: 4 }}>
               (frame {currentFrame})
             </span>
             {editedFrames.has(currentFrame) && (

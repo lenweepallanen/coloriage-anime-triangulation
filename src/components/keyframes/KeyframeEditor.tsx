@@ -429,7 +429,7 @@ export default function KeyframeEditor({
           <button
             onClick={() => onPropagateBackward?.('segment')}
             disabled={propagating || isFirstFrame}
-            style={{ background: '#7c3aed', color: 'white' }}
+            style={{ background: '#7c3aed', color: 'white', borderColor: '#7c3aed' }}
             title="Re-track vers la frame éditée précédente"
           >
             {propagating ? '...' : '← 1 seg'}
@@ -437,7 +437,7 @@ export default function KeyframeEditor({
           <button
             onClick={() => onPropagateBackward?.('all')}
             disabled={propagating || isFirstFrame}
-            style={{ background: '#6d28d9', color: 'white' }}
+            style={{ background: '#6d28d9', color: 'white', borderColor: '#6d28d9' }}
             title="Re-track en arrière jusqu'au début"
           >
             ← tout
@@ -446,7 +446,7 @@ export default function KeyframeEditor({
           <button
             onClick={() => onPropagateBidi?.('segment')}
             disabled={propagating || (isFirstFrame && isLastFrame)}
-            style={{ background: '#2563eb', color: 'white' }}
+            style={{ background: 'var(--color-primary)', color: 'white', borderColor: 'var(--color-primary)' }}
             title="Re-track 1 segment dans les 2 directions"
           >
             ↔ 1 seg
@@ -454,7 +454,7 @@ export default function KeyframeEditor({
           <button
             onClick={() => onPropagateBidi?.('all')}
             disabled={propagating || (isFirstFrame && isLastFrame)}
-            style={{ background: '#1d4ed8', color: 'white' }}
+            style={{ background: '#1d4ed8', color: 'white', borderColor: '#1d4ed8' }}
             title="Re-track dans les 2 directions jusqu'aux extrémités"
           >
             ↔ tout
@@ -463,7 +463,7 @@ export default function KeyframeEditor({
           <button
             onClick={() => onPropagateForward?.('segment')}
             disabled={propagating || isLastFrame}
-            style={{ background: '#22c55e', color: 'white' }}
+            style={{ background: 'var(--color-success)', color: 'white', borderColor: 'var(--color-success)' }}
             title="Re-track vers la frame éditée suivante"
           >
             {propagating ? 'Propagation...' : '→ 1 seg'}
@@ -471,7 +471,7 @@ export default function KeyframeEditor({
           <button
             onClick={() => onPropagateForward?.('all')}
             disabled={propagating || isLastFrame}
-            style={{ background: '#16a34a', color: 'white' }}
+            style={{ background: '#16a34a', color: 'white', borderColor: '#16a34a' }}
             title="Re-track en avant jusqu'à la fin"
           >
             → tout
@@ -486,13 +486,13 @@ export default function KeyframeEditor({
               Debug contour
             </label>
           )}
-          <span style={{ fontSize: '0.75rem', color: '#888' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>
             Glissez les points pour corriger | ← arrière | ↔ bidi | → avant
           </span>
         </div>
       ) : (
         <div className="keyframe-editor-toolbar">
-          <span style={{ fontSize: '0.75rem', color: '#888' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>
             Glissez les points pour corriger leur position
           </span>
         </div>

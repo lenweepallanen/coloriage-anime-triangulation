@@ -341,7 +341,7 @@ export default function CannyValidationStep({ project, onSave }: Props) {
 
 
       {/* Frame slider */}
-      <div style={{ padding: '4px 12px', background: '#fafafa', borderBottom: '1px solid #eee' }}>
+      <div style={{ padding: '4px 12px', background: 'var(--color-surface-2)', borderBottom: '1px solid var(--color-border)' }}>
         <input
           type="range"
           min={0}
@@ -354,7 +354,7 @@ export default function CannyValidationStep({ project, onSave }: Props) {
       </div>
 
       {/* Video + Canny overlay */}
-      <div style={{ position: 'relative', minHeight: '400px', flex: 1, overflow: 'hidden', background: '#222' }}>
+      <div style={{ position: 'relative', minHeight: '400px', flex: 1, overflow: 'hidden', background: 'var(--color-bg)' }}>
         <canvas
           ref={canvasRef}
           style={{

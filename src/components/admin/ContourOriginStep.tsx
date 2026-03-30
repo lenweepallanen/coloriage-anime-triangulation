@@ -336,7 +336,7 @@ export default function ContourOriginStep({ project, onSave }: Props) {
         <button
           onClick={handleSave}
           disabled={saving || !origin}
-          style={{ background: origin ? '#22c55e' : undefined, color: origin ? 'white' : undefined }}
+          style={{ background: origin ? 'var(--color-success)' : undefined, color: origin ? 'white' : undefined }}
         >
           {saving ? 'Sauvegarde...' : 'Sauvegarder Point 0'}
         </button>

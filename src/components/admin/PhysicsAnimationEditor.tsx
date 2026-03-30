@@ -355,7 +355,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
 
   if (!basePositions || triangles.length === 0) {
     return (
-      <div style={{ padding: 20, color: '#666' }}>
+      <div style={{ padding: 20, color: 'var(--color-muted)' }}>
         <p>La rest animation doit avoir une triangulation calculee (etape 10) avant de pouvoir creer une animation physique.</p>
       </div>
     )
@@ -371,7 +371,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
         <label style={{ fontWeight: 600, display: 'block', marginBottom: 4 }}>
           Code JS — transforme les positions du maillage
         </label>
-        <div style={{ fontSize: '0.75em', color: '#666', marginBottom: 6 }}>
+        <div style={{ fontSize: '0.75em', color: 'var(--color-text-secondary)', marginBottom: 6 }}>
           Variables disponibles : <code>positions</code> (Point2D[] a muter), <code>time</code> (secondes),{' '}
           <code>frameIndex</code>, <code>totalFrames</code>, <code>numVertices</code>, <code>progress</code> (0 a 1)
         </div>
@@ -385,7 +385,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
             fontFamily: 'monospace',
             fontSize: '0.85em',
             padding: 10,
-            border: error ? '2px solid #c00' : '1px solid #ccc',
+            border: error ? '2px solid var(--color-danger)' : '1px solid var(--color-input-border)',
             borderRadius: 6,
             resize: 'vertical',
             tabSize: 2,
@@ -393,7 +393,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
           }}
         />
         {error && (
-          <div style={{ color: '#c00', fontSize: '0.8em', marginTop: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+          <div style={{ color: 'var(--color-danger)', fontSize: '0.8em', marginTop: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
             {error}
           </div>
         )}
@@ -431,10 +431,10 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
         style={{
           width: '100%',
           height: 300,
-          border: '1px solid #ddd',
+          border: '1px solid var(--color-border)',
           borderRadius: 6,
           overflow: 'hidden',
-          background: '#f9f9f9',
+          background: 'var(--color-surface-2)',
         }}
       />
 
@@ -459,7 +459,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
           disabled={saving || computing || !!error}
           style={{
             padding: '6px 16px',
-            background: '#4a90d9',
+            background: 'var(--color-primary)',
             color: 'white',
             border: 'none',
             borderRadius: 4,
@@ -472,7 +472,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
       </div>
 
       {hasPrecomputed && (
-        <div style={{ fontSize: '0.8em', color: '#4caf50' }}>
+        <div style={{ fontSize: '0.8em', color: 'var(--color-success)' }}>
           Animation pre-calculee ({animation.mesh!.videoFramesMesh!.length} frames). Le bouton apparait dans la preview et le scan.
         </div>
       )}
