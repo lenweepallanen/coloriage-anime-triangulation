@@ -37,15 +37,11 @@ const SLIDERS: SliderDef[] = [
 // --- Visual effects config ---
 
 interface VisualEffectsConfig {
-  shadowAlpha: number       // 0 to 0.5
-  lightingAlpha: number     // 0 to 1
   parallaxRangeX: number    // 0 to 60 px — horizontal
   parallaxRangeY: number    // 0 to 60 px — vertical
 }
 
 const DEFAULT_VISUAL_EFFECTS: VisualEffectsConfig = {
-  shadowAlpha: 0.25,
-  lightingAlpha: 0.6,
   parallaxRangeX: 20,
   parallaxRangeY: 20,
 }
@@ -59,30 +55,11 @@ interface VisualSliderDef {
 }
 
 const VISUAL_SLIDERS: VisualSliderDef[] = [
-  { key: 'shadowAlpha', label: 'Ombre', min: 0, max: 0.5, step: 0.05 },
-  { key: 'lightingAlpha', label: 'Éclairage', min: 0, max: 1, step: 0.05 },
   { key: 'parallaxRangeX', label: 'Parallax H', min: 0, max: 60, step: 2 },
   { key: 'parallaxRangeY', label: 'Parallax V', min: 0, max: 60, step: 2 },
 ]
 
 const LONG_PRESS_DURATION = 3000 // ms
-
-// --- Helper: create lighting gradient texture ---
-
-function createLightingCanvas(): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = 256
-  c.height = 256
-  const ctx = c.getContext('2d')!
-  // Radial gradient: bright top-left, dark bottom-right
-  const grad = ctx.createRadialGradient(80, 80, 0, 128, 128, 180)
-  grad.addColorStop(0, 'rgba(255,255,255,0.35)')
-  grad.addColorStop(0.45, 'rgba(255,255,255,0)')
-  grad.addColorStop(1, 'rgba(0,0,0,0.18)')
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 256, 256)
-  return c
-}
 
 // --- Long-press close button ---
 
@@ -315,10 +292,8 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
 
     // --- Stage hierarchy ---
     const bgContainer = new PIXI.Container()
-    const shadowContainer = new PIXI.Container()
     const meshContainer = new PIXI.Container()
     app.stage.addChild(bgContainer)
-    app.stage.addChild(shadowContainer)
     app.stage.addChild(meshContainer)
 
     // --- Background video ---
@@ -408,67 +383,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
     const material = new PIXI.MeshMaterial(texture)
     const pixiMesh = new PIXI.Mesh(geometry, material)
     meshContainer.addChild(pixiMesh)
-
-    // --- Shadow (filled contour polygon, no triangle mesh) ---
-    const shadowOffsetX = 4
-    const shadowOffsetY = 6
-
-    // Build ordered contour vertex IDs (indices into allPoints)
-    const numContourAnchors = mesh.contourAnchors.length
-    const contourSubParams = mesh.contourSubdivisionParams ?? []
-    const contourVertexIds: number[] = []
-    for (let i = 0; i < numContourAnchors; i++) {
-      contourVertexIds.push(i)
-      const segPts: { t: number; idx: number }[] = []
-      for (let j = 0; j < contourSubParams.length; j++) {
-        if (contourSubParams[j].segmentIndex === i) {
-          segPts.push({ t: contourSubParams[j].t, idx: numContourAnchors + j })
-        }
-      }
-      segPts.sort((a, b) => a.t - b.t)
-      for (const sp of segPts) contourVertexIds.push(sp.idx)
-    }
-
-    const shadowGraphics = new PIXI.Graphics()
-    shadowContainer.addChild(shadowGraphics)
-    shadowContainer.filters = [new PIXI.BlurFilter(18)]
-
-    // Draw shadow polygon from point positions (image coords)
-    function drawShadow(positions: Point2D[]) {
-      shadowGraphics.clear()
-      shadowContainer.alpha = visualRef.current.shadowAlpha
-      if (shadowContainer.alpha <= 0 || contourVertexIds.length < 3) return
-      shadowGraphics.beginFill(0x000000, 1.0)
-      const first = contourVertexIds[0]
-      shadowGraphics.moveTo(
-        positions[first].x * scale + offsetX + shadowOffsetX,
-        positions[first].y * scale + offsetY + shadowOffsetY
-      )
-      for (let ci = 1; ci < contourVertexIds.length; ci++) {
-        const idx = contourVertexIds[ci]
-        shadowGraphics.lineTo(
-          positions[idx].x * scale + offsetX + shadowOffsetX,
-          positions[idx].y * scale + offsetY + shadowOffsetY
-        )
-      }
-      shadowGraphics.closePath()
-      shadowGraphics.endFill()
-    }
-
-    // Initial shadow draw
-    drawShadow(allPoints)
-
-    // --- Lighting overlay ---
-    const lightCanvas = createLightingCanvas()
-    const lightTexture = PIXI.Texture.from(lightCanvas)
-    const lightSprite = new PIXI.Sprite(lightTexture)
-    lightSprite.width = scanCanvas.width * scale
-    lightSprite.height = scanCanvas.height * scale
-    lightSprite.x = offsetX
-    lightSprite.y = offsetY
-    lightSprite.blendMode = PIXI.BLEND_MODES.OVERLAY
-    lightSprite.alpha = visualRef.current.lightingAlpha
-    meshContainer.addChild(lightSprite)
 
     // --- Physics ---
     const physics = new MeshPhysicsEffect(allPoints.length, physicsConfig)
@@ -580,10 +494,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
         }
         verts.update()
 
-        // Update shadow contour polygon
-        drawShadow(modifiedPositions)
-        lightSprite.alpha = visualRef.current.lightingAlpha
-
         // Parallax on background
         if (bgSprite) {
           const p = parallax.getOffset()
@@ -598,9 +508,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
         const img = screenToImage(t.screenX, t.screenY)
         const touchState: TouchState = { active: t.active, imageX: img.x, imageY: img.y }
         physics.update(allPoints, touchState, delta)
-
-        // Visual effects live update
-        lightSprite.alpha = visualRef.current.lightingAlpha
 
         // Parallax (always active)
         if (bgSprite) {
@@ -620,8 +527,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
         }
         verts.update()
 
-        // Update shadow contour polygon
-        drawShadow(modifiedPositions)
       })
     }
 

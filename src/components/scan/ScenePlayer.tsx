@@ -23,20 +23,6 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-function createLightingCanvas(): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = 256
-  c.height = 256
-  const ctx = c.getContext('2d')!
-  const grad = ctx.createRadialGradient(80, 80, 0, 128, 128, 180)
-  grad.addColorStop(0, 'rgba(255,255,255,0.35)')
-  grad.addColorStop(0.45, 'rgba(255,255,255,0)')
-  grad.addColorStop(1, 'rgba(0,0,0,0.18)')
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 256, 256)
-  return c
-}
-
 const LONG_PRESS_DURATION = 3000
 
 function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
@@ -267,61 +253,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     const material = new PIXI.MeshMaterial(texture)
     const pixiMesh = new PIXI.Mesh(geometry, material)
 
-    const shadowContainer = new PIXI.Container()
-    const shadowGraphics = new PIXI.Graphics()
-    shadowContainer.addChild(shadowGraphics)
-    shadowContainer.filters = [new PIXI.BlurFilter(18)]
-
-    const numContourAnchors = mesh.contourAnchors.length
-    const contourSubParams = mesh.contourSubdivisionParams ?? []
-    const contourVertexIds: number[] = []
-    for (let i = 0; i < numContourAnchors; i++) {
-      contourVertexIds.push(i)
-      const segPts: { t: number; idx: number }[] = []
-      for (let j = 0; j < contourSubParams.length; j++) {
-        if (contourSubParams[j].segmentIndex === i) {
-          segPts.push({ t: contourSubParams[j].t, idx: numContourAnchors + j })
-        }
-      }
-      segPts.sort((a, b) => a.t - b.t)
-      for (const sp of segPts) contourVertexIds.push(sp.idx)
-    }
-
-    function drawShadow(positions: Point2D[]) {
-      shadowGraphics.clear()
-      if (contourVertexIds.length < 3) return
-      shadowGraphics.beginFill(0x000000, 0.25)
-      const first = contourVertexIds[0]
-      shadowGraphics.moveTo(
-        positions[first].x * charScale + charOffsetX + 4,
-        positions[first].y * charScale + charOffsetY + 6
-      )
-      for (let ci = 1; ci < contourVertexIds.length; ci++) {
-        const idx = contourVertexIds[ci]
-        shadowGraphics.lineTo(
-          positions[idx].x * charScale + charOffsetX + 4,
-          positions[idx].y * charScale + charOffsetY + 6
-        )
-      }
-      shadowGraphics.closePath()
-      shadowGraphics.endFill()
-    }
-
-    const lightCanvas = createLightingCanvas()
-    const lightTexture = PIXI.Texture.from(lightCanvas)
-    const lightSprite = new PIXI.Sprite(lightTexture)
-    lightSprite.width = charW
-    lightSprite.height = charH
-    lightSprite.x = charOffsetX
-    lightSprite.y = charOffsetY
-    lightSprite.blendMode = PIXI.BLEND_MODES.OVERLAY
-    lightSprite.alpha = 0.6
-
-    characterContainer.addChild(shadowContainer)
     characterContainer.addChild(pixiMesh)
-    characterContainer.addChild(lightSprite)
-
-    drawShadow(allPoints)
 
     const physics = new MeshPhysicsEffect(numPoints, { ...DEFAULT_PHYSICS_CONFIG })
     physicsRef.current = physics
@@ -487,12 +419,6 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
         (verts.data as unknown as Float32Array)[i * 2 + 1] = modifiedPositions[i].y * charScale + charOffsetY
       }
       verts.update()
-
-      drawShadow(modifiedPositions)
-
-      // Update light sprite position to follow character
-      lightSprite.x = charOffsetX
-      lightSprite.y = charOffsetY
 
       if (bgSprite) {
         bgSprite.x = -scenePlayback.backgroundOffsetX * bgScale

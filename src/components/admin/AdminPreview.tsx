@@ -28,42 +28,6 @@ const SLIDERS: SliderDef[] = [
   { key: 'returnSpeed', label: 'Retour', min: 0.5, max: 0.98, step: 0.01 },
 ]
 
-interface VisualEffectsConfig {
-  shadowAlpha: number
-  lightingAlpha: number
-}
-
-const DEFAULT_VISUAL: VisualEffectsConfig = {
-  shadowAlpha: 0.25,
-  lightingAlpha: 0.6,
-}
-
-interface VisualSliderDef {
-  key: keyof VisualEffectsConfig
-  label: string
-  min: number
-  max: number
-  step: number
-}
-
-const VISUAL_SLIDERS: VisualSliderDef[] = [
-  { key: 'shadowAlpha', label: 'Ombre', min: 0, max: 0.5, step: 0.05 },
-  { key: 'lightingAlpha', label: 'Eclairage', min: 0, max: 1, step: 0.05 },
-]
-
-function createLightingCanvas(): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = 256
-  c.height = 256
-  const ctx = c.getContext('2d')!
-  const grad = ctx.createRadialGradient(80, 80, 0, 128, 128, 180)
-  grad.addColorStop(0, 'rgba(255,255,255,0.35)')
-  grad.addColorStop(0.45, 'rgba(255,255,255,0)')
-  grad.addColorStop(1, 'rgba(0,0,0,0.18)')
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 256, 256)
-  return c
-}
 
 function getAnimationData(project: Project) {
   const restAnim = project.animations.find(a => a.type === 'rest')
@@ -79,9 +43,7 @@ export default function AdminPreview({ project, style }: Props) {
   const playingRef = useRef(true)
   const [playing, setPlaying] = useState(true)
   const [physicsConfig, setPhysicsConfig] = useState<PhysicsConfig>({ ...DEFAULT_PHYSICS_CONFIG })
-  const [visualConfig, setVisualConfig] = useState<VisualEffectsConfig>({ ...DEFAULT_VISUAL })
   const physicsRef = useRef<MeshPhysicsEffect | null>(null)
-  const visualRef = useRef<VisualEffectsConfig>({ ...DEFAULT_VISUAL })
   const touchRef = useRef<{ active: boolean; screenX: number; screenY: number }>({
     active: false, screenX: 0, screenY: 0,
   })
@@ -109,13 +71,6 @@ export default function AdminPreview({ project, style }: Props) {
     })
   }, [])
 
-  const updateVisualConfig = useCallback((key: keyof VisualEffectsConfig, value: number) => {
-    setVisualConfig(prev => {
-      const next = { ...prev, [key]: value }
-      visualRef.current = next
-      return next
-    })
-  }, [])
 
   const handleOneshotTrigger = useCallback((animId: string) => {
     multiPlaybackRef.current?.requestOneshot(animId)
@@ -190,10 +145,8 @@ export default function AdminPreview({ project, style }: Props) {
 
       // Stage hierarchy
       const bgContainer = new PIXI.Container()
-      const shadowContainer = new PIXI.Container()
       const meshContainer = new PIXI.Container()
       app.stage.addChild(bgContainer)
-      app.stage.addChild(shadowContainer)
       app.stage.addChild(meshContainer)
 
       const viewW = app.screen.width
@@ -266,62 +219,6 @@ export default function AdminPreview({ project, style }: Props) {
       const material = new PIXI.MeshMaterial(texture)
       const pixiMesh = new PIXI.Mesh(geometry, material)
       meshContainer.addChild(pixiMesh)
-
-      // Shadow (filled contour polygon)
-      const shadowOffsetX = 4
-      const shadowOffsetY = 6
-      const numContourAnchors = mesh.contourAnchors.length
-      const contourSubParams = mesh.contourSubdivisionParams ?? []
-      const contourVertexIds: number[] = []
-      for (let i = 0; i < numContourAnchors; i++) {
-        contourVertexIds.push(i)
-        const segPts: { t: number; idx: number }[] = []
-        for (let j = 0; j < contourSubParams.length; j++) {
-          if (contourSubParams[j].segmentIndex === i) {
-            segPts.push({ t: contourSubParams[j].t, idx: numContourAnchors + j })
-          }
-        }
-        segPts.sort((a, b) => a.t - b.t)
-        for (const sp of segPts) contourVertexIds.push(sp.idx)
-      }
-
-      const shadowGraphics = new PIXI.Graphics()
-      shadowContainer.addChild(shadowGraphics)
-      shadowContainer.filters = [new PIXI.BlurFilter(18)]
-
-      function drawShadow(positions: Point2D[]) {
-        shadowGraphics.clear()
-        shadowContainer.alpha = visualRef.current.shadowAlpha
-        if (shadowContainer.alpha <= 0 || contourVertexIds.length < 3) return
-        shadowGraphics.beginFill(0x000000, 1.0)
-        const first = contourVertexIds[0]
-        shadowGraphics.moveTo(
-          positions[first].x * scale + offsetX + shadowOffsetX,
-          positions[first].y * scale + offsetY + shadowOffsetY,
-        )
-        for (let ci = 1; ci < contourVertexIds.length; ci++) {
-          const idx = contourVertexIds[ci]
-          shadowGraphics.lineTo(
-            positions[idx].x * scale + offsetX + shadowOffsetX,
-            positions[idx].y * scale + offsetY + shadowOffsetY,
-          )
-        }
-        shadowGraphics.closePath()
-        shadowGraphics.endFill()
-      }
-      drawShadow(allPoints)
-
-      // Lighting overlay
-      const lightCanvas = createLightingCanvas()
-      const lightTexture = PIXI.Texture.from(lightCanvas)
-      const lightSprite = new PIXI.Sprite(lightTexture)
-      lightSprite.width = texCanvas.width * scale
-      lightSprite.height = texCanvas.height * scale
-      lightSprite.x = offsetX
-      lightSprite.y = offsetY
-      lightSprite.blendMode = PIXI.BLEND_MODES.OVERLAY
-      lightSprite.alpha = visualRef.current.lightingAlpha
-      meshContainer.addChild(lightSprite)
 
       // Physics
       const physics = new MeshPhysicsEffect(allPoints.length, physicsConfig)
@@ -421,9 +318,6 @@ export default function AdminPreview({ project, style }: Props) {
         }
         verts.update()
 
-        // Shadow + lighting
-        drawShadow(modifiedPositions)
-        lightSprite.alpha = visualRef.current.lightingAlpha
       })
 
       // ResizeObserver for responsive sizing
@@ -528,24 +422,6 @@ export default function AdminPreview({ project, style }: Props) {
                 step={step}
                 value={physicsConfig[key]}
                 onChange={e => updateConfig(key, parseFloat(e.target.value))}
-              />
-            </label>
-          ))}
-        </div>
-      </details>
-      <details style={{ fontSize: '0.8rem' }}>
-        <summary>Effets visuels</summary>
-        <div className="settings-group" style={{ padding: '4px 0' }}>
-          {VISUAL_SLIDERS.map(({ key, label, min, max, step }) => (
-            <label key={key} className="physics-slider">
-              <span>{label}: {visualConfig[key]}</span>
-              <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={visualConfig[key]}
-                onChange={e => updateVisualConfig(key, parseFloat(e.target.value))}
               />
             </label>
           ))}
