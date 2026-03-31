@@ -5,6 +5,7 @@ import CameraView from '../components/scan/CameraView'
 import CornerAdjustment from '../components/scan/CornerAdjustment'
 import { useScanProcessor } from '../components/scan/ScanProcessor'
 import AnimationPlayer from '../components/scan/AnimationPlayer'
+import ScenePlayer from '../components/scan/ScenePlayer'
 import type { Point2D, Project } from '../types/project'
 
 export default function ScanPage() {
@@ -159,12 +160,19 @@ function ScanFlow({ project }: { project: Project }) {
       )}
 
       {stage === 'animation' && processor.rectifiedCanvas && (
-        <AnimationPlayer
-          project={project}
-          scanCanvas={processor.rectifiedCanvas}
-          contentAlignment={processor.contentAlignment}
-          onClose={handleRetake}
-        />
+        project.scene && project.scene.backgroundImageBlob && project.scene.restPoints.length > 0
+          ? <ScenePlayer
+              project={project}
+              scanCanvas={processor.rectifiedCanvas}
+              contentAlignment={processor.contentAlignment}
+              onClose={handleRetake}
+            />
+          : <AnimationPlayer
+              project={project}
+              scanCanvas={processor.rectifiedCanvas}
+              contentAlignment={processor.contentAlignment}
+              onClose={handleRetake}
+            />
       )}
     </div>
   )
