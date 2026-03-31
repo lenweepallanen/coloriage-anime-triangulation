@@ -233,8 +233,18 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     const charScale = charFitScale * scene.characterScale
     const charW = scanCanvas.width * charScale
     const charH = scanCanvas.height * charScale
-    const charOffsetX = (viewW - charW) / 2
     const charOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
+
+    // Character X offset: computed dynamically each frame from scenePlayback.currentX.
+    // Positions the character at its backgroundX on the background image,
+    // accounting for background scroll offset. When background is wide enough to scroll,
+    // the character appears centered. When it can't scroll (image not wide enough),
+    // the character moves across the fixed background — giving the impression of movement.
+    function computeCharOffsetX(sp: ScenePlayback): number {
+      return sp.currentX * bgScale - sp.backgroundOffsetX * bgScale - charW / 2
+    }
+    // Initial value — will be updated once scenePlayback is created
+    let charOffsetX = (viewW - charW) / 2
 
     const texture = PIXI.Texture.from(scanCanvas)
     const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
@@ -333,6 +343,9 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       },
     })
     scenePlaybackRef.current = scenePlayback
+
+    // Now that scenePlayback exists, compute the correct initial charOffsetX
+    charOffsetX = computeCharOffsetX(scenePlayback)
 
     // --- Animation switching ---
     let currentGetPositions: () => Point2D[] = () => allPoints
@@ -459,6 +472,9 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
         positions = currentGetPositions()
       }
 
+      // Update character X position based on current scene position
+      charOffsetX = computeCharOffsetX(scenePlayback)
+
       const t = touchRef.current
       const img = screenToImage(t.screenX, t.screenY)
       const touchState: TouchState = { active: t.active && scenePlayback.currentState === 'interaction', imageX: img.x, imageY: img.y }
@@ -473,6 +489,10 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       verts.update()
 
       drawShadow(modifiedPositions)
+
+      // Update light sprite position to follow character
+      lightSprite.x = charOffsetX
+      lightSprite.y = charOffsetY
 
       if (bgSprite) {
         bgSprite.x = -scenePlayback.backgroundOffsetX * bgScale

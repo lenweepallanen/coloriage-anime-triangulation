@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -85,6 +85,38 @@ interface AnimationDoc {
   physicsOverlay: boolean
 }
 
+interface SceneRestPointDoc {
+  id: string
+  backgroundX: number
+  restAnimationId?: string
+  availableAnimationIds?: string[]
+}
+
+interface SceneSegmentDoc {
+  duration: number
+  animationId?: string
+}
+
+interface SceneTransitionDoc {
+  waypoints: number[]
+  segments: SceneSegmentDoc[]
+}
+
+interface SceneDoc {
+  id: string
+  name: string
+  hasBackgroundImage: boolean
+  backgroundWidth: number
+  backgroundHeight: number
+  characterScale: number
+  characterY: number
+  restPoints: SceneRestPointDoc[]
+  transitions: SceneTransitionDoc[]
+  startMode: 'rest' | 'transition'
+  startX?: number
+  startTransition?: SceneTransitionDoc
+}
+
 interface ProjectDoc {
   id: string
   name: string
@@ -95,6 +127,7 @@ interface ProjectDoc {
   ambientSoundEnabled: boolean
   animations: AnimationDoc[]
   markers: Project['markers']
+  scene: SceneDoc | null
 }
 
 // Legacy project doc (v4 format — single mesh + video at root)
@@ -210,6 +243,38 @@ function animToDoc(anim: Animation): AnimationDoc {
   }
 }
 
+function transitionToDoc(t: import('../types/project').SceneTransition): SceneTransitionDoc {
+  return {
+    waypoints: t.waypoints,
+    segments: t.segments.map(s => ({
+      duration: s.duration,
+      ...(s.animationId != null && { animationId: s.animationId }),
+    })),
+  }
+}
+
+function sceneToDoc(scene: Scene): SceneDoc {
+  return {
+    id: scene.id,
+    name: scene.name,
+    hasBackgroundImage: scene.backgroundImageBlob != null,
+    backgroundWidth: scene.backgroundWidth,
+    backgroundHeight: scene.backgroundHeight,
+    characterScale: scene.characterScale,
+    characterY: scene.characterY,
+    restPoints: scene.restPoints.map(rp => ({
+      id: rp.id,
+      backgroundX: rp.backgroundX,
+      ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
+      ...(rp.availableAnimationIds != null && { availableAnimationIds: rp.availableAnimationIds }),
+    })),
+    transitions: scene.transitions.map(transitionToDoc),
+    startMode: scene.startMode,
+    ...(scene.startX != null && { startX: scene.startX }),
+    ...(scene.startTransition != null && { startTransition: transitionToDoc(scene.startTransition) }),
+  }
+}
+
 function toDoc(project: Project): ProjectDoc {
   return {
     id: project.id,
@@ -221,6 +286,7 @@ function toDoc(project: Project): ProjectDoc {
     ambientSoundEnabled: project.ambientSoundEnabled ?? false,
     animations: project.animations.map(animToDoc),
     markers: project.markers,
+    scene: project.scene ? sceneToDoc(project.scene) : null,
   }
 }
 
@@ -354,10 +420,11 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   const projDoc = data as unknown as ProjectDoc
   const id = projDoc.id
 
-  const [imageBlob, backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
+  const [imageBlob, backgroundVideoBlob, ambientSoundBlob, sceneBackgroundBlob] = await Promise.all([
     projDoc.hasImage ? downloadBlob(`projects/${id}/originalImage`) : Promise.resolve(null),
     projDoc.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
     (projDoc as ProjectDoc).hasAmbientSound ? downloadBlob(`projects/${id}/ambientSound`) : Promise.resolve(null),
+    projDoc.scene?.hasBackgroundImage ? downloadBlob(`projects/${id}/sceneBackground`) : Promise.resolve(null),
   ])
 
   // Load all animations in parallel
@@ -393,6 +460,38 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     })
   )
 
+  // Reconstruct scene if present
+  const docToTransition = (td: SceneTransitionDoc): import('../types/project').SceneTransition => ({
+    waypoints: td.waypoints ?? [],
+    segments: (td.segments ?? []).map(s => ({
+      duration: s.duration,
+      ...(s.animationId != null && { animationId: s.animationId }),
+    })),
+  })
+
+  let scene: Scene | null = null
+  if (projDoc.scene) {
+    scene = {
+      id: projDoc.scene.id,
+      name: projDoc.scene.name,
+      backgroundImageBlob: sceneBackgroundBlob,
+      backgroundWidth: projDoc.scene.backgroundWidth,
+      backgroundHeight: projDoc.scene.backgroundHeight,
+      characterScale: projDoc.scene.characterScale,
+      characterY: projDoc.scene.characterY,
+      restPoints: (projDoc.scene.restPoints ?? []).map(rp => ({
+        id: rp.id,
+        backgroundX: rp.backgroundX,
+        ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
+        ...(rp.availableAnimationIds != null && { availableAnimationIds: rp.availableAnimationIds }),
+      })),
+      transitions: (projDoc.scene.transitions ?? []).map(docToTransition),
+      startMode: projDoc.scene.startMode ?? 'rest',
+      ...(projDoc.scene.startX != null && { startX: projDoc.scene.startX }),
+      ...(projDoc.scene.startTransition != null && { startTransition: docToTransition(projDoc.scene.startTransition) }),
+    }
+  }
+
   return {
     id: projDoc.id,
     name: projDoc.name,
@@ -403,6 +502,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     ambientSoundEnabled: (projDoc as ProjectDoc).ambientSoundEnabled ?? false,
     animations,
     markers: projDoc.markers,
+    scene,
   }
 }
 
@@ -452,6 +552,7 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     ambientSoundEnabled: false,
     animations: [legacyAnimation],
     markers: data.markers,
+    scene: null,
   }
 }
 
@@ -498,6 +599,7 @@ export async function createProject(name: string): Promise<Project> {
     ambientSoundEnabled: false,
     animations: [restAnimation],
     markers: null,
+    scene: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
   console.log('[Firebase] Project created:', project.id)
@@ -542,6 +644,7 @@ export async function getAllProjects(): Promise<Project[]> {
         ambientSoundEnabled: false,
         animations: [legacyAnim],
         markers: legacy.markers,
+        scene: null,
       }
     }
 
@@ -568,6 +671,7 @@ export async function getAllProjects(): Promise<Project[]> {
         audioEnabled: animDoc.audioEnabled ?? false,
       })),
       markers: projDoc.markers,
+      scene: null,
     }
   })
 }
@@ -581,7 +685,7 @@ export type AnimationUploadField =
   | 'videoFramesMesh'
 
 export type UploadHint =
-  | 'image' | 'backgroundVideo' | 'ambientSound'
+  | 'image' | 'backgroundVideo' | 'ambientSound' | 'sceneBackground'
   | { animationId: string; field: AnimationUploadField }
 
 /** Flat upload hint used by step components (legacy-compatible strings) */
@@ -617,6 +721,12 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       uploads.push(
         uploadBlob(`projects/${id}/ambientSound`, project.ambientSoundBlob)
           .then(() => console.log('[Storage] Ambient sound uploaded'))
+      )
+    } else if (hint === 'sceneBackground' && project.scene?.backgroundImageBlob) {
+      console.log('[Storage] Uploading scene background for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/sceneBackground`, project.scene.backgroundImageBlob)
+          .then(() => console.log('[Storage] Scene background uploaded'))
       )
     } else if (typeof hint === 'object') {
       const { animationId, field } = hint
@@ -693,6 +803,7 @@ export async function deleteProject(id: string): Promise<void> {
     `projects/${id}/originalImage`,
     `projects/${id}/backgroundVideo`,
     `projects/${id}/ambientSound`,
+    `projects/${id}/sceneBackground`,
   ]
   for (const path of projectFiles) {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
@@ -774,6 +885,7 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   if (duplicate.originalImageBlob) hints.push('image')
   if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
   if (duplicate.ambientSoundBlob) hints.push('ambientSound')
+  if (duplicate.scene?.backgroundImageBlob) hints.push('sceneBackground')
   for (const anim of duplicate.animations) {
     const newAnimId = anim.id
     for (const field of ANIM_UPLOAD_FIELDS) {

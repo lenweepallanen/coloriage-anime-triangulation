@@ -40,12 +40,15 @@ export class ScenePlayback {
   private segmentProgress: number = 0
   private segmentStartX: number = 0
   private segmentEndX: number = 0
+  private segmentStartRawX: number = 0  // un-clamped X position at segment start
+  private segmentEndRawX: number = 0    // un-clamped X position at segment end
   private segmentDuration: number = 0
   private _currentTransitionIndex: number = -1  // -1 = startTransition
   private _currentSegmentIndex: number = 0
   private _currentSegmentAnimationId?: string
 
   private _backgroundOffsetX: number = 0
+  private _currentX: number = 0  // current character position on background (not clamped)
 
   // Blend state (brief transition between segment and interaction animations)
   private blendProgress: number = 0
@@ -66,11 +69,13 @@ export class ScenePlayback {
 
     if (this.scene.startMode === 'transition' && this.scene.startTransition && this.scene.startX != null) {
       // Start in movement: traverse startTransition segments → restPoints[0]
+      this._currentX = this.scene.startX
       this._backgroundOffsetX = this.computeOffsetForX(this.scene.startX)
       this._currentTransitionIndex = -1
       this.startTransitionSegments(-1)
     } else {
       // Start at rest point 0
+      this._currentX = this.scene.restPoints[0]?.backgroundX ?? 0
       this._backgroundOffsetX = this.computeOffsetForRestPoint(0)
       this._state = 'interaction'
     }
@@ -139,6 +144,8 @@ export class ScenePlayback {
 
     this._state = 'segment'
     this.segmentProgress = 0
+    this.segmentStartRawX = xPositions[segmentIndex]
+    this.segmentEndRawX = xPositions[segmentIndex + 1]
     this.segmentStartX = this.computeOffsetForX(xPositions[segmentIndex])
     this.segmentEndX = this.computeOffsetForX(xPositions[segmentIndex + 1])
     this.segmentDuration = segment.duration
@@ -172,12 +179,14 @@ export class ScenePlayback {
         if (this.segmentProgress >= 1) {
           this.segmentProgress = 1
           this._backgroundOffsetX = this.segmentEndX
+          this._currentX = this.segmentEndRawX
           this.finishSegment()
         } else {
           const t = easeInOut(this.segmentProgress)
           this._backgroundOffsetX = this.clampOffset(
             this.segmentStartX + (this.segmentEndX - this.segmentStartX) * t
           )
+          this._currentX = this.segmentStartRawX + (this.segmentEndRawX - this.segmentStartRawX) * t
         }
         break
       }
@@ -216,6 +225,7 @@ export class ScenePlayback {
       return
     }
 
+    this._currentX = rp.backgroundX
     this._backgroundOffsetX = this.computeOffsetForRestPoint(index)
     this.onRestPointArrival?.(index, rp)
 
@@ -228,6 +238,11 @@ export class ScenePlayback {
 
   get backgroundOffsetX(): number {
     return this._backgroundOffsetX
+  }
+
+  /** Current character X position on the background (not clamped by viewport) */
+  get currentX(): number {
+    return this._currentX
   }
 
   get currentState(): SceneState {
@@ -290,5 +305,10 @@ export class ScenePlayback {
     if (this._state === 'interaction') {
       this._backgroundOffsetX = this.computeOffsetForRestPoint(this._currentRestIndex)
     }
+  }
+
+  /** Background width in pixels */
+  get bgWidth(): number {
+    return this.scene.backgroundWidth
   }
 }

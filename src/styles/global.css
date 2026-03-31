@@ -2474,6 +2474,32 @@ code {
   border-radius: var(--radius);
 }
 
+/* Viewport frame preview on timeline */
+.scene-timeline-viewport-mask {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.scene-timeline-viewport-frame {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  border-left: 2px dashed rgba(255, 255, 255, 0.7);
+  border-right: 2px dashed rgba(255, 255, 255, 0.7);
+  box-sizing: border-box;
+}
+
+.scene-timeline-character-preview {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  object-fit: contain;
+  opacity: 0.75;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5));
+}
+
 /* Config panel (replaces keyframe config) */
 .scene-config-panel {
   background: var(--color-surface-2);

@@ -17,6 +17,7 @@ import AnchorPointsStep from '../components/admin/AnchorPointsStep'
 import AnchorTrackingStep from '../components/admin/AnchorTrackingStep'
 import TriangulationStep from '../components/admin/TriangulationStep'
 import PhysicsAnimationEditor from '../components/admin/PhysicsAnimationEditor'
+import SceneEditor from '../components/admin/SceneEditor'
 import { generateTemplatePDF } from '../utils/pdfGenerator'
 
 // Full pipeline for rest animation
@@ -50,7 +51,7 @@ const PHYSICS_STEPS = [
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number]
 
-const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound'])
+const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound', 'sceneBackground'])
 
 // Short labels for stepper display
 const STEP_SHORT_LABELS: Record<string, string> = {
@@ -228,6 +229,9 @@ export default function AdminPage() {
     await save(updatedProject, scopedHints)
   }, [project, selectedAnimationId, isRestAnim, save])
 
+  // Scene editor toggle
+  const [sceneEditorOpen, setSceneEditorOpen] = useState(false)
+
   // Preview panel toggle + resizable splitter
   const [previewVisible, setPreviewVisible] = useState(true)
   const [previewRatio, setPreviewRatio] = useState(33.3) // % of total width for preview
@@ -340,7 +344,26 @@ export default function AdminPage() {
             </svg>
             <span className="scan-card-label">Scanner</span>
           </Link>
+
+          {canPreview && (
+            <button
+              className={`scene-card ${sceneEditorOpen ? 'scene-card--active' : ''}`}
+              onClick={() => setSceneEditorOpen(v => !v)}
+            >
+              <svg className="scene-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <path d="M8 21h8" />
+                <path d="M12 17v4" />
+                <path d="M7 8l3 3-3 3" />
+              </svg>
+              <span className="scene-card-label">Scène</span>
+            </button>
+          )}
         </div>
+
+        {sceneEditorOpen && canPreview && (
+          <SceneEditor project={project} onSave={save} />
+        )}
 
         <nav className="pipeline-stepper">
           {availableSteps.map((step, i) => {

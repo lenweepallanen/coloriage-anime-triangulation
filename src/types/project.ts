@@ -101,6 +101,38 @@ export interface Animation {
   audioEnabled: boolean;
 }
 
+export interface SceneRestPoint {
+  id: string;
+  backgroundX: number;
+  restAnimationId?: string;
+  availableAnimationIds?: string[];
+}
+
+export interface SceneSegment {
+  duration: number;
+  animationId?: string;
+}
+
+export interface SceneTransition {
+  waypoints: number[];
+  segments: SceneSegment[];
+}
+
+export interface Scene {
+  id: string;
+  name: string;
+  backgroundImageBlob: Blob | null;
+  backgroundWidth: number;
+  backgroundHeight: number;
+  characterScale: number;
+  characterY: number;
+  restPoints: SceneRestPoint[];
+  transitions: SceneTransition[];
+  startMode: 'rest' | 'transition';
+  startX?: number;
+  startTransition?: SceneTransition;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -111,6 +143,7 @@ export interface Project {
   ambientSoundEnabled: boolean;
   animations: Animation[];
   markers: MarkerCorners | null;
+  scene: Scene | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

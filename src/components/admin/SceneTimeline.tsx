@@ -24,6 +24,12 @@ interface Props {
   onDeleteRestPoint: (index: number) => void
   onDeleteWaypoint: (transitionIndex: number, waypointIndex: number) => void
   onAddRestPoint: (backgroundX: number) => void
+  // Character preview on timeline
+  characterImageUrl?: string | null
+  characterImageWidth?: number
+  characterImageHeight?: number
+  characterScale?: number
+  characterY?: number
 }
 
 const MIN_TIMELINE_HEIGHT = 100
@@ -57,6 +63,11 @@ export default function SceneTimeline({
   onDeleteRestPoint,
   onDeleteWaypoint,
   onAddRestPoint,
+  characterImageUrl,
+  characterImageWidth,
+  characterImageHeight,
+  characterScale: charScale = 1,
+  characterY: charY = 0,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -248,6 +259,54 @@ export default function SceneTimeline({
 
   const isStartPointSelected = selection?.type === 'startPoint'
 
+  // --- Viewport frame & character preview ---
+  // Simulate ScenePlayback offset logic to show what the player will render
+  const SCREEN_ASPECT = 16 / 9
+  // Viewport in background-image pixels
+  const viewportWidthBg = backgroundHeight > 0 ? backgroundHeight * SCREEN_ASPECT : 0
+  const viewportHeightBg = backgroundHeight
+
+  // Compute backgroundOffsetX for a given character X (same logic as ScenePlayback)
+  function computeViewportOffset(charBgX: number): number {
+    const maxOffset = Math.max(0, backgroundWidth - viewportWidthBg)
+    const raw = charBgX - viewportWidthBg / 2
+    return Math.max(0, Math.min(maxOffset, raw))
+  }
+
+  // Character dimensions in background pixels
+  // In ScenePlayer: charH_screen = viewH * characterScale, charH_bg = backgroundHeight * characterScale
+  const charHBg = backgroundHeight * charScale
+  const charAspect = (characterImageWidth && characterImageHeight) ? characterImageWidth / characterImageHeight : 1
+  const charWBg = charAspect * charHBg
+
+  // Selected rest point for viewport preview
+  const selectedRpIndex = selection?.type === 'restPoint' ? selection.index : null
+  const selectedRp = selectedRpIndex != null ? restPoints[selectedRpIndex] : null
+
+  // Compute viewport frame and character position for the selected rest point
+  const viewportPreview = selectedRp ? (() => {
+    const bgX = selectedRp.backgroundX
+    const offset = computeViewportOffset(bgX)
+    // Character screen position in bg coords:
+    // charScreenX_bg = currentX - offset - charW_bg / 2
+    const charXBg = bgX - offset - charWBg / 2
+    const charYBg = (viewportHeightBg - charHBg) / 2 + charY
+    // Clamp viewport width to background width (viewport can't exceed it)
+    const clampedVpW = Math.min(viewportWidthBg, backgroundWidth)
+    return {
+      // Viewport rectangle in timeline coords
+      vpX: toTimelineX(offset),
+      vpY: 0,
+      vpW: toTimelineX(clampedVpW),
+      vpH: effectiveHeight,
+      // Character position in timeline coords (absolute on background)
+      charX: toTimelineX(bgX - charWBg / 2),
+      charY: charYBg * scale,
+      charW: charWBg * scale,
+      charH: charHBg * scale,
+    }
+  })() : null
+
   return (
     <div className="scene-timeline-wrapper" ref={wrapperRef}>
       <div
@@ -262,6 +321,46 @@ export default function SceneTimeline({
             alt="Scene background"
             className="scene-timeline-bg"
             style={{ width: timelineWidth, height: effectiveHeight }}
+            draggable={false}
+          />
+        )}
+
+        {/* Viewport frame overlay (darkens areas outside viewport) */}
+        {viewportPreview && (
+          <>
+            {/* Dark overlay left of viewport */}
+            {viewportPreview.vpX > 0 && (
+              <div className="scene-timeline-viewport-mask" style={{
+                left: 0, top: 0, width: viewportPreview.vpX, height: effectiveHeight,
+              }} />
+            )}
+            {/* Dark overlay right of viewport */}
+            {viewportPreview.vpX + viewportPreview.vpW < timelineWidth && (
+              <div className="scene-timeline-viewport-mask" style={{
+                left: viewportPreview.vpX + viewportPreview.vpW, top: 0,
+                width: timelineWidth - viewportPreview.vpX - viewportPreview.vpW, height: effectiveHeight,
+              }} />
+            )}
+            {/* Viewport border */}
+            <div className="scene-timeline-viewport-frame" style={{
+              left: viewportPreview.vpX, top: 0,
+              width: viewportPreview.vpW, height: effectiveHeight,
+            }} />
+          </>
+        )}
+
+        {/* Character preview image at selected rest point */}
+        {viewportPreview && characterImageUrl && viewportPreview.charW > 0 && (
+          <img
+            src={characterImageUrl}
+            alt=""
+            className="scene-timeline-character-preview"
+            style={{
+              left: viewportPreview.charX,
+              top: viewportPreview.charY,
+              width: viewportPreview.charW,
+              height: viewportPreview.charH,
+            }}
             draggable={false}
           />
         )}

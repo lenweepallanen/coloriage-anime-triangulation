@@ -116,6 +116,24 @@ export default function SceneEditor({ project, onSave }: Props) {
     }
   }, [project.scene])
 
+  // Character image URL + dimensions for timeline preview
+  const [charImageUrl, setCharImageUrl] = useState<string | null>(null)
+  const [charImageSize, setCharImageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+
+  useEffect(() => {
+    if (project.originalImageBlob) {
+      const url = URL.createObjectURL(project.originalImageBlob)
+      setCharImageUrl(url)
+      const img = new Image()
+      img.src = url
+      img.onload = () => setCharImageSize({ w: img.naturalWidth, h: img.naturalHeight })
+      return () => { URL.revokeObjectURL(url); setCharImageUrl(null) }
+    } else {
+      setCharImageUrl(null)
+      setCharImageSize({ w: 0, h: 0 })
+    }
+  }, [project.originalImageBlob])
+
   useEffect(() => {
     if (scene.backgroundImageBlob) {
       const url = URL.createObjectURL(scene.backgroundImageBlob)
@@ -504,6 +522,11 @@ export default function SceneEditor({ project, onSave }: Props) {
           onDeleteRestPoint={handleDeleteRestPoint}
           onDeleteWaypoint={handleDeleteWaypoint}
           onAddRestPoint={handleAddRestPoint}
+          characterImageUrl={charImageUrl}
+          characterImageWidth={charImageSize.w}
+          characterImageHeight={charImageSize.h}
+          characterScale={scene.characterScale}
+          characterY={scene.characterY}
         />
       )}
 
