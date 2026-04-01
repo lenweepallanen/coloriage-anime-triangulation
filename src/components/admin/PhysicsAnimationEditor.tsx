@@ -307,8 +307,7 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
       updatedMesh.videoFramesMesh = result.frames
     } else if (restMesh) {
       // Import shared geometry fields from rest
-      const { SHARED_GEOMETRY_FIELDS, copySharedGeometry } = await import('./AnimationManager')
-      void SHARED_GEOMETRY_FIELDS // reference to avoid unused import
+      const { copySharedGeometry } = await import('./AnimationCardList')
       const shared = copySharedGeometry(restMesh)
       const newMesh = {
         cannyParams: null,
