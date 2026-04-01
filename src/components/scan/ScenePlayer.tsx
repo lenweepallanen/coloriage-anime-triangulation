@@ -16,6 +16,7 @@ interface Props {
   scanCanvas: HTMLCanvasElement
   contentAlignment?: ContentAlignment | null
   onClose: () => void
+  modal?: boolean
 }
 
 function smoothstep(t: number): number {
@@ -85,7 +86,7 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
   )
 }
 
-export default function ScenePlayer({ project, scanCanvas, contentAlignment, onClose }: Props) {
+export default function ScenePlayer({ project, scanCanvas, contentAlignment, onClose, modal }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -93,6 +94,9 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
   const playingRef = useRef(true)
   const [sceneState, setSceneState] = useState<SceneState>('interaction')
   const [currentRestIdx, setCurrentRestIdx] = useState(0)
+  const [showHelpBubble, setShowHelpBubble] = useState(false)
+  const [currentHelpText, setCurrentHelpText] = useState('')
+  const speakAudioRef = useRef<HTMLAudioElement | null>(null)
   const scenePlaybackRef = useRef<ScenePlayback | null>(null)
   const physicsRef = useRef<MeshPhysicsEffect | null>(null)
   const touchRef = useRef<{ active: boolean; screenX: number; screenY: number }>({
@@ -117,8 +121,9 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     animMap.current = map
   }, [project.animations])
 
-  // Enter fullscreen + lock landscape
+  // Enter fullscreen + lock landscape (skip in modal mode)
   useEffect(() => {
+    if (modal) return
     const el = playerRef.current
     if (!el) return
     let mounted = true
@@ -146,7 +151,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
       try { screen.orientation?.unlock?.() } catch { /* */ }
     }
-  }, [])
+  }, [modal])
 
   // PIXI setup
   useEffect(() => {
@@ -255,6 +260,22 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
 
     characterContainer.addChild(pixiMesh)
 
+    // --- Audio elements for animation sounds ---
+    const animAudioElements = new Map<string, HTMLAudioElement>()
+    const animAudioUrls: string[] = []
+    for (const anim of project.animations) {
+      if (anim.type !== 'rest' && anim.audioBlob && anim.audioEnabled) {
+        const url = URL.createObjectURL(anim.audioBlob)
+        animAudioUrls.push(url)
+        const audio = new Audio(url)
+        animAudioElements.set(anim.id, audio)
+      }
+    }
+    const playAnimAudio = (animId: string) => {
+      const audio = animAudioElements.get(animId)
+      if (audio) { audio.currentTime = 0; audio.play().catch(() => {}) }
+    }
+
     const physics = new MeshPhysicsEffect(numPoints, { ...DEFAULT_PHYSICS_CONFIG })
     physicsRef.current = physics
     const modifiedPositions: Point2D[] = new Array(numPoints)
@@ -327,6 +348,8 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       if (oneshotAnims.length > 0) {
         const multiPlayback = new MultiAnimationPlayback(restFrames, oneshotAnims, {
           crossfadeFrames: rest?.mesh?.crossfadeFrames ?? 7,
+          onOneshotStart: playAnimAudio,
+          onOverlayStart: playAnimAudio,
         })
         currentMultiPlaybackRef = multiPlayback
         currentGetPositions = () => multiPlayback.getPositions()
@@ -348,7 +371,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
       } else if (newState === 'interaction' || newState === 'blend') {
         const rp = scenePlayback.currentRestPoint
-        setupInteractionAnimation(rp?.restAnimationId, rp?.availableAnimationIds ?? [])
+        setupInteractionAnimation(rp?.restAnimationId, rp?.randomAnimationIds ?? [])
       }
       blendTo = currentGetPositions
     }
@@ -360,7 +383,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
       } else {
         const firstRp = scene.restPoints[0]
-        setupInteractionAnimation(firstRp.restAnimationId, firstRp.availableAnimationIds ?? [])
+        setupInteractionAnimation(firstRp.restAnimationId, firstRp.randomAnimationIds ?? [])
       }
     }
 
@@ -444,6 +467,8 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       canvas.removeEventListener('pointercancel', onPointerUp)
       window.removeEventListener('resize', handleResize)
       if (bgImageUrl) URL.revokeObjectURL(bgImageUrl)
+      for (const audio of animAudioElements.values()) { audio.pause() }
+      for (const url of animAudioUrls) URL.revokeObjectURL(url)
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
@@ -461,16 +486,65 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     scenePlaybackRef.current?.advance()
   }, [])
 
-  const handleOneshotTrigger = useCallback((animId: string) => {
+  const handleRandomAnimation = useCallback(() => {
+    const rp = scene.restPoints[currentRestIdx]
+    const ids = (rp?.randomAnimationIds ?? []).filter(id => {
+      const a = project.animations.find(a => a.id === id)
+      return a != null && a.mesh?.videoFramesMesh != null
+    })
+    if (ids.length === 0) return
+    const randomId = ids[Math.floor(Math.random() * ids.length)]
     const sp = scenePlaybackRef.current as unknown as { getMultiPlayback?: () => MultiAnimationPlayback | null }
-    sp?.getMultiPlayback?.()?.requestOneshot(animId)
+    sp?.getMultiPlayback?.()?.requestOneshot(randomId)
+  }, [currentRestIdx, scene.restPoints, project.animations])
+
+  const handleSpeak = useCallback(() => {
+    const rp = scene.restPoints[currentRestIdx]
+    const activeIds = rp?.speakSoundIds ?? []
+    if (activeIds.length === 0) return
+    const randomId = activeIds[Math.floor(Math.random() * activeIds.length)]
+    const idx = scene.speakSounds.findIndex(s => s.id === randomId)
+    const blob = idx >= 0 ? scene.speakSoundBlobs[idx] : null
+    if (!blob) return
+
+    if (speakAudioRef.current) {
+      speakAudioRef.current.pause()
+      URL.revokeObjectURL(speakAudioRef.current.src)
+    }
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    speakAudioRef.current = audio
+    audio.play().catch(() => {})
+    audio.onended = () => { URL.revokeObjectURL(url); speakAudioRef.current = null }
+  }, [currentRestIdx, scene])
+
+  const handleHelp = useCallback(() => {
+    const rp = scene.restPoints[currentRestIdx]
+    const texts = rp?.helpTexts ?? []
+    if (texts.length === 0) return
+    setCurrentHelpText(texts[Math.floor(Math.random() * texts.length)])
+    setShowHelpBubble(true)
+  }, [currentRestIdx, scene.restPoints])
+
+  // Dismiss help bubble when rest point changes
+  useEffect(() => { setShowHelpBubble(false) }, [currentRestIdx])
+
+  // Cleanup speak audio on unmount
+  useEffect(() => () => {
+    if (speakAudioRef.current) {
+      speakAudioRef.current.pause()
+      URL.revokeObjectURL(speakAudioRef.current.src)
+      speakAudioRef.current = null
+    }
   }, [])
 
-  // Get available animations for current rest point
   const currentRp = scene.restPoints[currentRestIdx]
-  const availableAnims = (currentRp?.availableAnimationIds ?? [])
-    .map(id => project.animations.find(a => a.id === id))
-    .filter((a): a is Animation => a != null && a.mesh?.videoFramesMesh != null)
+  const hasRandomAnims = (currentRp?.randomAnimationIds ?? []).some(id => {
+    const a = project.animations.find(a => a.id === id)
+    return a != null && a.mesh?.videoFramesMesh != null
+  })
+  const hasSpeakSounds = (currentRp?.speakSoundIds ?? []).length > 0
+  const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0
 
   const isInteraction = sceneState === 'interaction'
   const isLastRestPoint = currentRestIdx >= scene.restPoints.length - 1
@@ -479,27 +553,48 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     <div className="animation-player scene-player" ref={playerRef}>
       <div ref={containerRef} className="animation-canvas" />
 
-      <LongPressCloseButton onComplete={handleExitFullscreen} />
+      {modal ? (
+        <button className="preview-modal-close" onClick={onClose} title="Fermer">&times;</button>
+      ) : (
+        <LongPressCloseButton onComplete={handleExitFullscreen} />
+      )}
 
-      {isInteraction && (
-        <div className="scene-player-buttons">
-          {availableAnims.map(anim => (
-            <button
-              key={anim.id}
-              onClick={() => handleOneshotTrigger(anim.id)}
-              className="scene-player-anim-btn"
-            >
-              {anim.name}
+      {/* LEFT side buttons */}
+      {isInteraction && (hasRandomAnims || hasSpeakSounds) && (
+        <div className="scene-player-left-buttons">
+          {hasRandomAnims && (
+            <button className="scene-player-random-anim-btn" onClick={handleRandomAnimation}>
+              Animation
             </button>
-          ))}
-          {!isLastRestPoint && (
-            <button onClick={handleContinue} className="scene-player-continue-btn">
-              Continuer ▶
+          )}
+          {hasSpeakSounds && (
+            <button className="scene-player-speak-btn" onClick={handleSpeak}>
+              Parler
             </button>
           )}
         </div>
       )}
 
+      {/* RIGHT side - next arrow */}
+      {isInteraction && !isLastRestPoint && (
+        <button className="scene-player-next-btn" onClick={handleContinue}>
+          &#x276F;
+        </button>
+      )}
+
+      {/* RIGHT side - help button */}
+      {hasHelpTexts && (
+        <button className="scene-player-help-btn" onClick={handleHelp}>?</button>
+      )}
+
+      {/* Help speech bubble */}
+      {showHelpBubble && (
+        <div className="scene-player-help-bubble" onClick={() => setShowHelpBubble(false)}>
+          <p>{currentHelpText}</p>
+        </div>
+      )}
+
+      {/* Bottom center - play/pause */}
       <button
         className="scene-player-playpause"
         onClick={() => setPlaying(p => !p)}

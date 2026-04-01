@@ -871,9 +871,8 @@ code {
 
 .preview-modal-content {
   position: relative;
-  width: 100%;
-  max-width: 900px;
-  height: 80vh;
+  width: 70vw;
+  height: 75vh;
   background: var(--color-surface-1);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -902,6 +901,25 @@ code {
 
 .preview-modal-close:hover {
   background: rgba(0, 0, 0, 0.75);
+}
+
+.preview-modal-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  z-index: 11;
+  background: linear-gradient(135deg, transparent 50%, var(--color-muted) 50%);
+  border-radius: 0 0 var(--radius-lg) 0;
+  opacity: 0.5;
+  transition: opacity var(--transition);
+  touch-action: none;
+}
+
+.preview-modal-resize-handle:hover {
+  opacity: 1;
 }
 
 .admin-preview-canvas-wrapper {
@@ -1674,6 +1692,11 @@ code {
   height: 100%;
   z-index: 100;
   background: #000;
+}
+
+.preview-modal-content .animation-player {
+  position: relative;
+  z-index: auto;
 }
 
 /* Force landscape via CSS rotation when in portrait (fallback for iOS) */
@@ -2865,22 +2888,84 @@ code {
   font-style: italic;
 }
 
+.scene-config-panel-sound-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.scene-config-panel-sound-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.scene-config-panel-help-add {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.scene-config-panel-help-add input[type="text"] {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.scene-config-panel-help-add input[type="text"]:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.scene-config-panel-help-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scene-config-panel-help-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 4px 0;
+}
+
+.scene-config-panel-help-text {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ─── Scene Player ─── */
 
-.scene-player-buttons {
+/* LEFT side buttons — vertically centered */
+.scene-player-left-buttons {
   position: absolute;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 16px;
   z-index: 110;
 }
 
-.scene-player-anim-btn {
-  padding: 10px 20px;
+.scene-player-random-anim-btn,
+.scene-player-speak-btn {
+  padding: 14px 20px;
   font-size: 1em;
-  border-radius: 12px;
+  border-radius: 16px;
   border: none;
   background: rgba(255, 255, 255, 0.85);
   color: #333;
@@ -2888,37 +2973,115 @@ code {
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(8px);
+  min-width: 120px;
+  text-align: center;
   transition: background var(--transition), transform var(--transition);
 }
 
-.scene-player-anim-btn:hover {
+.scene-player-random-anim-btn:hover,
+.scene-player-speak-btn:hover {
   background: rgba(255, 255, 255, 1);
   transform: translateY(-1px);
 }
 
-.scene-player-continue-btn {
-  padding: 10px 24px;
-  font-size: 1em;
-  border-radius: 12px;
-  border: 2px solid var(--color-success);
-  background: rgba(34, 197, 94, 0.15);
+.scene-player-random-anim-btn:active,
+.scene-player-speak-btn:active {
+  transform: scale(0.95);
+}
+
+/* RIGHT side — next arrow (vertically centered) */
+.scene-player-next-btn {
+  position: absolute;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(0, 0, 0, 0.4);
   color: white;
+  font-size: 24px;
   cursor: pointer;
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   backdrop-filter: blur(8px);
   transition: background var(--transition), transform var(--transition);
 }
 
-.scene-player-continue-btn:hover {
-  background: rgba(34, 197, 94, 0.3);
-  transform: translateY(-1px);
+.scene-player-next-btn:hover {
+  background: rgba(0, 0, 0, 0.6);
+  transform: translateY(-50%) scale(1.05);
 }
 
+.scene-player-next-btn:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+/* RIGHT side — help button (bottom-right) */
+.scene-player-help-btn {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(0, 0, 0, 0.4);
+  color: white;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+  transition: background var(--transition);
+}
+
+.scene-player-help-btn:hover {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Help speech bubble */
+.scene-player-help-bubble {
+  position: absolute;
+  right: 80px;
+  bottom: 24px;
+  max-width: 280px;
+  padding: 16px 20px;
+  background: white;
+  color: #333;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 120;
+  font-size: 0.95em;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.scene-player-help-bubble::after {
+  content: '';
+  position: absolute;
+  right: -8px;
+  bottom: 16px;
+  border: 8px solid transparent;
+  border-left-color: white;
+}
+
+.scene-player-help-bubble p {
+  margin: 0;
+}
+
+/* Bottom center — play/pause */
 .scene-player-playpause {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 44px;
   height: 44px;
   border-radius: 50%;

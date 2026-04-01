@@ -1,10 +1,11 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type { Project, Scene, SceneRestPoint, SceneTransition, SceneSegment } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import SceneTimeline from './SceneTimeline'
 import type { TimelineSelection } from './SceneTimeline'
 import SceneConfigPanel from './SceneConfigPanel'
 import ScenePlayer from '../scan/ScenePlayer'
+import { PreviewModalShell } from './PreviewModal'
 
 interface Props {
   project: Project
@@ -23,6 +24,8 @@ function createDefaultScene(): Scene {
     restPoints: [],
     transitions: [],
     startMode: 'rest',
+    speakSounds: [],
+    speakSoundBlobs: [],
   }
 }
 
@@ -351,16 +354,51 @@ export default function SceneEditor({ project, onSave }: Props) {
     })
   }, [])
 
+  // Pending speak sound upload hints (accumulated between saves)
+  const pendingSpeakHintsRef = useRef<UploadHint[]>([])
+
+  // Import speak sound to scene pool
+  const handleSpeakSoundImport = useCallback((file: File) => {
+    const id = crypto.randomUUID()
+    const name = file.name
+    const blob = file as Blob
+    setScene(prev => ({
+      ...prev,
+      speakSounds: [...prev.speakSounds, { id, name }],
+      speakSoundBlobs: [...prev.speakSoundBlobs, blob],
+    }))
+    pendingSpeakHintsRef.current.push({ speakSoundId: id })
+  }, [])
+
+  // Delete speak sound from scene pool + uncheck from all rest points
+  const handleSpeakSoundDelete = useCallback((soundId: string) => {
+    setScene(prev => {
+      const idx = prev.speakSounds.findIndex(s => s.id === soundId)
+      if (idx < 0) return prev
+      return {
+        ...prev,
+        speakSounds: prev.speakSounds.filter(s => s.id !== soundId),
+        speakSoundBlobs: prev.speakSoundBlobs.filter((_, i) => i !== idx),
+        restPoints: prev.restPoints.map(rp => ({
+          ...rp,
+          speakSoundIds: rp.speakSoundIds?.filter(id => id !== soundId),
+        })),
+      }
+    })
+    pendingSpeakHintsRef.current.push({ deleteSpeakSoundId: soundId })
+  }, [])
+
   // Save scene
   const handleSave = useCallback(async () => {
     setSaving(true)
     try {
-      const hints: UploadHint[] = []
+      const hints: UploadHint[] = [...pendingSpeakHintsRef.current]
       if (scene.backgroundImageBlob && scene.backgroundImageBlob !== project.scene?.backgroundImageBlob) {
         hints.push('sceneBackground')
       }
       const updatedProject: Project = { ...project, scene }
       await onSave(updatedProject, hints.length > 0 ? hints : undefined)
+      pendingSpeakHintsRef.current = []
     } finally {
       setSaving(false)
     }
@@ -543,17 +581,24 @@ export default function SceneEditor({ project, onSave }: Props) {
           onRestPointChange={handleRestPointChange}
           onSegmentChange={handleSegmentChange}
           onStartModeChange={handleStartModeChange}
+          speakSounds={scene.speakSounds}
+          speakSoundBlobs={scene.speakSoundBlobs}
+          onSpeakSoundImport={handleSpeakSoundImport}
+          onSpeakSoundDelete={handleSpeakSoundDelete}
         />
       )}
 
-      {/* Fullscreen scene preview */}
-      {previewing && previewCanvas && previewProjectRef.current && (
-        <ScenePlayer
-          project={previewProjectRef.current}
-          scanCanvas={previewCanvas}
-          onClose={handleClosePreview}
-        />
-      )}
+      {/* Scene preview modal */}
+      <PreviewModalShell open={previewing && !!previewCanvas && !!previewProjectRef.current} onClose={handleClosePreview}>
+        {previewCanvas && previewProjectRef.current && (
+          <ScenePlayer
+            project={previewProjectRef.current}
+            scanCanvas={previewCanvas}
+            onClose={handleClosePreview}
+            modal
+          />
+        )}
+      </PreviewModalShell>
     </div>
   )
 }

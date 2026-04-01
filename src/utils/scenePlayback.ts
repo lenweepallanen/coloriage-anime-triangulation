@@ -284,7 +284,7 @@ export class ScenePlayback {
   /** Available animation IDs for the current rest point */
   get interactionAnimationIds(): string[] {
     if (this._state !== 'interaction' && this._state !== 'blend') return []
-    return this.currentRestPoint?.availableAnimationIds ?? []
+    return this.currentRestPoint?.randomAnimationIds ?? []
   }
 
   /** Blend progress [0,1] when in blend state */

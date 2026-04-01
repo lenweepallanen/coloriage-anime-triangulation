@@ -1,4 +1,5 @@
-import type { SceneRestPoint, SceneTransition, SceneSegment, Animation } from '../../types/project'
+import { useState, useRef, useCallback } from 'react'
+import type { SceneRestPoint, SceneTransition, SceneSegment, Animation, SpeakSound } from '../../types/project'
 import type { TimelineSelection } from './SceneTimeline'
 
 interface Props {
@@ -12,6 +13,10 @@ interface Props {
   onRestPointChange: (index: number, updated: SceneRestPoint) => void
   onSegmentChange: (transitionIndex: number, segmentIndex: number, updated: SceneSegment) => void
   onStartModeChange: (mode: 'rest' | 'transition') => void
+  speakSounds: SpeakSound[]
+  speakSoundBlobs: (Blob | null)[]
+  onSpeakSoundImport: (file: File) => void
+  onSpeakSoundDelete: (soundId: string) => void
 }
 
 export default function SceneConfigPanel({
@@ -25,6 +30,10 @@ export default function SceneConfigPanel({
   onRestPointChange,
   onSegmentChange,
   onStartModeChange,
+  speakSounds,
+  speakSoundBlobs,
+  onSpeakSoundImport,
+  onSpeakSoundDelete,
 }: Props) {
   const readyAnimations = animations.filter(a => a.mesh?.videoFramesMesh != null)
   const restAnimations = readyAnimations.filter(a => a.type === 'rest')
@@ -57,22 +66,22 @@ export default function SceneConfigPanel({
         </div>
 
         <div className="scene-config-panel-field">
-          <label>Animations disponibles</label>
+          <label>Animation Aléatoire</label>
           <div className="scene-config-panel-checkboxes">
             {nonRestAnimations.map(a => {
-              const checked = rp.availableAnimationIds?.includes(a.id) ?? false
+              const checked = rp.randomAnimationIds?.includes(a.id) ?? false
               return (
                 <label key={a.id} className="scene-config-panel-checkbox">
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={(e) => {
-                      const current = rp.availableAnimationIds ?? []
+                      const current = rp.randomAnimationIds ?? []
                       const updated = e.target.checked
                         ? [...current, a.id]
                         : current.filter(id => id !== a.id)
                       onRestPointChange(selection.index, {
-                        ...rp, availableAnimationIds: updated,
+                        ...rp, randomAnimationIds: updated,
                       })
                     }}
                   />
@@ -85,6 +94,22 @@ export default function SceneConfigPanel({
             )}
           </div>
         </div>
+
+        <SpeakSoundsSection
+          rp={rp}
+          rpIndex={selection.index}
+          speakSounds={speakSounds}
+          speakSoundBlobs={speakSoundBlobs}
+          onRestPointChange={onRestPointChange}
+          onSpeakSoundImport={onSpeakSoundImport}
+          onSpeakSoundDelete={onSpeakSoundDelete}
+        />
+
+        <HelpTextsSection
+          rp={rp}
+          rpIndex={selection.index}
+          onRestPointChange={onRestPointChange}
+        />
       </div>
     )
   }
@@ -167,4 +192,163 @@ export default function SceneConfigPanel({
   }
 
   return null
+}
+
+// --- Speak Sounds sub-section ---
+
+function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestPointChange, onSpeakSoundImport, onSpeakSoundDelete }: {
+  rp: SceneRestPoint
+  rpIndex: number
+  speakSounds: SpeakSound[]
+  speakSoundBlobs: (Blob | null)[]
+  onRestPointChange: (index: number, updated: SceneRestPoint) => void
+  onSpeakSoundImport: (file: File) => void
+  onSpeakSoundDelete: (soundId: string) => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [playingId, setPlayingId] = useState<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  const handlePreview = useCallback((soundId: string) => {
+    // Stop current preview
+    if (audioRef.current) {
+      audioRef.current.pause()
+      URL.revokeObjectURL(audioRef.current.src)
+      audioRef.current = null
+    }
+    if (playingId === soundId) {
+      setPlayingId(null)
+      return
+    }
+    const idx = speakSounds.findIndex(s => s.id === soundId)
+    const blob = idx >= 0 ? speakSoundBlobs[idx] : null
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    audioRef.current = audio
+    setPlayingId(soundId)
+    audio.play().catch(() => {})
+    audio.onended = () => { URL.revokeObjectURL(url); setPlayingId(null); audioRef.current = null }
+  }, [playingId, speakSounds, speakSoundBlobs])
+
+  return (
+    <div className="scene-config-panel-field">
+      <label>Sons "Parler"</label>
+      <button
+        className="btn-sm btn-secondary"
+        style={{ marginBottom: 8 }}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        + Importer son
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) onSpeakSoundImport(file)
+          e.target.value = ''
+        }}
+      />
+      <div className="scene-config-panel-checkboxes">
+        {speakSounds.map(sound => {
+          const checked = rp.speakSoundIds?.includes(sound.id) ?? false
+          return (
+            <div key={sound.id} className="scene-config-panel-sound-row">
+              <label className="scene-config-panel-checkbox">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    const current = rp.speakSoundIds ?? []
+                    const updated = e.target.checked
+                      ? [...current, sound.id]
+                      : current.filter(id => id !== sound.id)
+                    onRestPointChange(rpIndex, { ...rp, speakSoundIds: updated })
+                  }}
+                />
+                <span>{sound.name}</span>
+              </label>
+              <div className="scene-config-panel-sound-actions">
+                <button
+                  className="btn-icon btn-sm"
+                  onClick={() => handlePreview(sound.id)}
+                  title={playingId === sound.id ? 'Stop' : 'Écouter'}
+                >
+                  {playingId === sound.id ? '⏹' : '▶'}
+                </button>
+                <button
+                  className="btn-icon btn-sm btn-danger"
+                  onClick={() => onSpeakSoundDelete(sound.id)}
+                  title="Supprimer"
+                >
+                  &times;
+                </button>
+              </div>
+            </div>
+          )
+        })}
+        {speakSounds.length === 0 && (
+          <span className="scene-config-panel-empty">Aucun son importé</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// --- Help Texts sub-section ---
+
+function HelpTextsSection({ rp, rpIndex, onRestPointChange }: {
+  rp: SceneRestPoint
+  rpIndex: number
+  onRestPointChange: (index: number, updated: SceneRestPoint) => void
+}) {
+  const [newText, setNewText] = useState('')
+  const texts = rp.helpTexts ?? []
+
+  const handleAdd = () => {
+    const trimmed = newText.trim()
+    if (!trimmed) return
+    onRestPointChange(rpIndex, { ...rp, helpTexts: [...texts, trimmed] })
+    setNewText('')
+  }
+
+  const handleRemove = (index: number) => {
+    onRestPointChange(rpIndex, { ...rp, helpTexts: texts.filter((_, i) => i !== index) })
+  }
+
+  return (
+    <div className="scene-config-panel-field">
+      <label>Textes d'aide "?"</label>
+      <div className="scene-config-panel-help-add">
+        <input
+          type="text"
+          value={newText}
+          onChange={(e) => setNewText(e.target.value)}
+          placeholder="Nouveau texte d'aide..."
+          onKeyDown={(e) => { if (e.key === 'Enter') handleAdd() }}
+        />
+        <button className="btn-sm btn-secondary" onClick={handleAdd}>+</button>
+      </div>
+      <div className="scene-config-panel-help-list">
+        {texts.map((text, i) => (
+          <div key={i} className="scene-config-panel-help-item">
+            <span className="scene-config-panel-help-text">"{text}"</span>
+            <button
+              className="btn-icon btn-sm btn-danger"
+              onClick={() => handleRemove(i)}
+              title="Supprimer"
+            >
+              &times;
+            </button>
+          </div>
+        ))}
+        {texts.length === 0 && (
+          <span className="scene-config-panel-empty">Aucun texte d'aide</span>
+        )}
+      </div>
+    </div>
+  )
 }

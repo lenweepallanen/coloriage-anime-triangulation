@@ -105,7 +105,14 @@ export interface SceneRestPoint {
   id: string;
   backgroundX: number;
   restAnimationId?: string;
-  availableAnimationIds?: string[];
+  randomAnimationIds?: string[];
+  speakSoundIds?: string[];
+  helpTexts?: string[];
+}
+
+export interface SpeakSound {
+  id: string;
+  name: string;
 }
 
 export interface SceneSegment {
@@ -131,6 +138,8 @@ export interface Scene {
   startMode: 'rest' | 'transition';
   startX?: number;
   startTransition?: SceneTransition;
+  speakSounds: SpeakSound[];
+  speakSoundBlobs: (Blob | null)[];
 }
 
 export interface Project {

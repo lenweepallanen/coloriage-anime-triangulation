@@ -89,7 +89,10 @@ interface SceneRestPointDoc {
   id: string
   backgroundX: number
   restAnimationId?: string
-  availableAnimationIds?: string[]
+  randomAnimationIds?: string[]
+  availableAnimationIds?: string[]  // legacy fallback
+  speakSoundIds?: string[]
+  helpTexts?: string[]
 }
 
 interface SceneSegmentDoc {
@@ -115,6 +118,7 @@ interface SceneDoc {
   startMode: 'rest' | 'transition'
   startX?: number
   startTransition?: SceneTransitionDoc
+  speakSounds?: { id: string; name: string }[]
 }
 
 interface ProjectDoc {
@@ -266,12 +270,15 @@ function sceneToDoc(scene: Scene): SceneDoc {
       id: rp.id,
       backgroundX: rp.backgroundX,
       ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
-      ...(rp.availableAnimationIds != null && { availableAnimationIds: rp.availableAnimationIds }),
+      ...(rp.randomAnimationIds != null && { randomAnimationIds: rp.randomAnimationIds }),
+      ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
+      ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
     })),
     transitions: scene.transitions.map(transitionToDoc),
     startMode: scene.startMode,
     ...(scene.startX != null && { startX: scene.startX }),
     ...(scene.startTransition != null && { startTransition: transitionToDoc(scene.startTransition) }),
+    ...(scene.speakSounds.length > 0 && { speakSounds: scene.speakSounds.map(s => ({ id: s.id, name: s.name })) }),
   }
 }
 
@@ -471,6 +478,10 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
 
   let scene: Scene | null = null
   if (projDoc.scene) {
+    const speakSounds = projDoc.scene.speakSounds ?? []
+    const speakSoundBlobs = await Promise.all(
+      speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`))
+    )
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
@@ -483,12 +494,16 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         id: rp.id,
         backgroundX: rp.backgroundX,
         ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
-        ...(rp.availableAnimationIds != null && { availableAnimationIds: rp.availableAnimationIds }),
+        randomAnimationIds: rp.randomAnimationIds ?? rp.availableAnimationIds,
+        ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
+        ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
       })),
       transitions: (projDoc.scene.transitions ?? []).map(docToTransition),
       startMode: projDoc.scene.startMode ?? 'rest',
       ...(projDoc.scene.startX != null && { startX: projDoc.scene.startX }),
       ...(projDoc.scene.startTransition != null && { startTransition: docToTransition(projDoc.scene.startTransition) }),
+      speakSounds,
+      speakSoundBlobs,
     }
   }
 
@@ -687,6 +702,8 @@ export type AnimationUploadField =
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound' | 'sceneBackground'
   | { animationId: string; field: AnimationUploadField }
+  | { speakSoundId: string }
+  | { deleteSpeakSoundId: string }
 
 /** Flat upload hint used by step components (legacy-compatible strings) */
 export type StepUploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | AnimationUploadField
@@ -728,7 +745,24 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         uploadBlob(`projects/${id}/sceneBackground`, project.scene.backgroundImageBlob)
           .then(() => console.log('[Storage] Scene background uploaded'))
       )
-    } else if (typeof hint === 'object') {
+    } else if (typeof hint === 'object' && 'speakSoundId' in hint) {
+      const soundId = hint.speakSoundId
+      const idx = project.scene?.speakSounds.findIndex(s => s.id === soundId) ?? -1
+      const blob = idx >= 0 ? project.scene?.speakSoundBlobs[idx] : null
+      if (blob) {
+        console.log(`[Storage] Uploading speak sound ${soundId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/scene/speakSounds/${soundId}`, blob)
+            .then(() => console.log(`[Storage] Speak sound ${soundId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'deleteSpeakSoundId' in hint) {
+      const soundId = hint.deleteSpeakSoundId
+      console.log(`[Storage] Deleting speak sound ${soundId}`)
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/scene/speakSounds/${soundId}`)).catch(() => {})
+      )
+    } else if (typeof hint === 'object' && 'animationId' in hint) {
       const { animationId, field } = hint
       const anim = project.animations.find(a => a.id === animationId)
       if (!anim) continue
@@ -809,6 +843,14 @@ export async function deleteProject(id: string): Promise<void> {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
   }
 
+  // Delete speak sound files
+  if (data && 'scene' in data) {
+    const sceneDoc = (data as unknown as ProjectDoc).scene
+    for (const sound of sceneDoc?.speakSounds ?? []) {
+      deletions.push(deleteObject(ref(storage, `projects/${id}/scene/speakSounds/${sound.id}`)).catch(() => {}))
+    }
+  }
+
   // Delete animation storage files
   if (data && 'animations' in data) {
     const projDoc = data as unknown as ProjectDoc
@@ -886,6 +928,9 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
   if (duplicate.ambientSoundBlob) hints.push('ambientSound')
   if (duplicate.scene?.backgroundImageBlob) hints.push('sceneBackground')
+  for (const sound of duplicate.scene?.speakSounds ?? []) {
+    hints.push({ speakSoundId: sound.id })
+  }
   for (const anim of duplicate.animations) {
     const newAnimId = anim.id
     for (const field of ANIM_UPLOAD_FIELDS) {
