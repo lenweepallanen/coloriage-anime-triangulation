@@ -347,11 +347,11 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
       const newBone: Bone = {
         id: crypto.randomUUID(),
         name: `Bone ${bones.length + 1}`,
-        parentId: null,
         head: pendingHead,
         tail: ref,
         fixedLength: false,
         elbowPos: null,
+        elbowMode: 'rest',
       }
       setBones(prev => [...prev, newBone])
       setSelectedBoneId(newBone.id)
@@ -567,11 +567,6 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
               }}
             >
               {bone.name}
-              {bone.parentId && (
-                <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', marginLeft: 4 }}>
-                  ← {bones.find(b => b.id === bone.parentId)?.name ?? '?'}
-                </span>
-              )}
             </div>
           ))}
         </div>
@@ -586,19 +581,6 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
               onChange={e => updateBone(selectedBone.id, { name: e.target.value })}
               style={{ fontSize: 'var(--text-sm)' }}
             />
-
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>Parent</label>
-            <select
-              className="input"
-              value={selectedBone.parentId ?? ''}
-              onChange={e => updateBone(selectedBone.id, { parentId: e.target.value || null })}
-              style={{ fontSize: 'var(--text-sm)' }}
-            >
-              <option value="">Aucun (racine)</option>
-              {bones.filter(b => b.id !== selectedBone.id).map(b => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
               <input
@@ -628,15 +610,30 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
                 Coude (pli)
               </label>
               {selectedBone.elbowPos && (
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', paddingLeft: 20 }}>
-                  Position : ({selectedBone.elbowPos.x.toFixed(0)}, {selectedBone.elbowPos.y.toFixed(0)})
-                  <button
-                    className="btn-sm btn-ghost"
-                    style={{ marginLeft: 8, fontSize: 'var(--text-xs)' }}
-                    onClick={() => setEditMode('place-elbow')}
-                  >
-                    Repositionner
-                  </button>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div>
+                    Position : ({selectedBone.elbowPos.x.toFixed(0)}, {selectedBone.elbowPos.y.toFixed(0)})
+                    <button
+                      className="btn-sm btn-ghost"
+                      style={{ marginLeft: 8, fontSize: 'var(--text-xs)' }}
+                      onClick={() => setEditMode('place-elbow')}
+                    >
+                      Repositionner
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <label>Mode :</label>
+                    <select
+                      className="input"
+                      value={selectedBone.elbowMode ?? 'rest'}
+                      onChange={e => updateBone(selectedBone.id, { elbowMode: e.target.value as 'rest' | 'centroid' | 'continuity' })}
+                      style={{ fontSize: 'var(--text-xs)', flex: 1 }}
+                    >
+                      <option value="rest">Fixe (placement)</option>
+                      <option value="centroid">Centroïde (intérieur)</option>
+                      <option value="continuity">Continuité (frame préc.)</option>
+                    </select>
+                  </div>
                 </div>
               )}
             </div>

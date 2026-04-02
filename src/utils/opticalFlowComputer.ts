@@ -531,7 +531,36 @@ export async function precomputeOpticalFlow(
       }
     }
 
-    // Apply per-frame constraints (skip frame 0 — no displacement yet)
+    // Apply per-frame constraints
+    // Frame 0: only snap-to-contour (no anti-saut/neighbor — no previous frame)
+    // Frame 1+: all constraints
+    if (constraints && i === 0 && (useSnap || useOTSnap) && frameResult.detectedContour?.length) {
+      // Snap frame 0 to video Canny contour to avoid static-image micro-shift
+      if (useOTSnap && constraints.contourAnchorOrder) {
+        const cannyPixels = frameResult.detectedContour as Point2D[]
+        const fallbackSnap = (pos: Point2D[], anchorOrder: number[], contour: Point2D[]) => {
+          const idx = new ContourSpatialIndex(contour)
+          const result = pos.map(p => ({ ...p }))
+          for (const ai of anchorOrder) {
+            const nearest = idx.nearest(pos[ai], 30)
+            if (nearest) result[ai] = nearest.point
+          }
+          return result
+        }
+        const otResult = applyOTSnap(points, constraints.contourAnchorOrder, cannyPixels, otParams!, fallbackSnap)
+        points = otResult.snapped
+      } else if (useSnap) {
+        const contourIndex = new ContourSpatialIndex(frameResult.detectedContour as Point2D[])
+        const snapOpts = { enabled: true, snapRadius: 12, lostRadius: 30, strengthNormal: 1.0, strengthPartial: 0.5, ...constraints.snapToContourConfig }
+        const snapResult = applySnapToContour(points, contourIndex, snapOpts)
+        points = snapResult.snapped
+        if (snapResult.lostFlags.some(f => f)) {
+          const recovery = recoverLostPoints(points, snapResult.lostFlags, contourIndex)
+          points = recovery.recovered
+        }
+      }
+      await flowUpdatePoints(points)
+    }
     if (constraints && i > 0) {
       let changed = false
       const vmax = constraints.antiSautVmax ?? Math.sqrt(videoW * videoW + videoH * videoH) * 0.015

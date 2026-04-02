@@ -134,27 +134,41 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       const iw = img.naturalWidth, ih = img.naturalHeight
       imageDimsRef.current = { w: iw, h: ih }
 
-      // 2. Get ordered contour for frame 0
+      // 2. Get ordered contour for frame 0 — use VIDEO frame 0 (not static image)
+      // to avoid micro-shift between static image Canny and video Canny
       let ordered0: Point2D[]
       if (useCache && cachedCanny[0] && cachedCanny[0].length > 0) {
         ordered0 = cachedCanny[0]
       } else {
-        const canvas0 = document.createElement('canvas')
-        canvas0.width = iw; canvas0.height = ih
-        const ctx0 = canvas0.getContext('2d')!
-        ctx0.drawImage(img, 0, 0)
-        const imgData0 = ctx0.getImageData(0, 0, iw, ih)
+        // Detect Canny on video frame 0 (consistent with frame 1+)
+        const tempUrl = URL.createObjectURL(project.videoBlob!)
+        const tempVideo = document.createElement('video')
+        tempVideo.src = tempUrl
+        tempVideo.muted = true
+        tempVideo.preload = 'auto'
+        await new Promise<void>(r => { tempVideo.onloadeddata = () => r(); tempVideo.load() })
+        tempVideo.currentTime = 0
+        await new Promise<void>(r => { tempVideo.onseeked = () => r() })
+        const tempCanvas = document.createElement('canvas')
+        const tvw = tempVideo.videoWidth, tvh = tempVideo.videoHeight
+        tempCanvas.width = tvw; tempCanvas.height = tvh
+        const tempCtx = tempCanvas.getContext('2d')!
+        tempCtx.drawImage(tempVideo, 0, 0)
+        const imgData0 = tempCtx.getImageData(0, 0, tvw, tvh)
+        URL.revokeObjectURL(tempUrl)
+
         const cannyPts0 = await flowCannyContour(imgData0, cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize)
         if (!cannyPts0 || cannyPts0.length < 10) {
-          setProgress('Erreur: contour Canny non détecté sur l\'image originale')
+          setProgress('Erreur: contour Canny non détecté sur la frame 0 vidéo')
           setPhase('ready')
           URL.revokeObjectURL(img.src)
           return
         }
-        // cannyPts0 are already ordered by OpenCV's findContours
-        ordered0 = cannyPts0
-        if (mesh.contourOrigin) {
-          ordered0 = reorderContourFromOrigin(ordered0, mesh.contourOrigin)
+        // Scale from video coords to image coords (consistent with frame 1+ handling)
+        ordered0 = cannyPts0.map(p => ({ x: (p.x / tvw) * iw, y: (p.y / tvh) * ih }))
+        const p0Frame0 = mesh.contourOriginFrames?.[0]?.[0] ?? mesh.contourOrigin
+        if (p0Frame0) {
+          ordered0 = reorderContourFromOrigin(ordered0, p0Frame0)
         }
       }
       URL.revokeObjectURL(img.src)
@@ -208,9 +222,14 @@ export default function ContourTrackingStep({ project, onSave }: Props) {
       const allLostFlags: boolean[][] = []
       const allCannyFrames: Point2D[][] = []
 
-      // Frame 0 = original anchor positions (no lost)
-      allFrames.push([...contourAnchors])
-      allRawFrames.push([...contourAnchors])
+      // Frame 0 = anchor positions snapped to video frame 0 Canny (not static image)
+      const contourIdx0 = new ContourSpatialIndex(ordered0)
+      const snappedAnchors0 = contourAnchors.map(anchor => {
+        const snap = contourIdx0.nearestUnbounded(anchor)
+        return snap ? snap.point : anchor
+      })
+      allFrames.push(snappedAnchors0)
+      allRawFrames.push(snappedAnchors0)
       allLostFlags.push(contourAnchors.map(() => false))
       allCannyFrames.push(ordered0)
 

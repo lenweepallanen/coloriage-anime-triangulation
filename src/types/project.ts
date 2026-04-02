@@ -33,14 +33,16 @@ export interface BoneEndpointRef {
   localY: number;         // offset perpendiculaire, normalisé par |A-B|
 }
 
+export type ElbowMode = 'rest' | 'centroid' | 'continuity'
+
 export interface Bone {
   id: string;
   name: string;
-  parentId: string | null;  // null = racine
   head: BoneEndpointRef;
   tail: BoneEndpointRef;
   fixedLength: boolean;     // si true, longueur constante (rest pose)
   elbowPos: Point2D | null; // position du coude au repos (null = pas de coude, IK 2-bones)
+  elbowMode: ElbowMode;    // 'rest' = côté fixé au placement, 'centroid' = vers intérieur mesh, 'continuity' = frame précédente
 }
 
 export interface MeshData {

@@ -10,7 +10,7 @@
  * segment lengths when the head and tail move closer/further apart.
  */
 
-import type { Point2D, Bone, BoneEndpointRef } from '../types/project'
+import type { Point2D, Bone, BoneEndpointRef, ElbowMode } from '../types/project'
 
 // ─── Geometry helpers ────────────────────────────────────────────────────
 
@@ -225,18 +225,6 @@ function identityMatrix(): AffineMatrix {
   return [1, 0, 0, 0, 1, 0]
 }
 
-function composeMatrices(m1: AffineMatrix, m2: AffineMatrix): AffineMatrix {
-  const [a1, b1, tx1, c1, d1, ty1] = m1
-  const [a2, b2, tx2, c2, d2, ty2] = m2
-  return [
-    a1 * a2 + b1 * c2,
-    a1 * b2 + b1 * d2,
-    a1 * tx2 + b1 * ty2 + tx1,
-    c1 * a2 + d1 * c2,
-    c1 * b2 + d1 * d2,
-    c1 * tx2 + d1 * ty2 + ty1,
-  ]
-}
 
 function boneLocalMatrix(transform: BoneTransform): AffineMatrix {
   const cos = Math.cos(transform.angle)
@@ -247,32 +235,51 @@ function boneLocalMatrix(transform: BoneTransform): AffineMatrix {
   return [cos, -sin, tx, sin, cos, ty]
 }
 
-function topologicalSort(bones: Bone[]): Bone[] {
-  const byId = new Map(bones.map(b => [b.id, b]))
-  const sorted: Bone[] = []
-  const visited = new Set<string>()
+/**
+ * Choose bendSide for elbow IK based on the elbow mode.
+ * - 'rest': use the side determined at rest pose placement (fixed)
+ * - 'centroid': choose the side closest to the centroid of tracked points (towards interior)
+ * - 'continuity': choose the side closest to previous frame's elbow position
+ */
+function chooseBendSide(
+  mode: ElbowMode,
+  head: Point2D, tail: Point2D,
+  len1: number, len2: number,
+  restBendSide: number,
+  centroid: Point2D | null,
+  prevElbow: Point2D | null,
+): number {
+  if (mode === 'rest' || (!centroid && !prevElbow)) return restBendSide
 
-  function visit(bone: Bone) {
-    if (visited.has(bone.id)) return
-    if (bone.parentId && byId.has(bone.parentId)) {
-      visit(byId.get(bone.parentId)!)
-    }
-    visited.add(bone.id)
-    sorted.push(bone)
+  if (mode === 'centroid' && centroid) {
+    const ePlus = solveElbowIK(head, tail, len1, len2, +1)
+    const eMinus = solveElbowIK(head, tail, len1, len2, -1)
+    const dPlus = Math.hypot(ePlus.x - centroid.x, ePlus.y - centroid.y)
+    const dMinus = Math.hypot(eMinus.x - centroid.x, eMinus.y - centroid.y)
+    return dPlus <= dMinus ? +1 : -1
   }
 
-  for (const bone of bones) visit(bone)
-  return sorted
+  if (mode === 'continuity' && prevElbow) {
+    const ePlus = solveElbowIK(head, tail, len1, len2, +1)
+    const eMinus = solveElbowIK(head, tail, len1, len2, -1)
+    const dPlus = Math.hypot(ePlus.x - prevElbow.x, ePlus.y - prevElbow.y)
+    const dMinus = Math.hypot(eMinus.x - prevElbow.x, eMinus.y - prevElbow.y)
+    return dPlus <= dMinus ? +1 : -1
+  }
+
+  return restBendSide
 }
 
 /**
  * Resolve current-frame head, tail, and optional elbow for a bone.
- * Handles fixedLength and elbow IK.
+ * Handles fixedLength and elbow IK with dynamic bendSide.
  */
 function resolveBonePositions(
   bone: Bone,
   restPose: BonePose,
   trackedPositions: Point2D[],
+  centroid: Point2D | null,
+  prevElbow: Point2D | null,
 ): { head: Point2D; tail: Point2D; elbow?: Point2D } {
   const head = computeBoneEndpoint(bone.head, trackedPositions)
   let tail = computeBoneEndpoint(bone.tail, trackedPositions)
@@ -290,7 +297,12 @@ function resolveBonePositions(
 
   // Elbow IK
   if (bone.elbowPos && restPose.elbowLen1 != null && restPose.elbowLen2 != null && restPose.elbowBendSide != null) {
-    const elbow = solveElbowIK(head, tail, restPose.elbowLen1, restPose.elbowLen2, restPose.elbowBendSide)
+    const mode = bone.elbowMode ?? 'rest'
+    const bendSide = chooseBendSide(
+      mode, head, tail, restPose.elbowLen1, restPose.elbowLen2,
+      restPose.elbowBendSide, centroid, prevElbow,
+    )
+    const elbow = solveElbowIK(head, tail, restPose.elbowLen1, restPose.elbowLen2, bendSide)
     return { head, tail, elbow }
   }
 
@@ -307,46 +319,30 @@ export function computeSubBoneMatrices(
   trackedPositions: Point2D[],
   subBones: SubBone[],
   boneToSub: number[][],
+  centroid?: Point2D | null,
+  prevElbows?: Map<string, Point2D> | null,
 ): AffineMatrix[] {
-  const sorted = topologicalSort(bones)
   const boneIndexMap = new Map(bones.map((b, i) => [b.id, i]))
   const matrices: AffineMatrix[] = new Array(subBones.length).fill(null)
-  const parentWorldMat = new Map<string, AffineMatrix>()
 
-  for (const bone of sorted) {
+  for (const bone of bones) {
     const bi = boneIndexMap.get(bone.id)!
     const rest = restPose.get(bone.id)!
-    const resolved = resolveBonePositions(bone, rest, trackedPositions)
+    const resolved = resolveBonePositions(bone, rest, trackedPositions, centroid ?? null, prevElbows?.get(bone.id) ?? null)
     const subIndices = boneToSub[bi]
 
     if (resolved.elbow && subIndices.length === 2) {
       // Sub-bone 0: head → elbow
       const t0 = computeBoneTransform(rest.head, rest.elbow!, resolved.head, resolved.elbow)
-      let mat0 = boneLocalMatrix(t0)
-      if (bone.parentId && parentWorldMat.has(bone.parentId)) {
-        mat0 = composeMatrices(parentWorldMat.get(bone.parentId)!, mat0)
-      }
-      matrices[subIndices[0]] = mat0
+      matrices[subIndices[0]] = boneLocalMatrix(t0)
 
       // Sub-bone 1: elbow → tail
       const t1 = computeBoneTransform(rest.elbow!, rest.tail, resolved.elbow, resolved.tail)
-      let mat1 = boneLocalMatrix(t1)
-      if (bone.parentId && parentWorldMat.has(bone.parentId)) {
-        mat1 = composeMatrices(parentWorldMat.get(bone.parentId)!, mat1)
-      }
-      matrices[subIndices[1]] = mat1
-
-      // For child bones, use the tail sub-bone's matrix as parent
-      parentWorldMat.set(bone.id, mat1)
+      matrices[subIndices[1]] = boneLocalMatrix(t1)
     } else {
       // Single sub-bone: head → tail
       const t = computeBoneTransform(rest.head, rest.tail, resolved.head, resolved.tail)
-      let mat = boneLocalMatrix(t)
-      if (bone.parentId && parentWorldMat.has(bone.parentId)) {
-        mat = composeMatrices(parentWorldMat.get(bone.parentId)!, mat)
-      }
-      matrices[subIndices[0]] = mat
-      parentWorldMat.set(bone.id, mat)
+      matrices[subIndices[0]] = boneLocalMatrix(t)
     }
   }
 
@@ -467,9 +463,43 @@ export function batchSolveBone(
   const { subBones, boneToSub } = expandToSubBones(bones, restPose)
   const result: Point2D[][] = new Array(nFrames)
 
+  // Track previous elbow positions for 'continuity' mode
+  let prevElbows: Map<string, Point2D> | null = null
+
+  // Check if any bone uses centroid or continuity mode
+  const needsCentroid = bones.some(b => b.elbowPos && b.elbowMode === 'centroid')
+  const needsContinuity = bones.some(b => b.elbowPos && b.elbowMode === 'continuity')
+
   for (let f = 0; f < nFrames; f++) {
-    const matrices = computeSubBoneMatrices(bones, restPose, trackedFrames[f], subBones, boneToSub)
+    const tracked = trackedFrames[f]
+
+    // Compute centroid of tracked points (for 'centroid' mode)
+    let centroid: Point2D | null = null
+    if (needsCentroid && tracked.length > 0) {
+      let cx = 0, cy = 0
+      for (const p of tracked) { cx += p.x; cy += p.y }
+      centroid = { x: cx / tracked.length, y: cy / tracked.length }
+    }
+
+    const matrices = computeSubBoneMatrices(
+      bones, restPose, tracked, subBones, boneToSub,
+      centroid, needsContinuity ? prevElbows : null,
+    )
     result[f] = skinVerticesSubBones(allRestPoints, boneWeights, matrices)
+
+    // Store current elbow positions for next frame's continuity
+    if (needsContinuity) {
+      const elbows = new Map<string, Point2D>()
+      for (const bone of bones) {
+        if (!bone.elbowPos) continue
+        const rest = restPose.get(bone.id)!
+        const resolved = resolveBonePositions(
+          bone, rest, tracked, centroid, prevElbows?.get(bone.id) ?? null,
+        )
+        if (resolved.elbow) elbows.set(bone.id, resolved.elbow)
+      }
+      prevElbows = elbows
+    }
 
     if (onProgress && f % 10 === 0) {
       onProgress(f, nFrames)
@@ -487,22 +517,13 @@ export function computeWorldMatrices(
   restPose: Map<string, BonePose>,
   trackedPositions: Point2D[],
 ): Map<string, AffineMatrix> {
-  // For bones without elbows, this gives the same result as before.
-  // For bones with elbows, returns the tail sub-bone matrix (full chain transform).
-  const sorted = topologicalSort(bones)
   const worldMatrices = new Map<string, AffineMatrix>()
 
-  for (const bone of sorted) {
+  for (const bone of bones) {
     const rest = restPose.get(bone.id)!
-    const resolved = resolveBonePositions(bone, rest, trackedPositions)
+    const resolved = resolveBonePositions(bone, rest, trackedPositions, null, null)
     const localTransform = computeBoneTransform(rest.head, rest.tail, resolved.head, resolved.tail)
-    const localMat = boneLocalMatrix(localTransform)
-
-    if (bone.parentId && worldMatrices.has(bone.parentId)) {
-      worldMatrices.set(bone.id, composeMatrices(worldMatrices.get(bone.parentId)!, localMat))
-    } else {
-      worldMatrices.set(bone.id, localMat)
-    }
+    worldMatrices.set(bone.id, boneLocalMatrix(localTransform))
   }
 
   return worldMatrices

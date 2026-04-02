@@ -149,7 +149,11 @@ export default function BoneTriangulationStep({ project, animation, onSave }: Pr
       ...contourAnchorFrames[frame],
       ...(ancFrames?.[frame] ?? mesh.anchorPoints),
     ]
-    const restTracked = [...mesh.contourAnchors, ...mesh.anchorPoints]
+    // Rest = tracked frame 0 (not editor positions, to avoid micro-shift)
+    const restTracked = [
+      ...contourAnchorFrames[0],
+      ...(ancFrames?.[0] ?? mesh.anchorPoints),
+    ]
 
     // Draw tracked anchor points
     const nCA = mesh.contourAnchors.length
@@ -428,12 +432,6 @@ export default function BoneTriangulationStep({ project, animation, onSave }: Pr
         ...mesh.internalPoints,
       ]
 
-      // Rest tracked positions (frame 0)
-      const restTrackedPositions: Point2D[] = [
-        ...mesh.contourAnchors,
-        ...mesh.anchorPoints,
-      ]
-
       // Tracked positions per frame
       const trackedFrames: Point2D[][] = []
       for (let f = 0; f < totalF; f++) {
@@ -442,6 +440,9 @@ export default function BoneTriangulationStep({ project, animation, onSave }: Pr
           ...(ancFrames[f] ?? mesh.anchorPoints),
         ])
       }
+
+      // Rest pose = tracked frame 0 (not editor positions, to avoid micro-shift)
+      const restTrackedPositions = trackedFrames[0]
 
       setAnimProgress('Calcul déformation bones...')
       await new Promise(r => setTimeout(r, 0))

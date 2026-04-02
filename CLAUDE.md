@@ -129,12 +129,12 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 3. **Tracking Point 0** — Tracking P0 sur la vidéo bone (optical flow + snap Canny)
 4. **Tracking Contour** — Placement curviligne + snap extrema courbure sur la vidéo bone
 5. **Tracking Ancres** — Optical flow ancres internes sur la vidéo bone (anti-saut + voisinage)
-6. **Bones** — Définition du squelette : bones hiérarchiques (parent-enfant), chaque bone a 2 endpoints (head/tail) positionnés relativement à une paire d'anchor points trackés. Option **longueur constante** par bone. Validation → calcul auto-weights par distance inverse.
+6. **Bones** — Définition du squelette : chaque bone a 2 endpoints (head/tail) positionnés relativement à une paire d'anchor points trackés. Option **longueur constante** par bone. Option **coude** (elbow IK 2-bones) avec 3 modes de pli. Validation → calcul auto-weights par distance inverse sur les sub-bones.
 7. **Triangulation** — Calcul animation par déformation squelettique (bones + LBS au lieu d'ARAP) → `videoFramesMesh`. Preview wireframe/gradient avec overlay bones animés.
 
 ### Système Bone
 
-**Concept** : au lieu de tracker chaque point du maillage et d'utiliser ARAP pour déformer, on définit un squelette de bones dont les positions sont déduites des anchor points trackés. Les vertices du maillage sont liés aux bones par skinning automatique.
+**Concept** : au lieu de tracker chaque point du maillage et d'utiliser ARAP pour déformer, on définit un squelette de bones dont les positions sont déduites des anchor points trackés. Les vertices du maillage sont liés aux bones par skinning automatique. Chaque bone est indépendant (pas de hiérarchie parent-enfant).
 
 **Bone** : segment défini par 2 endpoints (head + tail). Chaque endpoint est positionné dans le repère local d'une paire d'anchors :
 - `origin = anchorA`, `axe_x = anchorB - anchorA`, `axe_y = perp(axe_x)`
@@ -142,20 +142,29 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 - `localX`/`localY` normalisés par `|A-B|` — le bone se déplace et se redimensionne avec ses anchors
 - Si `anchorA === anchorB` : le bone suit la translation pure de l'anchor (pas de rotation)
 
-**Hiérarchie** : les bones forment un arbre (parent-child). Les transforms se composent par forward kinematics (parents d'abord).
-
 **Longueur constante** (`fixedLength: boolean`) : si activé, la direction du bone suit les anchors mais sa longueur est figée à celle du rest pose. Le tail est repositionné sur la droite head→tail à distance constante.
 
-**Auto-weights** : poids par distance inverse au carré au segment du bone. `w = 1/(dist+1)²`, normalisés par vertex. Seuil < 0.01 → 0.
+**Coude (elbow IK)** : un bone peut avoir un coude intermédiaire (`elbowPos: Point2D | null`). Le coude crée 2 sous-segments (head→elbow, elbow→tail) dont les longueurs sont constantes (déterminées au repos). La position du coude est calculée par IK 2-bones (intersection de 2 cercles, cosine rule) à chaque frame. 3 modes pour choisir le côté du pli (`elbowMode: ElbowMode`) :
+- **`rest`** : côté fixé par le placement du coude au repos (cross product)
+- **`centroid`** : le coude plie vers le centroïde des points trackés (intérieur du mesh)
+- **`continuity`** : le coude reste du même côté que la frame précédente (continuité temporelle)
 
-**Skinning** : Linear Blend Skinning (LBS) — chaque vertex est déformé par la moyenne pondérée des transformations rigides (rotation + translation) de ses bones influents.
+Le coude est draggable dans l'éditeur (mousedown/move/up).
+
+**Sub-bones** : en interne, un bone avec coude est éclaté en 2 sub-bones pour le calcul des weights et du skinning. Un bone sans coude = 1 sub-bone. Les auto-weights et matrices travaillent sur les sub-bones.
+
+**Auto-weights** : poids par distance inverse au carré au segment du sub-bone. `w = 1/(dist+1)²`, normalisés par vertex. Seuil < 0.01 → 0.
+
+**Skinning** : Linear Blend Skinning (LBS) — chaque vertex est déformé par la moyenne pondérée des transformations rigides (rotation + translation) de ses sub-bones influents.
+
+**Rest pose** : le rest pose des bones utilise `trackedFrames[0]` (positions trackées frame 0 de la vidéo), pas les positions éditeur statiques. Cela évite le micro-décalage entre l'image statique et la frame 0 de la vidéo.
 
 **Déformation par frame** :
 1. Calcul positions endpoints depuis les tracked anchors (`contourAnchorFrames[f]` + `anchorFrames[f]`)
-2. Si `fixedLength` : normaliser la longueur au rest pose
-3. Calcul transform rigide (rotation + translation) par bone vs rest pose
-4. Forward kinematics : composition parent→enfant
-5. LBS : `position_vertex = Σ weight_b × transform_b(rest_position_vertex)`
+2. Si `fixedLength` (sans coude) : normaliser la longueur au rest pose
+3. Si coude : résoudre IK 2-bones → position du coude, avec bendSide selon le mode
+4. Calcul transform rigide (rotation + translation) par sub-bone vs rest pose
+5. LBS : `position_vertex = Σ weight_sb × transform_sb(rest_position_vertex)`
 6. Résultat : `videoFramesMesh[f]`
 
 ## Workflow Scan (utilisateur final)
@@ -325,13 +334,16 @@ BoneEndpointRef {
   localY: number                         // offset perpendiculaire, normalisé par |A-B|
 }
 
+ElbowMode = 'rest' | 'centroid' | 'continuity'
+
 Bone {
   id: string
   name: string
-  parentId: string | null                // null = racine
   head: BoneEndpointRef
   tail: BoneEndpointRef
   fixedLength: boolean                   // si true, longueur constante (rest pose)
+  elbowPos: Point2D | null              // position du coude au repos (null = pas de coude)
+  elbowMode: ElbowMode                  // mode de choix du côté du pli
 }
 
 SceneBackgroundLayer {
@@ -436,6 +448,7 @@ StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
 - Les points sont indexés : contourAnchors 0..A-1, contourSubdivision A..A+S-1, anchorPoints A+S..A+S+M-1, internals après
 - Les pixels retournés par OpenCV `findContours` sont déjà ordonnés — `orderContourPixels()` n'est plus nécessaire dans le pipeline normal
 - Le cache `contourCannyFrames` (calculé étape 6) est propagé aux étapes 7 et 10 pour éviter la re-détection Canny
+- **Frame 0 cohérence vidéo** : le tracking contour (étape 7) détecte le Canny sur la frame 0 de la vidéo (pas l'image statique) et snappe les anchors dessus. L'optical flow (étape 9) applique le snap-to-contour à frame 0 aussi. Le bone solver utilise `trackedFrames[0]` comme rest pose. Cela élimine le micro-décalage image statique vs vidéo frame 0.
 
 ## Commandes
 
