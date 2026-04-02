@@ -40,6 +40,7 @@ export interface Bone {
   head: BoneEndpointRef;
   tail: BoneEndpointRef;
   fixedLength: boolean;     // si true, longueur constante (rest pose)
+  elbowPos: Point2D | null; // position du coude au repos (null = pas de coude, IK 2-bones)
 }
 
 export interface MeshData {

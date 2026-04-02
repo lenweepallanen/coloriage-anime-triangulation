@@ -47,7 +47,7 @@ function getBoneColor(index: number): string {
   return BONE_COLORS[index % BONE_COLORS.length]
 }
 
-type EditMode = 'select' | 'add-head' | 'add-tail'
+type EditMode = 'select' | 'add-head' | 'add-tail' | 'place-elbow'
 
 export default function BoneEditorStep({ project, animation, onSave }: Props) {
   const [saving, setSaving] = useState(false)
@@ -62,6 +62,7 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } =
     useCanvasInteraction(canvasRef)
   const animFrameRef = useRef(0)
+  const draggingElbowRef = useRef<string | null>(null)  // bone id being dragged
 
   const restGeo = useMemo(() => getRestGeometry(project), [project])
   const selectedBone = bones.find(b => b.id === selectedBoneId) ?? null
@@ -153,14 +154,45 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
       const isSelected = bone.id === selectedBoneId
       const headPos = computeBoneEndpoint(bone.head, trackedPoints)
       const tailPos = computeBoneEndpoint(bone.tail, trackedPoints)
+      const hasElbow = bone.elbowPos != null
 
-      // Bone line
-      ctx.strokeStyle = color
-      ctx.lineWidth = (isSelected ? 3 : 2) / t.scale
-      ctx.beginPath()
-      ctx.moveTo(headPos.x, headPos.y)
-      ctx.lineTo(tailPos.x, tailPos.y)
-      ctx.stroke()
+      if (hasElbow) {
+        // Draw 2 sub-segments through elbow
+        const elbowPos = bone.elbowPos!
+        const lw = (isSelected ? 3 : 2) / t.scale
+
+        // Segment head → elbow
+        ctx.strokeStyle = color
+        ctx.lineWidth = lw
+        ctx.beginPath()
+        ctx.moveTo(headPos.x, headPos.y)
+        ctx.lineTo(elbowPos.x, elbowPos.y)
+        ctx.stroke()
+
+        // Segment elbow → tail (slightly lighter)
+        ctx.globalAlpha = 0.7
+        ctx.beginPath()
+        ctx.moveTo(elbowPos.x, elbowPos.y)
+        ctx.lineTo(tailPos.x, tailPos.y)
+        ctx.stroke()
+        ctx.globalAlpha = 1
+
+        // Elbow square
+        const elbR = (isSelected ? 5 : 4) / t.scale
+        ctx.fillStyle = '#fbbf24' // amber/yellow
+        ctx.fillRect(elbowPos.x - elbR, elbowPos.y - elbR, elbR * 2, elbR * 2)
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 1 / t.scale
+        ctx.strokeRect(elbowPos.x - elbR, elbowPos.y - elbR, elbR * 2, elbR * 2)
+      } else {
+        // Single segment head → tail
+        ctx.strokeStyle = color
+        ctx.lineWidth = (isSelected ? 3 : 2) / t.scale
+        ctx.beginPath()
+        ctx.moveTo(headPos.x, headPos.y)
+        ctx.lineTo(tailPos.x, tailPos.y)
+        ctx.stroke()
+      }
 
       // Head circle
       const headR = (isSelected ? 6 : 4) / t.scale
@@ -245,6 +277,49 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
     return { anchorIndexA: iA, anchorIndexB: iB, localX, localY }
   }
 
+  /** Hit-test elbow: returns bone id if click is near an elbow point */
+  function findElbowAtPos(imgPos: Point2D): string | null {
+    const threshold = 10 / transformRef.current.scale
+    for (let i = bones.length - 1; i >= 0; i--) {
+      const bone = bones[i]
+      if (!bone.elbowPos) continue
+      if (Math.hypot(imgPos.x - bone.elbowPos.x, imgPos.y - bone.elbowPos.y) < threshold) {
+        return bone.id
+      }
+    }
+    return null
+  }
+
+  function handleCanvasMouseDown(e: React.MouseEvent) {
+    if (isPanning.current || spaceDown.current || !restGeo) return
+    if (e.button !== 0) return
+
+    const imgPos = screenToImage(e.clientX, e.clientY)
+
+    // In select mode, check if we're starting a drag on an elbow
+    if (editMode === 'select') {
+      const elbowBoneId = findElbowAtPos(imgPos)
+      if (elbowBoneId) {
+        draggingElbowRef.current = elbowBoneId
+        setSelectedBoneId(elbowBoneId)
+        e.preventDefault()
+        return
+      }
+    }
+  }
+
+  function handleCanvasMouseMove(e: React.MouseEvent) {
+    if (!draggingElbowRef.current || !restGeo) return
+    const imgPos = screenToImage(e.clientX, e.clientY)
+    setBones(prev => prev.map(b =>
+      b.id === draggingElbowRef.current ? { ...b, elbowPos: { x: imgPos.x, y: imgPos.y } } : b
+    ))
+  }
+
+  function handleCanvasMouseUp(_e: React.MouseEvent) {
+    draggingElbowRef.current = null
+  }
+
   function handleCanvasClick(e: React.MouseEvent) {
     if (isPanning.current || spaceDown.current || !restGeo) return
     if (e.button !== 0) return
@@ -252,7 +327,7 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
     const imgPos = screenToImage(e.clientX, e.clientY)
 
     if (editMode === 'select') {
-      // Hit-test bones
+      // Hit-test bones (skip if we just finished a drag)
       const hitBone = findBoneAtPos(imgPos)
       setSelectedBoneId(hitBone?.id ?? null)
       return
@@ -276,10 +351,19 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
         head: pendingHead,
         tail: ref,
         fixedLength: false,
+        elbowPos: null,
       }
       setBones(prev => [...prev, newBone])
       setSelectedBoneId(newBone.id)
       setPendingHead(null)
+      setEditMode('select')
+      return
+    }
+
+    if (editMode === 'place-elbow' && selectedBoneId) {
+      setBones(prev => prev.map(b =>
+        b.id === selectedBoneId ? { ...b, elbowPos: { x: imgPos.x, y: imgPos.y } } : b
+      ))
       setEditMode('select')
       return
     }
@@ -423,6 +507,9 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
         <canvas
           ref={canvasRef}
           style={{ width: '100%', height: '100%', display: 'block', cursor: editMode !== 'select' ? 'crosshair' : 'default' }}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseUp={handleCanvasMouseUp}
           onClick={handleCanvasClick}
           onContextMenu={handleContextMenu}
         />
@@ -449,6 +536,11 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
         {editMode === 'add-tail' && (
           <div style={{ position: 'absolute', bottom: 8, left: 8, background: 'rgba(0,0,0,0.7)', padding: '4px 8px', borderRadius: 4, fontSize: 12 }}>
             Cliquez pour placer la <strong>queue</strong> du bone — clic droit pour annuler
+          </div>
+        )}
+        {editMode === 'place-elbow' && (
+          <div style={{ position: 'absolute', bottom: 8, left: 8, background: 'rgba(0,0,0,0.7)', padding: '4px 8px', borderRadius: 4, fontSize: 12, borderLeft: '3px solid #fbbf24' }}>
+            Cliquez pour placer le <strong>coude</strong> sur le bone
           </div>
         )}
       </div>
@@ -516,6 +608,38 @@ export default function BoneEditorStep({ project, animation, onSave }: Props) {
               />
               Longueur constante
             </label>
+
+            {/* Elbow */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 'var(--space-1)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+                <input
+                  type="checkbox"
+                  checked={selectedBone.elbowPos != null}
+                  onChange={e => {
+                    if (e.target.checked) {
+                      // Enter elbow placement mode
+                      setEditMode('place-elbow')
+                    } else {
+                      // Remove elbow
+                      updateBone(selectedBone.id, { elbowPos: null })
+                    }
+                  }}
+                />
+                Coude (pli)
+              </label>
+              {selectedBone.elbowPos && (
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', paddingLeft: 20 }}>
+                  Position : ({selectedBone.elbowPos.x.toFixed(0)}, {selectedBone.elbowPos.y.toFixed(0)})
+                  <button
+                    className="btn-sm btn-ghost"
+                    style={{ marginLeft: 8, fontSize: 'var(--text-xs)' }}
+                    onClick={() => setEditMode('place-elbow')}
+                  >
+                    Repositionner
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Head endpoint */}
             <fieldset style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 4, padding: 'var(--space-2)' }}>
