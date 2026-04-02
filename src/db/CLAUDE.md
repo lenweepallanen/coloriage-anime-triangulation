@@ -26,6 +26,8 @@ Séparation métadonnées / blobs :
   ambientSoundEnabled: boolean
   markers: MarkerCorners | null
   animations: AnimationDoc[]    // Remplace mesh/hasVideo au root
+  bodyZones?: BodyZoneDoc[]     // Zones corporelles (triangleIndices par zone)
+  scene: SceneDoc | null        // Scène avec backgroundLayers
 }
 ```
 
@@ -58,6 +60,9 @@ Chaque `AnimationDoc` :
 projects/{projectId}/originalImage                              → Blob image (niveau projet)
 projects/{projectId}/backgroundVideo                            → Blob vidéo fond (niveau projet)
 projects/{projectId}/ambientSound                               → Blob son d'ambiance (niveau projet)
+projects/{projectId}/sceneBackgroundLayer0                      → Arrière-plan scène (parallax)
+projects/{projectId}/sceneBackgroundLayer1                      → Milieu scène (parallax)
+projects/{projectId}/sceneBackgroundLayer2                      → Premier plan scène (parallax)
 projects/{projectId}/animations/{animId}/video                  → Blob vidéo animation
 projects/{projectId}/animations/{animId}/contourOriginKeyframes.json
 projects/{projectId}/animations/{animId}/contourOriginFrames.json
@@ -86,7 +91,10 @@ scans/{scanId}/scanImage                                        → Blob image r
 ### Upload Hints
 
 ```typescript
-UploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | { animationId: string; field: AnimationUploadField }
+UploadHint = 'image' | 'backgroundVideo' | 'ambientSound'
+  | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
+  | { animationId: string; field: AnimationUploadField }
+  | { speakSoundId: string } | { deleteSpeakSoundId: string }
 
 AnimationUploadField =
   | 'video' | 'audio' | 'contourOriginKeyframes' | 'contourOriginFrames'

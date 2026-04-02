@@ -22,7 +22,8 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 |---------|-------|------|
 | `ProjectImportSection.tsx` | — | Import assets projet (image, vidéo fond, son ambiance) avec toggle activer/désactiver |
 | `AnimationManager.tsx` | — | Sélecteur/gestion animations (ajout oneshot/physics, suppression, renommage, toggle type) |
-| `AdminPreview.tsx` | — | Preview live PIXI.js de l'animation dans le split-panel admin + son ambiance sync play/pause |
+| `AdminPreview.tsx` | — | Preview live PIXI.js de l'animation dans le split-panel admin (sans physique tactile) |
+| `BodyZoneEditor.tsx` | — | Éditeur de zones corporelles (sélection triangles, peinture, rectangle) |
 | `PhysicsAnimationEditor.tsx` | Code Editeur | Éditeur code JS + preview PIXI temps réel + pré-calcul frames |
 | `ImportStep.tsx` | 1 | Upload vidéo d'animation (+ son optionnel pour oneshot) |
 | `CannyValidationStep.tsx` | 2 | Preview edges Canny sur vidéo + réglage seuils |
@@ -79,12 +80,22 @@ Preview live PIXI.js intégrée dans le split-panel droit de `AdminPage`. Rendu 
 - **Props** : `{ project: Project, style?: CSSProperties }`
 - **Texture** : `originalImageBlob` → Image → canvas offscreen → PIXI.Texture (UVs directs, pas de contentAlignment)
 - **Animation** : `MultiAnimationPlayback` (rest loop + oneshots + physics overlays) ou `LoopPlayback` si aucun
-- **Physique** : `MeshPhysicsEffect` avec pointer events sur le canvas PIXI
-- **Effets visuels** : ombre (contour polygon + blur), éclairage (gradient overlay), vidéo de fond (sans parallax)
-- **Contrôles** : play/pause, boutons oneshot/physics, sliders physique/visuels en `<details>` dépliables
+- **Contrôles** : play/pause, boutons oneshot/physics
 - **Son ambiance** : joué en boucle si `project.ambientSoundBlob` et `ambientSoundEnabled`, synchronisé avec play/pause via `ambientAudioRef`
 - **Performance** : FPS capé à 30 (`app.ticker.maxFPS`), `ResizeObserver` pour le redimensionnement
-- **Pas de** : fullscreen, landscape lock, parallax gyroscope, LongPressCloseButton
+- **Pas de** : physique tactile, fullscreen, landscape lock, parallax gyroscope
+
+## BodyZoneEditor (`BodyZoneEditor.tsx`)
+
+Éditeur de zones corporelles. Canvas interactif pour assigner des triangles du maillage à des zones labellisées.
+
+- **Prérequis** : topologie verrouillée sur la rest animation
+- **Layout** : canvas (gauche) + panneau liste zones (droite)
+- **Canvas** : image originale en fond, triangles colorés par zone, wireframe gris
+- **Sélection** : clic sur triangle (toggle), drag pour peindre, rectangle de sélection (drag dans le vide), clic droit pour retirer
+- **Zones** : ajout/suppression, couleur configurable, label éditable (double-clic), compteur triangles
+- **Sauvegarde** : `project.bodyZones` mis à jour via `onSave`
+- **Zoom/Pan** : réutilise `useCanvasInteraction`
 
 ## Import projet (`ProjectImportSection.tsx`)
 

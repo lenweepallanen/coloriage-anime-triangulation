@@ -11,7 +11,8 @@ Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traiteme
 | `CameraView.tsx` | Flux caméra temps réel + détection marqueurs L + analyse qualité |
 | `CornerAdjustment.tsx` | Ajustement manuel des 4 coins détectés (SVG draggable) |
 | `ScanProcessor.tsx` | Hook de traitement : correction perspective + debug pipeline + sauvegarde scan |
-| `AnimationPlayer.tsx` | Rendu PIXI.js du maillage texturé animé |
+| `AnimationPlayer.tsx` | Rendu PIXI.js du maillage texturé animé (sans physique tactile) |
+| `ScenePlayer.tsx` | Rendu PIXI.js scène multi-layer parallax + interactions zones corporelles |
 
 ## CameraView — Détection temps réel
 
@@ -133,7 +134,7 @@ Après `enhanceContrast`, le processeur détecte automatiquement la bounding box
 
 Layout horizontal plein écran (`position: fixed`, `z-index: 100`) :
 - **Gauche** : canvas PIXI (`flex: 1`, fond noir)
-- **Droite** : sidebar 220px (180px mobile) avec boutons (Play/Pause, Fullscreen, Fermer) et sliders dans des `<details>` dépliables (Physique + Effets visuels)
+- **Droite** : sidebar 220px (180px mobile) avec boutons (Play/Pause, Fullscreen, Fermer) et sliders dans des `<details>` dépliables (Effets visuels)
 - **Bas centre** : boutons oneshot/physics flottants (un par animation oneshot ou physics prête, bordure violette pour les physics overlay)
 
 ### Multi-animation playback
@@ -201,6 +202,29 @@ Si `project.ambientSoundBlob` et `project.ambientSoundEnabled` : un `HTMLAudioEl
 ### Contrôles (sidebar)
 
 - Play / Pause, Plein écran, Fermer
-- Sliders Physique : Force, Rayon, Concentration, Retour
-- Sliders Visuels : Ombre, Éclairage, Parallax
+- Sliders Visuels : Parallax
 - Boutons oneshot/physics : un par animation oneshot ou physics avec `videoFramesMesh` prêt (les boutons overlay restent cliquables même pendant un oneshot)
+
+## ScenePlayer — Rendu scène avec parallax + zones corporelles
+
+### Parallax 3 couches
+
+Le background de scène est composé de 3 layers (`scene.backgroundLayers[0..2]`) rendus dans 3 containers PIXI ordonnés (back-to-front) :
+- Layer 0 (arrière-plan) : `depthFactor` par défaut 0.3
+- Layer 1 (milieu) : `depthFactor` par défaut 0.6
+- Layer 2 (premier plan) : `depthFactor` 1.0 (comportement identique à l'ancien background unique)
+
+Formule : `sprite.x = -frontOffsetPx * depthFactor` — les couches arrière défilent plus lentement.
+
+Le `bgScale` est basé sur la hauteur du layer 2 (premier plan). Le `backgroundOffsetX` de `ScenePlayback` est en pixels du front layer.
+
+### Détection zones corporelles
+
+Au `pointerdown` pendant l'état `interaction` :
+1. Conversion screen → image via `screenToImage`
+2. `findTriangleAtPoint` → index du triangle touché
+3. Lookup dans `triangleZoneMap` (pré-calculé depuis `project.bodyZones`)
+4. Lookup du mapping zone→animation dans `restPoint.zoneAnimationMappings`
+5. Si mapping trouvé → `multiPlayback.requestOneshot(animationId)`
+
+Les positions courantes (`latestPositions`) sont mises à jour à chaque frame du ticker pour un hit-test précis sur le mesh déformé.

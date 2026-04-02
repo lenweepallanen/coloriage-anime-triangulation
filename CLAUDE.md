@@ -54,13 +54,24 @@ Ces assets sont au **niveau projet** (partagés par toutes les animations). Le c
 
 ### Preview panel (AdminPreview)
 
-Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet droit (preview live PIXI.js). La preview utilise l'image PNG originale comme texture (pas de scan). Affiche l'animation rest en boucle + boutons oneshot/physics + physique tactile + effets visuels.
+Layout split-panel dans `AdminPage` : volet gauche (édition pipeline) + volet droit (preview live PIXI.js). La preview utilise l'image PNG originale comme texture (pas de scan). Affiche l'animation rest en boucle + boutons oneshot/physics.
 
 - **Masquable** : bouton "Masquer/Afficher preview" dans le header
 - **Redimensionnable** : barre de séparation draggable (15% à 60%), défaut ~1/3
 - **Condition** : visible seulement quand la rest animation a un `videoFramesMesh` calculé
 - **Responsive** : pleine largeur avec marges 5vw sur écrans 4K (>2000px) ; empilement vertical sous 1024px
-- **Composant** : `AdminPreview.tsx` — PIXI.js léger (~320 lignes), FPS capé à 30, ResizeObserver, pas de fullscreen/parallax
+- **Composant** : `AdminPreview.tsx` — PIXI.js léger, FPS capé à 30, ResizeObserver, pas de fullscreen/parallax
+- **Pas de physique tactile** — la physique spring-back a été supprimée
+
+### Zones Corporelles
+
+Système de **zones corporelles** pour les interactions tactiles dans le ScenePlayer. L'admin définit des groupes de triangles labellisés (tête, queue, etc.) sur le maillage, puis dans l'éditeur de scène, chaque zone est liée à une animation par rest point.
+
+- **Modèle** : `BodyZone { id, label, color, triangleIndices[] }` sur `Project.bodyZones`
+- **Mapping** : `ZoneAnimationMapping { zoneId, animationId }` sur `SceneRestPoint.zoneAnimationMappings`
+- **Éditeur** : onglet "Zones" dans l'admin (4ème section), éditeur canvas avec sélection par triangle (clic, peinture, rectangle)
+- **Player** : au toucher pendant l'état interaction, détection du triangle → zone → animation → `requestOneshot()`
+- **Sécurité** : les zones sont invalidées (vidées) quand la géométrie rest change
 
 ### Design system
 
@@ -121,7 +132,7 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 2. **Ajustement coins** — Repositionnement manuel des 4 coins
 3. **Correction perspective** — Homographie OpenCV → image 2048×2048 → crop marges 64px → resize aux dimensions originales
 4. **Debug** — Visualisation 4 étapes du pipeline (photo brute, 2048 avec marges, croppée, overlay mesh)
-5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS + parallax gyroscope + boutons oneshot
+5. **Animation** — Rendu PIXI.js du maillage texturé animé à 24 FPS + parallax gyroscope + boutons oneshot + interactions par zones corporelles
 
 ## Structure des fichiers
 
@@ -129,7 +140,7 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 src/
 ├── main.tsx                    Point d'entrée
 ├── App.tsx                     Router
-├── types/project.ts            Types (Point2D, Animation, AnimationType, ProjectStepView, MeshData, Project, Scan)
+├── types/project.ts            Types (Point2D, Animation, BodyZone, SceneBackgroundLayer, ProjectStepView, MeshData, Project, Scan)
 ├── db/
 │   ├── firebase.ts             Init Firebase
 │   ├── projectsStore.ts        CRUD projets (Firestore + Storage)
@@ -140,7 +151,7 @@ src/
 │   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + ProjectImportSection + PhysicsAnimationEditor)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor)
 │   ├── keyframes/              Éditeur de keyframes (éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -162,6 +173,7 @@ src/
 │   ├── pdfGenerator.ts         Génération PDF
 │   ├── pdfLayout.ts            Constantes layout A4
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
+│   ├── bodyZoneUtils.ts        Détection zones corporelles (triangle→zone, hit test, touch detection)
 │   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css
 public/
@@ -186,6 +198,18 @@ Animation {
   physicsOverlay: boolean            // Si true, se superpose à la rest loop sans attendre la fin du cycle
 }
 
+BodyZone {
+  id: string                         // crypto.randomUUID()
+  label: string                      // "tête", "queue"
+  color: string                      // hex pour l'éditeur
+  triangleIndices: number[]          // indices dans mesh.triangles
+}
+
+ZoneAnimationMapping {
+  zoneId: string
+  animationId: string                // réf Animation.id (oneshot ou physics)
+}
+
 Project {
   id, name, createdAt
   originalImageBlob: Blob | null     // Image coloriage (niveau projet)
@@ -193,6 +217,7 @@ Project {
   ambientSoundBlob: Blob | null      // Son d'ambiance (niveau projet, boucle continue)
   ambientSoundEnabled: boolean       // Toggle activer/désactiver le son
   animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics
+  bodyZones: BodyZone[]              // Zones corporelles (triangles groupés par label)
   markers: MarkerCorners | null      // 4 coins marqueurs L
 }
 
@@ -251,6 +276,34 @@ MeshData {
   videoFramesMesh: Point2D[][] | null
 }
 
+SceneBackgroundLayer {
+  imageBlob: Blob | null
+  width: number
+  height: number
+  depthFactor: number                // 0.0–1.0, vitesse défilement (0.3=arrière, 0.6=milieu, 1.0=premier plan)
+}
+
+Scene {
+  id, name
+  backgroundLayers: SceneBackgroundLayer[]  // Toujours 3 : [arrière-plan, milieu, premier plan]
+  characterScale: number
+  characterY: number
+  restPoints: SceneRestPoint[]
+  transitions: SceneTransition[]
+  startMode: 'rest' | 'transition'
+  speakSounds: SpeakSound[]
+  speakSoundBlobs: (Blob | null)[]
+}
+
+SceneRestPoint {
+  id, backgroundX
+  restAnimationId?: string
+  randomAnimationIds?: string[]
+  zoneAnimationMappings?: ZoneAnimationMapping[]  // Zone corporelle → animation
+  speakSoundIds?: string[]
+  helpTexts?: string[]
+}
+
 Scan {
   id, projectId, scannedAt
   scanImageBlob: Blob                // Image rectifiée
@@ -284,6 +337,9 @@ Trois espaces de coordonnées coexistent :
   - `projects/{id}/originalImage` — blob image (niveau projet)
   - `projects/{id}/backgroundVideo` — vidéo fond (niveau projet)
   - `projects/{id}/ambientSound` — son d'ambiance (niveau projet)
+  - `projects/{id}/sceneBackgroundLayer0` — arrière-plan scène
+  - `projects/{id}/sceneBackgroundLayer1` — milieu scène
+  - `projects/{id}/sceneBackgroundLayer2` — premier plan scène
   - `projects/{id}/animations/{animId}/video` — vidéo animation
   - `projects/{id}/animations/{animId}/contourOriginKeyframes.json`
   - `projects/{id}/animations/{animId}/contourOriginFrames.json`
@@ -303,7 +359,10 @@ Les projets existants (sans `animations` au root, avec `mesh`/`hasVideo` directe
 ### Upload Hints
 
 ```typescript
-UploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | { animationId: string; field: AnimationUploadField }
+UploadHint = 'image' | 'backgroundVideo' | 'ambientSound'
+  | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
+  | { animationId: string; field: AnimationUploadField }
+  | { speakSoundId: string } | { deleteSpeakSoundId: string }
 StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
 ```
 
