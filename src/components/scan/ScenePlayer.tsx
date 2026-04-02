@@ -6,10 +6,9 @@ import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
-import { MeshPhysicsEffect, DEFAULT_PHYSICS_CONFIG } from '../../utils/meshPhysicsEffects'
-import type { TouchState } from '../../utils/meshPhysicsEffects'
 import { ScenePlayback } from '../../utils/scenePlayback'
 import type { SceneState } from '../../utils/scenePlayback'
+import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUtils'
 
 interface Props {
   project: Project
@@ -98,10 +97,6 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
   const [currentHelpText, setCurrentHelpText] = useState('')
   const speakAudioRef = useRef<HTMLAudioElement | null>(null)
   const scenePlaybackRef = useRef<ScenePlayback | null>(null)
-  const physicsRef = useRef<MeshPhysicsEffect | null>(null)
-  const touchRef = useRef<{ active: boolean; screenX: number; screenY: number }>({
-    active: false, screenX: 0, screenY: 0,
-  })
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
@@ -174,18 +169,6 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     appRef.current = app
     containerRef.current.appendChild(app.view as HTMLCanvasElement)
 
-    const canvas = app.view as HTMLCanvasElement
-    canvas.style.touchAction = 'none'
-
-    const onPointerDown = (e: PointerEvent) => { touchRef.current = { active: true, screenX: e.offsetX, screenY: e.offsetY } }
-    const onPointerMove = (e: PointerEvent) => { if (touchRef.current.active) { touchRef.current.screenX = e.offsetX; touchRef.current.screenY = e.offsetY } }
-    const onPointerUp = () => { touchRef.current.active = false }
-    canvas.addEventListener('pointerdown', onPointerDown)
-    canvas.addEventListener('pointermove', onPointerMove)
-    canvas.addEventListener('pointerup', onPointerUp)
-    canvas.addEventListener('pointerleave', onPointerUp)
-    canvas.addEventListener('pointercancel', onPointerUp)
-
     const viewW = app.screen.width
     const viewH = app.screen.height
 
@@ -194,14 +177,23 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     app.stage.addChild(bgContainer)
     app.stage.addChild(characterContainer)
 
-    let bgSprite: PIXI.Sprite | null = null
-    let bgImageUrl: string | null = null
-    const bgScale = viewH / scene.backgroundHeight
+    const bgSprites: (PIXI.Sprite | null)[] = [null, null, null]
+    const bgImageUrls: string[] = []
+    const frontLayer = scene.backgroundLayers[2]
+    const bgScale = viewH / frontLayer.height
 
-    if (scene.backgroundImageBlob) {
-      bgImageUrl = URL.createObjectURL(scene.backgroundImageBlob)
+    // Pre-create 3 containers to guarantee z-order
+    const layerContainers = [new PIXI.Container(), new PIXI.Container(), new PIXI.Container()]
+    for (const lc of layerContainers) bgContainer.addChild(lc)
+
+    for (let li = 0; li < 3; li++) {
+      const layer = scene.backgroundLayers[li]
+      if (!layer.imageBlob) continue
+      const url = URL.createObjectURL(layer.imageBlob)
+      bgImageUrls.push(url)
       const bgImg = new Image()
-      bgImg.src = bgImageUrl
+      bgImg.src = url
+      const layerIndex = li
       bgImg.onload = () => {
         const bgCanvas = document.createElement('canvas')
         bgCanvas.width = bgImg.naturalWidth
@@ -211,12 +203,11 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
 
         const bgTexture = PIXI.Texture.from(bgCanvas)
         const sprite = new PIXI.Sprite(bgTexture)
-        sprite.width = scene.backgroundWidth * bgScale
+        const layerScale = viewH / layer.height
+        sprite.width = layer.width * layerScale
         sprite.height = viewH
-        bgContainer.addChild(sprite)
-        bgSprite = sprite
-
-        bgSprite.x = -scenePlayback.backgroundOffsetX * bgScale
+        layerContainers[layerIndex].addChild(sprite)
+        bgSprites[layerIndex] = sprite
       }
     }
 
@@ -276,15 +267,17 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       if (audio) { audio.currentTime = 0; audio.play().catch(() => {}) }
     }
 
-    const physics = new MeshPhysicsEffect(numPoints, { ...DEFAULT_PHYSICS_CONFIG })
-    physicsRef.current = physics
-    const modifiedPositions: Point2D[] = new Array(numPoints)
-    for (let i = 0; i < numPoints; i++) modifiedPositions[i] = { x: 0, y: 0 }
+    // --- Zone touch detection (setup) ---
+    const triangleZoneMap = buildTriangleZoneMap(mesh.triangles, project.bodyZones ?? [])
+    let latestPositions: Point2D[] = allPoints
 
     const screenToImage = (sx: number, sy: number): { x: number; y: number } => ({
       x: (sx - charOffsetX) / charScale,
       y: (sy - charOffsetY) / charScale,
     })
+
+    const canvas = app.view as HTMLCanvasElement
+    canvas.style.touchAction = 'none'
 
     // --- Scene playback state machine ---
     const scenePlayback = new ScenePlayback({
@@ -389,6 +382,25 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
 
     let prevSceneState: SceneState = initialState
 
+    // --- Zone touch detection (pointer event) ---
+    const onPointerDown = (e: PointerEvent) => {
+      if (scenePlayback.currentState !== 'interaction') return
+      const img = screenToImage(e.offsetX, e.offsetY)
+      const zoneId = detectTouchedZone(
+        { x: img.x, y: img.y },
+        latestPositions,
+        mesh.triangles,
+        triangleZoneMap,
+      )
+      if (!zoneId) return
+      const rp = scenePlayback.currentRestPoint
+      const mapping = rp?.zoneAnimationMappings?.find(m => m.zoneId === zoneId)
+      if (mapping && currentMultiPlaybackRef) {
+        currentMultiPlaybackRef.requestOneshot(mapping.animationId)
+      }
+    }
+    canvas.addEventListener('pointerdown', onPointerDown)
+
     // --- Main ticker ---
     app.ticker.add((delta) => {
       const deltaSeconds = delta / 60
@@ -429,22 +441,22 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
 
       // Update character X position based on current scene position
       charOffsetX = computeCharOffsetX(scenePlayback)
-
-      const t = touchRef.current
-      const img = screenToImage(t.screenX, t.screenY)
-      const touchState: TouchState = { active: t.active && scenePlayback.currentState === 'interaction', imageX: img.x, imageY: img.y }
-      physics.update(positions, touchState, delta)
-      physics.apply(positions, modifiedPositions)
+      latestPositions = positions
 
       const verts = geometry.getBuffer('aVertexPosition')
       for (let i = 0; i < numPoints; i++) {
-        (verts.data as unknown as Float32Array)[i * 2] = modifiedPositions[i].x * charScale + charOffsetX;
-        (verts.data as unknown as Float32Array)[i * 2 + 1] = modifiedPositions[i].y * charScale + charOffsetY
+        (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * charScale + charOffsetX;
+        (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * charScale + charOffsetY
       }
       verts.update()
 
-      if (bgSprite) {
-        bgSprite.x = -scenePlayback.backgroundOffsetX * bgScale
+      // Parallax scrolling: each layer scrolls at depthFactor × front speed.
+      // The offset is relative to the front layer's scroll, applied directly in screen pixels.
+      const frontOffsetPx = scenePlayback.backgroundOffsetX * bgScale
+      for (let li = 0; li < 3; li++) {
+        const sprite = bgSprites[li]
+        if (!sprite) continue
+        sprite.x = -frontOffsetPx * scene.backgroundLayers[li].depthFactor
       }
     })
 
@@ -458,15 +470,10 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     ;(scenePlaybackRef.current as unknown as { getMultiPlayback: typeof getMultiPlayback }).getMultiPlayback = getMultiPlayback
 
     return () => {
-      physicsRef.current = null
       scenePlaybackRef.current = null
       canvas.removeEventListener('pointerdown', onPointerDown)
-      canvas.removeEventListener('pointermove', onPointerMove)
-      canvas.removeEventListener('pointerup', onPointerUp)
-      canvas.removeEventListener('pointerleave', onPointerUp)
-      canvas.removeEventListener('pointercancel', onPointerUp)
       window.removeEventListener('resize', handleResize)
-      if (bgImageUrl) URL.revokeObjectURL(bgImageUrl)
+      for (const url of bgImageUrls) URL.revokeObjectURL(url)
       for (const audio of animAudioElements.values()) { audio.pause() }
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
       app.destroy(true, { children: true, texture: true })

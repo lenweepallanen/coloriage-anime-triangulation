@@ -93,7 +93,7 @@ export class ScenePlayback {
   }
 
   private clampOffset(offset: number): number {
-    const maxOffset = Math.max(0, this.scene.backgroundWidth - this.viewportWidth)
+    const maxOffset = Math.max(0, this.scene.backgroundLayers[2].width - this.viewportWidth)
     return Math.max(0, Math.min(maxOffset, offset))
   }
 
@@ -309,6 +309,6 @@ export class ScenePlayback {
 
   /** Background width in pixels */
   get bgWidth(): number {
-    return this.scene.backgroundWidth
+    return this.scene.backgroundLayers[2].width
   }
 }

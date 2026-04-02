@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -85,11 +85,24 @@ interface AnimationDoc {
   physicsOverlay: boolean
 }
 
+interface BodyZoneDoc {
+  id: string
+  label: string
+  color: string
+  triangleIndices: number[]
+}
+
+interface ZoneAnimationMappingDoc {
+  zoneId: string
+  animationId: string
+}
+
 interface SceneRestPointDoc {
   id: string
   backgroundX: number
   restAnimationId?: string
   randomAnimationIds?: string[]
+  zoneAnimationMappings?: ZoneAnimationMappingDoc[]
   availableAnimationIds?: string[]  // legacy fallback
   speakSoundIds?: string[]
   helpTexts?: string[]
@@ -105,12 +118,21 @@ interface SceneTransitionDoc {
   segments: SceneSegmentDoc[]
 }
 
+interface SceneBackgroundLayerDoc {
+  hasImage: boolean
+  width: number
+  height: number
+  depthFactor: number
+}
+
 interface SceneDoc {
   id: string
   name: string
-  hasBackgroundImage: boolean
-  backgroundWidth: number
-  backgroundHeight: number
+  backgroundLayers?: SceneBackgroundLayerDoc[]
+  // Legacy fields (migration)
+  hasBackgroundImage?: boolean
+  backgroundWidth?: number
+  backgroundHeight?: number
   characterScale: number
   characterY: number
   restPoints: SceneRestPointDoc[]
@@ -130,6 +152,7 @@ interface ProjectDoc {
   hasAmbientSound: boolean
   ambientSoundEnabled: boolean
   animations: AnimationDoc[]
+  bodyZones?: BodyZoneDoc[]
   markers: Project['markers']
   scene: SceneDoc | null
 }
@@ -261,9 +284,12 @@ function sceneToDoc(scene: Scene): SceneDoc {
   return {
     id: scene.id,
     name: scene.name,
-    hasBackgroundImage: scene.backgroundImageBlob != null,
-    backgroundWidth: scene.backgroundWidth,
-    backgroundHeight: scene.backgroundHeight,
+    backgroundLayers: scene.backgroundLayers.map(l => ({
+      hasImage: l.imageBlob != null,
+      width: l.width,
+      height: l.height,
+      depthFactor: l.depthFactor,
+    })),
     characterScale: scene.characterScale,
     characterY: scene.characterY,
     restPoints: scene.restPoints.map(rp => ({
@@ -271,6 +297,7 @@ function sceneToDoc(scene: Scene): SceneDoc {
       backgroundX: rp.backgroundX,
       ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
       ...(rp.randomAnimationIds != null && { randomAnimationIds: rp.randomAnimationIds }),
+      ...(rp.zoneAnimationMappings != null && rp.zoneAnimationMappings.length > 0 && { zoneAnimationMappings: rp.zoneAnimationMappings }),
       ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
       ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
     })),
@@ -292,6 +319,7 @@ function toDoc(project: Project): ProjectDoc {
     hasAmbientSound: project.ambientSoundBlob != null,
     ambientSoundEnabled: project.ambientSoundEnabled ?? false,
     animations: project.animations.map(animToDoc),
+    ...(project.bodyZones.length > 0 && { bodyZones: project.bodyZones }),
     markers: project.markers,
     scene: project.scene ? sceneToDoc(project.scene) : null,
   }
@@ -427,12 +455,28 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   const projDoc = data as unknown as ProjectDoc
   const id = projDoc.id
 
-  const [imageBlob, backgroundVideoBlob, ambientSoundBlob, sceneBackgroundBlob] = await Promise.all([
+  const [imageBlob, backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
     projDoc.hasImage ? downloadBlob(`projects/${id}/originalImage`) : Promise.resolve(null),
     projDoc.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
     (projDoc as ProjectDoc).hasAmbientSound ? downloadBlob(`projects/${id}/ambientSound`) : Promise.resolve(null),
-    projDoc.scene?.hasBackgroundImage ? downloadBlob(`projects/${id}/sceneBackground`) : Promise.resolve(null),
   ])
+
+  // Download scene background layer blobs
+  let sceneLayerBlobs: (Blob | null)[] = [null, null, null]
+  if (projDoc.scene) {
+    if (projDoc.scene.backgroundLayers) {
+      // New format: 3 layers
+      sceneLayerBlobs = await Promise.all(
+        projDoc.scene.backgroundLayers.map((l, i) =>
+          l.hasImage ? downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`) : Promise.resolve(null)
+        )
+      )
+    } else if (projDoc.scene.hasBackgroundImage) {
+      // Legacy format: single background → layer 2
+      const legacyBlob = await downloadBlob(`projects/${id}/sceneBackground`)
+      sceneLayerBlobs = [null, null, legacyBlob]
+    }
+  }
 
   // Load all animations in parallel
   const animations = await Promise.all(
@@ -482,12 +526,23 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     const speakSoundBlobs = await Promise.all(
       speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`))
     )
+    // Build background layers (with legacy migration)
+    const layerDocs = projDoc.scene.backgroundLayers ?? [
+      { hasImage: false, width: 0, height: 0, depthFactor: 0.3 },
+      { hasImage: false, width: 0, height: 0, depthFactor: 0.6 },
+      { hasImage: projDoc.scene.hasBackgroundImage ?? false, width: projDoc.scene.backgroundWidth ?? 0, height: projDoc.scene.backgroundHeight ?? 0, depthFactor: 1.0 },
+    ]
+    const backgroundLayers: SceneBackgroundLayer[] = layerDocs.map((l, i) => ({
+      imageBlob: sceneLayerBlobs[i] ?? null,
+      width: l.width,
+      height: l.height,
+      depthFactor: l.depthFactor,
+    }))
+
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
-      backgroundImageBlob: sceneBackgroundBlob,
-      backgroundWidth: projDoc.scene.backgroundWidth,
-      backgroundHeight: projDoc.scene.backgroundHeight,
+      backgroundLayers,
       characterScale: projDoc.scene.characterScale,
       characterY: projDoc.scene.characterY,
       restPoints: (projDoc.scene.restPoints ?? []).map(rp => ({
@@ -495,6 +550,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         backgroundX: rp.backgroundX,
         ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
         randomAnimationIds: rp.randomAnimationIds ?? rp.availableAnimationIds,
+        ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
         ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
         ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
       })),
@@ -516,6 +572,12 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     ambientSoundBlob,
     ambientSoundEnabled: (projDoc as ProjectDoc).ambientSoundEnabled ?? false,
     animations,
+    bodyZones: (projDoc.bodyZones ?? []).map((z: Record<string, unknown>) => ({
+      id: z.id as string,
+      label: z.label as string,
+      color: z.color as string,
+      triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
+    })),
     markers: projDoc.markers,
     scene,
   }
@@ -566,6 +628,7 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     ambientSoundBlob: null,
     ambientSoundEnabled: false,
     animations: [legacyAnimation],
+    bodyZones: [],
     markers: data.markers,
     scene: null,
   }
@@ -613,6 +676,7 @@ export async function createProject(name: string): Promise<Project> {
     ambientSoundBlob: null,
     ambientSoundEnabled: false,
     animations: [restAnimation],
+    bodyZones: [],
     markers: null,
     scene: null,
   }
@@ -658,6 +722,7 @@ export async function getAllProjects(): Promise<Project[]> {
         ambientSoundBlob: null,
         ambientSoundEnabled: false,
         animations: [legacyAnim],
+        bodyZones: [],
         markers: legacy.markers,
         scene: null,
       }
@@ -685,6 +750,12 @@ export async function getAllProjects(): Promise<Project[]> {
         audioBlob: null,
         audioEnabled: animDoc.audioEnabled ?? false,
       })),
+      bodyZones: (projDoc.bodyZones ?? []).map((z: Record<string, unknown>) => ({
+      id: z.id as string,
+      label: z.label as string,
+      color: z.color as string,
+      triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
+    })),
       markers: projDoc.markers,
       scene: null,
     }
@@ -700,7 +771,8 @@ export type AnimationUploadField =
   | 'videoFramesMesh'
 
 export type UploadHint =
-  | 'image' | 'backgroundVideo' | 'ambientSound' | 'sceneBackground'
+  | 'image' | 'backgroundVideo' | 'ambientSound'
+  | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string }
   | { deleteSpeakSoundId: string }
@@ -739,12 +811,16 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         uploadBlob(`projects/${id}/ambientSound`, project.ambientSoundBlob)
           .then(() => console.log('[Storage] Ambient sound uploaded'))
       )
-    } else if (hint === 'sceneBackground' && project.scene?.backgroundImageBlob) {
-      console.log('[Storage] Uploading scene background for:', id)
-      uploads.push(
-        uploadBlob(`projects/${id}/sceneBackground`, project.scene.backgroundImageBlob)
-          .then(() => console.log('[Storage] Scene background uploaded'))
-      )
+    } else if (typeof hint === 'string' && hint.startsWith('sceneBackgroundLayer') && project.scene) {
+      const layerIdx = parseInt(hint.slice(-1))
+      const blob = project.scene.backgroundLayers[layerIdx]?.imageBlob
+      if (blob) {
+        console.log(`[Storage] Uploading scene background layer ${layerIdx} for:`, id)
+        uploads.push(
+          uploadBlob(`projects/${id}/sceneBackgroundLayer${layerIdx}`, blob)
+            .then(() => console.log(`[Storage] Scene background layer ${layerIdx} uploaded`))
+        )
+      }
     } else if (typeof hint === 'object' && 'speakSoundId' in hint) {
       const soundId = hint.speakSoundId
       const idx = project.scene?.speakSounds.findIndex(s => s.id === soundId) ?? -1
@@ -838,6 +914,9 @@ export async function deleteProject(id: string): Promise<void> {
     `projects/${id}/backgroundVideo`,
     `projects/${id}/ambientSound`,
     `projects/${id}/sceneBackground`,
+    `projects/${id}/sceneBackgroundLayer0`,
+    `projects/${id}/sceneBackgroundLayer1`,
+    `projects/${id}/sceneBackgroundLayer2`,
   ]
   for (const path of projectFiles) {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
@@ -927,7 +1006,11 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   if (duplicate.originalImageBlob) hints.push('image')
   if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
   if (duplicate.ambientSoundBlob) hints.push('ambientSound')
-  if (duplicate.scene?.backgroundImageBlob) hints.push('sceneBackground')
+  if (duplicate.scene) {
+    duplicate.scene.backgroundLayers.forEach((l, i) => {
+      if (l.imageBlob) hints.push(`sceneBackgroundLayer${i}` as UploadHint)
+    })
+  }
   for (const sound of duplicate.scene?.speakSounds ?? []) {
     hints.push({ speakSoundId: sound.id })
   }

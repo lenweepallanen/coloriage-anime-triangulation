@@ -78,6 +78,18 @@ export interface MeshData {
   videoFramesMesh: Point2D[][] | null;  // allPoints par frame
 }
 
+export interface BodyZone {
+  id: string;
+  label: string;
+  color: string;
+  triangleIndices: number[];
+}
+
+export interface ZoneAnimationMapping {
+  zoneId: string;
+  animationId: string;
+}
+
 export interface MarkerCorners {
   topLeft: Point2D;
   topRight: Point2D;
@@ -106,6 +118,7 @@ export interface SceneRestPoint {
   backgroundX: number;
   restAnimationId?: string;
   randomAnimationIds?: string[];
+  zoneAnimationMappings?: ZoneAnimationMapping[];
   speakSoundIds?: string[];
   helpTexts?: string[];
 }
@@ -125,12 +138,17 @@ export interface SceneTransition {
   segments: SceneSegment[];
 }
 
+export interface SceneBackgroundLayer {
+  imageBlob: Blob | null;
+  width: number;
+  height: number;
+  depthFactor: number;
+}
+
 export interface Scene {
   id: string;
   name: string;
-  backgroundImageBlob: Blob | null;
-  backgroundWidth: number;
-  backgroundHeight: number;
+  backgroundLayers: SceneBackgroundLayer[];
   characterScale: number;
   characterY: number;
   restPoints: SceneRestPoint[];
@@ -151,6 +169,7 @@ export interface Project {
   ambientSoundBlob: Blob | null;
   ambientSoundEnabled: boolean;
   animations: Animation[];
+  bodyZones: BodyZone[];
   markers: MarkerCorners | null;
   scene: Scene | null;
 }

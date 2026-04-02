@@ -2,7 +2,11 @@ import { Link } from 'react-router-dom'
 import { useAdminContext } from './AdminLayout'
 
 export default function AdminSectionMenu() {
-  const { canPreview } = useAdminContext()
+  const { project, canPreview } = useAdminContext()
+
+  const restAnim = project.animations.find(a => a.type === 'rest')
+  const hasTopology = restAnim?.mesh?.topologyLocked === true
+    && (restAnim.mesh.triangles?.length ?? 0) > 0
 
   return (
     <div className="admin-section-menu">
@@ -28,6 +32,24 @@ export default function AdminSectionMenu() {
         </svg>
         <span className="admin-section-card-title">Animations</span>
         <span className="admin-section-card-desc">Créer, éditer et prévisualiser les animations</span>
+      </Link>
+
+      <Link
+        to={hasTopology ? 'zones' : '#'}
+        className={`admin-section-card ${!hasTopology ? 'admin-section-card--disabled' : ''}`}
+        onClick={e => { if (!hasTopology) e.preventDefault() }}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="32" height="32">
+          <path d="M12 2L2 7l10 5 10-5-10-5z" />
+          <path d="M2 17l10 5 10-5" />
+          <path d="M2 12l10 5 10-5" />
+        </svg>
+        <span className="admin-section-card-title">Zones Corporelles</span>
+        <span className="admin-section-card-desc">
+          {hasTopology
+            ? 'Définir les zones du maillage pour les interactions tactiles'
+            : 'Verrouillez la topologie pour accéder aux zones'}
+        </span>
       </Link>
 
       <Link

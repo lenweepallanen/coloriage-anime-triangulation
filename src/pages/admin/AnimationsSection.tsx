@@ -6,7 +6,7 @@ import AnimationCardList, { SHARED_GEOMETRY_FIELDS, copySharedGeometry } from '.
 import PipelineEditor from '../../components/admin/PipelineEditor'
 import PreviewModal from '../../components/admin/PreviewModal'
 
-const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound', 'sceneBackground'])
+const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound', 'sceneBackgroundLayer0', 'sceneBackgroundLayer1', 'sceneBackgroundLayer2'])
 
 export default function AnimationsSection() {
   const { project, save, canPreview } = useAdminContext()
@@ -95,6 +95,10 @@ export default function AnimationsSection() {
       if (otherCount > 0) {
         console.log(`[AnimSync] Geometry propagated to ${otherCount} other animation(s), tracking invalidated`)
       }
+      // Clear body zones when geometry changes (vertex indices become stale)
+      if (project.bodyZones.length > 0) {
+        console.log('[AnimSync] Body zones cleared due to geometry change')
+      }
     }
 
     // Convert step hints to scoped upload hints
@@ -111,6 +115,7 @@ export default function AnimationsSection() {
       ambientSoundEnabled: updated.ambientSoundEnabled,
       markers: updated.markers,
       animations: newAnims,
+      ...(geometryChanged && { bodyZones: [] }),
     }
 
     await save(updatedProject, scopedHints)

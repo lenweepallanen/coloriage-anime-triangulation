@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import type { SceneRestPoint, SceneTransition, SceneSegment, Animation, SpeakSound } from '../../types/project'
+import type { SceneRestPoint, SceneTransition, SceneSegment, Animation, SpeakSound, BodyZone, ZoneAnimationMapping } from '../../types/project'
 import type { TimelineSelection } from './SceneTimeline'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   startX?: number
   startTransition?: SceneTransition
   animations: Animation[]
+  bodyZones: BodyZone[]
   onRestPointChange: (index: number, updated: SceneRestPoint) => void
   onSegmentChange: (transitionIndex: number, segmentIndex: number, updated: SceneSegment) => void
   onStartModeChange: (mode: 'rest' | 'transition') => void
@@ -27,6 +28,7 @@ export default function SceneConfigPanel({
   startX,
   startTransition,
   animations,
+  bodyZones,
   onRestPointChange,
   onSegmentChange,
   onStartModeChange,
@@ -94,6 +96,16 @@ export default function SceneConfigPanel({
             )}
           </div>
         </div>
+
+        {bodyZones.length > 0 && (
+          <ZoneAnimationMappingsSection
+            rp={rp}
+            rpIndex={selection.index}
+            bodyZones={bodyZones}
+            animations={nonRestAnimations}
+            onRestPointChange={onRestPointChange}
+          />
+        )}
 
         <SpeakSoundsSection
           rp={rp}
@@ -293,6 +305,55 @@ function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestP
         {speakSounds.length === 0 && (
           <span className="scene-config-panel-empty">Aucun son importé</span>
         )}
+      </div>
+    </div>
+  )
+}
+
+// --- Zone Animation Mappings sub-section ---
+
+function ZoneAnimationMappingsSection({ rp, rpIndex, bodyZones, animations, onRestPointChange }: {
+  rp: SceneRestPoint
+  rpIndex: number
+  bodyZones: BodyZone[]
+  animations: Animation[]
+  onRestPointChange: (index: number, updated: SceneRestPoint) => void
+}) {
+  const mappings = rp.zoneAnimationMappings ?? []
+
+  const handleChange = (zoneId: string, animationId: string) => {
+    const filtered = mappings.filter(m => m.zoneId !== zoneId)
+    const updated: ZoneAnimationMapping[] = animationId
+      ? [...filtered, { zoneId, animationId }]
+      : filtered
+    onRestPointChange(rpIndex, { ...rp, zoneAnimationMappings: updated })
+  }
+
+  return (
+    <div className="scene-config-panel-field">
+      <label>Zones Corporelles</label>
+      <div className="scene-config-panel-checkboxes">
+        {bodyZones.map(zone => {
+          const mapping = mappings.find(m => m.zoneId === zone.id)
+          return (
+            <div key={zone.id} className="scene-config-panel-zone-row">
+              <span
+                className="scene-config-panel-zone-swatch"
+                style={{ backgroundColor: zone.color }}
+              />
+              <span className="scene-config-panel-zone-label">{zone.label}</span>
+              <select
+                value={mapping?.animationId ?? ''}
+                onChange={e => handleChange(zone.id, e.target.value)}
+              >
+                <option value="">— Aucune —</option>
+                {animations.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
+                ))}
+              </select>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

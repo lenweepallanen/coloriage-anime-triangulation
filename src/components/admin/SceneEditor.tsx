@@ -16,9 +16,11 @@ function createDefaultScene(): Scene {
   return {
     id: crypto.randomUUID(),
     name: 'Scène principale',
-    backgroundImageBlob: null,
-    backgroundWidth: 0,
-    backgroundHeight: 0,
+    backgroundLayers: [
+      { imageBlob: null, width: 0, height: 0, depthFactor: 0.3 },
+      { imageBlob: null, width: 0, height: 0, depthFactor: 0.6 },
+      { imageBlob: null, width: 0, height: 0, depthFactor: 1.0 },
+    ],
     characterScale: 1.0,
     characterY: 0,
     restPoints: [],
@@ -111,6 +113,8 @@ export default function SceneEditor({ project, onSave }: Props) {
   const [previewing, setPreviewing] = useState(false)
   const [previewCanvas, setPreviewCanvas] = useState<HTMLCanvasElement | null>(null)
   const [bgImageUrl, setBgImageUrl] = useState<string | null>(null)
+  const [layerPreviewUrls, setLayerPreviewUrls] = useState<(string | null)[]>([null, null, null])
+  const [layersExpanded, setLayersExpanded] = useState(true)
   const previewProjectRef = useRef<Project | null>(null)
 
   useEffect(() => {
@@ -137,18 +141,22 @@ export default function SceneEditor({ project, onSave }: Props) {
     }
   }, [project.originalImageBlob])
 
-  useEffect(() => {
-    if (scene.backgroundImageBlob) {
-      const url = URL.createObjectURL(scene.backgroundImageBlob)
-      setBgImageUrl(url)
-      return () => URL.revokeObjectURL(url)
-    } else {
-      setBgImageUrl(null)
-    }
-  }, [scene.backgroundImageBlob])
+  const frontLayer = scene.backgroundLayers[2]
 
-  // Background image import
-  const handleBackgroundImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Layer preview URLs
+  useEffect(() => {
+    const urls: (string | null)[] = []
+    for (let i = 0; i < 3; i++) {
+      const blob = scene.backgroundLayers[i]?.imageBlob
+      urls.push(blob ? URL.createObjectURL(blob) : null)
+    }
+    setLayerPreviewUrls(urls)
+    setBgImageUrl(urls[2])
+    return () => { for (const u of urls) if (u) URL.revokeObjectURL(u) }
+  }, [scene.backgroundLayers[0]?.imageBlob, scene.backgroundLayers[1]?.imageBlob, scene.backgroundLayers[2]?.imageBlob]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Background layer import
+  const handleLayerImport = useCallback(async (layerIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
@@ -159,13 +167,16 @@ export default function SceneEditor({ project, onSave }: Props) {
 
     await new Promise<void>((resolve) => {
       img.onload = () => {
-        const updated: Scene = {
-          ...scene,
-          backgroundImageBlob: blob,
-          backgroundWidth: img.naturalWidth,
-          backgroundHeight: img.naturalHeight,
+        const newLayers = [...scene.backgroundLayers]
+        newLayers[layerIndex] = {
+          imageBlob: blob,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          depthFactor: newLayers[layerIndex].depthFactor,
         }
-        if (updated.restPoints.length === 0) {
+        const updated: Scene = { ...scene, backgroundLayers: newLayers }
+        // Auto-create rest points when importing front layer for the first time
+        if (layerIndex === 2 && updated.restPoints.length === 0) {
           const firstRp = createRestPoint(Math.round(img.naturalWidth * 0.3))
           const secondRp = createRestPoint(Math.round(img.naturalWidth * 0.7))
           updated.restPoints = [firstRp, secondRp]
@@ -178,6 +189,22 @@ export default function SceneEditor({ project, onSave }: Props) {
       }
     })
   }, [scene])
+
+  const handleLayerDepthChange = useCallback((layerIndex: number, depthFactor: number) => {
+    setScene(prev => {
+      const newLayers = [...prev.backgroundLayers]
+      newLayers[layerIndex] = { ...newLayers[layerIndex], depthFactor }
+      return { ...prev, backgroundLayers: newLayers }
+    })
+  }, [])
+
+  const handleLayerRemove = useCallback((layerIndex: number) => {
+    setScene(prev => {
+      const newLayers = [...prev.backgroundLayers]
+      newLayers[layerIndex] = { imageBlob: null, width: 0, height: 0, depthFactor: newLayers[layerIndex].depthFactor }
+      return { ...prev, backgroundLayers: newLayers }
+    })
+  }, [])
 
   // Add rest point — inserts in sorted order and creates transitions
   const handleAddRestPoint = useCallback((backgroundX: number) => {
@@ -346,7 +373,7 @@ export default function SceneEditor({ project, onSave }: Props) {
         return {
           ...prev,
           startMode: mode,
-          startX: Math.round((prev.restPoints[0]?.backgroundX ?? prev.backgroundWidth / 2) * 0.5),
+          startX: Math.round((prev.restPoints[0]?.backgroundX ?? prev.backgroundLayers[2].width / 2) * 0.5),
           startTransition: createDefaultTransition(),
         }
       }
@@ -393,8 +420,12 @@ export default function SceneEditor({ project, onSave }: Props) {
     setSaving(true)
     try {
       const hints: UploadHint[] = [...pendingSpeakHintsRef.current]
-      if (scene.backgroundImageBlob && scene.backgroundImageBlob !== project.scene?.backgroundImageBlob) {
-        hints.push('sceneBackground')
+      for (let i = 0; i < 3; i++) {
+        const blob = scene.backgroundLayers[i]?.imageBlob
+        const oldBlob = project.scene?.backgroundLayers[i]?.imageBlob
+        if (blob && blob !== oldBlob) {
+          hints.push(`sceneBackgroundLayer${i}` as UploadHint)
+        }
       }
       const updatedProject: Project = { ...project, scene }
       await onSave(updatedProject, hints.length > 0 ? hints : undefined)
@@ -447,7 +478,7 @@ export default function SceneEditor({ project, onSave }: Props) {
     previewProjectRef.current = null
   }, [])
 
-  const hasScene = scene.backgroundImageBlob != null
+  const hasScene = scene.backgroundLayers[2].imageBlob != null
   const canPreview = hasScene && scene.restPoints.length > 0 && project.originalImageBlob != null
     && project.animations.some(a => a.type === 'rest' && a.mesh?.videoFramesMesh != null)
 
@@ -472,22 +503,76 @@ export default function SceneEditor({ project, onSave }: Props) {
         </div>
       </div>
 
-      {/* Background import */}
+      {/* Background layers import */}
       <div className="scene-editor-toolbar">
-        <div className="scene-editor-field">
-          <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
-            {hasScene ? 'Changer le background' : 'Importer un background panoramique'}
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              style={{ display: 'none' }}
-              onChange={handleBackgroundImport}
-            />
-          </label>
-          {hasScene && (
-            <span className="scene-editor-dimensions">
-              {scene.backgroundWidth} × {scene.backgroundHeight}px
-            </span>
+        <div className="scene-layers-section">
+          <div className="scene-layers-header">
+            <span className="scene-layers-title">Backgrounds parallax</span>
+            {scene.backgroundLayers.some(l => l.imageBlob) && (
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => setLayersExpanded(p => !p)}
+              >
+                {layersExpanded ? 'Masquer' : 'Afficher'}
+              </button>
+            )}
+          </div>
+
+          {layersExpanded && (
+            <div className="scene-layers-content">
+              {/* Left: 3 rows (label + import + preview) */}
+              <div className="scene-layers-list">
+                {(['Arrière-plan', 'Milieu', 'Premier plan'] as const).map((label, i) => {
+                  const layer = scene.backgroundLayers[i]
+                  const url = layerPreviewUrls[i]
+                  return (
+                    <div key={i} className="scene-layer-row">
+                      <div className="scene-layer-row-top">
+                        <span className="scene-layer-label">{label}</span>
+                        <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+                          {layer.imageBlob ? 'Changer' : 'Importer'}
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            style={{ display: 'none' }}
+                            onChange={(e) => handleLayerImport(i, e)}
+                          />
+                        </label>
+                        {layer.imageBlob && (
+                          <>
+                            <span className="scene-editor-dimensions">{layer.width}×{layer.height}</span>
+                            <label className="scene-editor-depth-label">
+                              Vitesse
+                              <input
+                                type="range" min={0} max={1} step={0.05}
+                                value={layer.depthFactor}
+                                onChange={(e) => handleLayerDepthChange(i, parseFloat(e.target.value))}
+                              />
+                              <span>{layer.depthFactor.toFixed(2)}</span>
+                            </label>
+                            <button className="btn-icon btn-sm btn-danger" onClick={() => handleLayerRemove(i)} title="Supprimer">&times;</button>
+                          </>
+                        )}
+                      </div>
+                      {layer.imageBlob && url && (
+                        <img src={url} alt={label} className="scene-layer-thumb" />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Right: stacked preview (all layers superimposed) */}
+              {scene.backgroundLayers.some(l => l.imageBlob) && (
+                <div className="scene-layers-stacked-preview">
+                  {[0, 1, 2].map(i => {
+                    const url = layerPreviewUrls[i]
+                    if (!url) return null
+                    return <img key={i} src={url} alt="" className="scene-layers-stacked-img" />
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -510,8 +595,8 @@ export default function SceneEditor({ project, onSave }: Props) {
               <label>Position Y personnage</label>
               <input
                 type="range"
-                min={-Math.round(scene.backgroundHeight / 2)}
-                max={Math.round(scene.backgroundHeight / 2)}
+                min={-Math.round(frontLayer.height / 2)}
+                max={Math.round(frontLayer.height / 2)}
                 step={1}
                 value={scene.characterY}
                 onChange={(e) => setScene(prev => ({ ...prev, characterY: parseInt(e.target.value) }))}
@@ -544,8 +629,8 @@ export default function SceneEditor({ project, onSave }: Props) {
       {hasScene && (
         <SceneTimeline
           backgroundImageUrl={bgImageUrl}
-          backgroundWidth={scene.backgroundWidth}
-          backgroundHeight={scene.backgroundHeight}
+          backgroundWidth={frontLayer.width}
+          backgroundHeight={frontLayer.height}
           restPoints={scene.restPoints}
           transitions={scene.transitions}
           startMode={scene.startMode}
@@ -578,6 +663,7 @@ export default function SceneEditor({ project, onSave }: Props) {
           startX={scene.startX}
           startTransition={scene.startTransition}
           animations={project.animations}
+          bodyZones={project.bodyZones ?? []}
           onRestPointChange={handleRestPointChange}
           onSegmentChange={handleSegmentChange}
           onStartModeChange={handleStartModeChange}

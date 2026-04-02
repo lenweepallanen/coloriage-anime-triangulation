@@ -6,8 +6,6 @@ import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
-import { MeshPhysicsEffect, DEFAULT_PHYSICS_CONFIG } from '../../utils/meshPhysicsEffects'
-import type { TouchState, PhysicsConfig } from '../../utils/meshPhysicsEffects'
 import { DeviceParallax } from '../../utils/deviceParallax'
 
 interface Props {
@@ -16,23 +14,6 @@ interface Props {
   contentAlignment?: ContentAlignment | null
   onClose: () => void
 }
-
-// --- Physics sliders ---
-
-interface SliderDef {
-  key: keyof PhysicsConfig
-  label: string
-  min: number
-  max: number
-  step: number
-}
-
-const SLIDERS: SliderDef[] = [
-  { key: 'force', label: 'Force', min: 5, max: 150, step: 5 },
-  { key: 'radius', label: 'Rayon', min: 30, max: 500, step: 10 },
-  { key: 'concentration', label: 'Concentration', min: 0.5, max: 5, step: 0.25 },
-  { key: 'returnSpeed', label: 'Retour', min: 0.5, max: 0.98, step: 0.01 },
-]
 
 // --- Visual effects config ---
 
@@ -155,13 +136,8 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
   const appRef = useRef<PIXI.Application | null>(null)
   const [playing, setPlaying] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [physicsConfig, setPhysicsConfig] = useState<PhysicsConfig>({ ...DEFAULT_PHYSICS_CONFIG })
   const [visualConfig, setVisualConfig] = useState<VisualEffectsConfig>({ ...DEFAULT_VISUAL_EFFECTS })
-  const physicsRef = useRef<MeshPhysicsEffect | null>(null)
   const visualRef = useRef<VisualEffectsConfig>({ ...DEFAULT_VISUAL_EFFECTS })
-  const touchRef = useRef<{ active: boolean; screenX: number; screenY: number }>({
-    active: false, screenX: 0, screenY: 0
-  })
   const [needsMotionPermission, setNeedsMotionPermission] = useState(false)
   const parallaxRef = useRef<DeviceParallax | null>(null)
   const onCloseRef = useRef(onClose)
@@ -180,14 +156,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
       else audio.pause()
     }
   }, [playing])
-
-  const updateConfig = useCallback((key: keyof PhysicsConfig, value: number) => {
-    setPhysicsConfig(prev => {
-      const next = { ...prev, [key]: value }
-      if (physicsRef.current) physicsRef.current.config = next
-      return next
-    })
-  }, [])
 
   const updateVisualConfig = useCallback((key: keyof VisualEffectsConfig, value: number) => {
     setVisualConfig(prev => {
@@ -266,29 +234,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
     })
     appRef.current = app
     containerRef.current.appendChild(app.view as HTMLCanvasElement)
-
-    // Pointer events for physics interaction
-    const canvas = app.view as HTMLCanvasElement
-    canvas.style.touchAction = 'none'
-
-    const onPointerDown = (e: PointerEvent) => {
-      touchRef.current = { active: true, screenX: e.offsetX, screenY: e.offsetY }
-    }
-    const onPointerMove = (e: PointerEvent) => {
-      if (touchRef.current.active) {
-        touchRef.current.screenX = e.offsetX
-        touchRef.current.screenY = e.offsetY
-      }
-    }
-    const onPointerUp = () => {
-      touchRef.current.active = false
-    }
-
-    canvas.addEventListener('pointerdown', onPointerDown)
-    canvas.addEventListener('pointermove', onPointerMove)
-    canvas.addEventListener('pointerup', onPointerUp)
-    canvas.addEventListener('pointerleave', onPointerUp)
-    canvas.addEventListener('pointercancel', onPointerUp)
 
     // --- Stage hierarchy ---
     const bgContainer = new PIXI.Container()
@@ -384,17 +329,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
     const pixiMesh = new PIXI.Mesh(geometry, material)
     meshContainer.addChild(pixiMesh)
 
-    // --- Physics ---
-    const physics = new MeshPhysicsEffect(allPoints.length, physicsConfig)
-    physicsRef.current = physics
-    const modifiedPositions: Point2D[] = new Array(allPoints.length)
-    for (let i = 0; i < allPoints.length; i++) modifiedPositions[i] = { x: 0, y: 0 }
-
-    const screenToImage = (sx: number, sy: number): { x: number; y: number } => ({
-      x: (sx - offsetX) / scale,
-      y: (sy - offsetY) / scale,
-    })
-
     // --- Background video parallax base position (updated on loadedmetadata) ---
     const bgBase = { x: bgSprite ? bgSprite.x : 0, y: bgSprite ? bgSprite.y : 0 }
     if (bgVideoEl) {
@@ -476,21 +410,11 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
 
         const positions = getPositions()
 
-        // Physics
-        const t = touchRef.current
-        const img = screenToImage(t.screenX, t.screenY)
-        const touchState: TouchState = { active: t.active, imageX: img.x, imageY: img.y }
-        physics.update(positions, touchState, delta)
-
-        if (physics.isIdle() && !playing) return
-
-        physics.apply(positions, modifiedPositions)
-
         // Update main mesh vertices
         const verts = geometry.getBuffer('aVertexPosition')
-        for (let i = 0; i < modifiedPositions.length; i++) {
-          (verts.data as unknown as Float32Array)[i * 2] = modifiedPositions[i].x * scale + offsetX;
-          (verts.data as unknown as Float32Array)[i * 2 + 1] = modifiedPositions[i].y * scale + offsetY
+        for (let i = 0; i < positions.length; i++) {
+          (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * scale + offsetX;
+          (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
         }
         verts.update()
 
@@ -500,33 +424,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
           bgSprite.x = bgBase.x + p.offsetX * visualRef.current.parallaxRangeX
           bgSprite.y = bgBase.y + p.offsetY * visualRef.current.parallaxRangeY
         }
-      })
-    } else {
-      // Static mesh: only physics, no animation
-      app.ticker.add((delta) => {
-        const t = touchRef.current
-        const img = screenToImage(t.screenX, t.screenY)
-        const touchState: TouchState = { active: t.active, imageX: img.x, imageY: img.y }
-        physics.update(allPoints, touchState, delta)
-
-        // Parallax (always active)
-        if (bgSprite) {
-          const p = parallax.getOffset()
-          bgSprite.x = bgBase.x + p.offsetX * visualRef.current.parallaxRangeX
-          bgSprite.y = bgBase.y + p.offsetY * visualRef.current.parallaxRangeY
-        }
-
-        if (physics.isIdle()) return
-
-        physics.apply(allPoints, modifiedPositions)
-
-        const verts = geometry.getBuffer('aVertexPosition')
-        for (let i = 0; i < modifiedPositions.length; i++) {
-          (verts.data as unknown as Float32Array)[i * 2] = modifiedPositions[i].x * scale + offsetX;
-          (verts.data as unknown as Float32Array)[i * 2 + 1] = modifiedPositions[i].y * scale + offsetY
-        }
-        verts.update()
-
       })
     }
 
@@ -541,15 +438,9 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
     window.addEventListener('resize', handleResize)
 
     return () => {
-      physicsRef.current = null
       multiPlaybackRef.current = null
       parallax.destroy()
       parallaxRef.current = null
-      canvas.removeEventListener('pointerdown', onPointerDown)
-      canvas.removeEventListener('pointermove', onPointerMove)
-      canvas.removeEventListener('pointerup', onPointerUp)
-      canvas.removeEventListener('pointerleave', onPointerUp)
-      canvas.removeEventListener('pointercancel', onPointerUp)
       window.removeEventListener('resize', handleResize)
       if (bgVideoEl) {
         bgVideoEl.pause()
@@ -650,24 +541,6 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
               )}
             </div>
             <div className="animation-settings">
-              <details open>
-                <summary>Physique</summary>
-                <div className="settings-group">
-                  {SLIDERS.map(({ key, label, min, max, step }) => (
-                    <label key={key} className="physics-slider">
-                      <span>{label}: {physicsConfig[key]}</span>
-                      <input
-                        type="range"
-                        min={min}
-                        max={max}
-                        step={step}
-                        value={physicsConfig[key]}
-                        onChange={e => updateConfig(key, parseFloat(e.target.value))}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </details>
               <details open>
                 <summary>Effets visuels</summary>
                 <div className="settings-group">
