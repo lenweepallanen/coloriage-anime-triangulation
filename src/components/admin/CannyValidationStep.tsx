@@ -250,6 +250,9 @@ export default function CannyValidationStep({ project, onSave }: Props) {
         topologyLocked: false,
         trackedTriangles: [],
         internalBarycentrics: [],
+        bones: [],
+        boneWeights: null,
+        bonesValidated: false,
         videoFramesMesh: null,
       }
       // If shared geometry exists (from rest animation), only reset tracking data.

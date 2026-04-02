@@ -125,7 +125,7 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
 function getAnimationData(project: Project) {
   const restAnim = project.animations.find(a => a.type === 'rest')
   const readyOneshots: Animation[] = project.animations.filter(
-    a => (a.type === 'oneshot' || a.type === 'physics') && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
+    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone') && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
   )
   return { restAnim, readyOneshots }
 }

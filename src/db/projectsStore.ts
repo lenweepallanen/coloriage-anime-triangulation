@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -39,6 +39,9 @@ interface MeshDoc {
   topologyLocked: boolean
   trackedTriangles: TriangleDoc[]
   internalBarycentrics: BarycentricRef[]
+  bones: Bone[]
+  hasBoneWeights: boolean
+  bonesValidated: boolean
   hasVideoFramesMesh: boolean
 }
 
@@ -250,6 +253,9 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     topologyLocked: mesh.topologyLocked ?? false,
     trackedTriangles: triToDoc(mesh.trackedTriangles ?? []),
     internalBarycentrics: mesh.internalBarycentrics ?? [],
+    bones: mesh.bones ?? [],
+    hasBoneWeights: mesh.boneWeights != null,
+    bonesValidated: mesh.bonesValidated ?? false,
     hasVideoFramesMesh: mesh.videoFramesMesh != null,
   }
 }
@@ -329,7 +335,7 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourOriginKeyframes' | 'contourOriginFrames' |
   'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
   'contourCannyFrames' |
-  'anchorKeyframes' | 'anchorFrames' | 'videoFramesMesh'>
+  'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -370,6 +376,9 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
       topologyLocked: false,
       trackedTriangles: [],
       internalBarycentrics: [],
+      bones: [],
+      boneWeights: null,
+      bonesValidated: false,
     }
   }
 
@@ -393,6 +402,8 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     topologyLocked: d.topologyLocked ?? false,
     trackedTriangles: docToTri(d.trackedTriangles ?? []),
     internalBarycentrics: d.internalBarycentrics ?? [],
+    bones: d.bones ?? [],
+    bonesValidated: d.bonesValidated ?? false,
   }
 }
 
@@ -411,6 +422,7 @@ async function loadAnimationJSON(
   contourCannyFrames: Point2D[][] | null
   anchorKeyframes: KeyframeData[]
   anchorFrames: Point2D[][] | null
+  boneWeights: number[][] | null
   videoFramesMesh: Point2D[][] | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
@@ -426,6 +438,7 @@ async function loadAnimationJSON(
     meshDoc.hasContourCannyFrames ? downloadJSON<Point2D[][]>(path('contourCannyFrames.json')) : null,
     meshDoc.hasAnchorKeyframes ? downloadJSON<KeyframeData[]>(path('anchorKeyframes.json')) : null,
     meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(path('anchorFrames.json')) : null,
+    meshDoc.hasBoneWeights ? downloadJSON<number[][]>(path('boneWeights.json')) : null,
     meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(path('videoFramesMesh.json')) : null,
   ])
 
@@ -438,7 +451,8 @@ async function loadAnimationJSON(
     contourCannyFrames: downloads[5],
     anchorKeyframes: downloads[6] ?? [],
     anchorFrames: downloads[7],
-    videoFramesMesh: downloads[8],
+    boneWeights: downloads[8],
+    videoFramesMesh: downloads[9],
   }
 }
 
@@ -768,6 +782,7 @@ export type AnimationUploadField =
   | 'contourAnchorKeyframes' | 'contourAnchorFrames'
   | 'contourSubdivisionFrames' | 'contourCannyFrames'
   | 'anchorKeyframes' | 'anchorFrames'
+  | 'boneWeights'
   | 'videoFramesMesh'
 
 export type UploadHint =
@@ -867,6 +882,7 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           contourCannyFrames: anim.mesh.contourCannyFrames,
           anchorKeyframes: anim.mesh.anchorKeyframes,
           anchorFrames: anim.mesh.anchorFrames,
+          boneWeights: anim.mesh.boneWeights,
           videoFramesMesh: anim.mesh.videoFramesMesh,
         }
         const data = jsonFieldMap[field]
@@ -897,6 +913,7 @@ const ANIM_JSON_FILES = [
   'contourCannyFrames.json',
   'anchorKeyframes.json',
   'anchorFrames.json',
+  'boneWeights.json',
   'videoFramesMesh.json',
 ]
 
@@ -975,7 +992,7 @@ const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'video', 'audio', 'contourOriginKeyframes', 'contourOriginFrames',
   'contourAnchorKeyframes', 'contourAnchorFrames',
   'contourSubdivisionFrames', 'contourCannyFrames',
-  'anchorKeyframes', 'anchorFrames', 'videoFramesMesh',
+  'anchorKeyframes', 'anchorFrames', 'boneWeights', 'videoFramesMesh',
 ]
 
 export async function duplicateProject(sourceId: string): Promise<Project> {

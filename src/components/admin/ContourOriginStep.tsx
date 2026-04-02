@@ -273,6 +273,9 @@ export default function ContourOriginStep({ project, onSave }: Props) {
         topologyLocked: false,
         trackedTriangles: [],
         internalBarycentrics: [],
+        bones: [],
+        boneWeights: null,
+        bonesValidated: false,
         videoFramesMesh: null,
       }
 
@@ -301,6 +304,9 @@ export default function ContourOriginStep({ project, onSave }: Props) {
         topologyLocked: false,
         trackedTriangles: [],
         internalBarycentrics: [],
+        bones: [],
+        boneWeights: null,
+        bonesValidated: false,
         videoFramesMesh: null,
       }
 

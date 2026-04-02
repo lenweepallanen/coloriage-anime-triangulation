@@ -26,6 +26,22 @@ export interface CurvilinearParam {
   t: number;               // Position curviligne normalisée [0,1] sur ce segment
 }
 
+export interface BoneEndpointRef {
+  anchorIndexA: number;   // index dans tracked = [...contourAnchors, ...anchorPoints]
+  anchorIndexB: number;
+  localX: number;         // 0=A, 1=B, le long du segment A→B
+  localY: number;         // offset perpendiculaire, normalisé par |A-B|
+}
+
+export interface Bone {
+  id: string;
+  name: string;
+  parentId: string | null;  // null = racine
+  head: BoneEndpointRef;
+  tail: BoneEndpointRef;
+  fixedLength: boolean;     // si true, longueur constante (rest pose)
+}
+
 export interface MeshData {
   // Étape 2 : Paramètres Canny validés
   cannyParams: CannyParams | null;
@@ -73,6 +89,11 @@ export interface MeshData {
   trackedTriangles: [number, number, number][];  // Delaunay sur [...contourAnchors, ...anchorPoints]
   internalBarycentrics: BarycentricRef[];  // Pour contourSubdivisionPoints + internalPoints
 
+  // Bones (animation type 'bone')
+  bones: Bone[];
+  boneWeights: number[][] | null;   // [vertexIndex][boneIndex], normalisés sum=1
+  bonesValidated: boolean;
+
   // Sortie finale (consumed by AnimationPlayer)
   crossfadeFrames?: number;  // Nombre de frames de crossfade pour la boucle seamless (défaut 7)
   videoFramesMesh: Point2D[][] | null;  // allPoints par frame
@@ -97,7 +118,7 @@ export interface MarkerCorners {
   bottomRight: Point2D;
 }
 
-export type AnimationType = 'rest' | 'oneshot' | 'physics';
+export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone';
 
 export interface Animation {
   id: string;

@@ -34,10 +34,11 @@ Un projet contient **plusieurs animations** partageant la même image et géomé
 - **Rest** (exactement 1) : animation en boucle infinie (idle). Pipeline complet 10 étapes. Seule animation autorisée à modifier la géométrie.
 - **Oneshot** (0+) : animations à la demande (wave, jump...). Pipeline réduit 6 étapes (tracking seul, géométrie héritée de rest).
 - **Physics** (0+) : animations procédurales par code JS. Pas de vidéo ni tracking — l'utilisateur écrit du code qui transforme les vertices du maillage. Les frames sont pré-calculées à la validation et stockées comme `videoFramesMesh`, ce qui les rend identiques aux oneshots pour le playback. Option **overlay** : si activée, l'animation se superpose instantanément à la rest loop (déplacements additifs) sans attendre la fin du cycle.
+- **Bone** (0+) : animations par déformation squelettique. Pipeline 7 étapes (vidéo + tracking des anchors comme oneshot, puis définition de bones + calcul par skinning au lieu d'ARAP). Self-contained comme physics — hérite la géométrie de rest, produit son propre `videoFramesMesh`. Utilisé comme oneshot/overlay dans le playback.
 
 ### Topologie partagée
 
-La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints, anchorPoints, internalPoints, triangles, trackedTriangles, internalBarycentrics) est définie sur la rest animation et **propagée** aux oneshots et physics. Si la géométrie rest change, le tracking des oneshots est invalidé et les frames pré-calculées des physics sont effacées.
+La géométrie frame 0 (contourOrigin, contourAnchors, contourSubdivisionPoints, anchorPoints, internalPoints, triangles, trackedTriangles, internalBarycentrics) est définie sur la rest animation et **propagée** aux oneshots, physics et bone. Si la géométrie rest change, le tracking des oneshots est invalidé, les frames pré-calculées des physics sont effacées, et les bones sont invalidés (boneWeights recalculé nécessaire).
 
 ### Adapter pattern
 
@@ -122,6 +123,41 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 ### Pipeline physics (1 étape)
 1. **Code Editeur** — Éditeur de code JS avec preview PIXI temps réel + pré-calcul des frames
 
+### Pipeline bone (7 étapes)
+1. **Vidéo** — Upload vidéo d'animation (image héritée du projet)
+2. **Canny** — Preview contour Canny sur la vidéo bone (géométrie héritée de rest en lecture seule)
+3. **Tracking Point 0** — Tracking P0 sur la vidéo bone (optical flow + snap Canny)
+4. **Tracking Contour** — Placement curviligne + snap extrema courbure sur la vidéo bone
+5. **Tracking Ancres** — Optical flow ancres internes sur la vidéo bone (anti-saut + voisinage)
+6. **Bones** — Définition du squelette : bones hiérarchiques (parent-enfant), chaque bone a 2 endpoints (head/tail) positionnés relativement à une paire d'anchor points trackés. Option **longueur constante** par bone. Validation → calcul auto-weights par distance inverse.
+7. **Triangulation** — Calcul animation par déformation squelettique (bones + LBS au lieu d'ARAP) → `videoFramesMesh`. Preview wireframe/gradient avec overlay bones animés.
+
+### Système Bone
+
+**Concept** : au lieu de tracker chaque point du maillage et d'utiliser ARAP pour déformer, on définit un squelette de bones dont les positions sont déduites des anchor points trackés. Les vertices du maillage sont liés aux bones par skinning automatique.
+
+**Bone** : segment défini par 2 endpoints (head + tail). Chaque endpoint est positionné dans le repère local d'une paire d'anchors :
+- `origin = anchorA`, `axe_x = anchorB - anchorA`, `axe_y = perp(axe_x)`
+- `position = anchorA + localX × (B-A) + localY × perp(B-A)`
+- `localX`/`localY` normalisés par `|A-B|` — le bone se déplace et se redimensionne avec ses anchors
+- Si `anchorA === anchorB` : le bone suit la translation pure de l'anchor (pas de rotation)
+
+**Hiérarchie** : les bones forment un arbre (parent-child). Les transforms se composent par forward kinematics (parents d'abord).
+
+**Longueur constante** (`fixedLength: boolean`) : si activé, la direction du bone suit les anchors mais sa longueur est figée à celle du rest pose. Le tail est repositionné sur la droite head→tail à distance constante.
+
+**Auto-weights** : poids par distance inverse au carré au segment du bone. `w = 1/(dist+1)²`, normalisés par vertex. Seuil < 0.01 → 0.
+
+**Skinning** : Linear Blend Skinning (LBS) — chaque vertex est déformé par la moyenne pondérée des transformations rigides (rotation + translation) de ses bones influents.
+
+**Déformation par frame** :
+1. Calcul positions endpoints depuis les tracked anchors (`contourAnchorFrames[f]` + `anchorFrames[f]`)
+2. Si `fixedLength` : normaliser la longueur au rest pose
+3. Calcul transform rigide (rotation + translation) par bone vs rest pose
+4. Forward kinematics : composition parent→enfant
+5. LBS : `position_vertex = Σ weight_b × transform_b(rest_position_vertex)`
+6. Résultat : `videoFramesMesh[f]`
+
 ## Workflow Scan (utilisateur final)
 
 **Orientation forcée** : toute la page scan est en mode paysage. `screen.orientation.lock('landscape')` au montage de `ScanPage`, avec fallback CSS `transform: rotate(90deg)` en portrait.
@@ -151,7 +187,7 @@ src/
 │   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor + BoneEditorStep + BoneTriangulationStep)
 │   ├── keyframes/              Éditeur de keyframes (éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -174,6 +210,7 @@ src/
 │   ├── pdfLayout.ts            Constantes layout A4
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
 │   ├── bodyZoneUtils.ts        Détection zones corporelles (triangle→zone, hit test, touch detection)
+│   ├── boneSolver.ts           Déformation squelettique (bones, auto-weights, LBS, forward kinematics)
 │   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css
 public/
@@ -184,7 +221,7 @@ public/
 ## Modèle de données
 
 ```typescript
-AnimationType = 'rest' | 'oneshot' | 'physics'
+AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone'
 
 Animation {
   id: string                         // crypto.randomUUID()
@@ -216,7 +253,7 @@ Project {
   backgroundVideoBlob: Blob | null   // Vidéo fond (niveau projet)
   ambientSoundBlob: Blob | null      // Son d'ambiance (niveau projet, boucle continue)
   ambientSoundEnabled: boolean       // Toggle activer/désactiver le son
-  animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics
+  animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics + 0..N bones
   bodyZones: BodyZone[]              // Zones corporelles (triangles groupés par label)
   markers: MarkerCorners | null      // 4 coins marqueurs L
 }
@@ -272,8 +309,29 @@ MeshData {
   trackedTriangles: [number,number,number][]
   internalBarycentrics: BarycentricRef[]
 
+  // Bones (animation type 'bone')
+  bones: Bone[]                          // Définitions des bones (étape 6 bone)
+  boneWeights: number[][] | null         // [vertexIndex][boneIndex], normalisés sum=1 (Cloud Storage JSON)
+  bonesValidated: boolean                // Étape 6 bone validée
+
   // Sortie finale (étape 10, consommé par AnimationPlayer)
   videoFramesMesh: Point2D[][] | null
+}
+
+BoneEndpointRef {
+  anchorIndexA: number                   // index dans tracked = [...contourAnchors, ...anchorPoints]
+  anchorIndexB: number
+  localX: number                         // 0=A, 1=B, le long du segment A→B
+  localY: number                         // offset perpendiculaire, normalisé par |A-B|
+}
+
+Bone {
+  id: string
+  name: string
+  parentId: string | null                // null = racine
+  head: BoneEndpointRef
+  tail: BoneEndpointRef
+  fixedLength: boolean                   // si true, longueur constante (rest pose)
 }
 
 SceneBackgroundLayer {
@@ -349,6 +407,7 @@ Trois espaces de coordonnées coexistent :
   - `projects/{id}/animations/{animId}/contourCannyFrames.json`
   - `projects/{id}/animations/{animId}/anchorKeyframes.json`
   - `projects/{id}/animations/{animId}/anchorFrames.json`
+  - `projects/{id}/animations/{animId}/boneWeights.json`
   - `projects/{id}/animations/{animId}/videoFramesMesh.json`
   - `scans/{id}/scanImage` — image rectifiée
 

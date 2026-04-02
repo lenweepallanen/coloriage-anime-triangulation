@@ -87,6 +87,8 @@ export default function AnimationsSection() {
             anchorTrackingValidated: false,
             anchorFrames: null,
             anchorKeyframes: [],
+            bonesValidated: false,
+            boneWeights: null,
             videoFramesMesh: null,
           },
         }

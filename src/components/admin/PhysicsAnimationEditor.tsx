@@ -336,6 +336,9 @@ export default function PhysicsAnimationEditor({ project, animation, onSave }: P
         topologyLocked: false,
         trackedTriangles: [] as [number, number, number][],
         internalBarycentrics: [] as import('../../types/project').BarycentricRef[],
+        bones: [] as import('../../types/project').Bone[],
+        boneWeights: null,
+        bonesValidated: false,
         videoFramesMesh: result.frames,
         ...shared,
       }

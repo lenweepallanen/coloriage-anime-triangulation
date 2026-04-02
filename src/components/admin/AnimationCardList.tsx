@@ -49,6 +49,9 @@ function createEmptyMesh(): MeshData {
     topologyLocked: false,
     trackedTriangles: [],
     internalBarycentrics: [],
+    bones: [],
+    boneWeights: null,
+    bonesValidated: false,
     videoFramesMesh: null,
   }
 }
@@ -77,13 +80,17 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
   const [saving, setSaving] = useState(false)
   const restAnim = project.animations.find(a => a.type === 'rest')
 
-  async function handleAdd(type: 'oneshot' | 'physics') {
+  async function handleAdd(type: 'oneshot' | 'physics' | 'bone') {
     const isPhysics = type === 'physics'
+    const isBone = type === 'bone'
+    const name = isPhysics
+      ? `Physics ${project.animations.filter(a => a.type === 'physics').length + 1}`
+      : isBone
+        ? `Bone ${project.animations.filter(a => a.type === 'bone').length + 1}`
+        : `Animation ${project.animations.length + 1}`
     const newAnim: Animation = {
       id: crypto.randomUUID(),
-      name: isPhysics
-        ? `Physics ${project.animations.filter(a => a.type === 'physics').length + 1}`
-        : `Animation ${project.animations.length + 1}`,
+      name,
       type,
       createdAt: Date.now(),
       videoBlob: null,
@@ -166,6 +173,9 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
         </button>
         <button className="btn-secondary" onClick={() => handleAdd('physics')} disabled={saving}>
           + Physics
+        </button>
+        <button className="btn-secondary" onClick={() => handleAdd('bone')} disabled={saving}>
+          + Bone
         </button>
       </div>
     </div>

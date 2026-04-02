@@ -12,6 +12,8 @@ import AnchorPointsStep from './AnchorPointsStep'
 import AnchorTrackingStep from './AnchorTrackingStep'
 import TriangulationStep from './TriangulationStep'
 import PhysicsAnimationEditor from './PhysicsAnimationEditor'
+import BoneEditorStep from './BoneEditorStep'
+import BoneTriangulationStep from './BoneTriangulationStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -24,9 +26,14 @@ const ONESHOT_STEPS = [
   'Tracking Contour', 'Tracking Ancres', 'Triangulation',
 ] as const
 
+const BONE_STEPS = [
+  'Vidéo', 'Canny', 'Tracking Point 0',
+  'Tracking Contour', 'Tracking Ancres', 'Bones', 'Triangulation',
+] as const
+
 const PHYSICS_STEPS = ['Code Editeur'] as const
 
-type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number]
+type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number]
 
 const STEP_SHORT_LABELS: Record<string, string> = {
   'Vidéo': 'Vidéo',
@@ -40,6 +47,7 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Tracking Ancres': 'Track Ancres',
   'Triangulation': 'Triangulation',
   'Code Editeur': 'Code',
+  'Bones': 'Bones',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -57,6 +65,7 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Ancres Internes': return (mesh?.anchorPoints?.length ?? 0) > 0 ? 'done' : 'pending'
     case 'Tracking Ancres': return mesh?.anchorTrackingValidated ? 'done' : 'pending'
     case 'Triangulation': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
+    case 'Bones': return mesh?.bonesValidated ? 'done' : 'pending'
     case 'Code Editeur': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
     default: return 'pending'
   }
@@ -66,6 +75,7 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
 export function getAnimationCompletionStatus(animation: Animation): { done: number; total: number } {
   const steps = animation.type === 'rest' ? REST_STEPS
     : animation.type === 'physics' ? PHYSICS_STEPS
+    : animation.type === 'bone' ? BONE_STEPS
     : ONESHOT_STEPS
   const mesh = animation.mesh
   const hasVideo = animation.videoBlob != null
@@ -87,7 +97,11 @@ interface Props {
 export default function PipelineEditor({ project, animation, stepView, stepSave, projectSave }: Props) {
   const isRestAnim = animation.type === 'rest'
   const isPhysicsAnim = animation.type === 'physics'
-  const availableSteps = isRestAnim ? REST_STEPS : isPhysicsAnim ? PHYSICS_STEPS : ONESHOT_STEPS
+  const isBoneAnim = animation.type === 'bone'
+  const availableSteps = isRestAnim ? REST_STEPS
+    : isPhysicsAnim ? PHYSICS_STEPS
+    : isBoneAnim ? BONE_STEPS
+    : ONESHOT_STEPS
   const [activeStep, setActiveStep] = useState<Step>(availableSteps[0] as Step)
 
   // Reset step if not available for this animation type
@@ -150,8 +164,22 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'Tracking Ancres' && (
           <AnchorTrackingStep project={stepView} onSave={stepSave} />
         )}
-        {activeStep === 'Triangulation' && (
+        {activeStep === 'Bones' && (
+          <BoneEditorStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Triangulation' && !isBoneAnim && (
           <TriangulationStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
+        )}
+        {activeStep === 'Triangulation' && isBoneAnim && (
+          <BoneTriangulationStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
         )}
         {activeStep === 'Code Editeur' && (
           <PhysicsAnimationEditor

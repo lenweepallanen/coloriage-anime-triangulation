@@ -494,6 +494,9 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
         topologyLocked: false,
         trackedTriangles: [],
         internalBarycentrics: [],
+        bones: [],
+        boneWeights: null,
+        bonesValidated: false,
         videoFramesMesh: null,
       }
       const mesh: MeshData = {
@@ -511,6 +514,9 @@ export default function ContourAnchorsStep({ project, onSave }: Props) {
         topologyLocked: false,
         trackedTriangles: [],
         internalBarycentrics: [],
+        bones: [],
+        boneWeights: null,
+        bonesValidated: false,
         videoFramesMesh: null,
       }
       await onSave({ ...project, mesh })
