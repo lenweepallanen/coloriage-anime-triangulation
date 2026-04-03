@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Animation, Point2D, MeshData } from '../../types/project'
+import { animationHasFrames, type Project, type Animation, type Point2D, type MeshData } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -9,6 +9,8 @@ import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { ScenePlayback } from '../../utils/scenePlayback'
 import type { SceneState } from '../../utils/scenePlayback'
 import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUtils'
+import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
   project: Project
@@ -109,7 +111,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
   useEffect(() => {
     const map = new Map<string, Animation>()
     for (const a of project.animations) {
-      if (a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0) {
+      if (animationHasFrames(a)) {
         map.set(a.id, a)
       }
     }
@@ -251,6 +253,29 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
 
     characterContainer.addChild(pixiMesh)
 
+    // --- Zone meshes for walk animations with limb separation ---
+    const walkAnims = project.animations.filter(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
+    const walkZoneMeshMap = new Map<string, ZoneMeshSetup>()
+    for (const wa of walkAnims) {
+      if (!wa.mesh?.walkLimbSeparation) continue
+      const setup = buildZoneMeshes(
+        wa.mesh.walkLimbSeparation,
+        allPoints,
+        mesh.triangles,
+        texture,
+        scanCanvas.width,
+        scanCanvas.height,
+        charScale,
+        0, 0, // offsets applied dynamically per frame
+        contentAlignment ?? undefined,
+      )
+      setup.container.visible = false
+      characterContainer.addChild(setup.container)
+      walkZoneMeshMap.set(wa.id, setup)
+    }
+    // Track which walk zone mesh is currently active
+    let activeWalkZoneAnimId: string | null = null
+
     // --- Audio elements for animation sounds ---
     const animAudioElements = new Map<string, HTMLAudioElement>()
     const animAudioUrls: string[] = []
@@ -302,8 +327,62 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     let blendProgress = 0
     const blendDuration = 7 / 24
 
+    // Zone playback state for walk animations
+    let activeZonePlaybacks: { zoneId: string; playback: LoopPlayback }[] | null = null
+    let activeBodyPlayback: LoopPlayback | null = null
+
+    function activateZoneMeshes(animId: string | null) {
+      // Hide all zone setups
+      for (const [id, setup] of walkZoneMeshMap) {
+        setup.container.visible = (id === animId)
+      }
+      activeWalkZoneAnimId = animId
+      if (!animId) {
+        activeZonePlaybacks = null
+        activeBodyPlayback = null
+      }
+    }
+
     function setupMovementAnimation(animId: string | undefined) {
       const anim = animId ? animMap.current.get(animId) : null
+
+      // Check if this is a walk with zone separation
+      if (anim && anim.mesh?.walkZoneFrames && anim.mesh.walkBodyFrames && walkZoneMeshMap.has(anim.id)) {
+        activateZoneMeshes(anim.id)
+        pixiMesh.visible = false
+
+        // Create per-zone LoopPlayback
+        const sep = anim.mesh.walkLimbSeparation!
+        activeZonePlaybacks = sep.zones.map(zone => ({
+          zoneId: zone.id,
+          playback: new LoopPlayback(anim.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 }),
+        }))
+        activeBodyPlayback = new LoopPlayback(anim.mesh.walkBodyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 })
+
+        // currentGetPositions still returns legacy positions for blending/touch detection
+        const legacyFrames = anim.mesh.videoFramesMesh
+        if (legacyFrames && legacyFrames.length > 0) {
+          const legacyPb = new LoopPlayback(legacyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 })
+          currentGetPositions = () => legacyPb.getPositions()
+          currentAdvance = (delta) => {
+            legacyPb.advance(delta)
+            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
+            activeBodyPlayback?.advance(delta)
+          }
+        } else {
+          currentGetPositions = () => allPoints
+          currentAdvance = (delta) => {
+            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
+            activeBodyPlayback?.advance(delta)
+          }
+        }
+        return
+      }
+
+      // Standard (non-walk) animation
+      activateZoneMeshes(null)
+      pixiMesh.visible = true
+
       const frames = anim?.mesh?.videoFramesMesh
       if (!frames || frames.length === 0) {
         currentGetPositions = () => allPoints
@@ -316,6 +395,10 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     }
 
     function setupInteractionAnimation(restAnimId: string | undefined, availableAnimIds: string[]) {
+      // Deactivate zone meshes when switching to interaction mode
+      activateZoneMeshes(null)
+      pixiMesh.visible = true
+
       const restId = restAnimId || restAnim?.id
       const rest = restId ? animMap.current.get(restId) : null
       const restFrames = rest?.mesh?.videoFramesMesh || mesh.videoFramesMesh
@@ -443,12 +526,31 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
       charOffsetX = computeCharOffsetX(scenePlayback)
       latestPositions = positions
 
-      const verts = geometry.getBuffer('aVertexPosition')
-      for (let i = 0; i < numPoints; i++) {
-        (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * charScale + charOffsetX;
-        (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * charScale + charOffsetY
+      // Zone mesh rendering for walk animations
+      if (activeWalkZoneAnimId && activeZonePlaybacks && activeBodyPlayback) {
+        const setup = walkZoneMeshMap.get(activeWalkZoneAnimId)
+        if (setup) {
+          // Update zone mesh positions
+          for (const zp of activeZonePlaybacks) {
+            const zm = setup.zoneMeshes.find(z => z.zoneId === zp.zoneId)
+            if (zm) {
+              updateZoneMeshVertices(zm, zp.playback.getPositions(), charScale, charOffsetX, charOffsetY)
+            }
+          }
+          // Update body mesh
+          updateZoneMeshVertices(setup.bodyMesh, activeBodyPlayback.getPositions(), charScale, charOffsetX, charOffsetY)
+        }
       }
-      verts.update()
+
+      // Update single mesh (for non-walk or legacy fallback)
+      if (pixiMesh.visible) {
+        const verts = geometry.getBuffer('aVertexPosition')
+        for (let i = 0; i < numPoints; i++) {
+          (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * charScale + charOffsetX;
+          (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * charScale + charOffsetY
+        }
+        verts.update()
+      }
 
       // Parallax scrolling: each layer scrolls at depthFactor × front speed.
       // The offset is relative to the front layer's scroll, applied directly in screen pixels.
@@ -497,7 +599,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     const rp = scene.restPoints[currentRestIdx]
     const ids = (rp?.randomAnimationIds ?? []).filter(id => {
       const a = project.animations.find(a => a.id === id)
-      return a != null && a.mesh?.videoFramesMesh != null
+      return a != null && animationHasFrames(a)
     })
     if (ids.length === 0) return
     const randomId = ids[Math.floor(Math.random() * ids.length)]

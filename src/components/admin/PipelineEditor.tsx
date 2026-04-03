@@ -14,8 +14,9 @@ import TriangulationStep from './TriangulationStep'
 import PhysicsAnimationEditor from './PhysicsAnimationEditor'
 import BoneEditorStep from './BoneEditorStep'
 import BoneTriangulationStep from './BoneTriangulationStep'
+import WalkLimbEditorStep from './WalkLimbEditorStep'
+import WalkZoneMeshStep from './WalkZoneMeshStep'
 import WalkBoneEditorStep from './WalkBoneEditorStep'
-import WalkBodySelectStep from './WalkBodySelectStep'
 import WalkParamsStep from './WalkParamsStep'
 import WalkComputeStep from './WalkComputeStep'
 
@@ -37,7 +38,7 @@ const BONE_STEPS = [
 
 const PHYSICS_STEPS = ['Code Editeur'] as const
 
-const WALK_STEPS = ['Bones marche', 'Corps', 'Paramètres', 'Calcul'] as const
+const WALK_STEPS = ['Zones membres', 'Maillage zones', 'Bones marche', 'Paramètres', 'Calcul'] as const
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number]
 
@@ -54,8 +55,9 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Triangulation': 'Triangulation',
   'Code Editeur': 'Code',
   'Bones': 'Bones',
+  'Zones membres': 'Zones',
+  'Maillage zones': 'Maillage',
   'Bones marche': 'Bones',
-  'Corps': 'Corps',
   'Paramètres': 'Paramètres',
   'Calcul': 'Calcul',
 }
@@ -77,10 +79,11 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Triangulation': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
     case 'Bones': return mesh?.bonesValidated ? 'done' : 'pending'
     case 'Code Editeur': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
+    case 'Zones membres': return mesh?.walkLimbSeparationValidated ? 'done' : 'pending'
+    case 'Maillage zones': return mesh?.walkLimbSeparationValidated ? 'done' : 'pending'
     case 'Bones marche': return mesh?.walkSkeletonValidated ? 'done' : 'pending'
-    case 'Corps': return mesh?.walkBodyValidated ? 'done' : 'pending'
     case 'Paramètres': return mesh?.walkParamsValidated ? 'done' : 'pending'
-    case 'Calcul': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
+    case 'Calcul': return (mesh?.videoFramesMesh != null || mesh?.walkZoneFrames != null) ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -205,15 +208,22 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
             onSave={projectSave}
           />
         )}
-        {activeStep === 'Bones marche' && (
-          <WalkBoneEditorStep
+        {activeStep === 'Zones membres' && (
+          <WalkLimbEditorStep
             project={project}
             animation={animation}
             onSave={projectSave}
           />
         )}
-        {activeStep === 'Corps' && (
-          <WalkBodySelectStep
+        {activeStep === 'Maillage zones' && (
+          <WalkZoneMeshStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Bones marche' && (
+          <WalkBoneEditorStep
             project={project}
             animation={animation}
             onSave={projectSave}

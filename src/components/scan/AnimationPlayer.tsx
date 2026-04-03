@@ -1,12 +1,14 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Animation, Point2D } from '../../types/project'
+import { animationHasFrames, type Project, type Animation, type Point2D } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { DeviceParallax } from '../../utils/deviceParallax'
+import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
   project: Project
@@ -125,7 +127,7 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
 function getAnimationData(project: Project) {
   const restAnim = project.animations.find(a => a.type === 'rest')
   const readyOneshots: Animation[] = project.animations.filter(
-    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone') && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
+    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone' || a.type === 'walk') && animationHasFrames(a)
   )
   return { restAnim, readyOneshots }
 }
@@ -322,7 +324,30 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
       vertices[i * 2 + 1] = p.y * scale + offsetY
     })
 
-    // Main mesh
+    // --- Check for walk animations with limb separation ---
+    // Find any walk animation with zone frames to enable multi-mesh z-order rendering
+    const walkAnim = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
+    let zoneMeshSetup: ZoneMeshSetup | null = null
+
+    if (walkAnim?.mesh?.walkLimbSeparation) {
+      zoneMeshSetup = buildZoneMeshes(
+        walkAnim.mesh.walkLimbSeparation,
+        allPoints,
+        mesh.triangles,
+        texture,
+        scanCanvas.width,
+        scanCanvas.height,
+        scale,
+        offsetX,
+        offsetY,
+        contentAlignment ?? undefined,
+      )
+      meshContainer.addChild(zoneMeshSetup.container)
+      // Hide the zone mesh container by default (shown during walk playback)
+      zoneMeshSetup.container.visible = false
+    }
+
+    // Main mesh (used for rest + non-walk animations)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const geometry = new PIXI.MeshGeometry(vertices as any, uvs as any, indices as any)
     const material = new PIXI.MeshMaterial(texture)
@@ -405,18 +430,56 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
         advancePlayback = (delta) => playback.advance(delta)
       }
 
+      // Walk zone mesh frame counter (for z-ordered multi-mesh during walk oneshot)
+      let walkFrameCounter = 0
+      const walkZoneFrames = walkAnim?.mesh?.walkZoneFrames
+      const walkBodyFrames = walkAnim?.mesh?.walkBodyFrames
+      const walkTotalFrames = walkBodyFrames?.length ?? 0
+
       app.ticker.add((delta) => {
         if (playing) advancePlayback(delta)
 
         const positions = getPositions()
 
-        // Update main mesh vertices
-        const verts = geometry.getBuffer('aVertexPosition')
-        for (let i = 0; i < positions.length; i++) {
-          (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * scale + offsetX;
-          (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
+        // Check if we should use zone mesh rendering (walk animation active with separation)
+        const activeOneshotId = hasOneshots ? (multiPlaybackRef.current as MultiAnimationPlayback)?.activeOneshotName : null
+        const isWalkZonePlaying = activeOneshotId && walkAnim && walkZoneFrames && walkBodyFrames && zoneMeshSetup
+          && activeOneshotId === walkAnim.name
+
+        if (isWalkZonePlaying && zoneMeshSetup) {
+          // Multi-mesh z-ordered rendering for walk animation
+          pixiMesh.visible = false
+          zoneMeshSetup.container.visible = true
+
+          // Advance walk frame counter
+          walkFrameCounter = (walkFrameCounter + Math.round(delta)) % walkTotalFrames
+
+          // Update zone meshes
+          for (const zm of zoneMeshSetup.zoneMeshes) {
+            const zoneFrame = walkZoneFrames[zm.zoneId]?.[walkFrameCounter]
+            if (zoneFrame) {
+              updateZoneMeshVertices(zm, zoneFrame, scale, offsetX, offsetY)
+            }
+          }
+          // Update body mesh
+          const bodyFrame = walkBodyFrames[walkFrameCounter]
+          if (bodyFrame) {
+            updateZoneMeshVertices(zoneMeshSetup.bodyMesh, bodyFrame, scale, offsetX, offsetY)
+          }
+        } else {
+          // Standard single-mesh rendering
+          pixiMesh.visible = true
+          if (zoneMeshSetup) zoneMeshSetup.container.visible = false
+          walkFrameCounter = 0
+
+          // Update main mesh vertices
+          const verts = geometry.getBuffer('aVertexPosition')
+          for (let i = 0; i < positions.length; i++) {
+            (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * scale + offsetX;
+            (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
+          }
+          verts.update()
         }
-        verts.update()
 
         // Parallax on background
         if (bgSprite) {

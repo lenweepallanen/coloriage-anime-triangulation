@@ -1,6 +1,6 @@
 import { useParams, Navigate, Outlet, NavLink, Link, useOutletContext } from 'react-router-dom'
 import { useProject } from '../../hooks/useProject'
-import type { Project } from '../../types/project'
+import { animationHasFrames, type Project } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 
 export interface AdminContext {
@@ -21,8 +21,7 @@ export default function AdminLayout() {
   if (!project) return <Navigate to="/" replace />
 
   const restAnim = project.animations.find(a => a.type === 'rest')
-  const canPreview = restAnim?.mesh?.videoFramesMesh != null
-    && restAnim.mesh.videoFramesMesh.length > 0
+  const canPreview = restAnim != null && animationHasFrames(restAnim)
 
   const context: AdminContext = { project, save, canPreview }
 

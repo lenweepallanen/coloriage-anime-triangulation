@@ -27,6 +27,10 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `loopPlayback.ts` | Playback seamless avec crossfade smoothstep configurable |
 | `multiAnimationPlayback.ts` | Machine d'états playback multi-animation (rest loop + oneshot transitions) |
 | `deviceParallax.ts` | Wrapper DeviceOrientation API avec gestion permission iOS + smoothing EMA + swap axes landscape |
+| `walkSolver.ts` | Cinématique marche quadrupède : squelette 18 keypoints, IK 2-bones (genoux), LBS par zone, calcul séparé zones/body |
+| `limbSeparation.ts` | Séparation membres/corps : Bézier→polygone, filtrage vertex-based, Delaunay par zone, patch manuel body (buildBodyMesh, findTwoNearest) |
+| `bezierUtils.ts` | Courbes Bézier : évaluation cubique, flatten en polyline, expansion polygone, sampling contour |
+| `zoneMeshRenderer.ts` | Rendu PIXI.js par zone : build meshes séparés (zone + body), z-ordering, update vertices par frame |
 
 ## autoMeshGenerator.ts
 

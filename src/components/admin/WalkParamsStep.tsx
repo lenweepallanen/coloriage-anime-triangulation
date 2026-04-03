@@ -61,12 +61,22 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
+    const canvas = canvasRef.current
+    let ro: ResizeObserver | null = null
+    if (canvas) {
+      ro = new ResizeObserver(() => {
+        if (imageRef.current && canvas.clientWidth > 0)
+          fitToCanvas(imageRef.current.naturalWidth, imageRef.current.naturalHeight)
+      })
+      ro.observe(canvas)
+    }
     return () => {
       imageRef.current = null
       URL.revokeObjectURL(url)
+      ro?.disconnect()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [project.originalImageBlob])
 
   const totalFrames = Math.round(CYCLES_PER_ANIM / params.speed * FPS)
   const duration = CYCLES_PER_ANIM / params.speed
@@ -188,8 +198,8 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
     return <div style={{ padding: 20, color: '#9ca3af' }}>Validez d'abord le squelette de marche.</div>
   }
 
-  if (!mesh.walkBodyValidated) {
-    return <div style={{ padding: 20, color: '#9ca3af' }}>Sélectionnez d'abord les triangles du corps.</div>
+  if (!mesh.walkSkeletonValidated) {
+    return <div style={{ padding: 20, color: '#9ca3af' }}>Definissez d'abord le squelette de marche.</div>
   }
 
   return (

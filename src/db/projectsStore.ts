@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -46,9 +46,13 @@ interface MeshDoc {
   walkSkeletonValidated: boolean
   walkBodyTriangles: number[]
   walkBodyValidated: boolean
+  walkLimbSeparation: unknown  // Serialized WalkLimbSeparation (triangles as {a,b,c} objects)
+  walkLimbSeparationValidated: boolean
   walkParams: WalkParams | null
   walkParamsValidated: boolean
   hasVideoFramesMesh: boolean
+  hasWalkZoneFrames: boolean
+  hasWalkBodyFrames: boolean
 }
 
 // Legacy formats (v1-v3)
@@ -218,6 +222,42 @@ function docToTri(docs: TriangleDoc[]): [number, number, number][] {
   return docs.map(t => [t.a, t.b, t.c] as [number, number, number])
 }
 
+// Serialize WalkLimbSeparation for Firestore (convert nested arrays to {a,b,c} objects)
+function limbSeparationToDoc(sep: WalkLimbSeparation | null | undefined): unknown {
+  if (!sep) return null
+  const zoneTrianglesDoc: Record<string, TriangleDoc[]> = {}
+  for (const [zoneId, tris] of Object.entries(sep.zoneTriangles)) {
+    zoneTrianglesDoc[zoneId] = triToDoc(tris)
+  }
+  return {
+    zones: sep.zones,
+    overlapMargin: sep.overlapMargin,
+    zonePoints: sep.zonePoints,
+    zoneTriangles: zoneTrianglesDoc,
+    bodyTriangleIndices: sep.bodyTriangleIndices,
+  }
+}
+
+// Deserialize WalkLimbSeparation from Firestore
+function limbSeparationFromDoc(doc: Record<string, unknown> | null | undefined): WalkLimbSeparation | null {
+  if (!doc) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d = doc as any
+  const zoneTriangles: Record<string, [number, number, number][]> = {}
+  if (d.zoneTriangles) {
+    for (const [zoneId, triDocs] of Object.entries(d.zoneTriangles)) {
+      zoneTriangles[zoneId] = docToTri(triDocs as TriangleDoc[])
+    }
+  }
+  return {
+    zones: d.zones ?? [],
+    overlapMargin: d.overlapMargin ?? 3,
+    zonePoints: d.zonePoints ?? {},
+    zoneTriangles,
+    bodyTriangleIndices: d.bodyTriangleIndices ?? [],
+  }
+}
+
 // --- Animation storage path helpers ---
 
 function animStoragePath(projectId: string, animId: string, file: string): string {
@@ -262,6 +302,8 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     bones: mesh.bones ?? [],
     hasBoneWeights: mesh.boneWeights != null,
     bonesValidated: mesh.bonesValidated ?? false,
+    walkLimbSeparation: limbSeparationToDoc(mesh.walkLimbSeparation),
+    walkLimbSeparationValidated: mesh.walkLimbSeparationValidated ?? false,
     walkSkeleton: mesh.walkSkeleton ?? null,
     walkSkeletonValidated: mesh.walkSkeletonValidated ?? false,
     walkBodyTriangles: mesh.walkBodyTriangles ?? [],
@@ -269,6 +311,8 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     walkParams: mesh.walkParams ?? null,
     walkParamsValidated: mesh.walkParamsValidated ?? false,
     hasVideoFramesMesh: mesh.videoFramesMesh != null,
+    hasWalkZoneFrames: mesh.walkZoneFrames != null,
+    hasWalkBodyFrames: mesh.walkBodyFrames != null,
   }
 }
 
@@ -347,7 +391,8 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourOriginKeyframes' | 'contourOriginFrames' |
   'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
   'contourCannyFrames' |
-  'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh'>
+  'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh' |
+  'walkZoneFrames' | 'walkBodyFrames'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -390,6 +435,8 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
       internalBarycentrics: [],
       bones: [],
       bonesValidated: false,
+      walkLimbSeparation: null,
+      walkLimbSeparationValidated: false,
       walkSkeleton: null,
       walkSkeletonValidated: false,
       walkBodyTriangles: [],
@@ -421,6 +468,8 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     internalBarycentrics: d.internalBarycentrics ?? [],
     bones: d.bones ?? [],
     bonesValidated: d.bonesValidated ?? false,
+    walkLimbSeparation: limbSeparationFromDoc(d.walkLimbSeparation as Record<string, unknown> | null),
+    walkLimbSeparationValidated: d.walkLimbSeparationValidated ?? false,
     walkSkeleton: d.walkSkeleton ?? null,
     walkSkeletonValidated: d.walkSkeletonValidated ?? false,
     walkBodyTriangles: d.walkBodyTriangles ?? [],
@@ -447,6 +496,8 @@ async function loadAnimationJSON(
   anchorFrames: Point2D[][] | null
   boneWeights: number[][] | null
   videoFramesMesh: Point2D[][] | null
+  walkZoneFrames: Record<string, Point2D[][]> | null
+  walkBodyFrames: Point2D[][] | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
   const path = (file: string) =>
@@ -463,6 +514,8 @@ async function loadAnimationJSON(
     meshDoc.hasAnchorFrames ? downloadJSON<Point2D[][]>(path('anchorFrames.json')) : null,
     meshDoc.hasBoneWeights ? downloadJSON<number[][]>(path('boneWeights.json')) : null,
     meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(path('videoFramesMesh.json')) : null,
+    meshDoc.hasWalkZoneFrames ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFrames.json')) : null,
+    meshDoc.hasWalkBodyFrames ? downloadJSON<Point2D[][]>(path('walkBodyFrames.json')) : null,
   ])
 
   return {
@@ -476,6 +529,8 @@ async function loadAnimationJSON(
     anchorFrames: downloads[7],
     boneWeights: downloads[8],
     videoFramesMesh: downloads[9],
+    walkZoneFrames: downloads[10],
+    walkBodyFrames: downloads[11],
   }
 }
 
@@ -684,6 +739,8 @@ function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
     anchorFrames: null,
     boneWeights: null,
     videoFramesMesh: null,
+    walkZoneFrames: null,
+    walkBodyFrames: null,
   }
 }
 
@@ -808,6 +865,7 @@ export type AnimationUploadField =
   | 'anchorKeyframes' | 'anchorFrames'
   | 'boneWeights'
   | 'videoFramesMesh'
+  | 'walkZoneFrames' | 'walkBodyFrames'
 
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound'
@@ -908,6 +966,8 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           anchorFrames: anim.mesh.anchorFrames,
           boneWeights: anim.mesh.boneWeights,
           videoFramesMesh: anim.mesh.videoFramesMesh,
+          walkZoneFrames: anim.mesh.walkZoneFrames,
+          walkBodyFrames: anim.mesh.walkBodyFrames,
         }
         const data = jsonFieldMap[field]
         if (data && (Array.isArray(data) ? data.length > 0 : true)) {
@@ -939,6 +999,8 @@ const ANIM_JSON_FILES = [
   'anchorFrames.json',
   'boneWeights.json',
   'videoFramesMesh.json',
+  'walkZoneFrames.json',
+  'walkBodyFrames.json',
 ]
 
 export async function deleteProject(id: string): Promise<void> {
@@ -1017,6 +1079,7 @@ const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'contourAnchorKeyframes', 'contourAnchorFrames',
   'contourSubdivisionFrames', 'contourCannyFrames',
   'anchorKeyframes', 'anchorFrames', 'boneWeights', 'videoFramesMesh',
+  'walkZoneFrames', 'walkBodyFrames',
 ]
 
 export async function duplicateProject(sourceId: string): Promise<Project> {

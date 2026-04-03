@@ -1,10 +1,12 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Animation, Point2D } from '../../types/project'
+import { animationHasFrames, type Project, type Animation, type Point2D } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
+import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
   project: Project
@@ -15,7 +17,7 @@ interface Props {
 function getAnimationData(project: Project) {
   const restAnim = project.animations.find(a => a.type === 'rest')
   const readyOneshots: Animation[] = project.animations.filter(
-    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone') && a.mesh?.videoFramesMesh && a.mesh.videoFramesMesh.length > 0
+    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone' || a.type === 'walk') && animationHasFrames(a)
   )
   return { restAnim, readyOneshots }
 }
@@ -161,6 +163,26 @@ export default function AdminPreview({ project, style }: Props) {
         vertices[i * 2 + 1] = p.y * scale + offsetY
       })
 
+      // Check for walk animations with limb separation
+      const walkAnim = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
+      let zoneMeshSetup: ZoneMeshSetup | null = null
+
+      if (walkAnim?.mesh?.walkLimbSeparation) {
+        zoneMeshSetup = buildZoneMeshes(
+          walkAnim.mesh.walkLimbSeparation,
+          allPoints,
+          mesh.triangles,
+          texture,
+          texCanvas.width,
+          texCanvas.height,
+          scale,
+          offsetX,
+          offsetY,
+        )
+        meshContainer.addChild(zoneMeshSetup.container)
+        zoneMeshSetup.container.visible = false
+      }
+
       // Main mesh
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const geometry = new PIXI.MeshGeometry(vertices as any, uvs as any, indices as any)
@@ -231,19 +253,46 @@ export default function AdminPreview({ project, style }: Props) {
         advancePlayback = (delta) => playback.advance(delta)
       }
 
+      // Walk zone frame counter
+      let walkFrameCounter = 0
+      const walkZoneFrames = walkAnim?.mesh?.walkZoneFrames
+      const walkBodyFrames = walkAnim?.mesh?.walkBodyFrames
+      const walkTotalFrames = walkBodyFrames?.length ?? 0
+
       // Animation loop
       app.ticker.add((delta) => {
         if (playingRef.current) advancePlayback(delta)
 
         const positions = getPositions()
 
-        // Update vertices
-        const verts = geometry.getBuffer('aVertexPosition')
-        for (let i = 0; i < positions.length; i++) {
-          (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * scale + offsetX;
-          (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
+        // Check if walk zone rendering is active
+        const activeOneshotName = hasOneshots ? (multiPlaybackRef.current as MultiAnimationPlayback)?.activeOneshotName : null
+        const isWalkZonePlaying = activeOneshotName && walkAnim && walkZoneFrames && walkBodyFrames && zoneMeshSetup
+          && activeOneshotName === walkAnim.name
+
+        if (isWalkZonePlaying && zoneMeshSetup) {
+          pixiMesh.visible = false
+          zoneMeshSetup.container.visible = true
+          walkFrameCounter = (walkFrameCounter + Math.round(delta)) % walkTotalFrames
+
+          for (const zm of zoneMeshSetup.zoneMeshes) {
+            const zoneFrame = walkZoneFrames[zm.zoneId]?.[walkFrameCounter]
+            if (zoneFrame) updateZoneMeshVertices(zm, zoneFrame, scale, offsetX, offsetY)
+          }
+          const bodyFrame = walkBodyFrames[walkFrameCounter]
+          if (bodyFrame) updateZoneMeshVertices(zoneMeshSetup.bodyMesh, bodyFrame, scale, offsetX, offsetY)
+        } else {
+          pixiMesh.visible = true
+          if (zoneMeshSetup) zoneMeshSetup.container.visible = false
+          walkFrameCounter = 0
+
+          const verts = geometry.getBuffer('aVertexPosition')
+          for (let i = 0; i < positions.length; i++) {
+            (verts.data as unknown as Float32Array)[i * 2] = positions[i].x * scale + offsetX;
+            (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
+          }
+          verts.update()
         }
-        verts.update()
       })
 
       // ResizeObserver for responsive sizing

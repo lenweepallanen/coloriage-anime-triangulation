@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import type { Project, Scene, SceneRestPoint, SceneTransition, SceneSegment } from '../../types/project'
+import { animationHasFrames, type Project, type Scene, type SceneRestPoint, type SceneTransition, type SceneSegment } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import SceneTimeline from './SceneTimeline'
 import type { TimelineSelection } from './SceneTimeline'
@@ -480,7 +480,7 @@ export default function SceneEditor({ project, onSave }: Props) {
 
   const hasScene = scene.backgroundLayers[2].imageBlob != null
   const canPreview = hasScene && scene.restPoints.length > 0 && project.originalImageBlob != null
-    && project.animations.some(a => a.type === 'rest' && a.mesh?.videoFramesMesh != null)
+    && project.animations.some(a => a.type === 'rest' && animationHasFrames(a))
 
   return (
     <div className="scene-editor">

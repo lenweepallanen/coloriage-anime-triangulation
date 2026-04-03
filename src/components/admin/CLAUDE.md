@@ -11,6 +11,7 @@ Navigation via **pipeline stepper numéroté** (cercles connectés, états done/
 - **Rest animation** : pipeline complet 10 étapes, seule autorisée à modifier la géométrie
 - **Oneshot animations** : pipeline réduit 6 étapes (Import vidéo + tracking uniquement), géométrie héritée de rest
 - **Physics animations** : 1 seule étape (Code Editeur), code JS qui transforme les vertices, pré-calcul à la validation
+- **Walk animations** : pipeline 5 étapes (squelette, séparation membres, maillage zones, paramètres, calcul), marche procédurale quadrupède
 
 ### Propagation géométrie partagée
 
@@ -35,6 +36,11 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 | `AnchorPointsStep.tsx` | 8 | Placement points d'ancrage intérieurs (features) |
 | `AnchorTrackingStep.tsx` | 9 | Tracking ancres par optical flow + keyframes |
 | `TriangulationStep.tsx` | 10 | Triangulation + animation finale (Delaunay + ARAP + preview) |
+| `WalkBoneEditorStep.tsx` | Walk 1 | Placement 18 keypoints du squelette quadrupède (6 groupes : 4 pattes + cou/tête + queue) |
+| `WalkLimbEditorStep.tsx` | Walk 2 | Définition zones pattes par courbes Bézier fermées + séparation limb/corps |
+| `WalkZoneMeshStep.tsx` | Walk 3 | Édition maillage par zone : limb (Delaunay auto + internals) + corps (fixe + patch manuel : ajouter/relier/déplacer) |
+| `WalkParamsStep.tsx` | Walk 4 | Paramètres cinématiques (longueur pas, levée pied, balancement corps/tête, phases) |
+| `WalkComputeStep.tsx` | Walk 5 | Calcul animation par LBS séparé (zones + body) + legacy unifié, preview wireframe/gradient |
 | `MarkerStep.tsx` | support | Placement des 4 marqueurs L pour le scan |
 | `PdfStep.tsx` | support | Génération et téléchargement du PDF coloriage |
 

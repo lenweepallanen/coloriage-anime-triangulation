@@ -98,6 +98,8 @@ export interface MeshData {
   bonesValidated: boolean;
 
   // Walk animation data (optional — only used by walk animations)
+  walkLimbSeparation?: WalkLimbSeparation | null;
+  walkLimbSeparationValidated?: boolean;
   walkSkeleton?: WalkSkeletonDefinition | null;
   walkSkeletonValidated?: boolean;
   walkBodyTriangles?: number[];      // indices de triangles formant le torse
@@ -108,6 +110,9 @@ export interface MeshData {
   // Sortie finale (consumed by AnimationPlayer)
   crossfadeFrames?: number;  // Nombre de frames de crossfade pour la boucle seamless (défaut 7)
   videoFramesMesh: Point2D[][] | null;  // allPoints par frame
+  // Walk limb separation frames (alternative à videoFramesMesh pour walk avec séparation)
+  walkZoneFrames?: Record<string, Point2D[][]> | null;  // zoneId → frames par zone
+  walkBodyFrames?: Point2D[][] | null;                   // frames du corps
 }
 
 export interface BodyZone {
@@ -151,6 +156,39 @@ export interface WalkParams {
   headSway: number;        // intensité oscillation cou/tête (0-100, défaut 50)
 }
 
+// ─── Walk Limb Separation ─────────────────────────────────────────────
+
+export interface BezierNode {
+  anchor: Point2D;
+  handleIn: Point2D;     // handle vers le nœud précédent
+  handleOut: Point2D;    // handle vers le nœud suivant
+  smooth: boolean;       // false = corner (ligne brisée), true = courbe (handles visibles)
+}
+
+export interface WalkLimbZone {
+  id: string;                    // crypto.randomUUID()
+  label: string;                 // "Patte AV gauche"
+  color: string;                 // hex pour l'éditeur
+  bezierNodes: BezierNode[];     // courbe fermée (dernier → premier)
+  zOrder: number;                // ordre de rendu (0 = derrière, 4 = devant tout)
+  legIndex: number;              // 0-3, correspondance avec les legs du squelette walk
+}
+
+export interface WalkLimbSeparation {
+  zones: WalkLimbZone[];
+  overlapMargin: number;                                      // pixels de chevauchement (défaut 3)
+  // Per-zone fresh triangulation (own points + triangles, independent of rest mesh)
+  zonePoints: Record<string, Point2D[]>;                      // zoneId → all vertices (contour samples + internals)
+  zoneTriangles: Record<string, [number, number, number][]>;  // zoneId → triangles (indices dans zonePoints[zoneId])
+  // Body = rest triangles not touching any limb zone (vertex-based filtering)
+  bodyTriangleIndices: number[];                               // indices into rest mesh triangles[]
+  // Body mesh (auto rest triangles + manual patch)
+  bodyPoints?: Point2D[];                                      // all body vertices (auto + manual extras)
+  bodyTriangles?: [number, number, number][];                  // all body triangles (auto + manual, indexed into bodyPoints)
+  bodyExtraPoints?: Point2D[];                                 // manually added points
+  bodyManualTriangles?: [number, number, number][];            // manually created triangles (indexed into bodyPoints)
+}
+
 export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk';
 
 export interface Animation {
@@ -165,6 +203,14 @@ export interface Animation {
   physicsOverlay: boolean;
   audioBlob: Blob | null;
   audioEnabled: boolean;
+}
+
+/** Check if an animation has computed frames (single mesh or separated zones). */
+export function animationHasFrames(anim: Animation): boolean {
+  const m = anim.mesh
+  if (!m) return false
+  return (m.videoFramesMesh != null && m.videoFramesMesh.length > 0)
+    || (m.walkZoneFrames != null && m.walkBodyFrames != null)
 }
 
 export interface SceneRestPoint {

@@ -66,12 +66,22 @@ export default function WalkBodySelectStep({ project, animation, onSave }: Props
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
+    const canvas = canvasRef.current
+    let ro: ResizeObserver | null = null
+    if (canvas) {
+      ro = new ResizeObserver(() => {
+        if (imageRef.current && canvas.clientWidth > 0)
+          fitToCanvas(imageRef.current.naturalWidth, imageRef.current.naturalHeight)
+      })
+      ro.observe(canvas)
+    }
     return () => {
       imageRef.current = null
       URL.revokeObjectURL(url)
+      ro?.disconnect()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [project.originalImageBlob])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current

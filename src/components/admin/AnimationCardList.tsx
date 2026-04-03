@@ -52,6 +52,8 @@ function createEmptyMesh(): MeshData {
     bones: [],
     boneWeights: null,
     bonesValidated: false,
+    walkLimbSeparation: null,
+    walkLimbSeparationValidated: false,
     walkSkeleton: null,
     walkSkeletonValidated: false,
     walkBodyTriangles: [],
@@ -59,6 +61,8 @@ function createEmptyMesh(): MeshData {
     walkParams: null,
     walkParamsValidated: false,
     videoFramesMesh: null,
+    walkZoneFrames: null,
+    walkBodyFrames: null,
   }
 }
 

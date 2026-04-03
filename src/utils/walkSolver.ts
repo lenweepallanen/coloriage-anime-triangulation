@@ -8,7 +8,7 @@
  * skinVerticesSubBones and pointToSegmentDistanceSq from boneSolver.ts.
  */
 
-import type { Point2D, WalkSkeletonDefinition, WalkParams } from '../types/project'
+import type { Point2D, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation } from '../types/project'
 import {
   solveElbowIK,
   computeBoneTransform,
@@ -17,6 +17,8 @@ import {
   pointToSegmentDistanceSq,
   type AffineMatrix,
 } from './boneSolver'
+import { flattenClosedBezier } from './bezierUtils'
+import { pointInPolygon } from './geometry'
 
 const FPS = 24
 const CYCLES_PER_ANIM = 4
@@ -210,6 +212,7 @@ export function computeWalkFrames(
   allRestPoints: Point2D[],
   _triangles: [number, number, number][],
   onProgress?: (frame: number, total: number) => void,
+  separation?: WalkLimbSeparation | null,
 ): Point2D[][] {
   const totalFrames = Math.round(CYCLES_PER_ANIM / params.speed * FPS)
   if (totalFrames < 2) return [allRestPoints.map(p => ({ ...p }))]
@@ -218,7 +221,15 @@ export function computeWalkFrames(
 
   // Build rest sub-bones and compute weights once
   const restSubBones = buildRestSubBones(skeleton)
-  const weights = computeWalkAutoWeights(allRestPoints, restSubBones)
+
+  // If separation exists, use zone-restricted weights:
+  // each vertex is only influenced by the bones of its zone
+  let weights: number[][]
+  if (separation) {
+    weights = computeZoneRestrictedWeights(allRestPoints, restSubBones, separation)
+  } else {
+    weights = computeWalkAutoWeights(allRestPoints, restSubBones)
+  }
 
   // Pre-compute rest leg segment lengths for IK
   const legRestLengths = skeleton.legs.map(leg => {
@@ -520,4 +531,285 @@ export function buildWalkSkeleton(
     neckChain: [12, 13, 14],
     tailChain: [15, 16, 17],
   }
+}
+
+// ─── Zone-restricted weights for single-mesh mode ─────────────────────
+
+/**
+ * Compute weights where each vertex is only influenced by bones of its zone.
+ * Vertices inside a limb polygon → only that leg's 2 sub-bones.
+ * Vertices not in any limb → only body sub-bones (spine, neck, head, tail).
+ */
+function computeZoneRestrictedWeights(
+  allRestPoints: Point2D[],
+  subBones: WalkSubBone[],
+  separation: WalkLimbSeparation,
+): number[][] {
+  // Flatten zone polygons for point-in-polygon tests
+  const zonePolygons: { legIndex: number; polygon: Point2D[] }[] = []
+  for (const zone of separation.zones) {
+    if (zone.bezierNodes.length < 3) continue
+    const poly = flattenClosedBezier(zone.bezierNodes, 20)
+    zonePolygons.push({ legIndex: zone.legIndex, polygon: poly })
+  }
+
+  const nVerts = allRestPoints.length
+  const weights: number[][] = new Array(nVerts)
+
+  for (let i = 0; i < nVerts; i++) {
+    const p = allRestPoints[i]
+
+    // Determine which zone this vertex belongs to
+    let allowedBones: number[] = BODY_SUBBONE_INDICES
+    for (const zp of zonePolygons) {
+      if (pointInPolygon(p, zp.polygon)) {
+        allowedBones = [zp.legIndex * 2, zp.legIndex * 2 + 1]
+        break
+      }
+    }
+
+    weights[i] = computeSingleVertexWeights(p, subBones, allowedBones)
+  }
+
+  return weights
+}
+
+function computeSingleVertexWeights(
+  p: Point2D,
+  subBones: WalkSubBone[],
+  allowedIndices: number[],
+): number[] {
+  const nSub = subBones.length
+  const raw = new Array<number>(nSub).fill(0)
+  let sum = 0
+
+  for (const j of allowedIndices) {
+    const sb = subBones[j]
+    const distSq = pointToSegmentDistanceSq(p, sb.restHead, sb.restTail)
+    const dist = Math.sqrt(distSq)
+    const w = 1.0 / ((dist + WEIGHT_EPSILON) * (dist + WEIGHT_EPSILON))
+    raw[j] = w
+    sum += w
+  }
+
+  if (sum > 0) for (const j of allowedIndices) raw[j] /= sum
+
+  let sum2 = 0
+  for (const j of allowedIndices) {
+    if (raw[j] < WEIGHT_THRESHOLD) raw[j] = 0
+    sum2 += raw[j]
+  }
+  if (sum2 > 0) for (const j of allowedIndices) raw[j] /= sum2
+
+  return raw
+}
+
+// ─── Separated walk computation (per-zone) ────────────────────────────
+
+/**
+ * Sub-bone index mapping:
+ *   [0,1]     = leg 0 (thigh, shin)
+ *   [2,3]     = leg 1
+ *   [4,5]     = leg 2
+ *   [6,7]     = leg 3
+ *   [8]       = spine
+ *   [9]       = neck
+ *   [10]      = head
+ *   [11]      = tail base
+ *   [12]      = tail tip
+ *
+ * Limb zone i uses only sub-bones [i*2, i*2+1].
+ * Body zone uses sub-bones [8..12].
+ */
+
+const BODY_SUBBONE_INDICES = [8, 9, 10, 11, 12]
+
+/**
+ * Compute zone-specific weights: for each vertex, only the specified
+ * sub-bones have non-zero weight. All others are forced to 0.
+ */
+function computeZoneWeights(
+  zoneVertexPositions: Point2D[],
+  allSubBones: WalkSubBone[],
+  allowedSubBoneIndices: number[],
+): number[][] {
+  const nVerts = zoneVertexPositions.length
+  const nSub = allSubBones.length
+  const weights: number[][] = new Array(nVerts)
+
+  for (let i = 0; i < nVerts; i++) {
+    const p = zoneVertexPositions[i]
+    const raw = new Array<number>(nSub).fill(0)
+    let sum = 0
+
+    for (const j of allowedSubBoneIndices) {
+      const sb = allSubBones[j]
+      const distSq = pointToSegmentDistanceSq(p, sb.restHead, sb.restTail)
+      const dist = Math.sqrt(distSq)
+      const w = 1.0 / ((dist + WEIGHT_EPSILON) * (dist + WEIGHT_EPSILON))
+      raw[j] = w
+      sum += w
+    }
+
+    if (sum > 0) {
+      for (const j of allowedSubBoneIndices) raw[j] /= sum
+    }
+
+    let sum2 = 0
+    for (const j of allowedSubBoneIndices) {
+      if (raw[j] < WEIGHT_THRESHOLD) raw[j] = 0
+      sum2 += raw[j]
+    }
+    if (sum2 > 0) {
+      for (const j of allowedSubBoneIndices) raw[j] /= sum2
+    }
+
+    weights[i] = raw
+  }
+  return weights
+}
+
+/**
+ * Compute walk frames with limb separation.
+ * Returns per-zone and body frames independently.
+ *
+ * Each zone's vertices are deformed only by the sub-bones belonging to that zone,
+ * eliminating cross-zone bleed.
+ */
+export function computeWalkFramesSeparated(
+  skeleton: WalkSkeletonDefinition,
+  params: WalkParams,
+  separation: WalkLimbSeparation,
+  allRestPoints: Point2D[],
+  restTriangles: [number, number, number][],
+  onProgress?: (frame: number, total: number) => void,
+): { zoneFrames: Record<string, Point2D[][]>; bodyFrames: Point2D[][] } {
+  const totalFrames = Math.round(CYCLES_PER_ANIM / params.speed * FPS)
+  const kp = skeleton.keyPoints
+
+  const restSubBones = buildRestSubBones(skeleton)
+
+  // ── Per-zone weights (each zone has its own points, independent of rest mesh) ──
+  const zoneData: Record<string, { restPts: Point2D[]; weights: number[][] }> = {}
+  for (const zone of separation.zones) {
+    const restPts = separation.zonePoints[zone.id] || []
+    const legSubBones = [zone.legIndex * 2, zone.legIndex * 2 + 1]
+    const weights = computeZoneWeights(restPts, restSubBones, legSubBones)
+    zoneData[zone.id] = { restPts, weights }
+  }
+
+  // ── Body: use pre-computed bodyPoints if available, else derive from indices ──
+  let bodyRestPts: Point2D[]
+  if (separation.bodyPoints) {
+    bodyRestPts = separation.bodyPoints
+  } else {
+    const bodyIdxSet = new Set<number>()
+    for (const ti of separation.bodyTriangleIndices) {
+      const [a, b, c] = restTriangles[ti]
+      bodyIdxSet.add(a); bodyIdxSet.add(b); bodyIdxSet.add(c)
+    }
+    const bodyIndices = [...bodyIdxSet].sort((a, b) => a - b)
+    bodyRestPts = bodyIndices.map(i => allRestPoints[i])
+  }
+  const bodyWeights = computeZoneWeights(bodyRestPts, restSubBones, BODY_SUBBONE_INDICES)
+
+  // Pre-compute rest leg lengths and bend sides
+  const legRestLengths = skeleton.legs.map(leg => ({
+    thighLen: Math.hypot(kp[leg.kneeIndex].x - kp[leg.baseIndex].x, kp[leg.kneeIndex].y - kp[leg.baseIndex].y),
+    shinLen: Math.hypot(kp[leg.footIndex].x - kp[leg.kneeIndex].x, kp[leg.footIndex].y - kp[leg.kneeIndex].y),
+  }))
+  const legBendSides = skeleton.legs.map(leg => {
+    const base = kp[leg.baseIndex], knee = kp[leg.kneeIndex], foot = kp[leg.footIndex]
+    return (knee.x - base.x) * (foot.y - base.y) - (knee.y - base.y) * (foot.x - base.x) >= 0 ? 1 : -1
+  })
+
+  const restFrontMid = midpoint(kp[skeleton.legs[0].baseIndex], kp[skeleton.legs[1].baseIndex])
+  const restBackMid = midpoint(kp[skeleton.legs[2].baseIndex], kp[skeleton.legs[3].baseIndex])
+  const restBodyCenter = midpoint(restFrontMid, restBackMid)
+
+  // Initialize result
+  const zoneFrames: Record<string, Point2D[][]> = {}
+  for (const zone of separation.zones) zoneFrames[zone.id] = new Array(totalFrames)
+  const bodyFrames: Point2D[][] = new Array(totalFrames)
+
+  for (let f = 0; f < totalFrames; f++) {
+    const cyclePhase = ((f / totalFrames) * CYCLES_PER_ANIM) % 1
+
+    // ── Kinematic computation (identical to computeWalkFrames) ──
+    const legBaseOffsets: Point2D[] = skeleton.legs.map(leg => ({
+      x: 0,
+      y: -params.bodySway * 0.5 * Math.sin(2 * Math.PI * 2 * (cyclePhase + leg.phaseOffset)),
+    }))
+
+    const body = computeBodyTransform(skeleton, kp, legBaseOffsets, params.bodySway, cyclePhase)
+    const applyBody = (p: Point2D): Point2D => {
+      const r = addOffset(p, body.dx, body.dy)
+      return rotateAround(r, restBodyCenter, body.pitch + body.roll)
+    }
+
+    const currentKP: Point2D[] = new Array(kp.length)
+    for (let li = 0; li < 4; li++) {
+      const leg = skeleton.legs[li]
+      currentKP[leg.baseIndex] = addOffset(applyBody(kp[leg.baseIndex]), 0, legBaseOffsets[li].y)
+    }
+    for (let li = 0; li < 4; li++) {
+      const leg = skeleton.legs[li]
+      const legPhase = (cyclePhase + leg.phaseOffset) % 1
+      const foot = computeFootPosition(kp[leg.footIndex], params.strideLength, params.footLift, legPhase)
+      currentKP[leg.kneeIndex] = solveElbowIK(currentKP[leg.baseIndex], foot, legRestLengths[li].thighLen, legRestLengths[li].shinLen, legBendSides[li])
+      currentKP[leg.footIndex] = foot
+    }
+
+    const [baseCouIdx, baseTeteIdx, sommetTeteIdx] = skeleton.neckChain
+    const headFactor = (params.headSway ?? 50) / 50
+    currentKP[baseCouIdx] = applyBody(kp[baseCouIdx])
+    const neckAngle = headFactor * (params.bodySway / 80) * Math.sin(2 * Math.PI * 2 * cyclePhase + Math.PI / 4)
+    currentKP[baseTeteIdx] = rotateAround(applyBody(kp[baseTeteIdx]), currentKP[baseCouIdx], neckAngle)
+    const headAngle = headFactor * (params.bodySway / 120) * Math.sin(2 * Math.PI * 2 * cyclePhase + Math.PI / 2)
+    currentKP[sommetTeteIdx] = rotateAround(applyBody(kp[sommetTeteIdx]), currentKP[baseTeteIdx], headAngle)
+
+    const [baseQueueIdx, milieuQueueIdx, pointeQueueIdx] = skeleton.tailChain
+    const tailDir = { x: kp[pointeQueueIdx].x - kp[baseQueueIdx].x, y: kp[pointeQueueIdx].y - kp[baseQueueIdx].y }
+    const tailLen = Math.hypot(tailDir.x, tailDir.y)
+    const tailPerp = tailLen > 0 ? { x: -tailDir.y / tailLen, y: tailDir.x / tailLen } : { x: 0, y: 1 }
+    const tailBaseOsc = params.bodySway * 1.0 * Math.sin(2 * Math.PI * cyclePhase)
+    const tailMidOsc = params.bodySway * 1.5 * Math.sin(2 * Math.PI * cyclePhase - Math.PI / 3)
+    const tailTipOsc = params.bodySway * 2.0 * Math.sin(2 * Math.PI * cyclePhase - 2 * Math.PI / 3)
+    currentKP[baseQueueIdx] = addOffset(applyBody(kp[baseQueueIdx]), tailPerp.x * tailBaseOsc, tailPerp.y * tailBaseOsc)
+    currentKP[milieuQueueIdx] = addOffset(applyBody(kp[milieuQueueIdx]), tailPerp.x * tailMidOsc, tailPerp.y * tailMidOsc)
+    currentKP[pointeQueueIdx] = addOffset(applyBody(kp[pointeQueueIdx]), tailPerp.x * tailTipOsc, tailPerp.y * tailTipOsc)
+
+    // ── Build current sub-bones + affine matrices ──
+    const currentSubBones: WalkSubBone[] = []
+    for (const leg of skeleton.legs) {
+      currentSubBones.push({ restHead: currentKP[leg.baseIndex], restTail: currentKP[leg.kneeIndex] })
+      currentSubBones.push({ restHead: currentKP[leg.kneeIndex], restTail: currentKP[leg.footIndex] })
+    }
+    const currFrontMid = midpoint(currentKP[skeleton.legs[0].baseIndex], currentKP[skeleton.legs[1].baseIndex])
+    const currBackMid = midpoint(currentKP[skeleton.legs[2].baseIndex], currentKP[skeleton.legs[3].baseIndex])
+    currentSubBones.push({ restHead: currFrontMid, restTail: currBackMid })
+    currentSubBones.push({ restHead: currentKP[baseCouIdx], restTail: currentKP[baseTeteIdx] })
+    currentSubBones.push({ restHead: currentKP[baseTeteIdx], restTail: currentKP[sommetTeteIdx] })
+    currentSubBones.push({ restHead: currentKP[baseQueueIdx], restTail: currentKP[milieuQueueIdx] })
+    currentSubBones.push({ restHead: currentKP[milieuQueueIdx], restTail: currentKP[pointeQueueIdx] })
+
+    const matrices: AffineMatrix[] = restSubBones.map((rest, i) => {
+      const curr = currentSubBones[i]
+      return boneLocalMatrix(computeBoneTransform(rest.restHead, rest.restTail, curr.restHead, curr.restTail))
+    })
+
+    // ── Per-zone LBS (each zone has its own independent points) ──
+    for (const zone of separation.zones) {
+      const { restPts, weights } = zoneData[zone.id]
+      zoneFrames[zone.id][f] = skinVerticesSubBones(restPts, weights, matrices)
+    }
+
+    // ── Body LBS ──
+    bodyFrames[f] = skinVerticesSubBones(bodyRestPts, bodyWeights, matrices)
+
+    if (onProgress && f % 5 === 0) onProgress(f, totalFrames)
+  }
+
+  if (onProgress) onProgress(totalFrames, totalFrames)
+  return { zoneFrames, bodyFrames }
 }

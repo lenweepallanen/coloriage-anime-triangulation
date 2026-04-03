@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import type { SceneRestPoint, SceneTransition, SceneSegment, Animation, SpeakSound, BodyZone, ZoneAnimationMapping } from '../../types/project'
+import { animationHasFrames, type SceneRestPoint, type SceneTransition, type SceneSegment, type Animation, type SpeakSound, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
 import type { TimelineSelection } from './SceneTimeline'
 
 interface Props {
@@ -37,7 +37,7 @@ export default function SceneConfigPanel({
   onSpeakSoundImport,
   onSpeakSoundDelete,
 }: Props) {
-  const readyAnimations = animations.filter(a => a.mesh?.videoFramesMesh != null)
+  const readyAnimations = animations.filter(a => animationHasFrames(a))
   const restAnimations = readyAnimations.filter(a => a.type === 'rest')
   const nonRestAnimations = readyAnimations.filter(a => a.type !== 'rest')
 

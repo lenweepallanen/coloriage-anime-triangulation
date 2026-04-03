@@ -35,6 +35,7 @@ Un projet contient **plusieurs animations** partageant la même image et géomé
 - **Oneshot** (0+) : animations à la demande (wave, jump...). Pipeline réduit 6 étapes (tracking seul, géométrie héritée de rest).
 - **Physics** (0+) : animations procédurales par code JS. Pas de vidéo ni tracking — l'utilisateur écrit du code qui transforme les vertices du maillage. Les frames sont pré-calculées à la validation et stockées comme `videoFramesMesh`, ce qui les rend identiques aux oneshots pour le playback. Option **overlay** : si activée, l'animation se superpose instantanément à la rest loop (déplacements additifs) sans attendre la fin du cycle.
 - **Bone** (0+) : animations par déformation squelettique. Pipeline 7 étapes (vidéo + tracking des anchors comme oneshot, puis définition de bones + calcul par skinning au lieu d'ARAP). Self-contained comme physics — hérite la géométrie de rest, produit son propre `videoFramesMesh`. Utilisé comme oneshot/overlay dans le playback.
+- **Walk** (0+) : animations de marche procédurale quadrupède. Pipeline 5 étapes (squelette 18 keypoints, séparation membres par courbes Bézier, édition maillage zone par zone, paramètres cinématiques, calcul LBS). Pas de vidéo ni tracking — les positions sont calculées par cinématique inverse + LBS. Produit `videoFramesMesh` + `walkZoneFrames`/`walkBodyFrames` pour le rendu séparé par zone.
 
 ### Topologie partagée
 
@@ -196,7 +197,7 @@ src/
 │   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor + BoneEditorStep + BoneTriangulationStep)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor + BoneEditorStep + BoneTriangulationStep + Walk*Steps)
 │   ├── keyframes/              Éditeur de keyframes (éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -220,6 +221,10 @@ src/
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
 │   ├── bodyZoneUtils.ts        Détection zones corporelles (triangle→zone, hit test, touch detection)
 │   ├── boneSolver.ts           Déformation squelettique (bones, auto-weights, LBS, forward kinematics)
+│   ├── walkSolver.ts           Cinématique marche quadrupède (squelette, IK, LBS, séparation zones)
+│   ├── limbSeparation.ts       Séparation membres/corps (Bézier→polygone, Delaunay par zone, patch manuel body)
+│   ├── bezierUtils.ts          Utilitaires courbes Bézier (flatten, expand, évaluation)
+│   ├── zoneMeshRenderer.ts     Rendu PIXI.js par zone (build/update meshes séparés, z-order)
 │   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css
 public/
@@ -230,7 +235,7 @@ public/
 ## Modèle de données
 
 ```typescript
-AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone'
+AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk'
 
 Animation {
   id: string                         // crypto.randomUUID()

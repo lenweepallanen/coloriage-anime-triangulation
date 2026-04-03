@@ -59,6 +59,7 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
   const [selectedIndex, setSelectedIndex] = useState<number>(0) // next unplaced
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [canvasKey, setCanvasKey] = useState(0)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
@@ -72,23 +73,35 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
     keyPointsLoaded: keyPoints.filter(p => p !== null).length,
   })
 
-  // Load image on every mount
+  // Load image + re-fit on resize/remount
   useEffect(() => {
     if (!project.originalImageBlob) return
     const url = URL.createObjectURL(project.originalImageBlob)
     const img = new Image()
     img.onload = () => {
       imageRef.current = img
-      // Wait for canvas layout before fitting
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
+
+    const canvas = canvasRef.current
+    let ro: ResizeObserver | null = null
+    if (canvas) {
+      ro = new ResizeObserver(() => {
+        if (imageRef.current && canvas.clientWidth > 0) {
+          fitToCanvas(imageRef.current.naturalWidth, imageRef.current.naturalHeight)
+        }
+      })
+      ro.observe(canvas)
+    }
+
     return () => {
       imageRef.current = null
       URL.revokeObjectURL(url)
+      ro?.disconnect()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [project.originalImageBlob, canvasKey])
 
   // Find next unplaced point
   useEffect(() => {
@@ -313,6 +326,7 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
     <div className="walk-bone-editor" style={{ display: 'flex', gap: 16, height: '100%' }}>
       <div style={{ flex: 1, position: 'relative' }}>
         <canvas
+          key={canvasKey}
           ref={canvasRef}
           style={{ width: '100%', height: 500, display: 'block', borderRadius: 8 }}
           onMouseDown={handleMouseDown}
@@ -320,9 +334,16 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
           onMouseUp={handleMouseUp}
           onContextMenu={handleContextMenu}
         />
-        <div style={{ padding: '8px 0', color: '#9ca3af', fontSize: 13 }}>
+        <div style={{ padding: '8px 0', color: '#9ca3af', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
           Clic gauche = placer, Drag = déplacer, Clic droit = supprimer.
           Espace + drag = pan, Molette = zoom.
+          <button
+            className="btn-sm btn-ghost"
+            onClick={() => setCanvasKey(k => k + 1)}
+            style={{ marginLeft: 'auto', fontSize: 11 }}
+          >
+            Rafraichir canvas
+          </button>
         </div>
       </div>
 
