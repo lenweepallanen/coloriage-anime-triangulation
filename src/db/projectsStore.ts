@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -42,6 +42,12 @@ interface MeshDoc {
   bones: Bone[]
   hasBoneWeights: boolean
   bonesValidated: boolean
+  walkSkeleton: WalkSkeletonDefinition | null
+  walkSkeletonValidated: boolean
+  walkBodyTriangles: number[]
+  walkBodyValidated: boolean
+  walkParams: WalkParams | null
+  walkParamsValidated: boolean
   hasVideoFramesMesh: boolean
 }
 
@@ -256,6 +262,12 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     bones: mesh.bones ?? [],
     hasBoneWeights: mesh.boneWeights != null,
     bonesValidated: mesh.bonesValidated ?? false,
+    walkSkeleton: mesh.walkSkeleton ?? null,
+    walkSkeletonValidated: mesh.walkSkeletonValidated ?? false,
+    walkBodyTriangles: mesh.walkBodyTriangles ?? [],
+    walkBodyValidated: mesh.walkBodyValidated ?? false,
+    walkParams: mesh.walkParams ?? null,
+    walkParamsValidated: mesh.walkParamsValidated ?? false,
     hasVideoFramesMesh: mesh.videoFramesMesh != null,
   }
 }
@@ -377,8 +389,13 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
       trackedTriangles: [],
       internalBarycentrics: [],
       bones: [],
-      boneWeights: null,
       bonesValidated: false,
+      walkSkeleton: null,
+      walkSkeletonValidated: false,
+      walkBodyTriangles: [],
+      walkBodyValidated: false,
+      walkParams: null,
+      walkParamsValidated: false,
     }
   }
 
@@ -404,6 +421,12 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     internalBarycentrics: d.internalBarycentrics ?? [],
     bones: d.bones ?? [],
     bonesValidated: d.bonesValidated ?? false,
+    walkSkeleton: d.walkSkeleton ?? null,
+    walkSkeletonValidated: d.walkSkeletonValidated ?? false,
+    walkBodyTriangles: d.walkBodyTriangles ?? [],
+    walkBodyValidated: d.walkBodyValidated ?? false,
+    walkParams: d.walkParams ?? null,
+    walkParamsValidated: d.walkParamsValidated ?? false,
   }
 }
 
@@ -659,6 +682,7 @@ function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
     contourCannyFrames: null,
     anchorKeyframes: [],
     anchorFrames: null,
+    boneWeights: null,
     videoFramesMesh: null,
   }
 }

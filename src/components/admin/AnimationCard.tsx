@@ -15,6 +15,8 @@ const TYPE_LABELS: Record<string, string> = {
   rest: 'Rest',
   oneshot: 'Oneshot',
   physics: 'Physics',
+  bone: 'Bone',
+  walk: 'Walk',
 }
 
 export default function AnimationCard({

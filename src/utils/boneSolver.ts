@@ -14,7 +14,7 @@ import type { Point2D, Bone, BoneEndpointRef, ElbowMode } from '../types/project
 
 // ─── Geometry helpers ────────────────────────────────────────────────────
 
-function pointToSegmentDistanceSq(p: Point2D, a: Point2D, b: Point2D): number {
+export function pointToSegmentDistanceSq(p: Point2D, a: Point2D, b: Point2D): number {
   const dx = b.x - a.x
   const dy = b.y - a.y
   const lenSq = dx * dx + dy * dy
@@ -226,7 +226,7 @@ function identityMatrix(): AffineMatrix {
 }
 
 
-function boneLocalMatrix(transform: BoneTransform): AffineMatrix {
+export function boneLocalMatrix(transform: BoneTransform): AffineMatrix {
   const cos = Math.cos(transform.angle)
   const sin = Math.sin(transform.angle)
   const { headRest, headCurr } = transform
@@ -406,7 +406,7 @@ export function computeAutoWeights(
 /**
  * Deform all vertices via LBS using sub-bone matrices and weights.
  */
-function skinVerticesSubBones(
+export function skinVerticesSubBones(
   allRestPoints: Point2D[],
   boneWeights: number[][],
   matrices: AffineMatrix[],

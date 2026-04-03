@@ -52,6 +52,12 @@ function createEmptyMesh(): MeshData {
     bones: [],
     boneWeights: null,
     bonesValidated: false,
+    walkSkeleton: null,
+    walkSkeletonValidated: false,
+    walkBodyTriangles: [],
+    walkBodyValidated: false,
+    walkParams: null,
+    walkParamsValidated: false,
     videoFramesMesh: null,
   }
 }
@@ -80,14 +86,17 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
   const [saving, setSaving] = useState(false)
   const restAnim = project.animations.find(a => a.type === 'rest')
 
-  async function handleAdd(type: 'oneshot' | 'physics' | 'bone') {
+  async function handleAdd(type: 'oneshot' | 'physics' | 'bone' | 'walk') {
     const isPhysics = type === 'physics'
     const isBone = type === 'bone'
+    const isWalk = type === 'walk'
     const name = isPhysics
       ? `Physics ${project.animations.filter(a => a.type === 'physics').length + 1}`
       : isBone
         ? `Bone ${project.animations.filter(a => a.type === 'bone').length + 1}`
-        : `Animation ${project.animations.length + 1}`
+        : isWalk
+          ? `Walk ${project.animations.filter(a => a.type === 'walk').length + 1}`
+          : `Animation ${project.animations.length + 1}`
     const newAnim: Animation = {
       id: crypto.randomUUID(),
       name,
@@ -176,6 +185,9 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
         </button>
         <button className="btn-secondary" onClick={() => handleAdd('bone')} disabled={saving}>
           + Bone
+        </button>
+        <button className="btn-secondary" onClick={() => handleAdd('walk')} disabled={saving}>
+          + Walk
         </button>
       </div>
     </div>

@@ -14,6 +14,10 @@ import TriangulationStep from './TriangulationStep'
 import PhysicsAnimationEditor from './PhysicsAnimationEditor'
 import BoneEditorStep from './BoneEditorStep'
 import BoneTriangulationStep from './BoneTriangulationStep'
+import WalkBoneEditorStep from './WalkBoneEditorStep'
+import WalkBodySelectStep from './WalkBodySelectStep'
+import WalkParamsStep from './WalkParamsStep'
+import WalkComputeStep from './WalkComputeStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -33,7 +37,9 @@ const BONE_STEPS = [
 
 const PHYSICS_STEPS = ['Code Editeur'] as const
 
-type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number]
+const WALK_STEPS = ['Bones marche', 'Corps', 'Paramètres', 'Calcul'] as const
+
+type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number]
 
 const STEP_SHORT_LABELS: Record<string, string> = {
   'Vidéo': 'Vidéo',
@@ -48,6 +54,10 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Triangulation': 'Triangulation',
   'Code Editeur': 'Code',
   'Bones': 'Bones',
+  'Bones marche': 'Bones',
+  'Corps': 'Corps',
+  'Paramètres': 'Paramètres',
+  'Calcul': 'Calcul',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -67,6 +77,10 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Triangulation': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
     case 'Bones': return mesh?.bonesValidated ? 'done' : 'pending'
     case 'Code Editeur': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
+    case 'Bones marche': return mesh?.walkSkeletonValidated ? 'done' : 'pending'
+    case 'Corps': return mesh?.walkBodyValidated ? 'done' : 'pending'
+    case 'Paramètres': return mesh?.walkParamsValidated ? 'done' : 'pending'
+    case 'Calcul': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -76,6 +90,7 @@ export function getAnimationCompletionStatus(animation: Animation): { done: numb
   const steps = animation.type === 'rest' ? REST_STEPS
     : animation.type === 'physics' ? PHYSICS_STEPS
     : animation.type === 'bone' ? BONE_STEPS
+    : animation.type === 'walk' ? WALK_STEPS
     : ONESHOT_STEPS
   const mesh = animation.mesh
   const hasVideo = animation.videoBlob != null
@@ -98,9 +113,11 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
   const isRestAnim = animation.type === 'rest'
   const isPhysicsAnim = animation.type === 'physics'
   const isBoneAnim = animation.type === 'bone'
+  const isWalkAnim = animation.type === 'walk'
   const availableSteps = isRestAnim ? REST_STEPS
     : isPhysicsAnim ? PHYSICS_STEPS
     : isBoneAnim ? BONE_STEPS
+    : isWalkAnim ? WALK_STEPS
     : ONESHOT_STEPS
   const [activeStep, setActiveStep] = useState<Step>(availableSteps[0] as Step)
 
@@ -183,6 +200,34 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         )}
         {activeStep === 'Code Editeur' && (
           <PhysicsAnimationEditor
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Bones marche' && (
+          <WalkBoneEditorStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Corps' && (
+          <WalkBodySelectStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Paramètres' && (
+          <WalkParamsStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Calcul' && (
+          <WalkComputeStep
             project={project}
             animation={animation}
             onSave={projectSave}

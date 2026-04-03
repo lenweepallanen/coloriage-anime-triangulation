@@ -97,6 +97,14 @@ export interface MeshData {
   boneWeights: number[][] | null;   // [vertexIndex][boneIndex], normalisés sum=1
   bonesValidated: boolean;
 
+  // Walk animation data (optional — only used by walk animations)
+  walkSkeleton?: WalkSkeletonDefinition | null;
+  walkSkeletonValidated?: boolean;
+  walkBodyTriangles?: number[];      // indices de triangles formant le torse
+  walkBodyValidated?: boolean;
+  walkParams?: WalkParams | null;
+  walkParamsValidated?: boolean;
+
   // Sortie finale (consumed by AnimationPlayer)
   crossfadeFrames?: number;  // Nombre de frames de crossfade pour la boucle seamless (défaut 7)
   videoFramesMesh: Point2D[][] | null;  // allPoints par frame
@@ -121,7 +129,29 @@ export interface MarkerCorners {
   bottomRight: Point2D;
 }
 
-export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone';
+export interface WalkLegDefinition {
+  baseIndex: number;      // index dans walkKeyPoints (hanche/épaule)
+  kneeIndex: number;      // index dans walkKeyPoints (genou)
+  footIndex: number;      // index dans walkKeyPoints (pied)
+  phaseOffset: number;    // 0-1, déphasage dans le cycle
+}
+
+export interface WalkSkeletonDefinition {
+  keyPoints: Point2D[];           // 14 points placés sur le canvas (espace image)
+  legs: [WalkLegDefinition, WalkLegDefinition, WalkLegDefinition, WalkLegDefinition];
+  neckChain: [number, number, number];  // indices: baseCou, baseTête, sommetTête
+  tailChain: [number, number, number];  // indices: baseQueue, milieuQueue, pointeQueue
+}
+
+export interface WalkParams {
+  speed: number;           // cycles/seconde (0.5-3, défaut 1)
+  strideLength: number;    // amplitude horizontale du pas en px (10-200, défaut 80)
+  footLift: number;        // hauteur max pied en l'air en px (5-100, défaut 30)
+  bodySway: number;        // oscillation verticale du corps en px (0-30, défaut 8)
+  headSway: number;        // intensité oscillation cou/tête (0-100, défaut 50)
+}
+
+export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk';
 
 export interface Animation {
   id: string;

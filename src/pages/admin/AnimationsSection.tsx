@@ -89,6 +89,11 @@ export default function AnimationsSection() {
             anchorKeyframes: [],
             bonesValidated: false,
             boneWeights: null,
+            walkSkeletonValidated: false,
+            walkBodyTriangles: [],
+            walkBodyValidated: false,
+            walkParamsValidated: false,
+            walkParams: null,
             videoFramesMesh: null,
           },
         }

@@ -34,6 +34,7 @@
   --color-type-oneshot: #f59e0b;
   --color-type-physics: #a855f7;
   --color-type-bone: #14b8a6;
+  --color-type-walk: #e056fd;
 
   /* Input */
   --color-input-bg: #252836;
@@ -788,6 +789,7 @@ code {
 .anim-card--oneshot { border-left: 3px solid var(--color-type-oneshot); }
 .anim-card--physics { border-left: 3px solid var(--color-type-physics); }
 .anim-card--bone { border-left: 3px solid var(--color-type-bone); }
+.anim-card--walk { border-left: 3px solid var(--color-type-walk); }
 
 .anim-card-header {
   display: flex;
@@ -809,6 +811,7 @@ code {
 .anim-card-badge--oneshot { background: rgba(245, 158, 11, 0.15); color: var(--color-type-oneshot); }
 .anim-card-badge--physics { background: rgba(168, 85, 247, 0.15); color: var(--color-type-physics); }
 .anim-card-badge--bone { background: rgba(20, 184, 166, 0.15); color: var(--color-type-bone); }
+.anim-card-badge--walk { background: rgba(224, 86, 253, 0.15); color: var(--color-type-walk); }
 
 .anim-card-completion-check {
   color: var(--color-success);
@@ -1313,6 +1316,7 @@ code {
 .anim-pill-dot.oneshot { background: var(--color-type-oneshot); }
 .anim-pill-dot.physics { background: var(--color-type-physics); }
 .anim-pill-dot.bone { background: var(--color-type-bone); }
+.anim-pill-dot.walk { background: var(--color-type-walk); }
 
 .anim-pill-actions {
   display: flex;
