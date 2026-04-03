@@ -188,6 +188,244 @@ export function buildBodyMesh(
 }
 
 /**
+ * Find the boundary edges of a triangle mesh.
+ * Returns edges as [vertexA, vertexB] pairs (ordered A < B).
+ * A boundary edge appears in exactly 1 triangle.
+ */
+export function findBoundaryEdges(triangles: [number, number, number][]): [number, number][] {
+  const edgeCount = new Map<string, { a: number; b: number; count: number }>()
+  for (const [a, b, c] of triangles) {
+    for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+      const key = `${Math.min(u, v)}_${Math.max(u, v)}`
+      const e = edgeCount.get(key)
+      if (e) e.count++
+      else edgeCount.set(key, { a: Math.min(u, v), b: Math.max(u, v), count: 1 })
+    }
+  }
+  const result: [number, number][] = []
+  for (const e of edgeCount.values()) {
+    if (e.count === 1) result.push([e.a, e.b])
+  }
+  return result
+}
+
+/**
+ * Walk the boundary of a mesh from vertex A to vertex B.
+ * Returns the ordered list of vertex indices along the boundary path (inclusive A and B).
+ */
+export function walkBoundaryPath(
+  boundaryEdges: [number, number][],
+  fromIdx: number,
+  toIdx: number,
+): number[] {
+  // Build adjacency from boundary edges
+  const adj = new Map<number, number[]>()
+  for (const [a, b] of boundaryEdges) {
+    if (!adj.has(a)) adj.set(a, [])
+    if (!adj.has(b)) adj.set(b, [])
+    adj.get(a)!.push(b)
+    adj.get(b)!.push(a)
+  }
+
+  // BFS from fromIdx to toIdx along boundary
+  const visited = new Set<number>([fromIdx])
+  const parent = new Map<number, number>()
+  const queue = [fromIdx]
+  let found = false
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!
+    if (curr === toIdx) { found = true; break }
+    for (const next of adj.get(curr) ?? []) {
+      if (!visited.has(next)) {
+        visited.add(next)
+        parent.set(next, curr)
+        queue.push(next)
+      }
+    }
+  }
+
+  if (!found) return [fromIdx, toIdx]
+
+  // Reconstruct path
+  const path: number[] = []
+  let c = toIdx
+  while (c !== fromIdx) {
+    path.push(c)
+    c = parent.get(c)!
+  }
+  path.push(fromIdx)
+  path.reverse()
+  return path
+}
+
+/**
+ * Generate internal points inside a closed polygon using a Poisson-like grid.
+ * Filters by point-in-polygon and minimum distance from boundary.
+ */
+export function generateInternalPoints(
+  polygon: Point2D[],
+  spacing: number,
+): Point2D[] {
+  if (polygon.length < 3) return []
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of polygon) {
+    if (p.x < minX) minX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.x > maxX) maxX = p.x
+    if (p.y > maxY) maxY = p.y
+  }
+
+  const margin = spacing * 0.4
+  const result: Point2D[] = []
+
+  for (let y = minY + spacing / 2; y < maxY; y += spacing) {
+    for (let x = minX + spacing / 2; x < maxX; x += spacing) {
+      const p = { x, y }
+      if (!pointInPolygon(p, polygon)) continue
+      // Check min distance from boundary
+      let tooClose = false
+      for (let i = 0; i < polygon.length; i++) {
+        const j = (i + 1) % polygon.length
+        const d = pointToSegmentDist(p, polygon[i], polygon[j])
+        if (d < margin) { tooClose = true; break }
+      }
+      if (!tooClose) result.push(p)
+    }
+  }
+  return result
+}
+
+function pointToSegmentDist(p: Point2D, a: Point2D, b: Point2D): number {
+  const dx = b.x - a.x, dy = b.y - a.y
+  const lenSq = dx * dx + dy * dy
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y)
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq))
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+}
+
+/**
+ * Triangulate a hidden face zone and merge into body mesh.
+ *
+ * 1. Build closed polygon: [A, ...bridgePoints, B] + body boundary path B→A
+ * 2. Generate internal points (Poisson grid)
+ * 3. Delaunay + filter by polygon
+ * 4. Append new points to bodyPoints, new triangles to bodyTriangles
+ * 5. Return updated body + triangle indices of the hidden face
+ */
+export function triangulateHiddenFace(
+  bodyPoints: Point2D[],
+  bodyTriangles: [number, number, number][],
+  vertexA: number,
+  vertexB: number,
+  bridgePoints: Point2D[],
+  spacing?: number,
+): {
+  updatedBodyPoints: Point2D[]
+  updatedBodyTriangles: [number, number, number][]
+  hiddenFaceTriangleIndices: number[]
+} {
+  // 1. Build closed polygon
+  const boundaryEdges = findBoundaryEdges(bodyTriangles)
+  const boundaryPath = walkBoundaryPath(boundaryEdges, vertexB, vertexA)
+  // boundaryPath goes from B to A along the boundary
+
+  // Closed polygon: A → bridgePoints → B → boundary(B→A)
+  const polygon: Point2D[] = [bodyPoints[vertexA]]
+  for (const bp of bridgePoints) polygon.push(bp)
+  polygon.push(bodyPoints[vertexB])
+  // Add boundary path from B to A (skip first=B and last=A since they're already in polygon)
+  for (let i = 1; i < boundaryPath.length - 1; i++) {
+    polygon.push(bodyPoints[boundaryPath[i]])
+  }
+
+  if (polygon.length < 3) {
+    return { updatedBodyPoints: bodyPoints, updatedBodyTriangles: bodyTriangles, hiddenFaceTriangleIndices: [] }
+  }
+
+  // 2. Generate internal points
+  const sp = spacing ?? Math.max(10, Math.hypot(
+    bodyPoints[vertexA].x - bodyPoints[vertexB].x,
+    bodyPoints[vertexA].y - bodyPoints[vertexB].y,
+  ) / 5)
+  const internalPts = generateInternalPoints(polygon, sp)
+
+  // 3. Build contour points for Delaunay
+  //    Contour = bridge points (new) + body boundary path points (existing, referenced by index)
+  //    We need to create a unified point array for Delaunay:
+  //    - Reuse existing body vertex indices for A, B, and boundary path vertices
+  //    - Add bridge points and internal points as NEW body vertices
+
+  const newPoints: Point2D[] = [...bridgePoints, ...internalPts]
+  const baseNewIdx = bodyPoints.length  // index where new points start
+
+  // All points for Delaunay (in local index space for the triangulation)
+  // We map: local index → global body index
+  const localPoints: Point2D[] = []
+  const localToGlobal: number[] = []
+
+  // A
+  localPoints.push(bodyPoints[vertexA])
+  localToGlobal.push(vertexA)
+
+  // Bridge points (new)
+  for (let i = 0; i < bridgePoints.length; i++) {
+    localPoints.push(bridgePoints[i])
+    localToGlobal.push(baseNewIdx + i)
+  }
+
+  // B
+  localPoints.push(bodyPoints[vertexB])
+  localToGlobal.push(vertexB)
+
+  // Boundary path vertices from B to A (skip B and A themselves)
+  for (let i = 1; i < boundaryPath.length - 1; i++) {
+    localPoints.push(bodyPoints[boundaryPath[i]])
+    localToGlobal.push(boundaryPath[i])
+  }
+
+  // Internal points (new)
+  for (let i = 0; i < internalPts.length; i++) {
+    localPoints.push(internalPts[i])
+    localToGlobal.push(baseNewIdx + bridgePoints.length + i)
+  }
+
+  // 4. Delaunay + filter
+  if (localPoints.length < 3) {
+    return { updatedBodyPoints: bodyPoints, updatedBodyTriangles: bodyTriangles, hiddenFaceTriangleIndices: [] }
+  }
+
+  const coords = new Float64Array(localPoints.length * 2)
+  localPoints.forEach((p, i) => { coords[i * 2] = p.x; coords[i * 2 + 1] = p.y })
+
+  let newTriangles: [number, number, number][] = []
+  try {
+    const delaunay = new Delaunator(coords)
+    for (let i = 0; i < delaunay.triangles.length; i += 3) {
+      const a = delaunay.triangles[i]
+      const b = delaunay.triangles[i + 1]
+      const c = delaunay.triangles[i + 2]
+      const cent = triangleCentroid(localPoints[a], localPoints[b], localPoints[c])
+      if (pointInPolygon(cent, polygon)) {
+        // Map local indices to global body indices
+        newTriangles.push([localToGlobal[a], localToGlobal[b], localToGlobal[c]])
+      }
+    }
+  } catch {
+    return { updatedBodyPoints: bodyPoints, updatedBodyTriangles: bodyTriangles, hiddenFaceTriangleIndices: [] }
+  }
+
+  // 5. Merge into body
+  const updatedBodyPoints = [...bodyPoints, ...newPoints]
+  const triStartIdx = bodyTriangles.length
+  const updatedBodyTriangles = [...bodyTriangles, ...newTriangles]
+  const hiddenFaceTriangleIndices = newTriangles.map((_, i) => triStartIdx + i)
+
+  return { updatedBodyPoints, updatedBodyTriangles, hiddenFaceTriangleIndices }
+}
+
+/**
  * Find the 2 nearest vertices to a point in a body mesh.
  * Returns their indices in bodyPoints.
  */

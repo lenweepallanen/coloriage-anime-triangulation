@@ -243,6 +243,18 @@ export default function WalkComputeStep({ project, animation, onSave }: Props) {
           color: '#888888',
         })
       }
+      // Hidden face zones (subset of body triangles, same bodyFrame)
+      if (bodyFrame && separation.hiddenFaceZones) {
+        for (const hfz of separation.hiddenFaceZones) {
+          const hfTris = hfz.bodyTriangleIndices.map(ti => separation.bodyTriangles?.[ti]).filter(Boolean) as [number, number, number][]
+          if (hfTris.length === 0) continue
+          drawGroups.push({
+            tris: hfTris,
+            getPoint: (idx: number) => bodyFrame[idx],
+            color: '#a855f7', // purple tint for hidden face
+          })
+        }
+      }
     } else if (videoFramesMesh) {
       // Legacy mode: single mesh
       const framePoints = videoFramesMesh[currentFrame]

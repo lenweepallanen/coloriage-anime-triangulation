@@ -713,6 +713,7 @@ export function computeWalkFramesSeparated(
   }
   const bodyWeights = computeZoneWeights(bodyRestPts, restSubBones, BODY_SUBBONE_INDICES)
 
+
   // Pre-compute rest leg lengths and bend sides
   const legRestLengths = skeleton.legs.map(leg => ({
     thighLen: Math.hypot(kp[leg.kneeIndex].x - kp[leg.baseIndex].x, kp[leg.kneeIndex].y - kp[leg.baseIndex].y),

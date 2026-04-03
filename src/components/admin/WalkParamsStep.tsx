@@ -44,6 +44,7 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
   })
   const [playing, setPlaying] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [imageLoaded, setImageLoaded] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, fitToCanvas } = useCanvasInteraction(canvasRef)
@@ -58,6 +59,7 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
     const img = new Image()
     img.onload = () => {
       imageRef.current = img
+      setImageLoaded(true)
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
@@ -72,6 +74,7 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
     }
     return () => {
       imageRef.current = null
+      setImageLoaded(false)
       URL.revokeObjectURL(url)
       ro?.disconnect()
     }
@@ -168,7 +171,8 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
     ctx.restore()
 
     animFrameRef.current = requestAnimationFrame(draw)
-  }, [skeleton, params, legPhases, playing, duration, transformRef])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skeleton, params, legPhases, playing, duration, transformRef, imageLoaded])
 
   useEffect(() => {
     lastTimeRef.current = 0

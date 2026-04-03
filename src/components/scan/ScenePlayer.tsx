@@ -11,6 +11,7 @@ import type { SceneState } from '../../utils/scenePlayback'
 import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUtils'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
+import { inpaintHiddenFaceOnScan } from '../../utils/hiddenFaceTexture'
 
 interface Props {
   project: Project
@@ -230,6 +231,23 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
     // Initial value — will be updated once scenePlayback is created
     let charOffsetX = (viewW - charW) / 2
 
+    // Inpaint hidden face zones onto a COPY of the scan canvas (to avoid overwriting limb texture)
+    let hfTexture: PIXI.Texture | undefined
+    const walkAnimForInpaint = project.animations.find(a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.hiddenFaceZones)
+    if (walkAnimForInpaint?.mesh?.walkLimbSeparation) {
+      const sep = walkAnimForInpaint.mesh.walkLimbSeparation
+      if (sep.hiddenFaceZones && sep.hiddenFaceZones.length > 0 && sep.bodyPoints && sep.bodyTriangles) {
+        const hfCanvas = document.createElement('canvas')
+        hfCanvas.width = scanCanvas.width
+        hfCanvas.height = scanCanvas.height
+        hfCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+        for (const hfz of sep.hiddenFaceZones) {
+          inpaintHiddenFaceOnScan(hfCanvas, hfz, sep.bodyPoints, sep.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+        }
+        hfTexture = PIXI.Texture.from(hfCanvas)
+      }
+    }
+
     const texture = PIXI.Texture.from(scanCanvas)
     const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
 
@@ -268,6 +286,7 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
         charScale,
         0, 0, // offsets applied dynamically per frame
         contentAlignment ?? undefined,
+        hfTexture,
       )
       setup.container.visible = false
       characterContainer.addChild(setup.container)
@@ -538,7 +557,14 @@ export default function ScenePlayer({ project, scanCanvas, contentAlignment, onC
             }
           }
           // Update body mesh
-          updateZoneMeshVertices(setup.bodyMesh, activeBodyPlayback.getPositions(), charScale, charOffsetX, charOffsetY)
+          const bodyPositions = activeBodyPlayback.getPositions()
+          updateZoneMeshVertices(setup.bodyMesh, bodyPositions, charScale, charOffsetX, charOffsetY)
+          // Update hidden face meshes (same bodyPoints, same bodyFrames)
+          if (setup.hiddenFaceMeshes) {
+            for (const hfm of setup.hiddenFaceMeshes) {
+              updateZoneMeshVertices(hfm, bodyPositions, charScale, charOffsetX, charOffsetY)
+            }
+          }
         }
       }
 

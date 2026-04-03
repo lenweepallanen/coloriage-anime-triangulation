@@ -106,13 +106,14 @@ export interface MeshData {
   walkBodyValidated?: boolean;
   walkParams?: WalkParams | null;
   walkParamsValidated?: boolean;
+  walkHiddenFaceValidated?: boolean;
 
   // Sortie finale (consumed by AnimationPlayer)
   crossfadeFrames?: number;  // Nombre de frames de crossfade pour la boucle seamless (défaut 7)
   videoFramesMesh: Point2D[][] | null;  // allPoints par frame
   // Walk limb separation frames (alternative à videoFramesMesh pour walk avec séparation)
   walkZoneFrames?: Record<string, Point2D[][]> | null;  // zoneId → frames par zone
-  walkBodyFrames?: Point2D[][] | null;                   // frames du corps
+  walkBodyFrames?: Point2D[][] | null;                   // frames du corps (inclut les triangles face cachée)
 }
 
 export interface BodyZone {
@@ -174,6 +175,14 @@ export interface WalkLimbZone {
   legIndex: number;              // 0-3, correspondance avec les legs du squelette walk
 }
 
+export interface HiddenFaceZone {
+  limbZoneId: string;              // réf WalkLimbZone.id (patte associée)
+  bodyVertexA: number;             // index dans bodyPoints du vertex de départ du contour bridge
+  bodyVertexB: number;             // index dans bodyPoints du vertex de fin du contour bridge
+  bridgePoints: Point2D[];         // points manuels placés entre A et B (contour intérieur)
+  bodyTriangleIndices: number[];   // indices dans bodyTriangles[] marqués comme face cachée
+}
+
 export interface WalkLimbSeparation {
   zones: WalkLimbZone[];
   overlapMargin: number;                                      // pixels de chevauchement (défaut 3)
@@ -187,6 +196,8 @@ export interface WalkLimbSeparation {
   bodyTriangles?: [number, number, number][];                  // all body triangles (auto + manual, indexed into bodyPoints)
   bodyExtraPoints?: Point2D[];                                 // manually added points
   bodyManualTriangles?: [number, number, number][];            // manually created triangles (indexed into bodyPoints)
+  // Hidden face zones (optional — one per limb, behind each leg)
+  hiddenFaceZones?: HiddenFaceZone[];                          // 0-4 zones face cachée
 }
 
 export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk';

@@ -58,6 +58,7 @@ export default function WalkLimbEditorStep({ project, animation, onSave }: Props
   const [activeZoneIdx, setActiveZoneIdx] = useState(0)
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null)
   const [saving, setSaving] = useState(false)
+  const [imageLoaded, setImageLoaded] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
@@ -81,6 +82,7 @@ export default function WalkLimbEditorStep({ project, animation, onSave }: Props
     const img = new Image()
     img.onload = () => {
       imageRef.current = img
+      setImageLoaded(true)
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
@@ -99,6 +101,7 @@ export default function WalkLimbEditorStep({ project, animation, onSave }: Props
 
     return () => {
       imageRef.current = null
+      setImageLoaded(false)
       URL.revokeObjectURL(url)
       ro?.disconnect()
     }
@@ -200,7 +203,8 @@ export default function WalkLimbEditorStep({ project, animation, onSave }: Props
 
     ctx.restore()
     animFrameRef.current = requestAnimationFrame(draw)
-  }, [zones, activeZoneIdx, restMesh, restAllPoints, transformRef])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zones, activeZoneIdx, restMesh, restAllPoints, transformRef, imageLoaded])
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw)

@@ -60,6 +60,7 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [canvasKey, setCanvasKey] = useState(0)
+  const [imageLoaded, setImageLoaded] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
@@ -80,6 +81,7 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
     const img = new Image()
     img.onload = () => {
       imageRef.current = img
+      setImageLoaded(true)
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
@@ -97,6 +99,7 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
 
     return () => {
       imageRef.current = null
+      setImageLoaded(false)
       URL.revokeObjectURL(url)
       ro?.disconnect()
     }
@@ -211,7 +214,8 @@ export default function WalkBoneEditorStep({ project, animation, onSave }: Props
     ctx.restore()
 
     animFrameRef.current = requestAnimationFrame(draw)
-  }, [keyPoints, selectedIndex, restMesh, transformRef])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyPoints, selectedIndex, restMesh, transformRef, imageLoaded])
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw)

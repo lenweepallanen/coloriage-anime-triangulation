@@ -50,6 +50,7 @@ interface MeshDoc {
   walkLimbSeparationValidated: boolean
   walkParams: WalkParams | null
   walkParamsValidated: boolean
+  walkHiddenFaceValidated: boolean
   hasVideoFramesMesh: boolean
   hasWalkZoneFrames: boolean
   hasWalkBodyFrames: boolean
@@ -229,13 +230,34 @@ function limbSeparationToDoc(sep: WalkLimbSeparation | null | undefined): unknow
   for (const [zoneId, tris] of Object.entries(sep.zoneTriangles)) {
     zoneTrianglesDoc[zoneId] = triToDoc(tris)
   }
-  return {
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const doc: Record<string, any> = {
     zones: sep.zones,
     overlapMargin: sep.overlapMargin,
     zonePoints: sep.zonePoints,
     zoneTriangles: zoneTrianglesDoc,
     bodyTriangleIndices: sep.bodyTriangleIndices,
   }
+
+  // Body mesh fields (triangles need {a,b,c} conversion)
+  if (sep.bodyPoints) doc.bodyPoints = sep.bodyPoints
+  if (sep.bodyTriangles) doc.bodyTriangles = triToDoc(sep.bodyTriangles)
+  if (sep.bodyExtraPoints) doc.bodyExtraPoints = sep.bodyExtraPoints
+  if (sep.bodyManualTriangles) doc.bodyManualTriangles = triToDoc(sep.bodyManualTriangles)
+
+  // Hidden face zones (triangles need {a,b,c} conversion, avoid undefined for Firestore)
+  if (sep.hiddenFaceZones && sep.hiddenFaceZones.length > 0) {
+    doc.hiddenFaceZones = sep.hiddenFaceZones.map(hfz => ({
+      limbZoneId: hfz.limbZoneId,
+      bodyVertexA: hfz.bodyVertexA,
+      bodyVertexB: hfz.bodyVertexB,
+      bridgePoints: hfz.bridgePoints,
+      bodyTriangleIndices: hfz.bodyTriangleIndices,
+    }))
+  }
+
+  return doc
 }
 
 // Deserialize WalkLimbSeparation from Firestore
@@ -249,13 +271,34 @@ function limbSeparationFromDoc(doc: Record<string, unknown> | null | undefined):
       zoneTriangles[zoneId] = docToTri(triDocs as TriangleDoc[])
     }
   }
-  return {
+
+  const result: WalkLimbSeparation = {
     zones: d.zones ?? [],
     overlapMargin: d.overlapMargin ?? 3,
     zonePoints: d.zonePoints ?? {},
     zoneTriangles,
     bodyTriangleIndices: d.bodyTriangleIndices ?? [],
   }
+
+  // Body mesh fields
+  if (d.bodyPoints) result.bodyPoints = d.bodyPoints
+  if (d.bodyTriangles) result.bodyTriangles = docToTri(d.bodyTriangles as TriangleDoc[])
+  if (d.bodyExtraPoints) result.bodyExtraPoints = d.bodyExtraPoints
+  if (d.bodyManualTriangles) result.bodyManualTriangles = docToTri(d.bodyManualTriangles as TriangleDoc[])
+
+  // Hidden face zones
+  if (d.hiddenFaceZones && Array.isArray(d.hiddenFaceZones)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    result.hiddenFaceZones = d.hiddenFaceZones.map((hfz: any) => ({
+      limbZoneId: hfz.limbZoneId,
+      bodyVertexA: hfz.bodyVertexA ?? 0,
+      bodyVertexB: hfz.bodyVertexB ?? 0,
+      bridgePoints: hfz.bridgePoints ?? [],
+      bodyTriangleIndices: hfz.bodyTriangleIndices ?? [],
+    }))
+  }
+
+  return result
 }
 
 // --- Animation storage path helpers ---
@@ -310,6 +353,7 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     walkBodyValidated: mesh.walkBodyValidated ?? false,
     walkParams: mesh.walkParams ?? null,
     walkParamsValidated: mesh.walkParamsValidated ?? false,
+    walkHiddenFaceValidated: mesh.walkHiddenFaceValidated ?? false,
     hasVideoFramesMesh: mesh.videoFramesMesh != null,
     hasWalkZoneFrames: mesh.walkZoneFrames != null,
     hasWalkBodyFrames: mesh.walkBodyFrames != null,
@@ -392,7 +436,7 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
   'contourCannyFrames' |
   'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh' |
-  'walkZoneFrames' | 'walkBodyFrames'>
+  'walkZoneFrames' | 'walkBodyFrames' | 'walkHiddenFaceFrames'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -476,6 +520,7 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     walkBodyValidated: d.walkBodyValidated ?? false,
     walkParams: d.walkParams ?? null,
     walkParamsValidated: d.walkParamsValidated ?? false,
+    walkHiddenFaceValidated: d.walkHiddenFaceValidated ?? false,
   }
 }
 

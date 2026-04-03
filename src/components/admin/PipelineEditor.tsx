@@ -19,6 +19,7 @@ import WalkZoneMeshStep from './WalkZoneMeshStep'
 import WalkBoneEditorStep from './WalkBoneEditorStep'
 import WalkParamsStep from './WalkParamsStep'
 import WalkComputeStep from './WalkComputeStep'
+import WalkHiddenFaceStep from './WalkHiddenFaceStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -38,7 +39,7 @@ const BONE_STEPS = [
 
 const PHYSICS_STEPS = ['Code Editeur'] as const
 
-const WALK_STEPS = ['Zones membres', 'Maillage zones', 'Bones marche', 'Paramètres', 'Calcul'] as const
+const WALK_STEPS = ['Zones membres', 'Maillage zones', 'Face cachée', 'Bones marche', 'Paramètres', 'Calcul'] as const
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number]
 
@@ -59,6 +60,7 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Maillage zones': 'Maillage',
   'Bones marche': 'Bones',
   'Paramètres': 'Paramètres',
+  'Face cachée': 'Face cachée',
   'Calcul': 'Calcul',
 }
 
@@ -81,6 +83,7 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Code Editeur': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
     case 'Zones membres': return mesh?.walkLimbSeparationValidated ? 'done' : 'pending'
     case 'Maillage zones': return mesh?.walkLimbSeparationValidated ? 'done' : 'pending'
+    case 'Face cachée': return mesh?.walkHiddenFaceValidated ? 'done' : 'pending'
     case 'Bones marche': return mesh?.walkSkeletonValidated ? 'done' : 'pending'
     case 'Paramètres': return mesh?.walkParamsValidated ? 'done' : 'pending'
     case 'Calcul': return (mesh?.videoFramesMesh != null || mesh?.walkZoneFrames != null) ? 'done' : 'pending'
@@ -217,6 +220,13 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         )}
         {activeStep === 'Maillage zones' && (
           <WalkZoneMeshStep
+            project={project}
+            animation={animation}
+            onSave={projectSave}
+          />
+        )}
+        {activeStep === 'Face cachée' && (
+          <WalkHiddenFaceStep
             project={project}
             animation={animation}
             onSave={projectSave}

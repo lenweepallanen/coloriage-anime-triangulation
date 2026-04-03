@@ -8,6 +8,7 @@ import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { DeviceParallax } from '../../utils/deviceParallax'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { inpaintHiddenFaceOnScan } from '../../utils/hiddenFaceTexture'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
@@ -299,6 +300,23 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
       }
     }
 
+    // --- Inpaint hidden face zones onto a COPY of the scan canvas (to avoid overwriting limb texture) ---
+    let hfTexture: PIXI.Texture | undefined
+    const walkAnim0 = project.animations.find(a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.hiddenFaceZones)
+    if (walkAnim0?.mesh?.walkLimbSeparation) {
+      const sep = walkAnim0.mesh.walkLimbSeparation
+      if (sep.hiddenFaceZones && sep.hiddenFaceZones.length > 0 && sep.bodyPoints && sep.bodyTriangles) {
+        const hfCanvas = document.createElement('canvas')
+        hfCanvas.width = scanCanvas.width
+        hfCanvas.height = scanCanvas.height
+        hfCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+        for (const hfz of sep.hiddenFaceZones) {
+          inpaintHiddenFaceOnScan(hfCanvas, hfz, sep.bodyPoints, sep.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+        }
+        hfTexture = PIXI.Texture.from(hfCanvas)
+      }
+    }
+
     // --- Mesh texture & geometry ---
     const texture = PIXI.Texture.from(scanCanvas)
     const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
@@ -341,10 +359,14 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
         offsetX,
         offsetY,
         contentAlignment ?? undefined,
+        hfTexture,
       )
       meshContainer.addChild(zoneMeshSetup.container)
       // Hide the zone mesh container by default (shown during walk playback)
       zoneMeshSetup.container.visible = false
+
+      // Hidden face meshes use the same scan texture (already inpainted above)
+      // — no separate texture or UV replacement needed.
     }
 
     // Main mesh (used for rest + non-walk animations)
@@ -436,6 +458,22 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
       const walkBodyFrames = walkAnim?.mesh?.walkBodyFrames
       const walkTotalFrames = walkBodyFrames?.length ?? 0
 
+      // Debug: verify body data consistency
+      if (walkAnim?.mesh?.walkLimbSeparation) {
+        const sep = walkAnim.mesh.walkLimbSeparation
+        console.log('[Walk HF debug]', {
+          bodyPointsCount: sep.bodyPoints?.length ?? 0,
+          bodyFrameF0Count: walkBodyFrames?.[0]?.length ?? 0,
+          hfZones: sep.hiddenFaceZones?.map(z => ({
+            id: z.limbZoneId,
+            triIndices: z.bodyTriangleIndices,
+            maxVertIdx: Math.max(...z.bodyTriangleIndices.flatMap(ti => sep.bodyTriangles?.[ti] ?? [])),
+          })),
+          hfMeshes: zoneMeshSetup?.hiddenFaceMeshes?.map(m => ({ id: m.zoneId, numVerts: m.numVertices })),
+          bodyMeshVerts: zoneMeshSetup?.bodyMesh?.numVertices,
+        })
+      }
+
       app.ticker.add((delta) => {
         if (playing) advancePlayback(delta)
 
@@ -465,6 +503,12 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
           const bodyFrame = walkBodyFrames[walkFrameCounter]
           if (bodyFrame) {
             updateZoneMeshVertices(zoneMeshSetup.bodyMesh, bodyFrame, scale, offsetX, offsetY)
+          }
+          // Update hidden face meshes (same bodyFrames, same bodyPoints)
+          if (bodyFrame && zoneMeshSetup.hiddenFaceMeshes) {
+            for (const hfm of zoneMeshSetup.hiddenFaceMeshes) {
+              updateZoneMeshVertices(hfm, bodyFrame, scale, offsetX, offsetY)
+            }
           }
         } else {
           // Standard single-mesh rendering

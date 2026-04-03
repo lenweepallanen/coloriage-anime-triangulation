@@ -85,6 +85,7 @@ export default function WalkZoneMeshStep({ project, animation, onSave }: Props) 
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null)
   const [dragTarget, setDragTarget] = useState<{ zoneId: string; idx: number } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [imageLoaded, setImageLoaded] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
@@ -98,6 +99,7 @@ export default function WalkZoneMeshStep({ project, animation, onSave }: Props) 
     const img = new Image()
     img.onload = () => {
       imageRef.current = img
+      setImageLoaded(true)
       requestAnimationFrame(() => fitToCanvas(img.width, img.height))
     }
     img.src = url
@@ -112,6 +114,7 @@ export default function WalkZoneMeshStep({ project, animation, onSave }: Props) 
     }
     return () => {
       imageRef.current = null
+      setImageLoaded(false)
       URL.revokeObjectURL(url)
       ro?.disconnect()
     }
@@ -254,7 +257,8 @@ export default function WalkZoneMeshStep({ project, animation, onSave }: Props) 
 
     ctx.restore()
     animFrameRef.current = requestAnimationFrame(draw)
-  }, [separation, zoneMeshes, bodyMesh, activeZoneId, bodyEditMode, connectAnchor, connectLast, transformRef])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [separation, zoneMeshes, bodyMesh, activeZoneId, bodyEditMode, connectAnchor, connectLast, transformRef, imageLoaded])
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw)

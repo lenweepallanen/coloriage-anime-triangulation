@@ -35,7 +35,7 @@ Un projet contient **plusieurs animations** partageant la même image et géomé
 - **Oneshot** (0+) : animations à la demande (wave, jump...). Pipeline réduit 6 étapes (tracking seul, géométrie héritée de rest).
 - **Physics** (0+) : animations procédurales par code JS. Pas de vidéo ni tracking — l'utilisateur écrit du code qui transforme les vertices du maillage. Les frames sont pré-calculées à la validation et stockées comme `videoFramesMesh`, ce qui les rend identiques aux oneshots pour le playback. Option **overlay** : si activée, l'animation se superpose instantanément à la rest loop (déplacements additifs) sans attendre la fin du cycle.
 - **Bone** (0+) : animations par déformation squelettique. Pipeline 7 étapes (vidéo + tracking des anchors comme oneshot, puis définition de bones + calcul par skinning au lieu d'ARAP). Self-contained comme physics — hérite la géométrie de rest, produit son propre `videoFramesMesh`. Utilisé comme oneshot/overlay dans le playback.
-- **Walk** (0+) : animations de marche procédurale quadrupède. Pipeline 5 étapes (squelette 18 keypoints, séparation membres par courbes Bézier, édition maillage zone par zone, paramètres cinématiques, calcul LBS). Pas de vidéo ni tracking — les positions sont calculées par cinématique inverse + LBS. Produit `videoFramesMesh` + `walkZoneFrames`/`walkBodyFrames` pour le rendu séparé par zone.
+- **Walk** (0+) : animations de marche procédurale quadrupède. Pipeline 6 étapes (squelette 18 keypoints, séparation membres par courbes Bézier, édition maillage zone par zone, face cachée derrière les pattes, paramètres cinématiques, calcul LBS). Pas de vidéo ni tracking — les positions sont calculées par cinématique inverse + LBS. Produit `videoFramesMesh` + `walkZoneFrames`/`walkBodyFrames` pour le rendu séparé par zone.
 
 ### Topologie partagée
 
@@ -168,6 +168,35 @@ Le coude est draggable dans l'éditeur (mousedown/move/up).
 5. LBS : `position_vertex = Σ weight_sb × transform_sb(rest_position_vertex)`
 6. Résultat : `videoFramesMesh[f]`
 
+### Pipeline Walk (6 étapes)
+
+1. **Zones membres** — Définition des 4 zones pattes par courbes Bézier fermées + séparation limb/corps
+2. **Maillage zones** — Édition maillage par zone : limb (Delaunay auto + internals) + corps (fixe + patch manuel : ajouter/relier/déplacer)
+3. **Face cachée** — Définition des zones de face cachée derrière chaque patte. Pour chaque patte : sélection de 2 vertices du contour body (A et B), placement de bridge points entre A et B, puis Delaunay dans le polygone fermé (bridge + body boundary). Les nouveaux triangles sont fusionnés dans bodyPoints/bodyTriangles. Texture auto-générée par diffusion Laplacienne au scan.
+4. **Bones marche** — Placement 18 keypoints du squelette quadrupède (6 groupes : 4 pattes + cou/tête + queue)
+5. **Paramètres** — Paramètres cinématiques (longueur pas, levée pied, balancement corps/tête, phases de marche)
+6. **Calcul** — Calcul animation par LBS séparé (zones + body) + legacy unifié, preview wireframe/gradient
+
+### Face cachée (système)
+
+Quand une patte s'anime, elle révèle la zone du corps qui était occultée dans l'image originale (l'enfant a colorié la patte, pas le corps derrière). Le système de "face cachée" comble ces trous :
+
+**Modèle** : `HiddenFaceZone { limbZoneId, bodyVertexA, bodyVertexB, bridgePoints, bodyTriangleIndices }` — sous-ensemble du body mesh, pas une triangulation indépendante.
+
+**Édition admin** (`WalkHiddenFaceStep`) :
+1. L'admin sélectionne 2 vertices du contour body (A et B)
+2. Il place des bridge points manuels entre A et B (contour intérieur)
+3. Polygone fermé = [A, ...bridgePoints, B] + body boundary path B→A
+4. Delaunay dans le polygone → points internes auto-générés (grille Poisson)
+5. Nouveaux points/triangles fusionnés dans `bodyPoints`/`bodyTriangles`
+6. Les indices des triangles ajoutés sont mémorisés dans `bodyTriangleIndices`
+
+**Animation** : les hidden face triangles font partie du body mesh → animés par `bodyFrames` (aucun calcul supplémentaire).
+
+**Rendu** : `zoneMeshRenderer` split le body en 2 PIXI meshes (pur body + hidden face) avec z-order différent. La texture des hidden face meshes est une copie du scan inpaintée par diffusion Laplacienne (`hiddenFaceTexture.ts`). Les pixels de bordure (couleurs connues du scan) diffusent vers l'intérieur via Jacobi SOR (150 itérations).
+
+**Z-order** : body (z=0) → hidden face (z=limb.zOrder - 0.5) → limb (z=limb.zOrder)
+
 ## Workflow Scan (utilisateur final)
 
 **Orientation forcée** : toute la page scan est en mode paysage. `screen.orientation.lock('landscape')` au montage de `ScanPage`, avec fallback CSS `transform: rotate(90deg)` en portrait.
@@ -222,9 +251,10 @@ src/
 │   ├── bodyZoneUtils.ts        Détection zones corporelles (triangle→zone, hit test, touch detection)
 │   ├── boneSolver.ts           Déformation squelettique (bones, auto-weights, LBS, forward kinematics)
 │   ├── walkSolver.ts           Cinématique marche quadrupède (squelette, IK, LBS, séparation zones)
-│   ├── limbSeparation.ts       Séparation membres/corps (Bézier→polygone, Delaunay par zone, patch manuel body)
+│   ├── limbSeparation.ts       Séparation membres/corps (Bézier→polygone, Delaunay par zone, patch manuel body, triangulation face cachée)
 │   ├── bezierUtils.ts          Utilitaires courbes Bézier (flatten, expand, évaluation)
-│   ├── zoneMeshRenderer.ts     Rendu PIXI.js par zone (build/update meshes séparés, z-order)
+│   ├── hiddenFaceTexture.ts    Inpainting diffusion Laplacienne pour les faces cachées derrière les pattes
+│   ├── zoneMeshRenderer.ts     Rendu PIXI.js par zone (build/update meshes séparés, z-order, split body/hidden face)
 │   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css
 public/
