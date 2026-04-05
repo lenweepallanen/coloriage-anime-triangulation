@@ -1,0 +1,5 @@
+functions-framework==3.*
+simple-lama-inpainting>=0.1.0
+Pillow>=10.0
+numpy
+flask-cors>=4.0

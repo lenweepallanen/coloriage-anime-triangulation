@@ -81,7 +81,9 @@ export function buildZoneMeshes(
     })
   }
 
-  // Collect all hidden face triangle indices (from ALL hidden face zones)
+  // Split body into pure body (scan texture) + hidden face meshes (inpainted texture)
+  const hiddenFaceMeshes: ZoneMeshInfo[] = []
+
   const hfTriIdxSet = new Set<number>()
   if (separation.hiddenFaceZones) {
     for (const hfz of separation.hiddenFaceZones) {
@@ -89,12 +91,9 @@ export function buildZoneMeshes(
     }
   }
 
-  // Split body triangles into pure body vs hidden face
   const pureBodyTris: [number, number, number][] = []
-  const hfBodyTris: [number, number, number][] = []
   for (let i = 0; i < bodyTris.length; i++) {
-    if (hfTriIdxSet.has(i)) hfBodyTris.push(bodyTris[i])
-    else pureBodyTris.push(bodyTris[i])
+    if (!hfTriIdxSet.has(i)) pureBodyTris.push(bodyTris[i])
   }
 
   // Pure body mesh (z=0, uses scan texture)
@@ -102,8 +101,6 @@ export function buildZoneMeshes(
   container.addChild(bodyInfo.pixiMesh)
 
   // Hidden face meshes — same bodyPoints, but only the marked triangles
-  // Each hidden face zone gets its own mesh so it can have its own z-order and texture
-  const hiddenFaceMeshes: ZoneMeshInfo[] = []
   if (separation.hiddenFaceZones) {
     for (const hfz of separation.hiddenFaceZones) {
       if (hfz.bodyTriangleIndices.length === 0) continue
@@ -111,7 +108,6 @@ export function buildZoneMeshes(
       if (hfTris.length === 0) continue
       const parentZone = separation.zones.find(z => z.id === hfz.limbZoneId)
       const hfZOrder = parentZone ? parentZone.zOrder - 0.5 : 0
-      // Use separate inpainted texture if provided, otherwise fall back to scan texture
       const info = buildMesh(
         `__hf_${hfz.limbZoneId}`, bodyPts, hfTris,
         hiddenFaceTexture ?? texture, imageWidth, imageHeight, scale, offsetX, offsetY,

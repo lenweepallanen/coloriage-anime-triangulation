@@ -100,8 +100,9 @@ Le hook `useScanProcessor` expose un objet `debugImages: DebugImages | null` ave
 | 2 | `raw2048Url` | Image 2048×2048 après correction perspective (avec marges 64px) |
 | 3 | `rectifiedUrl` | Image croppée aux dimensions originales (marges retirées) |
 | 4 | `meshOverlayUrl` | Image croppée + overlay triangulation frame 0 + bboxes d'alignement (cyan=dessin, jaune=mesh mappé) |
+| 5 | LaMa inpainting | Masque (zones pattes) + résultat inpainting (scan sans pattes) — affiché si walk animation présente |
 
-La page ScanPage affiche ces 4 images dans un stage `debug` entre `processing` et `animation`, permettant de vérifier visuellement chaque étape du pipeline avant de lancer l'animation.
+La page ScanPage affiche ces images dans un stage `debug` entre `processing` et `animation`. Un bandeau de statut LaMa indique la phase en cours (Lancement instance / Calcul inpainting / Terminé / Erreur). Le bouton "Lancer l'animation" est désactivé pendant l'inpainting.
 
 ### Alignement contenu scan ↔ maillage (ContentAlignment)
 

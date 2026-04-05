@@ -1,15 +1,15 @@
 /**
- * Hidden Face Texture — Laplacian diffusion inpainting for hidden face zones.
+ * Hidden Face Texture — Color clustering inpainting for hidden face zones.
  *
- * Paints diffused colors directly onto the scan canvas for the hidden face triangles.
+ * Paints flat-fill colors onto the scan canvas for the hidden face triangles.
  * These triangles are a subset of bodyTriangles (same bodyPoints).
  *
  * Algorithm:
  * 1. Convert body vertices to scan canvas coords (via contentAlignment)
  * 2. Rasterize the hidden face triangles into a mask on the scan canvas
  * 3. Identify border pixels (interior pixels adjacent to exterior with existing color)
- * 4. Iterative Jacobi diffusion: each interior pixel = average of 4 neighbors
- * 5. Write diffused pixels back onto the scan canvas
+ * 4. K-means clustering on border pixel colors (auto K=1..5 via silhouette score)
+ * 5. BFS propagation from border pixels with cluster barriers → flat fill
  */
 
 import type { Point2D, HiddenFaceZone } from '../types/project'
@@ -84,59 +84,274 @@ export function inpaintHiddenFaceOnScan(
     }
   }
 
-  // 5. Read scan pixels and initialize diffusion from border
+  // 5. Read scan pixels + collect border colors
   const ctx = scanCanvas.getContext('2d')
   if (!ctx) return
   const imgData = ctx.getImageData(minX, minY, w, h)
   const pixels = imgData.data
 
-  const r = new Float32Array(w * h)
-  const g = new Float32Array(w * h)
-  const b = new Float32Array(w * h)
+  const borderIndices: number[] = []
+  const borderColors: [number, number, number][] = []
   for (let i = 0; i < w * h; i++) {
     if (mask[i] === 2) {
-      r[i] = pixels[i * 4]
-      g[i] = pixels[i * 4 + 1]
-      b[i] = pixels[i * 4 + 2]
+      borderIndices.push(i)
+      borderColors.push([pixels[i * 4], pixels[i * 4 + 1], pixels[i * 4 + 2]])
     }
   }
 
-  // 6. Jacobi diffusion with SOR
-  const ITERATIONS = 150
-  const OMEGA = 1.7
-  for (let iter = 0; iter < ITERATIONS; iter++) {
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const idx = y * w + x
-        if (mask[idx] !== 1) continue
-        const avgR = (r[idx - 1] + r[idx + 1] + r[idx - w] + r[idx + w]) / 4
-        const avgG = (g[idx - 1] + g[idx + 1] + g[idx - w] + g[idx + w]) / 4
-        const avgB = (b[idx - 1] + b[idx + 1] + b[idx - w] + b[idx + w]) / 4
-        r[idx] += OMEGA * (avgR - r[idx])
-        g[idx] += OMEGA * (avgG - g[idx])
-        b[idx] += OMEGA * (avgB - b[idx])
+  if (borderIndices.length === 0) return
+
+  // 6. K-means clustering on border colors (auto K via silhouette)
+  const { assignments, centroids } = autoKMeans(borderColors, 5)
+
+  // Map border pixel index → cluster id
+  const borderCluster = new Int8Array(w * h).fill(-1)
+  for (let i = 0; i < borderIndices.length; i++) {
+    borderCluster[borderIndices[i]] = assignments[i]
+  }
+
+  // 7. BFS propagation from border pixels with cluster barriers
+  const pixelCluster = new Int8Array(w * h).fill(-1)
+  // Copy border assignments
+  for (let i = 0; i < borderIndices.length; i++) {
+    pixelCluster[borderIndices[i]] = assignments[i]
+  }
+
+  // Detect barrier border pixels: border pixel adjacent to a border pixel of different cluster
+  const barrier = new Uint8Array(w * h)
+  for (const idx of borderIndices) {
+    const bx = idx % w
+    const by = (idx - bx) / w
+    const cl = borderCluster[idx]
+    const neighbors = [
+      by > 0 ? idx - w : -1,
+      by < h - 1 ? idx + w : -1,
+      bx > 0 ? idx - 1 : -1,
+      bx < w - 1 ? idx + 1 : -1,
+    ]
+    for (const ni of neighbors) {
+      if (ni >= 0 && mask[ni] === 2 && borderCluster[ni] !== cl && borderCluster[ni] >= 0) {
+        barrier[idx] = 1
+        break
       }
     }
   }
 
-  // 7. Write diffused pixels back
+  // Multi-source BFS from non-barrier border pixels
+  const queue: number[] = []
+  for (const idx of borderIndices) {
+    if (!barrier[idx]) queue.push(idx)
+  }
+
+  let head = 0
+  while (head < queue.length) {
+    const idx = queue[head++]
+    const cl = pixelCluster[idx]
+    const bx = idx % w
+    const by = (idx - bx) / w
+    const neighbors = [
+      by > 0 ? idx - w : -1,
+      by < h - 1 ? idx + w : -1,
+      bx > 0 ? idx - 1 : -1,
+      bx < w - 1 ? idx + 1 : -1,
+    ]
+    for (const ni of neighbors) {
+      if (ni >= 0 && mask[ni] === 1 && pixelCluster[ni] < 0) {
+        pixelCluster[ni] = cl
+        queue.push(ni)
+      }
+    }
+  }
+
+  // Fallback: any interior pixel not reached → nearest border pixel (by distance)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x
+      if (mask[idx] !== 1 || pixelCluster[idx] >= 0) continue
+      let bestDist = Infinity
+      let bestCl = 0
+      for (let i = 0; i < borderIndices.length; i++) {
+        const bi = borderIndices[i]
+        const bbx = bi % w, bby = (bi - bbx) / w
+        const d = (x - bbx) * (x - bbx) + (y - bby) * (y - bby)
+        if (d < bestDist) { bestDist = d; bestCl = assignments[i] }
+      }
+      pixelCluster[idx] = bestCl
+    }
+  }
+
+  // 8. Write clustered colors
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = y * w + x
       if (mask[idx] !== 1) continue
+      const cl = pixelCluster[idx]
+      const c = cl >= 0 ? centroids[cl] : centroids[0]
       const pIdx = idx * 4
-      pixels[pIdx] = Math.round(Math.max(0, Math.min(255, r[idx])))
-      pixels[pIdx + 1] = Math.round(Math.max(0, Math.min(255, g[idx])))
-      pixels[pIdx + 2] = Math.round(Math.max(0, Math.min(255, b[idx])))
+      pixels[pIdx] = c[0]
+      pixels[pIdx + 1] = c[1]
+      pixels[pIdx + 2] = c[2]
       pixels[pIdx + 3] = 255
     }
   }
   ctx.putImageData(imgData, minX, minY)
 }
 
+// ─── K-means clustering ─────────────────────────────────────────────
+
+type RGB = [number, number, number]
+
+function distSqRGB(a: RGB, b: RGB): number {
+  const dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2]
+  return dr * dr + dg * dg + db * db
+}
+
+function runKMeans(
+  colors: RGB[], k: number, maxIter = 20,
+): { assignments: number[]; centroids: RGB[] } {
+  const n = colors.length
+  // K-means++ initialization
+  const centroids: RGB[] = [colors[Math.floor(Math.random() * n)]]
+  for (let c = 1; c < k; c++) {
+    const dists = colors.map(col => Math.min(...centroids.map(cen => distSqRGB(col, cen))))
+    const total = dists.reduce((s, d) => s + d, 0)
+    let r = Math.random() * total
+    let pick = 0
+    for (let i = 0; i < n; i++) {
+      r -= dists[i]
+      if (r <= 0) { pick = i; break }
+    }
+    centroids.push(colors[pick])
+  }
+
+  const assignments = new Array<number>(n).fill(0)
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    // Assign
+    let changed = false
+    for (let i = 0; i < n; i++) {
+      let bestD = Infinity, bestC = 0
+      for (let c = 0; c < k; c++) {
+        const d = distSqRGB(colors[i], centroids[c])
+        if (d < bestD) { bestD = d; bestC = c }
+      }
+      if (assignments[i] !== bestC) { assignments[i] = bestC; changed = true }
+    }
+    if (!changed) break
+
+    // Update centroids
+    const sums = Array.from({ length: k }, () => [0, 0, 0] as [number, number, number])
+    const counts = new Array<number>(k).fill(0)
+    for (let i = 0; i < n; i++) {
+      const c = assignments[i]
+      sums[c][0] += colors[i][0]
+      sums[c][1] += colors[i][1]
+      sums[c][2] += colors[i][2]
+      counts[c]++
+    }
+    for (let c = 0; c < k; c++) {
+      if (counts[c] > 0) {
+        centroids[c] = [
+          Math.round(sums[c][0] / counts[c]),
+          Math.round(sums[c][1] / counts[c]),
+          Math.round(sums[c][2] / counts[c]),
+        ]
+      }
+    }
+  }
+
+  return { assignments, centroids }
+}
+
+function silhouetteScore(colors: RGB[], assignments: number[], k: number): number {
+  const n = colors.length
+  if (k <= 1 || n <= k) return -1
+
+  // Group indices by cluster
+  const groups: number[][] = Array.from({ length: k }, () => [])
+  for (let i = 0; i < n; i++) groups[assignments[i]].push(i)
+
+  let totalS = 0
+  let counted = 0
+  for (let i = 0; i < n; i++) {
+    const ci = assignments[i]
+    if (groups[ci].length <= 1) continue
+
+    // a(i) = mean intra-cluster distance
+    let a = 0
+    for (const j of groups[ci]) {
+      if (j !== i) a += Math.sqrt(distSqRGB(colors[i], colors[j]))
+    }
+    a /= (groups[ci].length - 1)
+
+    // b(i) = min mean inter-cluster distance
+    let b = Infinity
+    for (let c = 0; c < k; c++) {
+      if (c === ci || groups[c].length === 0) continue
+      let meanD = 0
+      for (const j of groups[c]) meanD += Math.sqrt(distSqRGB(colors[i], colors[j]))
+      meanD /= groups[c].length
+      if (meanD < b) b = meanD
+    }
+
+    totalS += (b - a) / Math.max(a, b)
+    counted++
+  }
+
+  return counted > 0 ? totalS / counted : -1
+}
+
+function autoKMeans(
+  colors: RGB[], maxK: number,
+): { assignments: number[]; centroids: RGB[] } {
+  if (colors.length <= 1) {
+    return { assignments: [0], centroids: [colors[0] || [128, 128, 128]] }
+  }
+
+  // Small zone: just use median color
+  if (colors.length < 6) {
+    const median: RGB = [
+      colors.map(c => c[0]).sort((a, b) => a - b)[Math.floor(colors.length / 2)],
+      colors.map(c => c[1]).sort((a, b) => a - b)[Math.floor(colors.length / 2)],
+      colors.map(c => c[2]).sort((a, b) => a - b)[Math.floor(colors.length / 2)],
+    ]
+    return { assignments: new Array(colors.length).fill(0), centroids: [median] }
+  }
+
+  // Check if all colors are similar (variance test) → K=1
+  const mean: RGB = [0, 0, 0]
+  for (const c of colors) { mean[0] += c[0]; mean[1] += c[1]; mean[2] += c[2] }
+  mean[0] /= colors.length; mean[1] /= colors.length; mean[2] /= colors.length
+  let variance = 0
+  for (const c of colors) variance += distSqRGB(c, mean)
+  variance /= colors.length
+  // If std dev < 15 in RGB space, single color
+  if (variance < 225) {
+    return {
+      assignments: new Array(colors.length).fill(0),
+      centroids: [[Math.round(mean[0]), Math.round(mean[1]), Math.round(mean[2])]],
+    }
+  }
+
+  let bestScore = -2
+  let bestResult = runKMeans(colors, 1)
+
+  const effectiveMaxK = Math.min(maxK, colors.length)
+  for (let k = 2; k <= effectiveMaxK; k++) {
+    const result = runKMeans(colors, k)
+    const score = silhouetteScore(colors, result.assignments, k)
+    if (score > bestScore) {
+      bestScore = score
+      bestResult = result
+    }
+  }
+
+  return bestResult
+}
+
 // ─── Coordinate conversion ──────────────────────────────────────────
 
-function imageToScanPixel(
+export function imageToScanPixel(
   p: Point2D,
   imageWidth: number, imageHeight: number,
   scanW: number, scanH: number,

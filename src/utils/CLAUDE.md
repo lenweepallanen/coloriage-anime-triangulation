@@ -30,7 +30,10 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `walkSolver.ts` | Cinématique marche quadrupède : squelette 18 keypoints, IK 2-bones (genoux), LBS par zone, calcul séparé zones/body |
 | `limbSeparation.ts` | Séparation membres/corps : Bézier→polygone, filtrage vertex-based, Delaunay par zone, patch manuel body (buildBodyMesh, findTwoNearest) |
 | `bezierUtils.ts` | Courbes Bézier : évaluation cubique, flatten en polyline, expansion polygone, sampling contour |
-| `zoneMeshRenderer.ts` | Rendu PIXI.js par zone : build meshes séparés (zone + body), z-ordering, update vertices par frame |
+| `zoneMeshRenderer.ts` | Rendu PIXI.js par zone : build meshes séparés (zone + body + hidden face), z-ordering, update vertices par frame |
+| `hiddenFaceTexture.ts` | Inpainting diffusion Laplacienne (fallback) : K-means couleurs bordure + BFS propagation pour les faces cachées |
+| `limbMaskGenerator.ts` | Génération masque binaire PNG des zones pattes (Bézier dilatées) pour envoi à LaMa Cloud Function |
+| `lamaInpainting.ts` | Client API Cloud Function LaMa : envoi scan+masque (512px JPEG), réception résultat inpainté, upscale |
 
 ## autoMeshGenerator.ts
 

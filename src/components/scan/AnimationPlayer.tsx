@@ -14,6 +14,7 @@ import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 interface Props {
   project: Project
   scanCanvas: HTMLCanvasElement
+  lamaCanvas?: HTMLCanvasElement | null
   contentAlignment?: ContentAlignment | null
   onClose: () => void
 }
@@ -133,7 +134,7 @@ function getAnimationData(project: Project) {
   return { restAnim, readyOneshots }
 }
 
-export default function AnimationPlayer({ project, scanCanvas, contentAlignment, onClose }: Props) {
+export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -300,10 +301,15 @@ export default function AnimationPlayer({ project, scanCanvas, contentAlignment,
       }
     }
 
-    // --- Inpaint hidden face zones onto a COPY of the scan canvas (to avoid overwriting limb texture) ---
+    // --- Hidden face texture ---
+    // LaMa mode: use the inpainted "scan without legs" for hidden face zones only
+    // Fallback: Laplacian diffusion on a copy of the scan
+    // In both cases, pure body + limbs use the original high-res scan texture
     let hfTexture: PIXI.Texture | undefined
     const walkAnim0 = project.animations.find(a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.hiddenFaceZones)
-    if (walkAnim0?.mesh?.walkLimbSeparation) {
+    if (lamaCanvas) {
+      hfTexture = PIXI.Texture.from(lamaCanvas)
+    } else if (walkAnim0?.mesh?.walkLimbSeparation) {
       const sep = walkAnim0.mesh.walkLimbSeparation
       if (sep.hiddenFaceZones && sep.hiddenFaceZones.length > 0 && sep.bodyPoints && sep.bodyTriangles) {
         const hfCanvas = document.createElement('canvas')

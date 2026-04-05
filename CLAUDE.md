@@ -19,6 +19,7 @@ L'utilisateur crée un projet avec une image de coloriage et **plusieurs animati
 | Traitement image | Canvas API HTML5 |
 | Build | Vite 7 |
 | PDF | jsPDF |
+| Inpainting | LaMa via Cloud Function Python (GCP) |
 
 ## Architecture des routes
 
@@ -172,7 +173,7 @@ Le coude est draggable dans l'éditeur (mousedown/move/up).
 
 1. **Zones membres** — Définition des 4 zones pattes par courbes Bézier fermées + séparation limb/corps
 2. **Maillage zones** — Édition maillage par zone : limb (Delaunay auto + internals) + corps (fixe + patch manuel : ajouter/relier/déplacer)
-3. **Face cachée** — Définition des zones de face cachée derrière chaque patte. Pour chaque patte : sélection de 2 vertices du contour body (A et B), placement de bridge points entre A et B, puis Delaunay dans le polygone fermé (bridge + body boundary). Les nouveaux triangles sont fusionnés dans bodyPoints/bodyTriangles. Texture auto-générée par diffusion Laplacienne au scan.
+3. **Face cachée** — Définition des zones de face cachée derrière chaque patte. Pour chaque patte : sélection de 2 vertices du contour body (A et B), placement de bridge points entre A et B, puis Delaunay dans le polygone fermé (bridge + body boundary). Les nouveaux triangles sont fusionnés dans bodyPoints/bodyTriangles. Texture générée par LaMa inpainting (Cloud Function) au scan, avec fallback diffusion Laplacienne.
 4. **Bones marche** — Placement 18 keypoints du squelette quadrupède (6 groupes : 4 pattes + cou/tête + queue)
 5. **Paramètres** — Paramètres cinématiques (longueur pas, levée pied, balancement corps/tête, phases de marche)
 6. **Calcul** — Calcul animation par LBS séparé (zones + body) + legacy unifié, preview wireframe/gradient
@@ -193,7 +194,9 @@ Quand une patte s'anime, elle révèle la zone du corps qui était occultée dan
 
 **Animation** : les hidden face triangles font partie du body mesh → animés par `bodyFrames` (aucun calcul supplémentaire).
 
-**Rendu** : `zoneMeshRenderer` split le body en 2 PIXI meshes (pur body + hidden face) avec z-order différent. La texture des hidden face meshes est une copie du scan inpaintée par diffusion Laplacienne (`hiddenFaceTexture.ts`). Les pixels de bordure (couleurs connues du scan) diffusent vers l'intérieur via Jacobi SOR (150 itérations).
+**Rendu** : `zoneMeshRenderer` split le body en 2 PIXI meshes (pur body + hidden face) avec z-order différent. Le body visible utilise la texture scan haute résolution. Les hidden face meshes utilisent une texture inpaintée :
+- **LaMa** (prioritaire) : Cloud Function Python (`functions/main.py`) reçoit le scan + un masque binaire des zones pattes (généré par `limbMaskGenerator.ts` depuis les Bézier dilatées), exécute LaMa neural inpainting, retourne un "scan sans pattes". Résolution 512px pour la vitesse, upscalé aux dimensions originales.
+- **Fallback Laplacien** : si LaMa échoue, `hiddenFaceTexture.ts` inpainte par diffusion (K-means + BFS sur les couleurs de bordure).
 
 **Z-order** : body (z=0) → hidden face (z=limb.zOrder - 0.5) → limb (z=limb.zOrder)
 
@@ -253,7 +256,9 @@ src/
 │   ├── walkSolver.ts           Cinématique marche quadrupède (squelette, IK, LBS, séparation zones)
 │   ├── limbSeparation.ts       Séparation membres/corps (Bézier→polygone, Delaunay par zone, patch manuel body, triangulation face cachée)
 │   ├── bezierUtils.ts          Utilitaires courbes Bézier (flatten, expand, évaluation)
-│   ├── hiddenFaceTexture.ts    Inpainting diffusion Laplacienne pour les faces cachées derrière les pattes
+│   ├── hiddenFaceTexture.ts    Inpainting diffusion Laplacienne (fallback) pour les faces cachées derrière les pattes
+│   ├── limbMaskGenerator.ts    Génération masque binaire des zones pattes (Bézier dilatées) pour LaMa
+│   ├── lamaInpainting.ts       Client API Cloud Function LaMa (envoi scan+masque, réception inpainté)
 │   ├── zoneMeshRenderer.ts     Rendu PIXI.js par zone (build/update meshes séparés, z-order, split body/hidden face)
 │   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
 └── styles/global.css
@@ -470,6 +475,30 @@ UploadHint = 'image' | 'backgroundVideo' | 'ambientSound'
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string } | { deleteSpeakSoundId: string }
 StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
+```
+
+## Cloud Function — LaMa Inpainting
+
+**Répertoire** : `functions/` (Python 3.11, `simple-lama-inpainting`)
+
+**URL** : `https://lama-inpaint-6gzhik6pka-ew.a.run.app` (configurable via `VITE_LAMA_FUNCTION_URL`)
+
+**Spécifications** : gen2, 2 CPU, 2GB RAM, timeout 120s, concurrency 1, min-instances 0
+
+**Protocole** :
+- `GET /` → health check (déclenche cold start)
+- `POST /` → `{ image: base64, mask: base64 }` → `{ inpainted: base64 JPEG }`
+
+**Pipeline scan** : après correction perspective, le client génère un masque binaire (zones pattes Bézier dilatées 8px via `limbMaskGenerator.ts`), downscale à 512px, envoie à la Cloud Function. Le résultat est upscalé aux dimensions originales et utilisé comme texture pour les hidden face meshes uniquement.
+
+**Deploy** :
+```bash
+gcloud functions deploy lama-inpaint \
+  --gen2 --runtime python311 --trigger-http --allow-unauthenticated \
+  --memory 2048MB --cpu 2 --timeout 120s --concurrency 1 \
+  --min-instances 0 --max-instances 3 \
+  --source functions/ --entry-point lama_inpaint \
+  --project coloriage-anime-prod --region europe-west1
 ```
 
 ## Conventions
