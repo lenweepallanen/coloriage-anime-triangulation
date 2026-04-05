@@ -170,6 +170,19 @@ export default function SceneConfigPanel({
             ))}
           </select>
         </div>
+
+        <div className="scene-config-panel-field">
+          <label>Mouvement</label>
+          <select
+            value={segment.easing ?? 'smoothstep'}
+            onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
+              ...segment, easing: e.target.value as 'smoothstep' | 'linear',
+            })}
+          >
+            <option value="smoothstep">Ease in-out (accélère/décélère)</option>
+            <option value="linear">Linéaire (vitesse constante)</option>
+          </select>
+        </div>
       </div>
     )
   }

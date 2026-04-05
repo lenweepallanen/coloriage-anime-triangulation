@@ -6,6 +6,17 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
+function linear(t: number): number {
+  return Math.max(0, Math.min(1, t))
+}
+
+export type TransitionEasing = 'smoothstep' | 'linear'
+
+const EASING_FUNCTIONS: Record<TransitionEasing, (t: number) => number> = {
+  smoothstep,
+  linear,
+}
+
 export type PlaybackState = 'rest' | 'wait' | 'trans-out' | 'oneshot' | 'trans-in'
 
 export interface OneshotAnimation {
@@ -13,12 +24,14 @@ export interface OneshotAnimation {
   name: string
   frames: Point2D[][]
   overlay?: boolean
+  transitionEasing?: TransitionEasing  // per-animation override
 }
 
 export interface MultiAnimationPlaybackOptions {
   fps?: number
   crossfadeFrames?: number
   transitionFrames?: number
+  transitionEasing?: TransitionEasing  // default easing for all transitions
   speed?: number
   onOneshotStart?: (animId: string) => void
   onOverlayStart?: (animId: string) => void
@@ -28,12 +41,15 @@ export class MultiAnimationPlayback {
   private restPlayback: LoopPlayback
   private oneshotData: Map<string, Point2D[][]>
   private oneshotNames: Map<string, string>
+  private oneshotEasings: Map<string, TransitionEasing>
   private _state: PlaybackState = 'rest'
   private pendingOneshotId: string | null = null
   private activeOneshotId: string | null = null
 
   // Transition state
   private transitionFrames: number
+  private defaultEasing: TransitionEasing
+  private activeEasing: (t: number) => number = smoothstep
   private transitionCursor: number = 0
   private transitionFrom: Point2D[] = []
   private transitionTo: Point2D[] = []
@@ -63,6 +79,7 @@ export class MultiAnimationPlayback {
     this.fps = options?.fps ?? 24
     this._speed = options?.speed ?? 1.0
     this.transitionFrames = options?.transitionFrames ?? 7
+    this.defaultEasing = options?.transitionEasing ?? 'smoothstep'
     this.onOneshotStart = options?.onOneshotStart
     this.onOverlayStart = options?.onOverlayStart
 
@@ -74,9 +91,13 @@ export class MultiAnimationPlayback {
 
     this.oneshotData = new Map()
     this.oneshotNames = new Map()
+    this.oneshotEasings = new Map()
     for (const anim of oneshotAnimations) {
       this.oneshotData.set(anim.id, anim.frames)
       this.oneshotNames.set(anim.id, anim.name)
+      if (anim.transitionEasing) {
+        this.oneshotEasings.set(anim.id, anim.transitionEasing)
+      }
       if (anim.overlay) {
         this.overlayIds.add(anim.id)
         this.overlayBasePositions.set(anim.id, anim.frames[0])
@@ -185,7 +206,7 @@ export class MultiAnimationPlayback {
         positions = this.blend(
           this.transitionFrom,
           this.transitionTo,
-          smoothstep(this.transitionCursor / this.transitionFrames)
+          this.activeEasing(this.transitionCursor / this.transitionFrames)
         )
         break
 
@@ -202,7 +223,7 @@ export class MultiAnimationPlayback {
         positions = this.blend(
           this.transitionFrom,
           this.transitionTo,
-          smoothstep(this.transitionCursor / this.transitionFrames)
+          this.activeEasing(this.transitionCursor / this.transitionFrames)
         )
         break
     }
@@ -248,6 +269,9 @@ export class MultiAnimationPlayback {
     this.transitionFrom = this.restPlayback.getPositions()
     this.transitionTo = oneshotFrames[0]
     this.oneshotTotalFrames = oneshotFrames.length
+    // Resolve easing: per-animation override → global default
+    const easingName = this.oneshotEasings.get(oneshotId) ?? this.defaultEasing
+    this.activeEasing = EASING_FUNCTIONS[easingName]
   }
 
   private startTransitionIn(): void {
@@ -255,9 +279,7 @@ export class MultiAnimationPlayback {
     this._state = 'trans-in'
     this.transitionCursor = 0
     this.transitionFrom = oneshotFrames[oneshotFrames.length - 1]
-    // Transition back to rest frame 0
-    this.transitionTo = this.restPlayback.getPositions() // will be frame 0 area after seekFrame
-    // Actually, get rest frame 0 positions directly
+    // Easing stays the same as trans-out (same animation)
     this.restPlayback.seekFrame(0)
     this.transitionTo = this.restPlayback.getPositions()
   }

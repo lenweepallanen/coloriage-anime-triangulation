@@ -155,6 +155,8 @@ export interface WalkParams {
   footLift: number;        // hauteur max pied en l'air en px (5-100, défaut 30)
   bodySway: number;        // oscillation verticale du corps en px (0-30, défaut 8)
   headSway: number;        // intensité oscillation cou/tête (0-100, défaut 50)
+  kneeForwardFront: boolean;  // si true, genoux avant plient vers l'avant (humain) au lieu de l'arrière (cheval)
+  kneeForwardBack: boolean;   // si true, genoux arrière plient vers l'avant (humain) au lieu de l'arrière (cheval)
 }
 
 // ─── Walk Limb Separation ─────────────────────────────────────────────
@@ -239,9 +241,12 @@ export interface SpeakSound {
   name: string;
 }
 
+export type SegmentEasing = 'smoothstep' | 'linear';
+
 export interface SceneSegment {
   duration: number;
   animationId?: string;
+  easing?: SegmentEasing;
 }
 
 export interface SceneTransition {

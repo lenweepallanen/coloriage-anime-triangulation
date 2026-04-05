@@ -289,6 +289,31 @@ export default function WalkParamsStep({ project, animation, onSave }: Props) {
           />
         </div>
 
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: '#e5e7eb' }}>
+            Direction des genoux
+          </div>
+          <label style={{ fontSize: 13, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 6 }}>
+            <input
+              type="checkbox"
+              checked={params.kneeForwardFront ?? false}
+              onChange={e => setParams({ ...params, kneeForwardFront: e.target.checked })}
+            />
+            Pattes avant vers l'avant
+          </label>
+          <label style={{ fontSize: 13, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.kneeForwardBack ?? false}
+              onChange={e => setParams({ ...params, kneeForwardBack: e.target.checked })}
+            />
+            Pattes arrière vers l'avant
+          </label>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+            Décoché = genoux vers l'arrière (cheval)
+          </div>
+        </div>
+
         <hr style={{ border: 'none', borderTop: '1px solid #374151', margin: '16px 0' }} />
 
         <div style={{ marginBottom: 16 }}>

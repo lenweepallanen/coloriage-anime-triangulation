@@ -243,12 +243,15 @@ export function computeWalkFrames(
   })
 
   // Determine knee bend side from rest pose (cross product sign)
-  const legBendSides = skeleton.legs.map((leg) => {
+  // kneeForwardFront/Back flip the bend direction per leg pair (human vs horse style)
+  const legBendSides = skeleton.legs.map((leg, li) => {
     const base = kp[leg.baseIndex]
     const knee = kp[leg.kneeIndex]
     const foot = kp[leg.footIndex]
     const cross = (knee.x - base.x) * (foot.y - base.y) - (knee.y - base.y) * (foot.x - base.x)
-    return cross >= 0 ? 1 : -1
+    const isFront = li < 2
+    const flip = (isFront ? params.kneeForwardFront : params.kneeForwardBack) ? -1 : 1
+    return (cross >= 0 ? 1 : -1) * flip
   })
 
   // Rest spine endpoints
@@ -411,12 +414,14 @@ export function computeWalkBonePositions(
     }
   })
 
-  const legBendSides = skeleton.legs.map(leg => {
+  const legBendSides = skeleton.legs.map((leg, li) => {
     const base = kp[leg.baseIndex]
     const knee = kp[leg.kneeIndex]
     const foot = kp[leg.footIndex]
     const cross = (knee.x - base.x) * (foot.y - base.y) - (knee.y - base.y) * (foot.x - base.x)
-    return cross >= 0 ? 1 : -1
+    const isFront = li < 2
+    const flip = (isFront ? params.kneeForwardFront : params.kneeForwardBack) ? -1 : 1
+    return (cross >= 0 ? 1 : -1) * flip
   })
 
   const restFrontMid = midpoint(kp[skeleton.legs[0].baseIndex], kp[skeleton.legs[1].baseIndex])
@@ -503,6 +508,8 @@ export const DEFAULT_WALK_PARAMS: WalkParams = {
   footLift: 30,
   bodySway: 8,
   headSway: 50,
+  kneeForwardFront: false,
+  kneeForwardBack: false,
 }
 
 /** Walk gait presets (leg phase offsets). */
@@ -719,9 +726,12 @@ export function computeWalkFramesSeparated(
     thighLen: Math.hypot(kp[leg.kneeIndex].x - kp[leg.baseIndex].x, kp[leg.kneeIndex].y - kp[leg.baseIndex].y),
     shinLen: Math.hypot(kp[leg.footIndex].x - kp[leg.kneeIndex].x, kp[leg.footIndex].y - kp[leg.kneeIndex].y),
   }))
-  const legBendSides = skeleton.legs.map(leg => {
+  const legBendSides = skeleton.legs.map((leg, li) => {
     const base = kp[leg.baseIndex], knee = kp[leg.kneeIndex], foot = kp[leg.footIndex]
-    return (knee.x - base.x) * (foot.y - base.y) - (knee.y - base.y) * (foot.x - base.x) >= 0 ? 1 : -1
+    const cross = (knee.x - base.x) * (foot.y - base.y) - (knee.y - base.y) * (foot.x - base.x)
+    const isFront = li < 2
+    const flip = (isFront ? params.kneeForwardFront : params.kneeForwardBack) ? -1 : 1
+    return (cross >= 0 ? 1 : -1) * flip
   })
 
   const restFrontMid = midpoint(kp[skeleton.legs[0].baseIndex], kp[skeleton.legs[1].baseIndex])

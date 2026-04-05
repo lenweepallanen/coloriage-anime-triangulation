@@ -1,12 +1,21 @@
-import type { Scene, SceneRestPoint, SceneTransition, SceneSegment } from '../types/project'
+import type { Scene, SceneRestPoint, SceneTransition, SceneSegment, SegmentEasing } from '../types/project'
 
 function smoothstep(t: number): number {
   const c = Math.max(0, Math.min(1, t))
   return c * c * (3 - 2 * c)
 }
 
-function easeInOut(t: number): number {
-  return smoothstep(t)
+function linear(t: number): number {
+  return Math.max(0, Math.min(1, t))
+}
+
+const EASING_FUNCTIONS: Record<SegmentEasing, (t: number) => number> = {
+  smoothstep,
+  linear,
+}
+
+function resolveEasing(easing?: SegmentEasing): (t: number) => number {
+  return EASING_FUNCTIONS[easing ?? 'smoothstep']
 }
 
 export type SceneState = 'interaction' | 'segment' | 'blend'
@@ -46,6 +55,7 @@ export class ScenePlayback {
   private _currentTransitionIndex: number = -1  // -1 = startTransition
   private _currentSegmentIndex: number = 0
   private _currentSegmentAnimationId?: string
+  private _currentSegmentEasing: (t: number) => number = smoothstep
 
   private _backgroundOffsetX: number = 0
   private _currentX: number = 0  // current character position on background (not clamped)
@@ -150,6 +160,7 @@ export class ScenePlayback {
     this.segmentEndX = this.computeOffsetForX(xPositions[segmentIndex + 1])
     this.segmentDuration = segment.duration
     this._currentSegmentAnimationId = segment.animationId
+    this._currentSegmentEasing = resolveEasing(segment.easing)
     this._currentTransitionIndex = transitionIndex
     this._currentSegmentIndex = segmentIndex
 
@@ -182,7 +193,7 @@ export class ScenePlayback {
           this._currentX = this.segmentEndRawX
           this.finishSegment()
         } else {
-          const t = easeInOut(this.segmentProgress)
+          const t = this._currentSegmentEasing(this.segmentProgress)
           this._backgroundOffsetX = this.clampOffset(
             this.segmentStartX + (this.segmentEndX - this.segmentStartX) * t
           )
