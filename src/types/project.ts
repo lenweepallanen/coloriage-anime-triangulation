@@ -185,6 +185,14 @@ export interface HiddenFaceZone {
   bodyTriangleIndices: number[];   // indices dans bodyTriangles[] marqués comme face cachée
 }
 
+export interface HiddenFaceLimbZone {
+  limbZoneId: string;              // réf WalkLimbZone.id (patte à étendre)
+  zoneVertexA: number;             // index dans zonePoints[limbZoneId] — vertex de contour A
+  zoneVertexB: number;             // index dans zonePoints[limbZoneId] — vertex de contour B
+  bridgePoints: Point2D[];         // points manuels étendant la patte vers l'extérieur
+  zoneTriangleIndices: number[];   // indices dans zoneTriangles[limbZoneId] marqués comme extension
+}
+
 export interface WalkLimbSeparation {
   zones: WalkLimbZone[];
   overlapMargin: number;                                      // pixels de chevauchement (défaut 3)
@@ -199,7 +207,9 @@ export interface WalkLimbSeparation {
   bodyExtraPoints?: Point2D[];                                 // manually added points
   bodyManualTriangles?: [number, number, number][];            // manually created triangles (indexed into bodyPoints)
   // Hidden face zones (optional — one per limb, behind each leg)
-  hiddenFaceZones?: HiddenFaceZone[];                          // 0-4 zones face cachée
+  hiddenFaceZones?: HiddenFaceZone[];                          // 0-4 zones face cachée body
+  // Hidden face limb zones (optional — extension de patte cachée derrière le corps)
+  hiddenFaceLimbZones?: HiddenFaceLimbZone[];                  // 0-4 zones face cachée jambe
 }
 
 export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk';

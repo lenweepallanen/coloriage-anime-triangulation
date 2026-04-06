@@ -191,6 +191,36 @@ export async function flowCleanup(): Promise<void> {
   await workerRpc({ type: 'flow-cleanup' }, 'flow-cleanup-done')
 }
 
+// --- Détection bbox du dessin (pour l'alignement UV au scan) ---
+
+export interface DrawingBBox {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+export async function detectDrawingBBoxViaWorker(
+  imageData: ImageData
+): Promise<DrawingBBox | null> {
+  if (!workerReady) await loadOpenCVWorker()
+
+  return new Promise((resolve) => {
+    const handler = (e: MessageEvent) => {
+      if (e.data.type === 'detect-drawing-bbox-result') {
+        worker!.removeEventListener('message', handler)
+        worker!.onmessage = workerMessageHandler
+        resolve(e.data.bbox || null)
+      }
+    }
+    worker!.onmessage = handler
+    worker!.postMessage({
+      type: 'detect-drawing-bbox',
+      imageData: { data: imageData.data, width: imageData.width, height: imageData.height }
+    })
+  })
+}
+
 // --- Détection de contour (pour la triangulation auto) ---
 
 export async function detectContourViaWorker(

@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react'
 import type { Project, MeshData } from '../../types/project'
 import type { Point2D } from '../../types/project'
-import { processCapturedImage } from '../../utils/perspectiveCorrection'
+import { processCapturedImage, detectDrawingBBoxViaWorker } from '../../utils/perspectiveCorrection'
 import { createScan } from '../../db/scansStore'
-import { detectDrawingBBox, computeMeshBBox } from '../../utils/textureExtractor'
+import { computeMeshBBox } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 
 /** Get the rest animation's mesh from a project */
@@ -70,7 +70,8 @@ export function useScanProcessor(project: Project) {
         let alignment: ContentAlignment | null = null
         const restMesh = getRestMesh(project)
         if (restMesh) {
-          const drawBBox = detectDrawingBBox(canvas)
+          const bboxImageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const drawBBox = await detectDrawingBBoxViaWorker(bboxImageData)
           if (drawBBox) {
             const allMeshPoints = [
               ...restMesh.contourAnchors,

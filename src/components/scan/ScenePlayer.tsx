@@ -11,7 +11,7 @@ import type { SceneState } from '../../utils/scenePlayback'
 import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUtils'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
-import { inpaintHiddenFaceOnScan } from '../../utils/hiddenFaceTexture'
+import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 
 interface Props {
   project: Project
@@ -280,19 +280,32 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // --- Zone meshes for walk animations with limb separation ---
     const walkAnims = project.animations.filter(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
     const walkZoneMeshMap = new Map<string, ZoneMeshSetup>()
+
     for (const wa of walkAnims) {
-      if (!wa.mesh?.walkLimbSeparation) continue
+      const sep = wa.mesh?.walkLimbSeparation
+      if (!sep) continue
+
+      // Generate per-limb extension textures via texture mirroring (synchronous)
+      let hflTextures: Record<string, PIXI.Texture> | undefined
+      if (sep.hiddenFaceLimbZones && sep.hiddenFaceLimbZones.length > 0) {
+        hflTextures = {}
+        for (const hfl of sep.hiddenFaceLimbZones) {
+          const zonePts = sep.zonePoints[hfl.limbZoneId]
+          const zoneTris = sep.zoneTriangles[hfl.limbZoneId]
+          if (!zonePts || !zoneTris) continue
+          const hflCanvas = document.createElement('canvas')
+          hflCanvas.width = scanCanvas.width
+          hflCanvas.height = scanCanvas.height
+          hflCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+          flowExtrudeLimbOnScan(hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+          hflTextures[hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
+        }
+      }
+
       const setup = buildZoneMeshes(
-        wa.mesh.walkLimbSeparation,
-        allPoints,
-        mesh.triangles,
-        texture,
-        scanCanvas.width,
-        scanCanvas.height,
-        charScale,
-        0, 0, // offsets applied dynamically per frame
-        contentAlignment ?? undefined,
-        hfTexture,
+        sep, allPoints, mesh.triangles, texture,
+        scanCanvas.width, scanCanvas.height, charScale, 0, 0,
+        contentAlignment ?? undefined, hfTexture, hflTextures,
       )
       setup.container.visible = false
       characterContainer.addChild(setup.container)
@@ -569,6 +582,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           if (setup.hiddenFaceMeshes) {
             for (const hfm of setup.hiddenFaceMeshes) {
               updateZoneMeshVertices(hfm, bodyPositions, charScale, charOffsetX, charOffsetY)
+            }
+          }
+          // Update hidden face limb meshes (same zonePoints, same zoneFrames)
+          if (setup.hiddenFaceLimbMeshes) {
+            for (const hflm of setup.hiddenFaceLimbMeshes) {
+              const zoneId = hflm.zoneId.replace('__hfl_', '')
+              const zp = activeZonePlaybacks.find(z => z.zoneId === zoneId)
+              if (zp) {
+                updateZoneMeshVertices(hflm, zp.playback.getPositions(), charScale, charOffsetX, charOffsetY)
+              }
             }
           }
         }

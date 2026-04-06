@@ -8,6 +8,7 @@ import AnimationPlayer from '../components/scan/AnimationPlayer'
 import ScenePlayer from '../components/scan/ScenePlayer'
 import { generateLimbMask } from '../utils/limbMaskGenerator'
 import { requestLamaInpainting } from '../utils/lamaInpainting'
+import { renderIsolatedLimbDebug } from '../utils/hiddenFaceTexture'
 import type { Point2D, Project } from '../types/project'
 
 export default function ScanPage() {
@@ -48,6 +49,7 @@ function ScanFlow({ project }: { project: Project }) {
   const [lamaError, setLamaError] = useState<string | null>(null)
   const [lamaMaskUrl, setLamaMaskUrl] = useState<string | null>(null)
   const [lamaResultUrl, setLamaResultUrl] = useState<string | null>(null)
+  const [limbExtDebugImages, setLimbExtDebugImages] = useState<{ label: string; isolatedUrl: string }[]>([])
   const lamaStartedRef = useRef(false)
   const processor = useScanProcessor(project)
 
@@ -73,6 +75,7 @@ function ScanFlow({ project }: { project: Project }) {
     }
 
     const sep = walkAnim.mesh.walkLimbSeparation
+    console.log('[LimbExt] sep keys:', Object.keys(sep), 'hiddenFaceLimbZones:', sep.hiddenFaceLimbZones, 'hiddenFaceZones:', sep.hiddenFaceZones?.length)
     const scanCanvas = processor.rectifiedCanvas
 
     ;(async () => {
@@ -102,6 +105,35 @@ function ScanFlow({ project }: { project: Project }) {
         setLamaError(err instanceof Error ? err.message : 'Erreur LaMa')
         setLamaStatus('error')
       }
+
+      // Generate limb extension debug images
+      // Search ALL walk animations for hiddenFaceLimbZones
+      const debugImgs: { label: string; isolatedUrl: string }[] = []
+      for (const wa of project.animations) {
+        if (wa.type !== 'walk') continue
+        const wSep = wa.mesh?.walkLimbSeparation
+        if (!wSep?.hiddenFaceLimbZones?.length) continue
+        for (const hfl of wSep.hiddenFaceLimbZones) {
+          const zonePts = wSep.zonePoints[hfl.limbZoneId]
+          const zoneTris = wSep.zoneTriangles[hfl.limbZoneId]
+          if (!zonePts || !zoneTris) continue
+          const zone = wSep.zones.find(z => z.id === hfl.limbZoneId)
+          const label = zone?.label ?? hfl.limbZoneId
+
+          // Render isolated limb: visible part (scan) + extension (mirrored from limb)
+          const isolatedCanvas = renderIsolatedLimbDebug(
+            scanCanvas, hfl, zonePts, zoneTris,
+            scanCanvas.width, scanCanvas.height,
+            processor.contentAlignment ?? undefined,
+          )
+
+          debugImgs.push({
+            label,
+            isolatedUrl: isolatedCanvas.toDataURL(),
+          })
+        }
+      }
+      if (debugImgs.length > 0) setLimbExtDebugImages(debugImgs)
     })()
   }, [processor.rectifiedCanvas, processor.contentAlignment, project.animations])
 
@@ -262,6 +294,28 @@ function ScanFlow({ project }: { project: Project }) {
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {lamaStatus !== 'idle' && lamaStatus !== 'not-needed' && (
+            <div style={{ marginBottom: 24 }}>
+              <h4>6. Inpainting extensions de pattes</h4>
+              {limbExtDebugImages.length === 0 && (
+                <div style={{ color: '#999', fontSize: 13, padding: 12, border: '1px dashed #ccc', borderRadius: 8 }}>
+                  Aucune face cachee jambe definie. (hiddenFaceLimbZones absent dans les donnees du walk)
+                </div>
+              )}
+              {limbExtDebugImages.map((img, i) => (
+                <div key={i} style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: '#666', marginBottom: 4, fontWeight: 600 }}>{img.label}</div>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Bas = texture scan, haut = inpainting depuis la patte. Contour rouge = zone extension.</div>
+                  <img
+                    src={img.isolatedUrl}
+                    alt={`Patte isolee ${img.label}`}
+                    style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain', border: '1px solid #999', borderRadius: 8 }}
+                  />
+                </div>
+              ))}
             </div>
           )}
 

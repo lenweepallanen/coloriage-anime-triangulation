@@ -24,6 +24,7 @@ export interface ZoneMeshSetup {
   zoneMeshes: ZoneMeshInfo[]
   bodyMesh: ZoneMeshInfo
   hiddenFaceMeshes: ZoneMeshInfo[]
+  hiddenFaceLimbMeshes: ZoneMeshInfo[]
 }
 
 /**
@@ -41,11 +42,23 @@ export function buildZoneMeshes(
   offsetY: number,
   contentAlignment?: ContentAlignment,
   hiddenFaceTexture?: PIXI.Texture,
+  hiddenFaceLimbTextures?: Record<string, PIXI.Texture>,
 ): ZoneMeshSetup {
   const container = new PIXI.Container()
   container.sortableChildren = true
 
   const zoneMeshes: ZoneMeshInfo[] = []
+  const hiddenFaceLimbMeshes: ZoneMeshInfo[] = []
+
+  // Build per-limb hidden face triangle index sets for splitting
+  const hflByZone = new Map<string, Set<number>>()
+  if (separation.hiddenFaceLimbZones) {
+    for (const hfl of separation.hiddenFaceLimbZones) {
+      const set = new Set<number>()
+      for (const ti of hfl.zoneTriangleIndices) set.add(ti)
+      hflByZone.set(hfl.limbZoneId, set)
+    }
+  }
 
   // Build zone meshes (each zone has its own independent points + triangles)
   for (const zone of separation.zones) {
@@ -53,9 +66,37 @@ export function buildZoneMeshes(
     const tris = separation.zoneTriangles[zone.id] || []
     if (pts.length === 0 || tris.length === 0) continue
 
-    const info = buildMesh(zone.id, pts, tris, texture, imageWidth, imageHeight, scale, offsetX, offsetY, zone.zOrder, contentAlignment)
-    zoneMeshes.push(info)
-    container.addChild(info.pixiMesh)
+    const hflTriSet = hflByZone.get(zone.id)
+
+    if (hflTriSet && hflTriSet.size > 0) {
+      // Split: visible triangles (scan texture) + extension triangles (inpainted limb texture)
+      const visibleTris = tris.filter((_, i) => !hflTriSet.has(i))
+      const extTris = [...hflTriSet].map(i => tris[i]).filter(Boolean)
+
+      // Visible part
+      if (visibleTris.length > 0) {
+        const info = buildMesh(zone.id, pts, visibleTris, texture, imageWidth, imageHeight, scale, offsetX, offsetY, zone.zOrder, contentAlignment)
+        zoneMeshes.push(info)
+        container.addChild(info.pixiMesh)
+      }
+
+      // Extension part (slightly behind visible part)
+      if (extTris.length > 0) {
+        const limbTex = hiddenFaceLimbTextures?.[zone.id] ?? texture
+        const extInfo = buildMesh(
+          `__hfl_${zone.id}`, pts, extTris,
+          limbTex, imageWidth, imageHeight, scale, offsetX, offsetY,
+          zone.zOrder - 0.1, contentAlignment,
+        )
+        hiddenFaceLimbMeshes.push(extInfo)
+        container.addChild(extInfo.pixiMesh)
+      }
+    } else {
+      // No extension — single mesh as before
+      const info = buildMesh(zone.id, pts, tris, texture, imageWidth, imageHeight, scale, offsetX, offsetY, zone.zOrder, contentAlignment)
+      zoneMeshes.push(info)
+      container.addChild(info.pixiMesh)
+    }
   }
 
   // Build body mesh — use pre-computed bodyPoints/bodyTriangles if available, else derive from indices
@@ -118,7 +159,7 @@ export function buildZoneMeshes(
     }
   }
 
-  return { container, zoneMeshes, bodyMesh: bodyInfo, hiddenFaceMeshes }
+  return { container, zoneMeshes, bodyMesh: bodyInfo, hiddenFaceMeshes, hiddenFaceLimbMeshes }
 }
 
 function buildMesh(

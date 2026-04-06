@@ -31,7 +31,7 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `limbSeparation.ts` | Séparation membres/corps : Bézier→polygone, filtrage vertex-based, Delaunay par zone, patch manuel body (buildBodyMesh, findTwoNearest) |
 | `bezierUtils.ts` | Courbes Bézier : évaluation cubique, flatten en polyline, expansion polygone, sampling contour |
 | `zoneMeshRenderer.ts` | Rendu PIXI.js par zone : build meshes séparés (zone + body + hidden face), z-ordering, update vertices par frame |
-| `hiddenFaceTexture.ts` | Inpainting diffusion Laplacienne (fallback) : K-means couleurs bordure + BFS propagation pour les faces cachées |
+| `hiddenFaceTexture.ts` | (1) `inpaintHiddenFaceOnScan` : fallback body — K-means couleurs bordure + BFS propagation. (2) `flowExtrudeLimbOnScan` : extension patte — colonnes perpendiculaires à la corde A↔B (genou) échantillonnées dans la patte visible, lookup `column[u][dPx]` clamp en profondeur (pas de tiling cyclique) |
 | `limbMaskGenerator.ts` | Génération masque binaire PNG des zones pattes (Bézier dilatées) pour envoi à LaMa Cloud Function |
 | `lamaInpainting.ts` | Client API Cloud Function LaMa : envoi scan+masque (512px JPEG), réception résultat inpainté, upscale |
 
@@ -154,10 +154,10 @@ Bridge de communication avec le Web Worker OpenCV (`public/opencv-worker.js`).
 | `flowCannyContour(imageData, params)` | `canny-contour` | `contourPoints: Point2D[]` |
 | `flowInitTemplates(contourAnchorIndices, templateSize?)` | `flow-init-templates` | confirmation |
 | `flowExtractContourDense(imageData)` | `flow-contour-dense` | `contourPoints: Point2D[] \| null` |
+| `detectDrawingBBoxViaWorker(imageData)` | `detect-drawing-bbox` | `DrawingBBox \| null` |
 
 ## textureExtractor.ts
 
-- `detectDrawingBBox(canvas)` — détecte la bbox du dessin (pixels sombres lum < 128) par scan lignes/colonnes (≥3 pixels sombres). Gardes-fous : skip si < 0.1% dark pixels ou bbox > 95% canvas
 - `computeMeshBBox(points)` — simple min/max sur tous les points du maillage
 - `computeUVs(points, imageW, imageH, alignment?)` — normalise les coordonnées `[0,1]` :
   - Sans alignment : `u = x / imageWidth`, `v = y / imageHeight`

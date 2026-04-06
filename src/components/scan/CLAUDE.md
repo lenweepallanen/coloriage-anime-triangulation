@@ -109,14 +109,14 @@ La page ScanPage affiche ces images dans un stage `debug` entre `processing` et 
 Après `enhanceContrast`, le processeur détecte automatiquement la bounding box du dessin sur le scan et la compare à la bounding box du maillage pour calculer un mapping UV précis.
 
 **Pipeline** :
-1. `detectDrawingBBox(canvas)` — scanne lignes/colonnes pour trouver la première/dernière contenant ≥3 pixels sombres (lum < 128)
+1. `detectDrawingBBoxViaWorker(imageData)` — Worker OpenCV : Otsu + dilate 3×3 + `findContours(RETR_EXTERNAL)` → union des `boundingRect` de tous les contours dont l'aire ≥ 5% du plus gros (préserve les parties détachées du dessin, ignore le bruit isolé)
 2. `computeMeshBBox(allPoints)` — min/max sur tous les points du maillage
 3. Validation : scale X et Y dans [0.8, 1.2] sinon skip
 4. `ContentAlignment { drawBBox, meshBBox }` passé à `AnimationPlayer` via `ScanPage`
 
 **Gardes-fous** :
-- Skip si < 0.1% pixels sombres (page blanche)
-- Skip si bbox > 95% du canvas (bruit partout)
+- Skip si l'aire max < 0.1% du canvas (page blanche)
+- Skip si aucun contour significatif retenu
 - Skip si ratio scale hors [0.8, 1.2]
 
 **Debug overlay** : l'étape 4 affiche les bboxes en pointillé (cyan = dessin détecté, jaune = mesh mappé) et les triangles/points transformés via l'alignement.

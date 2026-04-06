@@ -12,7 +12,7 @@
  * 5. BFS propagation from border pixels with cluster barriers → flat fill
  */
 
-import type { Point2D, HiddenFaceZone } from '../types/project'
+import type { Point2D, HiddenFaceZone, HiddenFaceLimbZone } from '../types/project'
 import type { ContentAlignment } from './textureExtractor'
 
 /**
@@ -347,6 +347,346 @@ function autoKMeans(
   }
 
   return bestResult
+}
+
+/**
+ * Perpendicular column extrusion for hidden face limb extension.
+ *
+ * For each lateral position along the chord A↔B (knee), walks a ray
+ * perpendicular to the chord into the visible leg pixels and collects the
+ * RGB sequence. Each ray is one "river current" flowing along the leg's
+ * length (foot → knee). Hidden face pixels at the same lateral position are
+ * then filled by mirroring across the chord (knee → hip), so the visible
+ * leg's lines naturally extend through the chord.
+ *
+ * Compared to the previous row-band approach this:
+ * - Samples ALONG the leg's height (perpendicular to chord) instead of across
+ *   its width (parallel to chord), which is the geometric "perpendicular"
+ *   direction of the previous algorithm.
+ * - Uses a clamp on depth instead of cyclic tiling, removing the visible
+ *   "band repetition along the leg" artifact.
+ *
+ * Algorithm:
+ * 1. Compute chord A↔B and unit normal N (flipped to point into visible side).
+ * 2. Rasterize the visible triangles into a local binary mask.
+ * 3. For each lateral position iu ∈ [0, N_U):
+ *    - Entry P_iu = lerp(A, B, iu/(N_U-1))
+ *    - Walk d = SAMPLE_SKIP, +1, +2, … along N inside the visible mask
+ *    - Sample the scan pixel at each step → column[iu] (1D RGB array)
+ * 4. Fill empty edge columns by nearest non-empty neighbor.
+ * 5. For each hidden face pixel (px, py):
+ *    - Project on chord → u
+ *    - |perpendicular distance from chord| → dPx
+ *    - Color = column[round(u·(N_U-1))][clamp(floor(dPx), 0, len-1)]
+ *
+ * Why SAMPLE_SKIP? The first pixels right at the boundary often contain
+ * black contour artifacts (imprecise Bézier zone cut), so we skip them.
+ */
+export function flowExtrudeLimbOnScan(
+  scanCanvas: HTMLCanvasElement,
+  zone: HiddenFaceLimbZone,
+  zonePoints: Point2D[],
+  zoneTriangles: [number, number, number][],
+  imageWidth: number,
+  imageHeight: number,
+  contentAlignment?: ContentAlignment,
+): void {
+  if (zone.zoneTriangleIndices.length === 0) return
+
+  const SAMPLE_SKIP = 14   // px past chord (skip dirty contour band on visible side)
+  const MAX_DEPTH = 4096   // safety cap on column length
+  const N_U = 256          // lateral resolution along the chord
+
+  const scanW = scanCanvas.width
+  const scanH = scanCanvas.height
+
+  const scanPoints = zonePoints.map(p =>
+    imageToScanPixel(p, imageWidth, imageHeight, scanW, scanH, contentAlignment)
+  )
+  const A = scanPoints[zone.zoneVertexA]
+  const B = scanPoints[zone.zoneVertexB]
+  if (!A || !B) return
+  const chordDx = B.x - A.x
+  const chordDy = B.y - A.y
+  const chordLen = Math.hypot(chordDx, chordDy)
+  if (chordLen < 1) return
+  const chordLenSq = chordLen * chordLen
+  // Unit normal of the chord. Side TBD — flipped below to point into visible.
+  let chordNx = -chordDy / chordLen
+  let chordNy = chordDx / chordLen
+
+  // ─── 1. Split triangles into visible vs extension ───────────────
+  const extTriSet = new Set(zone.zoneTriangleIndices)
+  const visibleTriangles: [number, number, number][] = []
+  for (let i = 0; i < zoneTriangles.length; i++) {
+    if (!extTriSet.has(i)) visibleTriangles.push(zoneTriangles[i])
+  }
+  if (visibleTriangles.length === 0) return
+
+  // ─── 2. Flip chord normal toward the visible side ───────────────
+  let cxSum = 0, cySum = 0, cn = 0
+  for (const tri of visibleTriangles) {
+    for (const vi of tri) {
+      const p = scanPoints[vi]
+      if (!p) continue
+      cxSum += p.x; cySum += p.y; cn++
+    }
+  }
+  if (cn === 0) return
+  const visCxAvg = cxSum / cn
+  const visCyAvg = cySum / cn
+  const centroidProj = (visCxAvg - A.x) * chordNx + (visCyAvg - A.y) * chordNy
+  if (centroidProj < 0) {
+    chordNx = -chordNx
+    chordNy = -chordNy
+  }
+  // Now (chordNx, chordNy) is the unit perpendicular pointing INTO the visible leg.
+
+  // ─── 3. Rasterize visible mask in local bbox ────────────────────
+  let vminX = Infinity, vminY = Infinity, vmaxX = -Infinity, vmaxY = -Infinity
+  for (const tri of visibleTriangles) {
+    for (const vi of tri) {
+      const p = scanPoints[vi]
+      if (!p) continue
+      if (p.x < vminX) vminX = p.x
+      if (p.y < vminY) vminY = p.y
+      if (p.x > vmaxX) vmaxX = p.x
+      if (p.y > vmaxY) vmaxY = p.y
+    }
+  }
+  if (vminX === Infinity) return
+  vminX = Math.max(0, Math.floor(vminX) - 1)
+  vminY = Math.max(0, Math.floor(vminY) - 1)
+  vmaxX = Math.min(scanW - 1, Math.ceil(vmaxX) + 1)
+  vmaxY = Math.min(scanH - 1, Math.ceil(vmaxY) + 1)
+  const vw = vmaxX - vminX + 1
+  const vh = vmaxY - vminY + 1
+  if (vw <= 0 || vh <= 0) return
+
+  const visMask = new Uint8Array(vw * vh)
+  for (const tri of visibleTriangles) {
+    const [a, b, c] = tri
+    const pa = scanPoints[a], pb = scanPoints[b], pc = scanPoints[c]
+    if (!pa || !pb || !pc) continue
+    rasterizeTriangle(pa, pb, pc, vminX, vminY, vw, vh, visMask)
+  }
+
+  // ─── 4. Build perpendicular columns from chord into visible ─────
+  const ctx = scanCanvas.getContext('2d')
+  if (!ctx) return
+  const fullImgData = ctx.getImageData(0, 0, scanW, scanH)
+  const fullPixels = fullImgData.data
+
+  // Each column = 1D RGB sequence (Uint8ClampedArray of length 3·len)
+  const columns: { rgb: Uint8ClampedArray; len: number }[] = new Array(N_U)
+  let maxLen = 0
+  for (let iu = 0; iu < N_U; iu++) {
+    const t = iu / (N_U - 1)
+    const px0 = A.x + t * chordDx
+    const py0 = A.y + t * chordDy
+    const colColors: number[] = []
+    for (let step = 0; step < MAX_DEPTH; step++) {
+      const dWorld = SAMPLE_SKIP + step + 0.5  // pixel-center sampling
+      const sx = Math.round(px0 + dWorld * chordNx)
+      const sy = Math.round(py0 + dWorld * chordNy)
+      if (sx < vminX || sx > vmaxX || sy < vminY || sy > vmaxY) break
+      const localIdx = (sy - vminY) * vw + (sx - vminX)
+      if (visMask[localIdx] !== 1) break
+      const pi = (sy * scanW + sx) * 4
+      colColors.push(fullPixels[pi], fullPixels[pi + 1], fullPixels[pi + 2])
+    }
+    const len = (colColors.length / 3) | 0
+    columns[iu] = { rgb: new Uint8ClampedArray(colColors), len }
+    if (len > maxLen) maxLen = len
+  }
+  if (maxLen === 0) return
+
+  // Fill empty edge columns (near A or B where the perpendicular ray exits
+  // the visible mask immediately) with the nearest non-empty neighbor.
+  let firstNonEmpty = -1
+  for (let iu = 0; iu < N_U; iu++) {
+    if (columns[iu].len > 0) { firstNonEmpty = iu; break }
+  }
+  if (firstNonEmpty < 0) return
+  for (let iu = firstNonEmpty - 1; iu >= 0; iu--) {
+    if (columns[iu].len === 0) columns[iu] = columns[iu + 1]
+  }
+  for (let iu = firstNonEmpty + 1; iu < N_U; iu++) {
+    if (columns[iu].len === 0) columns[iu] = columns[iu - 1]
+  }
+
+  // ─── 5. Hidden face bbox + mask ─────────────────────────────────
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const ti of zone.zoneTriangleIndices) {
+    const tri = zoneTriangles[ti]
+    if (!tri) continue
+    for (const vi of tri) {
+      const p = scanPoints[vi]
+      if (!p) continue
+      if (p.x < minX) minX = p.x
+      if (p.y < minY) minY = p.y
+      if (p.x > maxX) maxX = p.x
+      if (p.y > maxY) maxY = p.y
+    }
+  }
+  if (minX === Infinity) return
+  const PAD = 4
+  minX = Math.max(0, Math.floor(minX) - PAD)
+  minY = Math.max(0, Math.floor(minY) - PAD)
+  maxX = Math.min(scanW - 1, Math.ceil(maxX) + PAD)
+  maxY = Math.min(scanH - 1, Math.ceil(maxY) + PAD)
+  const w = maxX - minX + 1
+  const h = maxY - minY + 1
+  if (w <= 0 || h <= 0) return
+
+  const extMask = new Uint8Array(w * h)
+  for (const ti of zone.zoneTriangleIndices) {
+    const tri = zoneTriangles[ti]
+    if (!tri) continue
+    const pa = scanPoints[tri[0]], pb = scanPoints[tri[1]], pc = scanPoints[tri[2]]
+    if (!pa || !pb || !pc) continue
+    rasterizeTriangle(pa, pb, pc, minX, minY, w, h, extMask)
+  }
+
+  // ─── 6. Write extension pixels via column lookup ────────────────
+  const localImgData = ctx.getImageData(minX, minY, w, h)
+  const localPixels = localImgData.data
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      if (extMask[i] !== 1) continue
+      const px = x + minX
+      const py = y + minY
+
+      // Lateral u: project the pixel onto the chord, clamped to [0, 1]
+      const rx = px - A.x, ry = py - A.y
+      let u = (rx * chordDx + ry * chordDy) / chordLenSq
+      if (u < 0) u = 0
+      else if (u > 1) u = 1
+
+      // Depth: |perpendicular distance from chord| (always positive)
+      const dProj = rx * chordNx + ry * chordNy
+      const dPx = Math.abs(dProj)
+
+      // Pick the column closest to u and clamp depth (no cyclic tiling)
+      const iu = Math.min(N_U - 1, Math.max(0, Math.round(u * (N_U - 1))))
+      const col = columns[iu]
+      if (col.len === 0) continue
+      const id = Math.min(col.len - 1, Math.max(0, Math.floor(dPx)))
+      const cIdx = id * 3
+
+      const dstIdx = i * 4
+      localPixels[dstIdx]     = col.rgb[cIdx]
+      localPixels[dstIdx + 1] = col.rgb[cIdx + 1]
+      localPixels[dstIdx + 2] = col.rgb[cIdx + 2]
+      localPixels[dstIdx + 3] = 255
+    }
+  }
+
+  ctx.putImageData(localImgData, minX, minY)
+}
+
+/**
+ * Render an isolated limb zone debug canvas showing:
+ * - Visible limb triangles textured from the scan
+ * - Extension triangles textured from inpainting (limb colors propagated)
+ * All on a dark background, cropped to the zone bounding box.
+ */
+export function renderIsolatedLimbDebug(
+  scanCanvas: HTMLCanvasElement,
+  zone: HiddenFaceLimbZone,
+  zonePoints: Point2D[],
+  zoneTriangles: [number, number, number][],
+  imageWidth: number,
+  imageHeight: number,
+  contentAlignment?: ContentAlignment,
+): HTMLCanvasElement {
+  const scanW = scanCanvas.width
+  const scanH = scanCanvas.height
+
+  const scanPoints = zonePoints.map(p => imageToScanPixel(p, imageWidth, imageHeight, scanW, scanH, contentAlignment))
+
+  // Bounding box over all zone triangles
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const sp of scanPoints) {
+    if (sp.x < minX) minX = sp.x
+    if (sp.y < minY) minY = sp.y
+    if (sp.x > maxX) maxX = sp.x
+    if (sp.y > maxY) maxY = sp.y
+  }
+  const PAD = 10
+  minX = Math.max(0, Math.floor(minX) - PAD)
+  minY = Math.max(0, Math.floor(minY) - PAD)
+  maxX = Math.min(scanW - 1, Math.ceil(maxX) + PAD)
+  maxY = Math.min(scanH - 1, Math.ceil(maxY) + PAD)
+  const w = maxX - minX + 1
+  const h = maxY - minY + 1
+
+  // First, run flow extrusion on a copy of the scan to get the extension texture
+  const inpaintedCanvas = document.createElement('canvas')
+  inpaintedCanvas.width = scanW
+  inpaintedCanvas.height = scanH
+  inpaintedCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+  flowExtrudeLimbOnScan(inpaintedCanvas, zone, zonePoints, zoneTriangles, imageWidth, imageHeight, contentAlignment)
+
+  // Create debug canvas (cropped to zone bbox)
+  const debugCanvas = document.createElement('canvas')
+  debugCanvas.width = w
+  debugCanvas.height = h
+  const ctx = debugCanvas.getContext('2d')!
+
+  // Dark background
+  ctx.fillStyle = '#2a2a3a'
+  ctx.fillRect(0, 0, w, h)
+
+  const extTriSet = new Set(zone.zoneTriangleIndices)
+  const scanCtx = scanCanvas.getContext('2d')!
+  const inpaintedCtx = inpaintedCanvas.getContext('2d')!
+
+  // Draw each triangle individually with the correct texture source
+  for (let ti = 0; ti < zoneTriangles.length; ti++) {
+    const tri = zoneTriangles[ti]
+    if (!tri) continue
+    const [a, b, c] = tri
+    const pa = scanPoints[a], pb = scanPoints[b], pc = scanPoints[c]
+    if (!pa || !pb || !pc) continue
+
+    const isExtension = extTriSet.has(ti)
+    const sourceCtx = isExtension ? inpaintedCtx : scanCtx
+
+    // Clip to triangle and draw the source texture
+    ctx.save()
+    ctx.beginPath()
+    ctx.moveTo(pa.x - minX, pa.y - minY)
+    ctx.lineTo(pb.x - minX, pb.y - minY)
+    ctx.lineTo(pc.x - minX, pc.y - minY)
+    ctx.closePath()
+    ctx.clip()
+
+    // Draw source canvas offset by -minX, -minY
+    ctx.drawImage(sourceCtx.canvas, -minX, -minY)
+    ctx.restore()
+  }
+
+  // Draw extension boundary as a subtle line
+  ctx.strokeStyle = 'rgba(255, 100, 100, 0.5)'
+  ctx.lineWidth = 1.5
+  for (const ti of zone.zoneTriangleIndices) {
+    const tri = zoneTriangles[ti]
+    if (!tri) continue
+    const [a, b, c] = tri
+    const pa = scanPoints[a], pb = scanPoints[b], pc = scanPoints[c]
+    if (!pa || !pb || !pc) continue
+    ctx.beginPath()
+    ctx.moveTo(pa.x - minX, pa.y - minY)
+    ctx.lineTo(pb.x - minX, pb.y - minY)
+    ctx.lineTo(pc.x - minX, pc.y - minY)
+    ctx.closePath()
+    ctx.stroke()
+  }
+
+  return debugCanvas
 }
 
 // ─── Coordinate conversion ──────────────────────────────────────────

@@ -196,9 +196,20 @@ Quand une patte s'anime, elle révèle la zone du corps qui était occultée dan
 
 **Rendu** : `zoneMeshRenderer` split le body en 2 PIXI meshes (pur body + hidden face) avec z-order différent. Le body visible utilise la texture scan haute résolution. Les hidden face meshes utilisent une texture inpaintée :
 - **LaMa** (prioritaire) : Cloud Function Python (`functions/main.py`) reçoit le scan + un masque binaire des zones pattes (généré par `limbMaskGenerator.ts` depuis les Bézier dilatées), exécute LaMa neural inpainting, retourne un "scan sans pattes". Résolution 512px pour la vitesse, upscalé aux dimensions originales.
-- **Fallback Laplacien** : si LaMa échoue, `hiddenFaceTexture.ts` inpainte par diffusion (K-means + BFS sur les couleurs de bordure).
+- **Fallback K-means/BFS** : si LaMa échoue, `inpaintHiddenFaceOnScan` (dans `hiddenFaceTexture.ts`) peint des couleurs plates par K-means sur les pixels de bordure puis propagation BFS avec barrières inter-clusters.
 
 **Z-order** : body (z=0) → hidden face (z=limb.zOrder - 0.5) → limb (z=limb.zOrder)
+
+### Hidden Face Limb (extension de patte)
+
+Symétrique au système body : quand le corps (animé) recouvre une partie de la patte qui était visible dans l'image originale, il faut "rallonger" la patte sous le corps. Modèle : `HiddenFaceLimbZone { limbZoneId, zoneVertexA, zoneVertexB, bridgePoints, zoneTriangleIndices }` — sous-ensemble du zone mesh d'une patte (pas du body).
+
+**Texture** : `flowExtrudeLimbOnScan` (dans `hiddenFaceTexture.ts`) extrude les couleurs de la patte visible vers la zone d'extension par échantillonnage perpendiculaire à la corde A↔B (le "genou" de la zone) :
+1. Rasterisation des triangles visibles → masque local.
+2. Pour chaque position latérale `iu ∈ [0, N_U)`, lance un rayon **perpendiculaire à la corde** depuis `lerp(A, B, iu/(N_U-1))` dans la patte visible et collecte les pixels jusqu'à sortir du masque (skip de quelques px pour éviter le contour noir) → 1 colonne RGB 1D = "rivière" du genou vers le pied.
+3. Pour chaque pixel d'extension : `u = projection sur corde`, `dPx = |distance perpendiculaire|`, lookup `column[round(u·(N_U-1))][clamp(floor(dPx), 0, len-1)]`.
+
+Conséquence : les "lignes" de la patte se prolongent par symétrie autour de la corde, sans bande répétée (clamp en profondeur, pas de tiling cyclique).
 
 ## Workflow Scan (utilisateur final)
 
@@ -256,7 +267,7 @@ src/
 │   ├── walkSolver.ts           Cinématique marche quadrupède (squelette, IK, LBS, séparation zones)
 │   ├── limbSeparation.ts       Séparation membres/corps (Bézier→polygone, Delaunay par zone, patch manuel body, triangulation face cachée)
 │   ├── bezierUtils.ts          Utilitaires courbes Bézier (flatten, expand, évaluation)
-│   ├── hiddenFaceTexture.ts    Inpainting diffusion Laplacienne (fallback) pour les faces cachées derrière les pattes
+│   ├── hiddenFaceTexture.ts    Inpainting body fallback (K-means + BFS) + extrusion patte par colonnes perpendiculaires
 │   ├── limbMaskGenerator.ts    Génération masque binaire des zones pattes (Bézier dilatées) pour LaMa
 │   ├── lamaInpainting.ts       Client API Cloud Function LaMa (envoi scan+masque, réception inpainté)
 │   ├── zoneMeshRenderer.ts     Rendu PIXI.js par zone (build/update meshes séparés, z-order, split body/hidden face)

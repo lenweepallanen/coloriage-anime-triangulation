@@ -257,6 +257,17 @@ function limbSeparationToDoc(sep: WalkLimbSeparation | null | undefined): unknow
     }))
   }
 
+  // Hidden face limb zones (extensions de pattes)
+  if (sep.hiddenFaceLimbZones && sep.hiddenFaceLimbZones.length > 0) {
+    doc.hiddenFaceLimbZones = sep.hiddenFaceLimbZones.map(hfl => ({
+      limbZoneId: hfl.limbZoneId,
+      zoneVertexA: hfl.zoneVertexA,
+      zoneVertexB: hfl.zoneVertexB,
+      bridgePoints: hfl.bridgePoints,
+      zoneTriangleIndices: hfl.zoneTriangleIndices,
+    }))
+  }
+
   return doc
 }
 
@@ -295,6 +306,19 @@ function limbSeparationFromDoc(doc: Record<string, unknown> | null | undefined):
       bodyVertexB: hfz.bodyVertexB ?? 0,
       bridgePoints: hfz.bridgePoints ?? [],
       bodyTriangleIndices: hfz.bodyTriangleIndices ?? [],
+    }))
+  }
+
+  // Hidden face limb zones (extensions de pattes)
+  console.log('[Firebase] limbSeparationFromDoc — all keys:', Object.keys(d), 'hiddenFaceLimbZones:', d.hiddenFaceLimbZones ? `array(${d.hiddenFaceLimbZones.length})` : String(d.hiddenFaceLimbZones), 'bodyPoints:', d.bodyPoints ? `array(${(d.bodyPoints as any[]).length})` : String(d.bodyPoints))
+  if (d.hiddenFaceLimbZones && Array.isArray(d.hiddenFaceLimbZones)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    result.hiddenFaceLimbZones = d.hiddenFaceLimbZones.map((hfl: any) => ({
+      limbZoneId: hfl.limbZoneId,
+      zoneVertexA: hfl.zoneVertexA ?? 0,
+      zoneVertexB: hfl.zoneVertexB ?? 0,
+      bridgePoints: hfl.bridgePoints ?? [],
+      zoneTriangleIndices: hfl.zoneTriangleIndices ?? [],
     }))
   }
 
@@ -512,7 +536,7 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     internalBarycentrics: d.internalBarycentrics ?? [],
     bones: d.bones ?? [],
     bonesValidated: d.bonesValidated ?? false,
-    walkLimbSeparation: limbSeparationFromDoc(d.walkLimbSeparation as Record<string, unknown> | null),
+    walkLimbSeparation: (() => { console.log('[Firebase] meshFromDoc walkLimbSeparation raw:', d.walkLimbSeparation ? Object.keys(d.walkLimbSeparation as object) : null); return limbSeparationFromDoc(d.walkLimbSeparation as Record<string, unknown> | null) })(),
     walkLimbSeparationValidated: d.walkLimbSeparationValidated ?? false,
     walkSkeleton: d.walkSkeleton ?? null,
     walkSkeletonValidated: d.walkSkeletonValidated ?? false,

@@ -426,6 +426,116 @@ export function triangulateHiddenFace(
 }
 
 /**
+ * Triangulate a hidden face LIMB zone and merge into zone mesh.
+ * Same algorithm as triangulateHiddenFace but operates on zonePoints/zoneTriangles.
+ *
+ * 1. Build closed polygon: [A, ...bridgePoints, B] + zone boundary path B→A
+ * 2. Generate internal points (Poisson grid)
+ * 3. Delaunay + filter by polygon
+ * 4. Append new points to zonePoints, new triangles to zoneTriangles
+ * 5. Return updated zone + triangle indices of the extension
+ */
+export function triangulateHiddenFaceLimb(
+  zonePoints: Point2D[],
+  zoneTriangles: [number, number, number][],
+  vertexA: number,
+  vertexB: number,
+  bridgePoints: Point2D[],
+  spacing?: number,
+): {
+  updatedZonePoints: Point2D[]
+  updatedZoneTriangles: [number, number, number][]
+  hiddenFaceLimbTriangleIndices: number[]
+} {
+  // 1. Build closed polygon
+  const boundaryEdges = findBoundaryEdges(zoneTriangles)
+  const boundaryPath = walkBoundaryPath(boundaryEdges, vertexB, vertexA)
+
+  const polygon: Point2D[] = [zonePoints[vertexA]]
+  for (const bp of bridgePoints) polygon.push(bp)
+  polygon.push(zonePoints[vertexB])
+  for (let i = 1; i < boundaryPath.length - 1; i++) {
+    polygon.push(zonePoints[boundaryPath[i]])
+  }
+
+  if (polygon.length < 3) {
+    return { updatedZonePoints: zonePoints, updatedZoneTriangles: zoneTriangles, hiddenFaceLimbTriangleIndices: [] }
+  }
+
+  // 2. Generate internal points
+  const sp = spacing ?? Math.max(10, Math.hypot(
+    zonePoints[vertexA].x - zonePoints[vertexB].x,
+    zonePoints[vertexA].y - zonePoints[vertexB].y,
+  ) / 5)
+  const internalPts = generateInternalPoints(polygon, sp)
+
+  // 3. Build unified point array for Delaunay
+  const newPoints: Point2D[] = [...bridgePoints, ...internalPts]
+  const baseNewIdx = zonePoints.length
+
+  const localPoints: Point2D[] = []
+  const localToGlobal: number[] = []
+
+  // A
+  localPoints.push(zonePoints[vertexA])
+  localToGlobal.push(vertexA)
+
+  // Bridge points (new)
+  for (let i = 0; i < bridgePoints.length; i++) {
+    localPoints.push(bridgePoints[i])
+    localToGlobal.push(baseNewIdx + i)
+  }
+
+  // B
+  localPoints.push(zonePoints[vertexB])
+  localToGlobal.push(vertexB)
+
+  // Boundary path vertices from B to A (skip B and A themselves)
+  for (let i = 1; i < boundaryPath.length - 1; i++) {
+    localPoints.push(zonePoints[boundaryPath[i]])
+    localToGlobal.push(boundaryPath[i])
+  }
+
+  // Internal points (new)
+  for (let i = 0; i < internalPts.length; i++) {
+    localPoints.push(internalPts[i])
+    localToGlobal.push(baseNewIdx + bridgePoints.length + i)
+  }
+
+  // 4. Delaunay + filter
+  if (localPoints.length < 3) {
+    return { updatedZonePoints: zonePoints, updatedZoneTriangles: zoneTriangles, hiddenFaceLimbTriangleIndices: [] }
+  }
+
+  const coords = new Float64Array(localPoints.length * 2)
+  localPoints.forEach((p, i) => { coords[i * 2] = p.x; coords[i * 2 + 1] = p.y })
+
+  let newTriangles: [number, number, number][] = []
+  try {
+    const delaunay = new Delaunator(coords)
+    for (let i = 0; i < delaunay.triangles.length; i += 3) {
+      const a = delaunay.triangles[i]
+      const b = delaunay.triangles[i + 1]
+      const c = delaunay.triangles[i + 2]
+      const cent = triangleCentroid(localPoints[a], localPoints[b], localPoints[c])
+      if (pointInPolygon(cent, polygon)) {
+        newTriangles.push([localToGlobal[a], localToGlobal[b], localToGlobal[c]])
+      }
+    }
+  } catch {
+    return { updatedZonePoints: zonePoints, updatedZoneTriangles: zoneTriangles, hiddenFaceLimbTriangleIndices: [] }
+  }
+
+  // 5. Merge into zone
+  const updatedZonePoints = [...zonePoints, ...newPoints]
+  const triStartIdx = zoneTriangles.length
+  const updatedZoneTriangles = [...zoneTriangles, ...newTriangles]
+  const hiddenFaceLimbTriangleIndices = newTriangles.map((_, i) => triStartIdx + i)
+
+  return { updatedZonePoints, updatedZoneTriangles, hiddenFaceLimbTriangleIndices }
+}
+
+/**
  * Find the 2 nearest vertices to a point in a body mesh.
  * Returns their indices in bodyPoints.
  */

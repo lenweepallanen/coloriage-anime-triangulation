@@ -912,6 +912,82 @@ function extractCannyContour(imgData, lowThreshold, highThreshold, blurSize) {
   }
 }
 
+// Détection bbox du dessin via composantes connexes
+// Robuste aux résidus, ombres, traits parasites par construction
+// Retourne l'union des bounding rects de tous les contours dont l'aire > 5% du plus gros
+function detectDrawingBBoxCV(imgData) {
+  var w = imgData.width, h = imgData.height;
+  var src = new cv.Mat(h, w, cv.CV_8UC4);
+  src.data.set(new Uint8Array(imgData.data));
+
+  var gray = new cv.Mat();
+  var binary = new cv.Mat();
+  var dilated = new cv.Mat();
+  var contours = new cv.MatVector();
+  var hierarchy = new cv.Mat();
+  var kernel = null;
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    // Otsu : seuil adaptatif au contraste réel du scan
+    cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
+
+    // Petite dilatation : fusionne les composantes très proches (anti-aliasing,
+    // gaps de 1-2 px dans les traits) sans coller aux ombres distantes
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.dilate(binary, dilated, kernel);
+
+    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    if (contours.size() === 0) {
+      return { bbox: null };
+    }
+
+    // Trouver l'aire max
+    var maxArea = 0;
+    for (var i = 0; i < contours.size(); i++) {
+      var a = cv.contourArea(contours.get(i));
+      if (a > maxArea) maxArea = a;
+    }
+
+    // Garde-fou page blanche : aucun contour significatif
+    if (maxArea < w * h * 0.001) {
+      return { bbox: null };
+    }
+
+    // Union des boundingRect de tous les contours significatifs (≥ 5% du max)
+    // → conserve les parties détachées du dessin (antennes, yeux, points isolés)
+    // → ignore le bruit (poussière, résidus de marqueurs L)
+    var threshold = maxArea * 0.05;
+    var minX = w, minY = h, maxX = 0, maxY = 0;
+    var kept = 0;
+    for (var j = 0; j < contours.size(); j++) {
+      var c = contours.get(j);
+      if (cv.contourArea(c) < threshold) continue;
+      var r = cv.boundingRect(c);
+      if (r.x < minX) minX = r.x;
+      if (r.y < minY) minY = r.y;
+      if (r.x + r.width > maxX) maxX = r.x + r.width;
+      if (r.y + r.height > maxY) maxY = r.y + r.height;
+      kept++;
+    }
+
+    if (kept === 0) {
+      return { bbox: null };
+    }
+
+    return { bbox: { minX: minX, minY: minY, maxX: maxX, maxY: maxY } };
+  } finally {
+    src.delete();
+    gray.delete();
+    binary.delete();
+    dilated.delete();
+    contours.delete();
+    hierarchy.delete();
+    if (kernel) kernel.delete();
+  }
+}
+
 // Détection Canny edges — retourne les pixels de bords
 function extractCannyEdges(imgData, lowThreshold, highThreshold, blurSize) {
   var w = imgData.width, h = imgData.height;
@@ -1046,6 +1122,17 @@ self.onmessage = async function(e) {
     } catch (err) {
       console.error('Worker canny-contour error:', err);
       self.postMessage({ type: 'canny-contour-result', contourPoints: null, error: err.message });
+    }
+    return;
+  }
+
+  if (type === 'detect-drawing-bbox') {
+    try {
+      var result = detectDrawingBBoxCV(imageData);
+      self.postMessage({ type: 'detect-drawing-bbox-result', bbox: result.bbox });
+    } catch (err) {
+      console.error('Worker detect-drawing-bbox error:', err);
+      self.postMessage({ type: 'detect-drawing-bbox-result', bbox: null, error: err.message });
     }
     return;
   }

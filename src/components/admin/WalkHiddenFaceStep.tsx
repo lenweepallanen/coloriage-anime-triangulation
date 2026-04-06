@@ -1,34 +1,41 @@
 /**
- * WalkHiddenFaceStep — Define hidden face zones behind limbs.
+ * WalkHiddenFaceStep — Define hidden face zones behind limbs AND limb extensions.
  *
- * For each limb, the admin:
- * 1. Selects 2 vertices on the body mesh boundary (A and B)
- * 2. Places bridge points between A and B to form the inner contour
- * 3. Clicks "Générer" → Delaunay fills the closed polygon (bridge + body boundary)
- * 4. New triangles are merged into bodyPoints/bodyTriangles
+ * Two modes:
+ * - "body" (Face cachée body): body area hidden behind a limb → inpainted body texture
+ * - "limb" (Face cachée jambe): limb extension hidden behind body → inpainted limb texture
  *
- * The hidden face triangles share vertices with the body mesh,
- * so they animate identically via bodyFrames.
+ * Body mode: selects 2 body boundary vertices (A,B), bridge points, Delaunay → bodyTriangles
+ * Limb mode: selects 2 zone boundary vertices (A,B), bridge points, Delaunay → zoneTriangles
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import type { Project, Animation, Point2D, HiddenFaceZone, WalkLimbSeparation } from '../../types/project'
+import type { Project, Animation, Point2D, HiddenFaceZone, HiddenFaceLimbZone, WalkLimbSeparation } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import {
-  findBoundaryEdges, walkBoundaryPath, triangulateHiddenFace,
+  findBoundaryEdges, walkBoundaryPath, triangulateHiddenFace, triangulateHiddenFaceLimb,
 } from '../../utils/limbSeparation'
 
 const POINT_RADIUS = 4
 const HIT_RADIUS = 10
 
+type HiddenFaceMode = 'body' | 'limb'
 type EditPhase = 'select-a' | 'select-b' | 'bridge' | 'done'
 
 interface HiddenFaceState {
   vertexA: number | null
   vertexB: number | null
   bridgePoints: Point2D[]
-  bodyTriangleIndices: number[]  // after triangulation
+  bodyTriangleIndices: number[]
+  generated: boolean
+}
+
+interface HiddenFaceLimbState {
+  zoneVertexA: number | null
+  zoneVertexB: number | null
+  bridgePoints: Point2D[]
+  zoneTriangleIndices: number[]
   generated: boolean
 }
 
@@ -45,7 +52,9 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
   const bodyPoints = separation?.bodyPoints ?? []
   const bodyTriangles = separation?.bodyTriangles ?? []
 
-  // Per-limb hidden face state
+  const [mode, setMode] = useState<HiddenFaceMode>('body')
+
+  // ─── Body mode state ───────────────────────────────────────────────
   const [hiddenFaces, setHiddenFaces] = useState<Record<string, HiddenFaceState>>(() => {
     const init: Record<string, HiddenFaceState> = {}
     if (separation?.hiddenFaceZones) {
@@ -61,11 +70,46 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
     }
     return init
   })
-
-  // Working copy of body mesh (grows as hidden faces are generated)
   const [workBodyPoints, setWorkBodyPoints] = useState<Point2D[]>(() => [...bodyPoints])
   const [workBodyTriangles, setWorkBodyTriangles] = useState<[number, number, number][]>(() => [...bodyTriangles])
 
+  // ─── Limb mode state ───────────────────────────────────────────────
+  const [limbHiddenFaces, setLimbHiddenFaces] = useState<Record<string, HiddenFaceLimbState>>(() => {
+    const init: Record<string, HiddenFaceLimbState> = {}
+    if (separation?.hiddenFaceLimbZones) {
+      for (const hfl of separation.hiddenFaceLimbZones) {
+        init[hfl.limbZoneId] = {
+          zoneVertexA: hfl.zoneVertexA,
+          zoneVertexB: hfl.zoneVertexB,
+          bridgePoints: [...hfl.bridgePoints],
+          zoneTriangleIndices: [...hfl.zoneTriangleIndices],
+          generated: hfl.zoneTriangleIndices.length > 0,
+        }
+      }
+    }
+    return init
+  })
+  // Working copies of zone points/triangles (keyed by zone id)
+  const [workZonePoints, setWorkZonePoints] = useState<Record<string, Point2D[]>>(() => {
+    const init: Record<string, Point2D[]> = {}
+    if (separation) {
+      for (const zone of separation.zones) {
+        init[zone.id] = [...(separation.zonePoints[zone.id] ?? [])]
+      }
+    }
+    return init
+  })
+  const [workZoneTriangles, setWorkZoneTriangles] = useState<Record<string, [number, number, number][]>>(() => {
+    const init: Record<string, [number, number, number][]> = {}
+    if (separation) {
+      for (const zone of separation.zones) {
+        init[zone.id] = [...(separation.zoneTriangles[zone.id] ?? [])]
+      }
+    }
+    return init
+  })
+
+  // ─── Common state ──────────────────────────────────────────────────
   const [activeLimbId, setActiveLimbId] = useState<string | null>(null)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
@@ -76,29 +120,55 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
   const imageRef = useRef<HTMLImageElement | null>(null)
   const animFrameRef = useRef<number>(0)
 
-  const activeHF = activeLimbId ? hiddenFaces[activeLimbId] : null
+  // ─── Derived state ─────────────────────────────────────────────────
 
-  const editPhase: EditPhase = !activeHF ? 'select-a'
-    : activeHF.vertexA === null ? 'select-a'
-    : activeHF.vertexB === null ? 'select-b'
-    : activeHF.generated ? 'done'
+  // Body mode: active HF and edit phase
+  const activeBodyHF = (mode === 'body' && activeLimbId) ? hiddenFaces[activeLimbId] : null
+  const bodyEditPhase: EditPhase = !activeBodyHF ? 'select-a'
+    : activeBodyHF.vertexA === null ? 'select-a'
+    : activeBodyHF.vertexB === null ? 'select-b'
+    : activeBodyHF.generated ? 'done'
     : 'bridge'
 
-  // Boundary edges of body mesh (for vertex selection + path walking)
-  const boundaryEdges = useMemo(() => findBoundaryEdges(workBodyTriangles), [workBodyTriangles])
-  const boundaryVertexSet = useMemo(() => {
+  // Limb mode: active HF and edit phase
+  const activeLimbHF = (mode === 'limb' && activeLimbId) ? limbHiddenFaces[activeLimbId] : null
+  const limbEditPhase: EditPhase = !activeLimbHF ? 'select-a'
+    : activeLimbHF.zoneVertexA === null ? 'select-a'
+    : activeLimbHF.zoneVertexB === null ? 'select-b'
+    : activeLimbHF.generated ? 'done'
+    : 'bridge'
+
+  const editPhase = mode === 'body' ? bodyEditPhase : limbEditPhase
+
+  // Body boundary edges
+  const bodyBoundaryEdges = useMemo(() => findBoundaryEdges(workBodyTriangles), [workBodyTriangles])
+  const bodyBoundaryVertexSet = useMemo(() => {
     const set = new Set<number>()
-    for (const [a, b] of boundaryEdges) { set.add(a); set.add(b) }
+    for (const [a, b] of bodyBoundaryEdges) { set.add(a); set.add(b) }
     return set
-  }, [boundaryEdges])
+  }, [bodyBoundaryEdges])
 
-  // Boundary path preview (B → A along body boundary)
+  // Limb boundary edges (for active limb)
+  const activeLimbTriangles: [number, number, number][] = (activeLimbId ? workZoneTriangles[activeLimbId] : null) ?? []
+  const limbBoundaryEdges = useMemo(() => findBoundaryEdges(activeLimbTriangles), [activeLimbTriangles])
+  const limbBoundaryVertexSet = useMemo(() => {
+    const set = new Set<number>()
+    for (const [a, b] of limbBoundaryEdges) { set.add(a); set.add(b) }
+    return set
+  }, [limbBoundaryEdges])
+
+  // Boundary path preview
   const boundaryPath = useMemo(() => {
-    if (!activeHF || activeHF.vertexA === null || activeHF.vertexB === null) return null
-    return walkBoundaryPath(boundaryEdges, activeHF.vertexB, activeHF.vertexA)
-  }, [activeHF, boundaryEdges])
+    if (mode === 'body') {
+      if (!activeBodyHF || activeBodyHF.vertexA === null || activeBodyHF.vertexB === null) return null
+      return walkBoundaryPath(bodyBoundaryEdges, activeBodyHF.vertexB, activeBodyHF.vertexA)
+    } else {
+      if (!activeLimbHF || activeLimbHF.zoneVertexA === null || activeLimbHF.zoneVertexB === null) return null
+      return walkBoundaryPath(limbBoundaryEdges, activeLimbHF.zoneVertexB, activeLimbHF.zoneVertexA)
+    }
+  }, [mode, activeBodyHF, activeLimbHF, bodyBoundaryEdges, limbBoundaryEdges])
 
-  // Load image
+  // ─── Image loading ─────────────────────────────────────────────────
   useEffect(() => {
     if (!project.originalImageBlob) return
     const url = URL.createObjectURL(project.originalImageBlob)
@@ -127,7 +197,7 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.originalImageBlob])
 
-  // ─── Draw ───────────────────────────────────────────────────────────
+  // ─── Draw ──────────────────────────────────────────────────────────
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -155,6 +225,18 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
 
     const pr = POINT_RADIUS / t.scale
 
+    if (mode === 'body') {
+      drawBodyMode(ctx, t, pr)
+    } else {
+      drawLimbMode(ctx, t, pr)
+    }
+
+    ctx.restore()
+    animFrameRef.current = requestAnimationFrame(draw)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [separation, mode, workBodyPoints, workBodyTriangles, hiddenFaces, workZonePoints, workZoneTriangles, limbHiddenFaces, activeLimbId, editPhase, boundaryPath, bodyBoundaryVertexSet, limbBoundaryVertexSet, transformRef, imageLoaded])
+
+  function drawBodyMode(ctx: CanvasRenderingContext2D, t: { scale: number }, pr: number) {
     // Draw body triangles (faded)
     ctx.fillStyle = 'rgba(136,136,136,0.08)'
     ctx.strokeStyle = 'rgba(136,136,136,0.2)'
@@ -168,7 +250,7 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
     }
 
     // Draw hidden face triangles for all limbs (colored)
-    for (const zone of separation.zones) {
+    for (const zone of separation!.zones) {
       const hf = hiddenFaces[zone.id]
       if (!hf || hf.bodyTriangleIndices.length === 0) continue
       const isActive = zone.id === activeLimbId
@@ -187,17 +269,17 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
       }
     }
 
-    // Draw active hidden face editing state
-    if (activeLimbId && activeHF) {
-      const zone = separation.zones.find(z => z.id === activeLimbId)
+    // Draw active editing state
+    if (activeLimbId && activeBodyHF) {
+      const zone = separation!.zones.find(z => z.id === activeLimbId)
       const color = zone?.color ?? '#f59e0b'
 
-      // Draw boundary vertices as selectable (during select-a / select-b phases)
-      if (editPhase === 'select-a' || editPhase === 'select-b') {
-        for (const idx of boundaryVertexSet) {
+      // Boundary vertices (during select-a / select-b)
+      if (bodyEditPhase === 'select-a' || bodyEditPhase === 'select-b') {
+        for (const idx of bodyBoundaryVertexSet) {
           const p = workBodyPoints[idx]
           if (!p) continue
-          const isA = idx === activeHF.vertexA
+          const isA = idx === activeBodyHF.vertexA
           ctx.fillStyle = isA ? '#f59e0b' : 'rgba(255,255,255,0.4)'
           ctx.strokeStyle = isA ? '#fff' : 'rgba(255,255,255,0.2)'
           ctx.lineWidth = 1 / t.scale
@@ -206,9 +288,9 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
         }
       }
 
-      // Draw vertex A marker
-      if (activeHF.vertexA !== null) {
-        const pa = workBodyPoints[activeHF.vertexA]
+      // Vertex A marker
+      if (activeBodyHF.vertexA !== null) {
+        const pa = workBodyPoints[activeBodyHF.vertexA]
         if (pa) {
           ctx.fillStyle = '#f59e0b'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
           ctx.beginPath(); ctx.arc(pa.x, pa.y, pr * 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
@@ -216,9 +298,9 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
         }
       }
 
-      // Draw vertex B marker
-      if (activeHF.vertexB !== null) {
-        const pb = workBodyPoints[activeHF.vertexB]
+      // Vertex B marker
+      if (activeBodyHF.vertexB !== null) {
+        const pb = workBodyPoints[activeBodyHF.vertexB]
         if (pb) {
           ctx.fillStyle = '#22c55e'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
           ctx.beginPath(); ctx.arc(pb.x, pb.y, pr * 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
@@ -226,74 +308,198 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
         }
       }
 
-      // Draw bridge points
-      if (activeHF.bridgePoints.length > 0) {
-        ctx.strokeStyle = hexToRgba(color, 0.8)
-        ctx.lineWidth = 1.5 / t.scale
-        ctx.beginPath()
-        if (activeHF.vertexA !== null) {
-          const pa = workBodyPoints[activeHF.vertexA]
-          if (pa) ctx.moveTo(pa.x, pa.y)
-        }
-        for (const bp of activeHF.bridgePoints) ctx.lineTo(bp.x, bp.y)
-        if (activeHF.vertexB !== null) {
-          const pb = workBodyPoints[activeHF.vertexB]
-          if (pb) ctx.lineTo(pb.x, pb.y)
-        }
-        ctx.stroke()
+      // Bridge points
+      drawBridgePoints(ctx, t, pr, activeBodyHF.bridgePoints, color,
+        activeBodyHF.vertexA !== null ? workBodyPoints[activeBodyHF.vertexA] : null,
+        activeBodyHF.vertexB !== null ? workBodyPoints[activeBodyHF.vertexB] : null)
 
-        for (let i = 0; i < activeHF.bridgePoints.length; i++) {
-          const bp = activeHF.bridgePoints[i]
-          ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 1.5 / t.scale
-          ctx.beginPath(); ctx.arc(bp.x, bp.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
-        }
+      // Boundary path preview
+      if (boundaryPath && boundaryPath.length > 1 && bodyEditPhase === 'bridge') {
+        drawBoundaryPathPreview(ctx, t, boundaryPath, workBodyPoints)
       }
+    }
+  }
 
-      // Draw boundary path preview (B → A along body boundary)
-      if (boundaryPath && boundaryPath.length > 1 && editPhase === 'bridge') {
-        ctx.strokeStyle = 'rgba(136,182,212,0.5)'
-        ctx.lineWidth = 2 / t.scale
-        ctx.setLineDash([4 / t.scale, 4 / t.scale])
+  function drawLimbMode(ctx: CanvasRenderingContext2D, t: { scale: number }, pr: number) {
+    if (!activeLimbId || !separation) return
+
+    const pts = workZonePoints[activeLimbId] ?? []
+    const tris = workZoneTriangles[activeLimbId] ?? []
+
+    // Draw zone triangles (faded)
+    ctx.fillStyle = 'rgba(136,136,136,0.08)'
+    ctx.strokeStyle = 'rgba(136,136,136,0.2)'
+    ctx.lineWidth = 0.5 / t.scale
+    for (const [a, b, c] of tris) {
+      const pa = pts[a], pb = pts[b], pc = pts[c]
+      if (!pa || !pb || !pc) continue
+      ctx.beginPath()
+      ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.lineTo(pc.x, pc.y)
+      ctx.closePath(); ctx.fill(); ctx.stroke()
+    }
+
+    // Draw extension triangles (colored)
+    const hfl = limbHiddenFaces[activeLimbId]
+    if (hfl && hfl.zoneTriangleIndices.length > 0) {
+      const zone = separation.zones.find(z => z.id === activeLimbId)
+      const color = zone?.color ?? '#f59e0b'
+      ctx.fillStyle = hexToRgba(color, 0.25)
+      ctx.strokeStyle = hexToRgba(color, 0.7)
+      ctx.lineWidth = 1.5 / t.scale
+      for (const ti of hfl.zoneTriangleIndices) {
+        const tri = tris[ti]
+        if (!tri) continue
+        const [a, b, c] = tri
+        const pa = pts[a], pb = pts[b], pc = pts[c]
+        if (!pa || !pb || !pc) continue
         ctx.beginPath()
-        const p0 = workBodyPoints[boundaryPath[0]]
-        if (p0) ctx.moveTo(p0.x, p0.y)
-        for (let i = 1; i < boundaryPath.length; i++) {
-          const p = workBodyPoints[boundaryPath[i]]
-          if (p) ctx.lineTo(p.x, p.y)
-        }
-        ctx.stroke()
-        ctx.setLineDash([])
+        ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.lineTo(pc.x, pc.y)
+        ctx.closePath(); ctx.fill(); ctx.stroke()
       }
     }
 
-    ctx.restore()
-    animFrameRef.current = requestAnimationFrame(draw)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [separation, workBodyPoints, workBodyTriangles, hiddenFaces, activeLimbId, editPhase, boundaryPath, boundaryVertexSet, transformRef, imageLoaded])
+    // Also show other limb zone extensions (dimmed) for context
+    for (const zone of separation.zones) {
+      if (zone.id === activeLimbId) continue
+      const otherHfl = limbHiddenFaces[zone.id]
+      if (!otherHfl || otherHfl.zoneTriangleIndices.length === 0) continue
+      const otherPts = workZonePoints[zone.id] ?? []
+      const otherTris = workZoneTriangles[zone.id] ?? []
+      ctx.fillStyle = hexToRgba(zone.color, 0.08)
+      ctx.strokeStyle = hexToRgba(zone.color, 0.2)
+      ctx.lineWidth = 0.5 / t.scale
+      for (const ti of otherHfl.zoneTriangleIndices) {
+        const tri = otherTris[ti]
+        if (!tri) continue
+        const [a, b, c] = tri
+        const pa = otherPts[a], pb = otherPts[b], pc = otherPts[c]
+        if (!pa || !pb || !pc) continue
+        ctx.beginPath()
+        ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.lineTo(pc.x, pc.y)
+        ctx.closePath(); ctx.fill(); ctx.stroke()
+      }
+    }
+
+    // Draw editing state
+    if (activeLimbHF) {
+      const zone = separation.zones.find(z => z.id === activeLimbId)
+      const color = zone?.color ?? '#f59e0b'
+
+      // Boundary vertices
+      if (limbEditPhase === 'select-a' || limbEditPhase === 'select-b') {
+        for (const idx of limbBoundaryVertexSet) {
+          const p = pts[idx]
+          if (!p) continue
+          const isA = idx === activeLimbHF.zoneVertexA
+          ctx.fillStyle = isA ? '#f59e0b' : 'rgba(255,255,255,0.4)'
+          ctx.strokeStyle = isA ? '#fff' : 'rgba(255,255,255,0.2)'
+          ctx.lineWidth = 1 / t.scale
+          ctx.beginPath(); ctx.arc(p.x, p.y, pr * (isA ? 1.5 : 0.7), 0, Math.PI * 2)
+          ctx.fill(); ctx.stroke()
+        }
+      }
+
+      // Vertex A marker
+      if (activeLimbHF.zoneVertexA !== null) {
+        const pa = pts[activeLimbHF.zoneVertexA]
+        if (pa) {
+          ctx.fillStyle = '#f59e0b'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
+          ctx.beginPath(); ctx.arc(pa.x, pa.y, pr * 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          ctx.fillStyle = '#fff'; ctx.font = `${10 / t.scale}px sans-serif`; ctx.fillText('A', pa.x + pr * 2.5, pa.y - pr)
+        }
+      }
+
+      // Vertex B marker
+      if (activeLimbHF.zoneVertexB !== null) {
+        const pb = pts[activeLimbHF.zoneVertexB]
+        if (pb) {
+          ctx.fillStyle = '#22c55e'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
+          ctx.beginPath(); ctx.arc(pb.x, pb.y, pr * 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          ctx.fillStyle = '#fff'; ctx.font = `${10 / t.scale}px sans-serif`; ctx.fillText('B', pb.x + pr * 2.5, pb.y - pr)
+        }
+      }
+
+      // Bridge points
+      drawBridgePoints(ctx, t, pr, activeLimbHF.bridgePoints, color,
+        activeLimbHF.zoneVertexA !== null ? pts[activeLimbHF.zoneVertexA] : null,
+        activeLimbHF.zoneVertexB !== null ? pts[activeLimbHF.zoneVertexB] : null)
+
+      // Boundary path preview
+      if (boundaryPath && boundaryPath.length > 1 && limbEditPhase === 'bridge') {
+        drawBoundaryPathPreview(ctx, t, boundaryPath, pts)
+      }
+    }
+  }
+
+  function drawBridgePoints(ctx: CanvasRenderingContext2D, t: { scale: number }, pr: number, bridgePoints: Point2D[], color: string, ptA: Point2D | null, ptB: Point2D | null) {
+    if (bridgePoints.length > 0) {
+      ctx.strokeStyle = hexToRgba(color, 0.8)
+      ctx.lineWidth = 1.5 / t.scale
+      ctx.beginPath()
+      if (ptA) ctx.moveTo(ptA.x, ptA.y)
+      for (const bp of bridgePoints) ctx.lineTo(bp.x, bp.y)
+      if (ptB) ctx.lineTo(ptB.x, ptB.y)
+      ctx.stroke()
+
+      for (const bp of bridgePoints) {
+        ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 1.5 / t.scale
+        ctx.beginPath(); ctx.arc(bp.x, bp.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+      }
+    }
+  }
+
+  function drawBoundaryPathPreview(ctx: CanvasRenderingContext2D, t: { scale: number }, path: number[], pts: Point2D[]) {
+    ctx.strokeStyle = 'rgba(136,182,212,0.5)'
+    ctx.lineWidth = 2 / t.scale
+    ctx.setLineDash([4 / t.scale, 4 / t.scale])
+    ctx.beginPath()
+    const p0 = pts[path[0]]
+    if (p0) ctx.moveTo(p0.x, p0.y)
+    for (let i = 1; i < path.length; i++) {
+      const p = pts[path[i]]
+      if (p) ctx.lineTo(p.x, p.y)
+    }
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(animFrameRef.current)
   }, [draw])
 
-  // ─── Helpers ────────────────────────────────────────────────────────
+  // ─── Hit test helpers ──────────────────────────────────────────────
 
   function hitTestBoundaryVertex(imgPt: Point2D, hitR: number): number {
-    let best = -1, bestDist = hitR
-    for (const idx of boundaryVertexSet) {
-      const p = workBodyPoints[idx]
-      if (!p) continue
-      const d = Math.hypot(p.x - imgPt.x, p.y - imgPt.y)
-      if (d < bestDist) { bestDist = d; best = idx }
+    if (mode === 'body') {
+      let best = -1, bestDist = hitR
+      for (const idx of bodyBoundaryVertexSet) {
+        const p = workBodyPoints[idx]
+        if (!p) continue
+        const d = Math.hypot(p.x - imgPt.x, p.y - imgPt.y)
+        if (d < bestDist) { bestDist = d; best = idx }
+      }
+      return best
+    } else {
+      if (!activeLimbId) return -1
+      const pts = workZonePoints[activeLimbId] ?? []
+      let best = -1, bestDist = hitR
+      for (const idx of limbBoundaryVertexSet) {
+        const p = pts[idx]
+        if (!p) continue
+        const d = Math.hypot(p.x - imgPt.x, p.y - imgPt.y)
+        if (d < bestDist) { bestDist = d; best = idx }
+      }
+      return best
     }
-    return best
   }
 
   function hitTestBridgePoint(imgPt: Point2D, hitR: number): number {
-    if (!activeHF) return -1
+    const bps = mode === 'body' ? activeBodyHF?.bridgePoints : activeLimbHF?.bridgePoints
+    if (!bps) return -1
     let best = -1, bestDist = hitR
-    for (let i = 0; i < activeHF.bridgePoints.length; i++) {
-      const d = Math.hypot(activeHF.bridgePoints[i].x - imgPt.x, activeHF.bridgePoints[i].y - imgPt.y)
+    for (let i = 0; i < bps.length; i++) {
+      const d = Math.hypot(bps[i].x - imgPt.x, bps[i].y - imgPt.y)
       if (d < bestDist) { bestDist = d; best = i }
     }
     return best
@@ -301,31 +507,22 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
 
   // ─── Toggle hidden face ────────────────────────────────────────────
 
-  function toggleHiddenFace(limbId: string) {
+  function toggleBodyHiddenFace(limbId: string) {
     if (hiddenFaces[limbId]) {
-      // Remove — also need to remove generated triangles from body
       const hf = hiddenFaces[limbId]
       if (hf.generated && hf.bodyTriangleIndices.length > 0) {
-        // Remove triangles and points added by this hidden face
-        // For simplicity, just reset body to original separation state
         setWorkBodyPoints([...(separation?.bodyPoints ?? [])])
         setWorkBodyTriangles([...(separation?.bodyTriangles ?? [])])
-        // Also reset all other hidden faces that were generated
         setHiddenFaces(prev => {
           const copy = { ...prev }
           delete copy[limbId]
-          // Reset all others' generated state since body was reset
           for (const key of Object.keys(copy)) {
             copy[key] = { ...copy[key], generated: false, bodyTriangleIndices: [] }
           }
           return copy
         })
       } else {
-        setHiddenFaces(prev => {
-          const copy = { ...prev }
-          delete copy[limbId]
-          return copy
-        })
+        setHiddenFaces(prev => { const copy = { ...prev }; delete copy[limbId]; return copy })
       }
       if (activeLimbId === limbId) setActiveLimbId(null)
     } else {
@@ -337,36 +534,81 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
     }
   }
 
+  function toggleLimbHiddenFace(limbId: string) {
+    if (limbHiddenFaces[limbId]) {
+      const hfl = limbHiddenFaces[limbId]
+      if (hfl.generated && hfl.zoneTriangleIndices.length > 0) {
+        // Reset zone to original separation state
+        setWorkZonePoints(prev => ({
+          ...prev,
+          [limbId]: [...(separation?.zonePoints[limbId] ?? [])],
+        }))
+        setWorkZoneTriangles(prev => ({
+          ...prev,
+          [limbId]: [...(separation?.zoneTriangles[limbId] ?? [])],
+        }))
+      }
+      setLimbHiddenFaces(prev => { const copy = { ...prev }; delete copy[limbId]; return copy })
+      if (activeLimbId === limbId) setActiveLimbId(null)
+    } else {
+      setLimbHiddenFaces(prev => ({
+        ...prev,
+        [limbId]: { zoneVertexA: null, zoneVertexB: null, bridgePoints: [], zoneTriangleIndices: [], generated: false },
+      }))
+      setActiveLimbId(limbId)
+    }
+  }
+
   // ─── Generate triangulation ────────────────────────────────────────
 
   function handleGenerate() {
-    if (!activeLimbId || !activeHF) return
-    if (activeHF.vertexA === null || activeHF.vertexB === null) return
+    if (!activeLimbId) return
 
-    const result = triangulateHiddenFace(
-      workBodyPoints, workBodyTriangles,
-      activeHF.vertexA, activeHF.vertexB,
-      activeHF.bridgePoints,
-    )
-
-    setWorkBodyPoints(result.updatedBodyPoints)
-    setWorkBodyTriangles(result.updatedBodyTriangles)
-    setHiddenFaces(prev => ({
-      ...prev,
-      [activeLimbId]: {
-        ...prev[activeLimbId],
-        bodyTriangleIndices: result.hiddenFaceTriangleIndices,
-        generated: true,
-      },
-    }))
+    if (mode === 'body') {
+      if (!activeBodyHF || activeBodyHF.vertexA === null || activeBodyHF.vertexB === null) return
+      const result = triangulateHiddenFace(
+        workBodyPoints, workBodyTriangles,
+        activeBodyHF.vertexA, activeBodyHF.vertexB,
+        activeBodyHF.bridgePoints,
+      )
+      setWorkBodyPoints(result.updatedBodyPoints)
+      setWorkBodyTriangles(result.updatedBodyTriangles)
+      setHiddenFaces(prev => ({
+        ...prev,
+        [activeLimbId]: {
+          ...prev[activeLimbId],
+          bodyTriangleIndices: result.hiddenFaceTriangleIndices,
+          generated: true,
+        },
+      }))
+    } else {
+      if (!activeLimbHF || activeLimbHF.zoneVertexA === null || activeLimbHF.zoneVertexB === null) return
+      const zonePts = workZonePoints[activeLimbId] ?? []
+      const zoneTris = workZoneTriangles[activeLimbId] ?? []
+      const result = triangulateHiddenFaceLimb(
+        zonePts, zoneTris,
+        activeLimbHF.zoneVertexA, activeLimbHF.zoneVertexB,
+        activeLimbHF.bridgePoints,
+      )
+      setWorkZonePoints(prev => ({ ...prev, [activeLimbId]: result.updatedZonePoints }))
+      setWorkZoneTriangles(prev => ({ ...prev, [activeLimbId]: result.updatedZoneTriangles }))
+      setLimbHiddenFaces(prev => ({
+        ...prev,
+        [activeLimbId]: {
+          ...prev[activeLimbId],
+          zoneTriangleIndices: result.hiddenFaceLimbTriangleIndices,
+          generated: true,
+        },
+      }))
+    }
   }
 
-  // ─── Mouse handlers ─────────────────────────────────────────────────
+  // ─── Mouse handlers ────────────────────────────────────────────────
 
   function handleMouseDown(e: React.MouseEvent) {
     if (e.button === 2) { handleContextMenu(e); return }
     if (e.button !== 0 || spaceDown.current || isPanning.current) return
-    if (!activeLimbId || !activeHF) return
+    if (!activeLimbId) return
 
     const imgPt = screenToImage(e.clientX, e.clientY)
     const t = transformRef.current
@@ -375,40 +617,46 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
     if (editPhase === 'select-a') {
       const idx = hitTestBoundaryVertex(imgPt, hitR)
       if (idx >= 0) {
-        setHiddenFaces(prev => ({
-          ...prev,
-          [activeLimbId]: { ...prev[activeLimbId], vertexA: idx },
-        }))
+        if (mode === 'body') {
+          setHiddenFaces(prev => ({ ...prev, [activeLimbId]: { ...prev[activeLimbId], vertexA: idx } }))
+        } else {
+          setLimbHiddenFaces(prev => ({ ...prev, [activeLimbId]: { ...prev[activeLimbId], zoneVertexA: idx } }))
+        }
       }
       return
     }
 
     if (editPhase === 'select-b') {
       const idx = hitTestBoundaryVertex(imgPt, hitR)
-      if (idx >= 0 && idx !== activeHF.vertexA) {
-        setHiddenFaces(prev => ({
-          ...prev,
-          [activeLimbId]: { ...prev[activeLimbId], vertexB: idx },
-        }))
+      const vertA = mode === 'body' ? activeBodyHF?.vertexA : activeLimbHF?.zoneVertexA
+      if (idx >= 0 && idx !== vertA) {
+        if (mode === 'body') {
+          setHiddenFaces(prev => ({ ...prev, [activeLimbId]: { ...prev[activeLimbId], vertexB: idx } }))
+        } else {
+          setLimbHiddenFaces(prev => ({ ...prev, [activeLimbId]: { ...prev[activeLimbId], zoneVertexB: idx } }))
+        }
       }
       return
     }
 
     if (editPhase === 'bridge') {
-      // Try to drag existing bridge point
       const bpIdx = hitTestBridgePoint(imgPt, hitR)
       if (bpIdx >= 0) {
         setDragIdx(bpIdx)
         return
       }
       // Add new bridge point
-      setHiddenFaces(prev => ({
-        ...prev,
-        [activeLimbId]: {
-          ...prev[activeLimbId],
-          bridgePoints: [...prev[activeLimbId].bridgePoints, imgPt],
-        },
-      }))
+      if (mode === 'body') {
+        setHiddenFaces(prev => ({
+          ...prev,
+          [activeLimbId]: { ...prev[activeLimbId], bridgePoints: [...prev[activeLimbId].bridgePoints, imgPt] },
+        }))
+      } else {
+        setLimbHiddenFaces(prev => ({
+          ...prev,
+          [activeLimbId]: { ...prev[activeLimbId], bridgePoints: [...prev[activeLimbId].bridgePoints, imgPt] },
+        }))
+      }
       return
     }
   }
@@ -416,33 +664,50 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
   function handleMouseMove(e: React.MouseEvent) {
     if (dragIdx === null || !activeLimbId) return
     const imgPt = screenToImage(e.clientX, e.clientY)
-    setHiddenFaces(prev => {
-      const hf = prev[activeLimbId]
-      if (!hf) return prev
-      const pts = [...hf.bridgePoints]
-      pts[dragIdx] = imgPt
-      return { ...prev, [activeLimbId]: { ...hf, bridgePoints: pts } }
-    })
+
+    if (mode === 'body') {
+      setHiddenFaces(prev => {
+        const hf = prev[activeLimbId]
+        if (!hf) return prev
+        const pts = [...hf.bridgePoints]; pts[dragIdx] = imgPt
+        return { ...prev, [activeLimbId]: { ...hf, bridgePoints: pts } }
+      })
+    } else {
+      setLimbHiddenFaces(prev => {
+        const hfl = prev[activeLimbId]
+        if (!hfl) return prev
+        const pts = [...hfl.bridgePoints]; pts[dragIdx] = imgPt
+        return { ...prev, [activeLimbId]: { ...hfl, bridgePoints: pts } }
+      })
+    }
   }
 
   function handleMouseUp() { setDragIdx(null) }
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
-    if (!activeLimbId || !activeHF || editPhase !== 'bridge') return
+    if (!activeLimbId || editPhase !== 'bridge') return
     const imgPt = screenToImage(e.clientX, e.clientY)
     const t = transformRef.current
     const hitR = HIT_RADIUS / t.scale
 
     const bpIdx = hitTestBridgePoint(imgPt, hitR)
     if (bpIdx >= 0) {
-      setHiddenFaces(prev => {
-        const hf = prev[activeLimbId]
-        if (!hf) return prev
-        const pts = [...hf.bridgePoints]
-        pts.splice(bpIdx, 1)
-        return { ...prev, [activeLimbId]: { ...hf, bridgePoints: pts } }
-      })
+      if (mode === 'body') {
+        setHiddenFaces(prev => {
+          const hf = prev[activeLimbId]
+          if (!hf) return prev
+          const pts = [...hf.bridgePoints]; pts.splice(bpIdx, 1)
+          return { ...prev, [activeLimbId]: { ...hf, bridgePoints: pts } }
+        })
+      } else {
+        setLimbHiddenFaces(prev => {
+          const hfl = prev[activeLimbId]
+          if (!hfl) return prev
+          const pts = [...hfl.bridgePoints]; pts.splice(bpIdx, 1)
+          return { ...prev, [activeLimbId]: { ...hfl, bridgePoints: pts } }
+        })
+      }
     }
   }
 
@@ -450,31 +715,45 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
 
   function handleReset() {
     if (!activeLimbId) return
-    setHiddenFaces(prev => ({
-      ...prev,
-      [activeLimbId]: { vertexA: null, vertexB: null, bridgePoints: [], bodyTriangleIndices: [], generated: false },
-    }))
-    // Reset body to original + regenerate other faces
-    setWorkBodyPoints([...(separation?.bodyPoints ?? [])])
-    setWorkBodyTriangles([...(separation?.bodyTriangles ?? [])])
-    // Reset all generated faces
-    setHiddenFaces(prev => {
-      const copy = { ...prev }
-      for (const key of Object.keys(copy)) {
-        if (key !== activeLimbId) {
-          copy[key] = { ...copy[key], generated: false, bodyTriangleIndices: [] }
+    if (mode === 'body') {
+      setHiddenFaces(prev => ({
+        ...prev,
+        [activeLimbId]: { vertexA: null, vertexB: null, bridgePoints: [], bodyTriangleIndices: [], generated: false },
+      }))
+      setWorkBodyPoints([...(separation?.bodyPoints ?? [])])
+      setWorkBodyTriangles([...(separation?.bodyTriangles ?? [])])
+      setHiddenFaces(prev => {
+        const copy = { ...prev }
+        for (const key of Object.keys(copy)) {
+          if (key !== activeLimbId) {
+            copy[key] = { ...copy[key], generated: false, bodyTriangleIndices: [] }
+          }
         }
-      }
-      return copy
-    })
+        return copy
+      })
+    } else {
+      setLimbHiddenFaces(prev => ({
+        ...prev,
+        [activeLimbId]: { zoneVertexA: null, zoneVertexB: null, bridgePoints: [], zoneTriangleIndices: [], generated: false },
+      }))
+      setWorkZonePoints(prev => ({
+        ...prev,
+        [activeLimbId]: [...(separation?.zonePoints[activeLimbId] ?? [])],
+      }))
+      setWorkZoneTriangles(prev => ({
+        ...prev,
+        [activeLimbId]: [...(separation?.zoneTriangles[activeLimbId] ?? [])],
+      }))
+    }
   }
 
-  // ─── Save ───────────────────────────────────────────────────────────
+  // ─── Save ──────────────────────────────────────────────────────────
 
   async function handleSave() {
     if (!mesh || !separation) return
     setSaving(true)
     try {
+      // Build body hidden face zones
       const hiddenFaceZones: HiddenFaceZone[] = []
       for (const [limbZoneId, hf] of Object.entries(hiddenFaces)) {
         if (hf.vertexA !== null && hf.vertexB !== null && hf.bodyTriangleIndices.length > 0) {
@@ -488,11 +767,30 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
         }
       }
 
+      // Build limb hidden face zones
+      const hiddenFaceLimbZones: HiddenFaceLimbZone[] = []
+      for (const [limbZoneId, hfl] of Object.entries(limbHiddenFaces)) {
+        if (hfl.zoneVertexA !== null && hfl.zoneVertexB !== null && hfl.zoneTriangleIndices.length > 0) {
+          hiddenFaceLimbZones.push({
+            limbZoneId,
+            zoneVertexA: hfl.zoneVertexA,
+            zoneVertexB: hfl.zoneVertexB,
+            bridgePoints: hfl.bridgePoints,
+            zoneTriangleIndices: hfl.zoneTriangleIndices,
+          })
+        }
+      }
+
+      console.log('[WalkHiddenFace] save — body HF:', hiddenFaceZones.length, 'limb HF:', hiddenFaceLimbZones.length, 'limbHiddenFaces state:', JSON.stringify(Object.entries(limbHiddenFaces).map(([k, v]) => ({ id: k, vertA: v.zoneVertexA, vertB: v.zoneVertexB, bridge: v.bridgePoints.length, tris: v.zoneTriangleIndices.length, gen: v.generated }))))
+
       const updatedSeparation: WalkLimbSeparation = {
         ...separation,
         bodyPoints: workBodyPoints,
         bodyTriangles: workBodyTriangles,
+        zonePoints: { ...separation.zonePoints, ...workZonePoints },
+        zoneTriangles: { ...separation.zoneTriangles, ...workZoneTriangles },
         hiddenFaceZones: hiddenFaceZones.length > 0 ? hiddenFaceZones : undefined,
+        hiddenFaceLimbZones: hiddenFaceLimbZones.length > 0 ? hiddenFaceLimbZones : undefined,
       }
 
       const updatedMesh = {
@@ -514,7 +812,7 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
     setSaving(false)
   }
 
-  // ─── Render ─────────────────────────────────────────────────────────
+  // ─── Render ────────────────────────────────────────────────────────
 
   if (!separation) {
     return (
@@ -524,8 +822,11 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
     )
   }
 
-  const enabledCount = Object.keys(hiddenFaces).length
-  const generatedCount = Object.values(hiddenFaces).filter(hf => hf.generated).length
+  const currentFaces = mode === 'body' ? hiddenFaces : limbHiddenFaces
+  const enabledCount = Object.keys(currentFaces).length
+  const generatedCount = mode === 'body'
+    ? Object.values(hiddenFaces).filter(hf => hf.generated).length
+    : Object.values(limbHiddenFaces).filter(hfl => hfl.generated).length
 
   return (
     <div style={{ display: 'flex', gap: 16, height: '100%' }}>
@@ -542,9 +843,13 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
           {!activeLimbId
             ? 'Activez une face cachee pour une patte.'
             : editPhase === 'select-a'
-              ? 'Cliquez sur un sommet du contour body (point A).'
+              ? mode === 'body'
+                ? 'Cliquez sur un sommet du contour body (point A).'
+                : 'Cliquez sur un sommet du contour de la patte (point A).'
               : editPhase === 'select-b'
-                ? 'Cliquez sur un 2e sommet du contour body (point B).'
+                ? mode === 'body'
+                  ? 'Cliquez sur un 2e sommet du contour body (point B).'
+                  : 'Cliquez sur un 2e sommet du contour de la patte (point B).'
                 : editPhase === 'bridge'
                   ? 'Placez des points entre A et B. Drag = deplacer. Clic droit = supprimer. Puis "Generer".'
                   : 'Triangulation generee. Vous pouvez valider ou reinitialiser.'}
@@ -552,15 +857,35 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
       </div>
 
       <div style={{ width: 260, flexShrink: 0, overflowY: 'auto' }}>
-        <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>Face cachee</h3>
+        {/* Mode toggle */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+          <button
+            className={`btn-sm ${mode === 'body' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => { setMode('body'); setActiveLimbId(null) }}
+            style={{ flex: 1, fontSize: 11 }}
+          >
+            Face cachee body
+          </button>
+          <button
+            className={`btn-sm ${mode === 'limb' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => { setMode('limb'); setActiveLimbId(null) }}
+            style={{ flex: 1, fontSize: 11 }}
+          >
+            Face cachee jambe
+          </button>
+        </div>
+
         <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 12 }}>
-          Definissez un maillage derriere chaque patte pour combler les trous.
+          {mode === 'body'
+            ? 'Maillage derriere chaque patte (corps cache par la patte).'
+            : 'Extension de la patte (partie cachee derriere le corps).'}
         </div>
 
         {separation.zones.map(zone => {
-          const isEnabled = !!hiddenFaces[zone.id]
+          const isEnabled = mode === 'body' ? !!hiddenFaces[zone.id] : !!limbHiddenFaces[zone.id]
           const isActive = zone.id === activeLimbId
-          const hf = hiddenFaces[zone.id]
+          const hf = mode === 'body' ? hiddenFaces[zone.id] : null
+          const hfl = mode === 'limb' ? limbHiddenFaces[zone.id] : null
           return (
             <div key={zone.id} style={{ marginBottom: 6 }}>
               <div
@@ -580,21 +905,32 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
                   <span style={{ color: '#e5e7eb', fontWeight: 500, flex: 1 }}>{zone.label}</span>
                   <button
                     className={`btn-sm ${isEnabled ? 'btn-ghost' : 'btn-secondary'}`}
-                    onClick={(e) => { e.stopPropagation(); toggleHiddenFace(zone.id) }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (mode === 'body') toggleBodyHiddenFace(zone.id)
+                      else toggleLimbHiddenFace(zone.id)
+                    }}
                     style={{ fontSize: 10, padding: '2px 6px' }}
                   >
                     {isEnabled ? '✕' : '+ Activer'}
                   </button>
                 </div>
-                {isEnabled && hf && (
+                {mode === 'body' && hf && (
                   <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>
                     {hf.generated
                       ? `${hf.bodyTriangleIndices.length} triangles generes`
                       : hf.vertexA !== null && hf.vertexB !== null
                         ? `A=${hf.vertexA} B=${hf.vertexB} · ${hf.bridgePoints.length} pts bridge`
-                        : hf.vertexA !== null
-                          ? 'Point A selectionne, cliquez B...'
-                          : 'Selectionnez le point A...'}
+                        : hf.vertexA !== null ? 'Point A selectionne, cliquez B...' : 'Selectionnez le point A...'}
+                  </div>
+                )}
+                {mode === 'limb' && hfl && (
+                  <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>
+                    {hfl.generated
+                      ? `${hfl.zoneTriangleIndices.length} triangles generes`
+                      : hfl.zoneVertexA !== null && hfl.zoneVertexB !== null
+                        ? `A=${hfl.zoneVertexA} B=${hfl.zoneVertexB} · ${hfl.bridgePoints.length} pts bridge`
+                        : hfl.zoneVertexA !== null ? 'Point A selectionne, cliquez B...' : 'Selectionnez le point A...'}
                   </div>
                 )}
               </div>
@@ -603,9 +939,9 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
         })}
 
         {/* Action buttons for active face */}
-        {activeLimbId && activeHF && (
+        {activeLimbId && (activeBodyHF || activeLimbHF) && (
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {editPhase === 'bridge' && activeHF.bridgePoints.length >= 0 && (
+            {editPhase === 'bridge' && (
               <button
                 className="btn-sm btn-secondary"
                 onClick={handleGenerate}
@@ -614,7 +950,7 @@ export default function WalkHiddenFaceStep({ project, animation, onSave }: Props
                 Generer la triangulation
               </button>
             )}
-            {(editPhase !== 'select-a' || activeHF.generated) && (
+            {(editPhase !== 'select-a' || (mode === 'body' ? activeBodyHF?.generated : activeLimbHF?.generated)) && (
               <button
                 className="btn-sm btn-ghost"
                 onClick={handleReset}

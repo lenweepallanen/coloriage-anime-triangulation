@@ -8,7 +8,7 @@ import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { DeviceParallax } from '../../utils/deviceParallax'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
-import { inpaintHiddenFaceOnScan } from '../../utils/hiddenFaceTexture'
+import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
@@ -354,25 +354,32 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     let zoneMeshSetup: ZoneMeshSetup | null = null
 
     if (walkAnim?.mesh?.walkLimbSeparation) {
+      const sep = walkAnim.mesh.walkLimbSeparation
+
+      // Generate per-limb extension textures via texture mirroring (synchronous)
+      let hflTextures: Record<string, PIXI.Texture> | undefined
+      if (sep.hiddenFaceLimbZones && sep.hiddenFaceLimbZones.length > 0) {
+        hflTextures = {}
+        for (const hfl of sep.hiddenFaceLimbZones) {
+          const zonePts = sep.zonePoints[hfl.limbZoneId]
+          const zoneTris = sep.zoneTriangles[hfl.limbZoneId]
+          if (!zonePts || !zoneTris) continue
+          const hflCanvas = document.createElement('canvas')
+          hflCanvas.width = scanCanvas.width
+          hflCanvas.height = scanCanvas.height
+          hflCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+          flowExtrudeLimbOnScan(hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+          hflTextures[hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
+        }
+      }
+
       zoneMeshSetup = buildZoneMeshes(
-        walkAnim.mesh.walkLimbSeparation,
-        allPoints,
-        mesh.triangles,
-        texture,
-        scanCanvas.width,
-        scanCanvas.height,
-        scale,
-        offsetX,
-        offsetY,
-        contentAlignment ?? undefined,
-        hfTexture,
+        sep, allPoints, mesh.triangles, texture,
+        scanCanvas.width, scanCanvas.height, scale, offsetX, offsetY,
+        contentAlignment ?? undefined, hfTexture, hflTextures,
       )
       meshContainer.addChild(zoneMeshSetup.container)
-      // Hide the zone mesh container by default (shown during walk playback)
       zoneMeshSetup.container.visible = false
-
-      // Hidden face meshes use the same scan texture (already inpainted above)
-      // — no separate texture or UV replacement needed.
     }
 
     // Main mesh (used for rest + non-walk animations)
@@ -514,6 +521,16 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           if (bodyFrame && zoneMeshSetup.hiddenFaceMeshes) {
             for (const hfm of zoneMeshSetup.hiddenFaceMeshes) {
               updateZoneMeshVertices(hfm, bodyFrame, scale, offsetX, offsetY)
+            }
+          }
+          // Update hidden face limb meshes (same zoneFrames, same zonePoints)
+          if (zoneMeshSetup.hiddenFaceLimbMeshes) {
+            for (const hflm of zoneMeshSetup.hiddenFaceLimbMeshes) {
+              const zoneId = hflm.zoneId.replace('__hfl_', '')
+              const zoneFrame = walkZoneFrames[zoneId]?.[walkFrameCounter]
+              if (zoneFrame) {
+                updateZoneMeshVertices(hflm, zoneFrame, scale, offsetX, offsetY)
+              }
             }
           }
         } else {
