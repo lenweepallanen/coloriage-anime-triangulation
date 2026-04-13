@@ -674,6 +674,8 @@ export default function MembersBonesContourAnchorTrackingStep({ project, onSave 
         sam2ContourAnchorFrames: anchorFramesRef.current,
         sam2ContourSubdivisionFrames: subdivFramesRef.current,
         sam2ContourAnchorTrackingValidated: true,
+        // Invalidate downstream step 9 (bones) when tracking is recomputed
+        sam2BonesValidated: false,
       }
       await onSave(
         { ...project, mesh: updated },

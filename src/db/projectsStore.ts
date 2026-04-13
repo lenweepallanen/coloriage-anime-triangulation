@@ -75,6 +75,13 @@ interface MeshDoc {
   sam2ContourAnchorTrackingValidated?: boolean
   hasSam2ContourAnchorFrames?: boolean
   hasSam2ContourSubdivisionFrames?: boolean
+  // Étape 9 "Bones par zone"
+  sam2Skeleton?: import('../types/project').Sam2Skeleton
+  sam2BonesValidated?: boolean
+  // Étape 10 "Lissage Bones"
+  sam2SmoothingCutoffHz?: number
+  sam2SmoothingValidated?: boolean
+  hasSam2SmoothedAnchorFrames?: boolean
 }
 
 // Legacy formats (v1-v3)
@@ -423,6 +430,13 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     ...(mesh.sam2ContourAnchorTrackingValidated != null && { sam2ContourAnchorTrackingValidated: mesh.sam2ContourAnchorTrackingValidated }),
     hasSam2ContourAnchorFrames: mesh.sam2ContourAnchorFrames != null,
     hasSam2ContourSubdivisionFrames: mesh.sam2ContourSubdivisionFrames != null,
+    // Étape 9 "Bones par zone"
+    ...(mesh.sam2Skeleton != null && { sam2Skeleton: mesh.sam2Skeleton }),
+    ...(mesh.sam2BonesValidated != null && { sam2BonesValidated: mesh.sam2BonesValidated }),
+    // Étape 10 "Lissage Bones"
+    ...(mesh.sam2SmoothingCutoffHz != null && { sam2SmoothingCutoffHz: mesh.sam2SmoothingCutoffHz }),
+    ...(mesh.sam2SmoothingValidated != null && { sam2SmoothingValidated: mesh.sam2SmoothingValidated }),
+    hasSam2SmoothedAnchorFrames: mesh.sam2SmoothedAnchorFrames != null,
   }
 }
 
@@ -504,7 +518,7 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh' |
   'walkZoneFrames' | 'walkBodyFrames' | 'walkHiddenFaceFrames' |
   'sam2MasksRLE' |
-  'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames'>
+  'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames' | 'sam2SmoothedAnchorFrames'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -605,6 +619,12 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     sam2ContourSubdivisionParams: d.sam2ContourSubdivisionParams,
     sam2ContourSubdivisionValidated: d.sam2ContourSubdivisionValidated,
     sam2ContourAnchorTrackingValidated: d.sam2ContourAnchorTrackingValidated,
+    // Étape 9 "Bones par zone"
+    sam2Skeleton: d.sam2Skeleton,
+    sam2BonesValidated: d.sam2BonesValidated,
+    // Étape 10 "Lissage Bones"
+    sam2SmoothingCutoffHz: d.sam2SmoothingCutoffHz,
+    sam2SmoothingValidated: d.sam2SmoothingValidated,
   }
 }
 
@@ -632,6 +652,7 @@ async function loadAnimationJSON(
   sam2ContourOriginFrames: Record<string, Point2D[]> | null
   sam2ContourAnchorFrames: Record<string, Point2D[][]> | null
   sam2ContourSubdivisionFrames: Record<string, Point2D[][]> | null
+  sam2SmoothedAnchorFrames: Record<string, Point2D[][]> | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
   const path = (file: string) =>
@@ -655,6 +676,7 @@ async function loadAnimationJSON(
     meshDoc.hasSam2ContourOriginFrames ? downloadJSON<Record<string, Point2D[]>>(path('sam2ContourOriginFrames.json')) : null,
     meshDoc.hasSam2ContourAnchorFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2ContourAnchorFrames.json')) : null,
     meshDoc.hasSam2ContourSubdivisionFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2ContourSubdivisionFrames.json')) : null,
+    meshDoc.hasSam2SmoothedAnchorFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2SmoothedAnchorFrames.json')) : null,
   ])
 
   return {
@@ -675,6 +697,7 @@ async function loadAnimationJSON(
     sam2ContourOriginFrames: downloads[14] as Record<string, Point2D[]> | null,
     sam2ContourAnchorFrames: downloads[15] as Record<string, Point2D[][]> | null,
     sam2ContourSubdivisionFrames: downloads[16] as Record<string, Point2D[][]> | null,
+    sam2SmoothedAnchorFrames: downloads[17] as Record<string, Point2D[][]> | null,
   }
 }
 
@@ -890,6 +913,7 @@ function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
     sam2ContourOriginFrames: null,
     sam2ContourAnchorFrames: null,
     sam2ContourSubdivisionFrames: null,
+    sam2SmoothedAnchorFrames: null,
   }
 }
 
@@ -1098,6 +1122,7 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         sam2ContourOriginFrames: 'sam2ContourOriginFrames.json',
         sam2ContourAnchorFrames: 'sam2ContourAnchorFrames.json',
         sam2ContourSubdivisionFrames: 'sam2ContourSubdivisionFrames.json',
+        sam2SmoothedAnchorFrames: 'sam2SmoothedAnchorFrames.json',
       }
       const storagePath = animStoragePath(
         id,
@@ -1138,6 +1163,7 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           sam2ContourOriginFrames: anim.mesh.sam2ContourOriginFrames,
           sam2ContourAnchorFrames: anim.mesh.sam2ContourAnchorFrames,
           sam2ContourSubdivisionFrames: anim.mesh.sam2ContourSubdivisionFrames,
+          sam2SmoothedAnchorFrames: anim.mesh.sam2SmoothedAnchorFrames,
         }
         const data = jsonFieldMap[field]
         const isNonEmpty = data != null && (Array.isArray(data) ? data.length > 0 : (typeof data === 'object' ? Object.keys(data).length > 0 : true))
@@ -1177,6 +1203,7 @@ const ANIM_JSON_FILES = [
   'sam2ContourOriginFrames.json',
   'sam2ContourAnchorFrames.json',
   'sam2ContourSubdivisionFrames.json',
+  'sam2SmoothedAnchorFrames.json',
 ]
 
 export async function deleteProject(id: string): Promise<void> {

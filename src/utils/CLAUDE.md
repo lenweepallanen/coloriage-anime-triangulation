@@ -37,6 +37,7 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `sam2Segmentation.ts` | Client API Cloud Function SAM 2 : envoi vidéo + prompts zones, réception masques RLE par zone par frame |
 | `rleMask.ts` | Utilitaires masques RLE COCO : decode/encode, pointInMask, clampPointToMask, decodeRLEMinusRLEs (soustraction body−pattes) |
 | `sam2Contour.ts` | Pipeline contours SAM 2 : extraction contour (rleToContour), lissage gaussien cyclique (smoothPolygonGaussian), soustraction body (bridgeContourAtLegs), lissage temporel (temporalSmoothContours), projection curviligne (pointToArcLength/arcLengthToPoint), subdivision par zone (computeSam2SubdivisionFramesAllZones) |
+| `sam2BoneSolver.ts` | Squelette members-bones : résolution positions joints/pattes par barycentre sur anchors de zone (`computeSam2Endpoint`), IK 2-bones pour genoux (`computeLegRestPose`, `resolveLegBone`), résolution squelette complet par frame (`resolveSkeletonFrame`) |
 
 ## autoMeshGenerator.ts
 

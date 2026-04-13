@@ -126,7 +126,7 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 ### Pipeline physics (1 étape)
 1. **Code Editeur** — Éditeur de code JS avec preview PIXI temps réel + pré-calcul des frames
 
-### Pipeline members-bones (8 étapes — SAM 2 + triangulation par zone, déterministe)
+### Pipeline members-bones (10 étapes — SAM 2 + bones barycentriques + lissage)
 1. **Vidéo** — Upload vidéo d'animation (autonome : pas d'image originale ni de géométrie héritée)
 2. **Définir Zones** — Définition de 5 zones (body + 4 pattes) avec clics SAM 2 natifs (1-3 prompts foreground/background par zone) sur la frame 0. Appel `requestSam2Segmentation` → masques RLE par frame par zone. Stocké dans `mesh.sam2Zones`/`sam2Prompts`/`sam2MasksRLE` (Storage `sam2Masks.json`).
 3. **Lissage Contours** — Extraction du contour externe de chaque masque RLE via `cv.findContours` (worker OpenCV) puis lissage gaussien 1D cyclique sur les coordonnées x/y du polygone (sigma configurable, défaut 3 px). **Soustraction body** : le masque body est nettoyé des masques pattes (`decodeRLEMinusRLEs`) avant extraction du contour, puis `bridgeContourAtLegs` saute les portions du contour body qui longent un contour de patte (threshold configurable, défaut 8 px). Lissage temporel (`temporalSmoothContours`, moving average 3 frames, 300 pts resamplés en arc-length) sur le body pour éliminer le jitter frame-à-frame. Stocké dans `mesh.sam2Contours: Record<zoneId, Point2D[][]>` (en pixels VIDÉO). Storage `sam2Contours.json`.
@@ -135,8 +135,8 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 6. **Anchors par zone** — Placement statique des anchors caractéristiques sur le contour lissé de chaque zone (P0 inclus comme premier anchor). Auto-détection par courbure CSS (`detectCurvatureExtrema`). **Tri par arc-length sur le contour réordonné depuis P0** (pas le contour brut) pour que la chaîne soit P0→1→2→...→n→P0. `mesh.sam2ContourAnchors: Record<zoneId, Point2D[]>`.
 7. **Subdivision par zone** — Compteurs +/- par segment et global. Segments cycliques : P0→1, 1→2, ..., n→P0. Réutilise `subdivideContour` du pipeline rest sur les contours SAM 2 lissés. `mesh.sam2ContourSubdivisionPoints/Params: Record<zoneId, ...>`.
 8. **Tracking Anchors zones** — Calcul **déterministe instantané** : pour chaque anchor et chaque point de subdivision, on calcule sa coordonnée curviligne `s_i` à frame 0 puis on échantillonne le contour de chaque frame à `s_i`. Stocke `mesh.sam2ContourAnchorFrames` + `sam2ContourSubdivisionFrames` en `Record<zoneId, Point2D[][]>` (Storage JSON).
-
-À l'étape 8, chaque zone dispose de sa géométrie complète frame par frame (anchors + subdivision). La suite du pipeline (placement points internes, triangulation Delaunay, ARAP, etc.) sera ajoutée dans une itération ultérieure.
+9. **Bones par zone** — Définition du squelette : **colonne vertébrale** (chaîne de joints, multi-clic puis clic droit pour finir) + **pattes** (hip/foot par barycentre sur anchors, genou par IK 2-bones draggable). Chaque endpoint est positionné par barycentre entre 1-2 anchors de zone (`Sam2BoneEndpointRef { zoneId, anchorIndexA, anchorIndexB, t }`). Preview vidéo + contours lissés + squelette animé frame par frame. `mesh.sam2Skeleton`, `mesh.sam2BonesValidated`.
+10. **Lissage Bones** — Lissage temporel Butterworth (cutoff Hz configurable) sur les anchor frames pour éliminer le tremblement des bones. Stocke `mesh.sam2SmoothedAnchorFrames` séparément (les frames bruts restent intacts). Preview comparaison brut/lissé. `mesh.sam2SmoothingValidated`.
 
 **Pourquoi pas d'optical flow** : le contour SAM 2 lissé fournit déjà une géométrie cohérente frame par frame, donc le tracking se réduit à un échantillonnage par coordonnée curviligne. CoTracker a été retiré (ne servait à rien après SAM 2). Aucune ressource cloud nécessaire après l'étape 2 (calcul SAM 2).
 
@@ -279,6 +279,7 @@ src/
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
 │   ├── bodyZoneUtils.ts        Détection zones corporelles (triangle→zone, hit test, touch detection)
 │   ├── boneSolver.ts           Déformation squelettique (bones, auto-weights, LBS, forward kinematics)
+│   ├── sam2BoneSolver.ts       Squelette members-bones (résolution barycentrique par zone, IK genoux)
 │   ├── walkSolver.ts           Cinématique marche quadrupède (squelette, IK, LBS, séparation zones)
 │   ├── limbSeparation.ts       Séparation membres/corps (Bézier→polygone, Delaunay par zone, patch manuel body, triangulation face cachée)
 │   ├── bezierUtils.ts          Utilitaires courbes Bézier (flatten, expand, évaluation)
@@ -410,6 +411,34 @@ Bone {
   fixedLength: boolean                   // si true, longueur constante (rest pose)
   elbowPos: Point2D | null              // position du coude au repos (null = pas de coude)
   elbowMode: ElbowMode                  // mode de choix du côté du pli
+}
+
+Sam2BoneEndpointRef {
+  zoneId: string                         // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  anchorIndexA: number                   // index dans sam2ContourAnchors[zoneId]
+  anchorIndexB: number                   // si A === B → snap sur anchor A
+  t: number                              // barycentre : position = A + t × (B − A). 0=A, 1=B
+}
+
+Sam2BodyJoint {
+  id: string
+  name: string
+  ref: Sam2BoneEndpointRef
+}
+
+Sam2LegBone {
+  id: string
+  zoneId: string                         // 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  name: string
+  hip: Sam2BoneEndpointRef
+  foot: Sam2BoneEndpointRef
+  kneeRestPos: Point2D                   // position repos du genou (vidéo coords), défaut midpoint hip↔foot
+  kneeMode: ElbowMode                    // 'rest' | 'centroid' | 'continuity'
+}
+
+Sam2Skeleton {
+  bodyChain: Sam2BodyJoint[]             // chaîne ordonnée, min 2 joints pour 1 segment
+  legs: Sam2LegBone[]                    // 0-4 pattes
 }
 
 SceneBackgroundLayer {

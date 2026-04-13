@@ -45,6 +45,40 @@ export interface Bone {
   elbowMode: ElbowMode;    // 'rest' = côté fixé au placement, 'centroid' = vers intérieur mesh, 'continuity' = frame précédente
 }
 
+// ─── Members-Bones Skeleton types (pipeline members-bones, étape 9) ─────
+
+/** Zone-aware endpoint reference — barycentric between 1 or 2 zone anchors */
+export interface Sam2BoneEndpointRef {
+  zoneId: string;           // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  anchorIndexA: number;     // index into sam2ContourAnchors[zoneId]
+  anchorIndexB: number;     // same zone. If A === B → snaps to anchor A
+  t: number;                // barycentric weight: position = A + t × (B − A). 0=A, 1=B, 0.5=midpoint
+}
+
+/** Joint in the body chain — consecutive joints form bone segments */
+export interface Sam2BodyJoint {
+  id: string;               // crypto.randomUUID()
+  name: string;             // 'Cou', 'Poitrine', 'Hanches'...
+  ref: Sam2BoneEndpointRef;
+}
+
+/** Leg bone with IK knee (reuses ElbowMode from bone animations) */
+export interface Sam2LegBone {
+  id: string;
+  zoneId: string;           // 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  name: string;
+  hip: Sam2BoneEndpointRef;
+  foot: Sam2BoneEndpointRef;
+  kneeRestPos: Point2D;     // rest pose knee position (video coords)
+  kneeMode: ElbowMode;      // 'rest' | 'centroid' | 'continuity'
+}
+
+/** Complete skeleton definition for members-bones animations */
+export interface Sam2Skeleton {
+  bodyChain: Sam2BodyJoint[];  // ordered chain, minimum 2 joints for 1 segment
+  legs: Sam2LegBone[];         // 0-4 legs
+}
+
 export interface MeshData {
   // Étape 2 : Paramètres Canny validés
   cannyParams: CannyParams | null;
@@ -131,6 +165,15 @@ export interface MeshData {
   sam2ContourAnchorFrames?: Record<string, Point2D[][]> | null;  // zoneId → frame → positions anchors
   sam2ContourSubdivisionFrames?: Record<string, Point2D[][]> | null;  // zoneId → frame → positions subdivision
   sam2ContourAnchorTrackingValidated?: boolean;
+
+  // Étape 9 "Bones par zone" — définition squelette members-bones
+  sam2Skeleton?: Sam2Skeleton;
+  sam2BonesValidated?: boolean;
+
+  // Étape 10 "Lissage Bones" — lissage temporel des anchor frames pour stabiliser les bones
+  sam2SmoothedAnchorFrames?: Record<string, Point2D[][]> | null;
+  sam2SmoothingCutoffHz?: number;  // Butterworth cutoff frequency (défaut 4)
+  sam2SmoothingValidated?: boolean;
 
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;

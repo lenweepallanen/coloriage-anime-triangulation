@@ -27,6 +27,8 @@ import MembersBonesContourOriginTrackingStep from './MembersBonesContourOriginTr
 import MembersBonesContourAnchorsStep from './MembersBonesContourAnchorsStep'
 import MembersBonesContourSubdivisionStep from './MembersBonesContourSubdivisionStep'
 import MembersBonesContourAnchorTrackingStep from './MembersBonesContourAnchorTrackingStep'
+import MembersBonesBoneStep from './MembersBonesBoneStep'
+import MembersBonesSmoothingStep from './MembersBonesSmoothingStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -57,6 +59,8 @@ const MEMBERS_BONES_STEPS = [
   'Anchors par zone',
   'Subdivision par zone',
   'Tracking Anchors zones',
+  'Bones par zone',
+  'Lissage Bones',
 ] as const
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number]
@@ -87,6 +91,8 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Anchors par zone': 'Anchors',
   'Subdivision par zone': 'Subdiv.',
   'Tracking Anchors zones': 'Track Anc.',
+  'Bones par zone': 'Bones',
+  'Lissage Bones': 'Lissage',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -119,6 +125,8 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Anchors par zone': return allZonesFilled(mesh, mesh?.sam2ContourAnchors) ? 'done' : 'pending'
     case 'Subdivision par zone': return mesh?.sam2ContourSubdivisionValidated ? 'done' : 'pending'
     case 'Tracking Anchors zones': return mesh?.sam2ContourAnchorTrackingValidated ? 'done' : 'pending'
+    case 'Bones par zone': return mesh?.sam2BonesValidated ? 'done' : 'pending'
+    case 'Lissage Bones': return mesh?.sam2SmoothingValidated ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -315,6 +323,12 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         )}
         {activeStep === 'Tracking Anchors zones' && (
           <MembersBonesContourAnchorTrackingStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Bones par zone' && (
+          <MembersBonesBoneStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Lissage Bones' && (
+          <MembersBonesSmoothingStep project={stepView} onSave={stepSave} />
         )}
       </div>
     </div>
