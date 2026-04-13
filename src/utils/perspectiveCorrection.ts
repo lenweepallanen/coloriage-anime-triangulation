@@ -191,6 +191,64 @@ export async function flowCleanup(): Promise<void> {
   await workerRpc({ type: 'flow-cleanup' }, 'flow-cleanup-done')
 }
 
+/**
+ * Extract the largest external contour from a binary mask. Used by sam2Contour.ts
+ * to convert a SAM 2 mask (decoded from RLE via decodeRLE) into an ordered polygon.
+ *
+ * @param mask    Uint8Array of length width*height (row-major), 0/1 binary
+ * @param width   mask width in pixels
+ * @param height  mask height in pixels
+ * @returns       Ordered polygon points (Point2D[]) in mask coordinates, or [] if no contour
+ */
+export async function flowMaskToContour(
+  mask: Uint8Array,
+  width: number,
+  height: number
+): Promise<{ x: number; y: number }[]> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'mask-to-contour',
+    mask,
+    width,
+    height,
+  }, 'mask-to-contour-result')
+  return result.points || []
+}
+
+export interface TemplateMatchResult {
+  x: number
+  y: number
+  score: number
+}
+
+/**
+ * Template matching "jump" entre 2 frames arbitraires (pas de tracking incrémental).
+ * Pour chaque point, extrait un patch templateSize×templateSize dans srcImageData
+ * puis cherche la meilleure correspondance NCC dans une fenêtre searchRadius autour
+ * de la même position dans dstImageData.
+ *
+ * Retourne un point (et son score [-1, 1]) par point d'entrée. Si le patch est trop
+ * près du bord ou hors du tableau, le point d'entrée est retourné avec score 0.
+ */
+export async function templateMatchJump(
+  srcImageData: ImageData,
+  dstImageData: ImageData,
+  points: { x: number; y: number }[],
+  templateSize = 31,
+  searchRadius = 200
+): Promise<TemplateMatchResult[]> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'template-match-jump',
+    srcImageData: { data: srcImageData.data, width: srcImageData.width, height: srcImageData.height },
+    dstImageData: { data: dstImageData.data, width: dstImageData.width, height: dstImageData.height },
+    points,
+    templateSize,
+    searchRadius,
+  }, 'template-match-jump-result')
+  return result.points || []
+}
+
 // --- Détection bbox du dessin (pour l'alignement UV au scan) ---
 
 export interface DrawingBBox {

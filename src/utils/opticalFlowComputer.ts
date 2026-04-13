@@ -1,5 +1,5 @@
 import type { Point2D, CannyParams } from '../types/project'
-import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints, flowInitTemplates, flowExtractContourDense } from './perspectiveCorrection'
+import { flowInit, flowProcessFrame, flowCleanup, flowUpdatePoints, flowInitTemplates, flowExtractContourDense, templateMatchJump } from './perspectiveCorrection'
 import type { FlowFrameOptions } from './perspectiveCorrection'
 import {
   buildAnchorAdjacency,
@@ -713,5 +713,58 @@ export async function precomputeOpticalFlow(
     videoFramesMesh: normalizedFrames,
     fps,
     contourDebug: useContourRefinement ? contourDebugData : undefined,
+  }
+}
+
+/**
+ * Track a set of points directly from one frame to another via template matching (NCC).
+ * Unlike `trackSegment`, this does NOT iterate frame-by-frame — it compares only the
+ * source frame and the destination frame. The returned positions correspond to the
+ * destination frame only.
+ *
+ * - Patches are extracted from the source frame at each point
+ * - For each patch, the best NCC match is searched in a `searchRadius`-pixel window
+ *   around the same position in the destination frame
+ * - Points are stored in image coordinates (converted from video coordinates internally)
+ *
+ * Returns one position (and a [-1,1] match score) per input point.
+ */
+export async function trackByTemplateJump(
+  videoBlob: Blob,
+  srcPoints: Point2D[],
+  imageWidth: number,
+  imageHeight: number,
+  srcFrameIndex: number,
+  dstFrameIndex: number,
+  templateSize = 31,
+  searchRadius = 200
+): Promise<{ points: Point2D[]; scores: number[] }> {
+  const { video, url, ctx, width: videoW, height: videoH, fps } = await prepareVideo(videoBlob)
+
+  try {
+    const srcVideoPoints = normalizePoints(srcPoints, imageWidth, imageHeight, videoW, videoH)
+
+    // Extract source and destination frames as ImageData
+    const srcImageData = await extractFrame(video, ctx, srcFrameIndex / fps, videoW, videoH)
+    const dstImageData = await extractFrame(video, ctx, dstFrameIndex / fps, videoW, videoH)
+
+    const matched = await templateMatchJump(
+      srcImageData,
+      dstImageData,
+      srcVideoPoints,
+      templateSize,
+      searchRadius
+    )
+
+    // Convert back to image coordinates
+    const points: Point2D[] = matched.map(m => ({
+      x: (m.x / videoW) * imageWidth,
+      y: (m.y / videoH) * imageHeight,
+    }))
+    const scores: number[] = matched.map(m => m.score)
+
+    return { points, scores }
+  } finally {
+    URL.revokeObjectURL(url)
   }
 }

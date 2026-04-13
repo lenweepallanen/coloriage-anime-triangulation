@@ -20,6 +20,13 @@ import WalkBoneEditorStep from './WalkBoneEditorStep'
 import WalkParamsStep from './WalkParamsStep'
 import WalkComputeStep from './WalkComputeStep'
 import WalkHiddenFaceStep from './WalkHiddenFaceStep'
+import MembersBonesZonesStep from './MembersBonesZonesStep'
+import MembersBonesContourSmoothStep from './MembersBonesContourSmoothStep'
+import MembersBonesContourOriginStep from './MembersBonesContourOriginStep'
+import MembersBonesContourOriginTrackingStep from './MembersBonesContourOriginTrackingStep'
+import MembersBonesContourAnchorsStep from './MembersBonesContourAnchorsStep'
+import MembersBonesContourSubdivisionStep from './MembersBonesContourSubdivisionStep'
+import MembersBonesContourAnchorTrackingStep from './MembersBonesContourAnchorTrackingStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -41,7 +48,18 @@ const PHYSICS_STEPS = ['Code Editeur'] as const
 
 const WALK_STEPS = ['Zones membres', 'Maillage zones', 'Face cachée', 'Bones marche', 'Paramètres', 'Calcul'] as const
 
-type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number]
+const MEMBERS_BONES_STEPS = [
+  'Vidéo',
+  'Définir Zones',
+  'Lissage Contours',
+  'P0 par zone',
+  'Tracking P0 zones',
+  'Anchors par zone',
+  'Subdivision par zone',
+  'Tracking Anchors zones',
+] as const
+
+type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number]
 
 const STEP_SHORT_LABELS: Record<string, string> = {
   'Vidéo': 'Vidéo',
@@ -62,6 +80,13 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Paramètres': 'Paramètres',
   'Face cachée': 'Face cachée',
   'Calcul': 'Calcul',
+  'Définir Zones': 'Zones',
+  'Lissage Contours': 'Lissage',
+  'P0 par zone': 'P0',
+  'Tracking P0 zones': 'Track P0',
+  'Anchors par zone': 'Anchors',
+  'Subdivision par zone': 'Subdiv.',
+  'Tracking Anchors zones': 'Track Anc.',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -87,8 +112,22 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Bones marche': return mesh?.walkSkeletonValidated ? 'done' : 'pending'
     case 'Paramètres': return mesh?.walkParamsValidated ? 'done' : 'pending'
     case 'Calcul': return (mesh?.videoFramesMesh != null || mesh?.walkZoneFrames != null) ? 'done' : 'pending'
+    case 'Définir Zones': return mesh?.sam2Validated ? 'done' : 'pending'
+    case 'Lissage Contours': return mesh?.sam2ContoursValidated ? 'done' : 'pending'
+    case 'P0 par zone': return allZonesFilled(mesh, mesh?.sam2ContourOrigins) ? 'done' : 'pending'
+    case 'Tracking P0 zones': return mesh?.sam2ContourOriginTrackingValidated ? 'done' : 'pending'
+    case 'Anchors par zone': return allZonesFilled(mesh, mesh?.sam2ContourAnchors) ? 'done' : 'pending'
+    case 'Subdivision par zone': return mesh?.sam2ContourSubdivisionValidated ? 'done' : 'pending'
+    case 'Tracking Anchors zones': return mesh?.sam2ContourAnchorTrackingValidated ? 'done' : 'pending'
     default: return 'pending'
   }
+}
+
+/** Check that the given Record has an entry for every zoneId defined in mesh.sam2Zones. */
+function allZonesFilled(mesh: MeshData | null, record: Record<string, unknown> | undefined): boolean {
+  if (!mesh?.sam2Zones || mesh.sam2Zones.length === 0) return false
+  if (!record) return false
+  return mesh.sam2Zones.every(z => record[z.id] != null)
 }
 
 /** Count how many steps are "done" for a given animation */
@@ -97,6 +136,7 @@ export function getAnimationCompletionStatus(animation: Animation): { done: numb
     : animation.type === 'physics' ? PHYSICS_STEPS
     : animation.type === 'bone' ? BONE_STEPS
     : animation.type === 'walk' ? WALK_STEPS
+    : animation.type === 'members-bones' ? MEMBERS_BONES_STEPS
     : ONESHOT_STEPS
   const mesh = animation.mesh
   const hasVideo = animation.videoBlob != null
@@ -120,10 +160,12 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
   const isPhysicsAnim = animation.type === 'physics'
   const isBoneAnim = animation.type === 'bone'
   const isWalkAnim = animation.type === 'walk'
+  const isMembersBonesAnim = animation.type === 'members-bones'
   const availableSteps = isRestAnim ? REST_STEPS
     : isPhysicsAnim ? PHYSICS_STEPS
     : isBoneAnim ? BONE_STEPS
     : isWalkAnim ? WALK_STEPS
+    : isMembersBonesAnim ? MEMBERS_BONES_STEPS
     : ONESHOT_STEPS
   const [activeStep, setActiveStep] = useState<Step>(availableSteps[0] as Step)
 
@@ -252,6 +294,27 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
             animation={animation}
             onSave={projectSave}
           />
+        )}
+        {activeStep === 'Définir Zones' && (
+          <MembersBonesZonesStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Lissage Contours' && (
+          <MembersBonesContourSmoothStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'P0 par zone' && (
+          <MembersBonesContourOriginStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Tracking P0 zones' && (
+          <MembersBonesContourOriginTrackingStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Anchors par zone' && (
+          <MembersBonesContourAnchorsStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Subdivision par zone' && (
+          <MembersBonesContourSubdivisionStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Tracking Anchors zones' && (
+          <MembersBonesContourAnchorTrackingStep project={stepView} onSave={stepSave} />
         )}
       </div>
     </div>

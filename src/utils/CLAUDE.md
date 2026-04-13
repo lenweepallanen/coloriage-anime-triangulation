@@ -34,6 +34,9 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `hiddenFaceTexture.ts` | (1) `inpaintHiddenFaceOnScan` : fallback body — K-means couleurs bordure + BFS propagation. (2) `flowExtrudeLimbOnScan` : extension patte — colonnes perpendiculaires à la corde A↔B (genou) échantillonnées dans la patte visible, lookup `column[u][dPx]` clamp en profondeur (pas de tiling cyclique) |
 | `limbMaskGenerator.ts` | Génération masque binaire PNG des zones pattes (Bézier dilatées) pour envoi à LaMa Cloud Function |
 | `lamaInpainting.ts` | Client API Cloud Function LaMa : envoi scan+masque (512px JPEG), réception résultat inpainté, upscale |
+| `sam2Segmentation.ts` | Client API Cloud Function SAM 2 : envoi vidéo + prompts zones, réception masques RLE par zone par frame |
+| `rleMask.ts` | Utilitaires masques RLE COCO : decode/encode, pointInMask, clampPointToMask, decodeRLEMinusRLEs (soustraction body−pattes) |
+| `sam2Contour.ts` | Pipeline contours SAM 2 : extraction contour (rleToContour), lissage gaussien cyclique (smoothPolygonGaussian), soustraction body (bridgeContourAtLegs), lissage temporel (temporalSmoothContours), projection curviligne (pointToArcLength/arcLengthToPoint), subdivision par zone (computeSam2SubdivisionFramesAllZones) |
 
 ## autoMeshGenerator.ts
 

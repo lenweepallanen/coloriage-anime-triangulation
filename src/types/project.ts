@@ -97,6 +97,41 @@ export interface MeshData {
   boneWeights: number[][] | null;   // [vertexIndex][boneIndex], normalisés sum=1
   bonesValidated: boolean;
 
+  // SAM 2 zones (animation type 'members-bones', étape "Définir Zones")
+  sam2Zones?: SAM2Zone[];
+  sam2Prompts?: SAM2Prompt[];
+  sam2MasksRLE?: Record<string, RLEMask[]> | null;  // zoneId → masks par frame
+  sam2VideoWidth?: number;          // dims vidéo au moment du calcul (invalidation)
+  sam2VideoHeight?: number;
+  sam2Validated?: boolean;
+
+  // Pipeline triangulation par zone SAM 2 (members-bones étapes 3-8)
+  // Étape 3 "Lissage Contours" — extraction du contour de chaque masque RLE puis lissage gaussien.
+  // Coordonnées en pixels VIDÉO (mêmes que sam2VideoWidth/Height).
+  sam2Contours?: Record<string, Point2D[][]> | null;  // zoneId → polygone par frame
+  sam2ContourSmoothSigma?: number;                    // sigma utilisé pour le lissage (UI)
+  sam2ContoursValidated?: boolean;
+
+  // Étape 4 "P0 par zone" — placement statique frame 0
+  sam2ContourOrigins?: Record<string, Point2D>;       // zoneId → P0
+
+  // Étape 5 "Tracking P0 zones" — déterministe via coordonnée curviligne
+  sam2ContourOriginFrames?: Record<string, Point2D[]> | null;  // zoneId → P0 par frame
+  sam2ContourOriginTrackingValidated?: boolean;
+
+  // Étape 6 "Anchors par zone" — placement statique frame 0 (P0 inclus comme premier anchor)
+  sam2ContourAnchors?: Record<string, Point2D[]>;     // zoneId → anchors
+
+  // Étape 7 "Subdivision par zone" — placement statique frame 0
+  sam2ContourSubdivisionPoints?: Record<string, Point2D[]>;
+  sam2ContourSubdivisionParams?: Record<string, CurvilinearParam[]>;
+  sam2ContourSubdivisionValidated?: boolean;
+
+  // Étape 8 "Tracking Anchors zones" — déterministe via coordonnée curviligne
+  sam2ContourAnchorFrames?: Record<string, Point2D[][]> | null;  // zoneId → frame → positions anchors
+  sam2ContourSubdivisionFrames?: Record<string, Point2D[][]> | null;  // zoneId → frame → positions subdivision
+  sam2ContourAnchorTrackingValidated?: boolean;
+
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;
   walkLimbSeparationValidated?: boolean;
@@ -177,6 +212,33 @@ export interface WalkLimbZone {
   legIndex: number;              // 0-3, correspondance avec les legs du squelette walk
 }
 
+// ─── SAM 2 zones (members-bones animation) ────────────────────────────
+
+/** SAM 2 prompt label : 0 = background, 1 = foreground */
+export type SAM2PromptLabel = 0 | 1
+
+/** A single SAM 2 prompt point assigned to a zone */
+export interface SAM2Prompt {
+  x: number              // image coordinates
+  y: number
+  zoneId: string         // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  label: SAM2PromptLabel
+}
+
+/** A SAM 2 zone definition (body or one of the 4 legs) */
+export interface SAM2Zone {
+  id: string             // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  label: string          // "Body", "Patte AVG", etc.
+  color: string          // hex for the editor / overlay
+}
+
+/** RLE COCO uncompressed mask, JSON-friendly. counts is alternated bg/fg run lengths,
+ *  always starting with a background run (length may be 0). */
+export interface RLEMask {
+  size: [number, number]  // [H, W] in video pixels
+  counts: number[]
+}
+
 export interface HiddenFaceZone {
   limbZoneId: string;              // réf WalkLimbZone.id (patte associée)
   bodyVertexA: number;             // index dans bodyPoints du vertex de départ du contour bridge
@@ -212,7 +274,7 @@ export interface WalkLimbSeparation {
   hiddenFaceLimbZones?: HiddenFaceLimbZone[];                  // 0-4 zones face cachée jambe
 }
 
-export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk';
+export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones';
 
 export interface Animation {
   id: string;

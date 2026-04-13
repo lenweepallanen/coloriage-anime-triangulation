@@ -37,6 +37,7 @@ Un projet contient **plusieurs animations** partageant la même image et géomé
 - **Physics** (0+) : animations procédurales par code JS. Pas de vidéo ni tracking — l'utilisateur écrit du code qui transforme les vertices du maillage. Les frames sont pré-calculées à la validation et stockées comme `videoFramesMesh`, ce qui les rend identiques aux oneshots pour le playback. Option **overlay** : si activée, l'animation se superpose instantanément à la rest loop (déplacements additifs) sans attendre la fin du cycle.
 - **Bone** (0+) : animations par déformation squelettique. Pipeline 7 étapes (vidéo + tracking des anchors comme oneshot, puis définition de bones + calcul par skinning au lieu d'ARAP). Self-contained comme physics — hérite la géométrie de rest, produit son propre `videoFramesMesh`. Utilisé comme oneshot/overlay dans le playback.
 - **Walk** (0+) : animations de marche procédurale quadrupède. Pipeline 6 étapes (squelette 18 keypoints, séparation membres par courbes Bézier, édition maillage zone par zone, face cachée derrière les pattes, paramètres cinématiques, calcul LBS). Pas de vidéo ni tracking — les positions sont calculées par cinématique inverse + LBS. Produit `videoFramesMesh` + `walkZoneFrames`/`walkBodyFrames` pour le rendu séparé par zone.
+- **Members-Bones** (0+) : type **autonome** (n'hérite pas la géométrie rest). Pipeline 4 étapes (Vidéo, Définir Zones, Définition Points, Tracking Points). Combine **SAM 2** (Meta 2024, segmentation vidéo native via Cloud Function) pour segmenter le body + 4 pattes par zone, et **CoTracker3** (Meta 2024, Cloud Function existante) pour le tracking de points caractéristiques. Pipeline robuste aux occlusions : les points caractéristiques sont auto-tagués à leur zone via le masque SAM 2 frame 0, et **clampés dans leur zone** au tracking si CoTracker les fait drift hors de leur masque. Stockage : `mesh.sam2Zones`/`sam2Prompts`/`sam2MasksRLE` (RLE COCO compact) + `mesh.anchorPointZoneIds` parallèle à `anchorPoints`.
 
 ### Topologie partagée
 
@@ -124,6 +125,20 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 
 ### Pipeline physics (1 étape)
 1. **Code Editeur** — Éditeur de code JS avec preview PIXI temps réel + pré-calcul des frames
+
+### Pipeline members-bones (8 étapes — SAM 2 + triangulation par zone, déterministe)
+1. **Vidéo** — Upload vidéo d'animation (autonome : pas d'image originale ni de géométrie héritée)
+2. **Définir Zones** — Définition de 5 zones (body + 4 pattes) avec clics SAM 2 natifs (1-3 prompts foreground/background par zone) sur la frame 0. Appel `requestSam2Segmentation` → masques RLE par frame par zone. Stocké dans `mesh.sam2Zones`/`sam2Prompts`/`sam2MasksRLE` (Storage `sam2Masks.json`).
+3. **Lissage Contours** — Extraction du contour externe de chaque masque RLE via `cv.findContours` (worker OpenCV) puis lissage gaussien 1D cyclique sur les coordonnées x/y du polygone (sigma configurable, défaut 3 px). **Soustraction body** : le masque body est nettoyé des masques pattes (`decodeRLEMinusRLEs`) avant extraction du contour, puis `bridgeContourAtLegs` saute les portions du contour body qui longent un contour de patte (threshold configurable, défaut 8 px). Lissage temporel (`temporalSmoothContours`, moving average 3 frames, 300 pts resamplés en arc-length) sur le body pour éliminer le jitter frame-à-frame. Stocké dans `mesh.sam2Contours: Record<zoneId, Point2D[][]>` (en pixels VIDÉO). Storage `sam2Contours.json`.
+4. **P0 par zone** — Placement statique d'un point d'origine P0 sur un **extremum de courbure** du contour lissé de chaque zone (à frame 0). Snap sur les top-20 extrema détectés par `detectCurvatureExtrema` (affichés en orange, rayon snap 50 px video). Sélecteur de zone active. `mesh.sam2ContourOrigins: Record<zoneId, Point2D>`.
+5. **Tracking P0 zones** — Calcul **déterministe** : pour chaque zone, `s_0 = pointToArcLength(P0, contour_frame_0)` puis pour chaque frame, échantillonnage à `s_0` + **snap sur l'extremum de courbure le plus proche** en distance d'arc circulaire (`detectGlobalCurvatureExtrema`, top 20). `mesh.sam2ContourOriginFrames: Record<zoneId, Point2D[]>` (Storage `sam2ContourOriginFrames.json`).
+6. **Anchors par zone** — Placement statique des anchors caractéristiques sur le contour lissé de chaque zone (P0 inclus comme premier anchor). Auto-détection par courbure CSS (`detectCurvatureExtrema`). **Tri par arc-length sur le contour réordonné depuis P0** (pas le contour brut) pour que la chaîne soit P0→1→2→...→n→P0. `mesh.sam2ContourAnchors: Record<zoneId, Point2D[]>`.
+7. **Subdivision par zone** — Compteurs +/- par segment et global. Segments cycliques : P0→1, 1→2, ..., n→P0. Réutilise `subdivideContour` du pipeline rest sur les contours SAM 2 lissés. `mesh.sam2ContourSubdivisionPoints/Params: Record<zoneId, ...>`.
+8. **Tracking Anchors zones** — Calcul **déterministe instantané** : pour chaque anchor et chaque point de subdivision, on calcule sa coordonnée curviligne `s_i` à frame 0 puis on échantillonne le contour de chaque frame à `s_i`. Stocke `mesh.sam2ContourAnchorFrames` + `sam2ContourSubdivisionFrames` en `Record<zoneId, Point2D[][]>` (Storage JSON).
+
+À l'étape 8, chaque zone dispose de sa géométrie complète frame par frame (anchors + subdivision). La suite du pipeline (placement points internes, triangulation Delaunay, ARAP, etc.) sera ajoutée dans une itération ultérieure.
+
+**Pourquoi pas d'optical flow** : le contour SAM 2 lissé fournit déjà une géométrie cohérente frame par frame, donc le tracking se réduit à un échantillonnage par coordonnée curviligne. CoTracker a été retiré (ne servait à rien après SAM 2). Aucune ressource cloud nécessaire après l'étape 2 (calcul SAM 2).
 
 ### Pipeline bone (7 étapes)
 1. **Vidéo** — Upload vidéo d'animation (image héritée du projet)
@@ -281,7 +296,7 @@ public/
 ## Modèle de données
 
 ```typescript
-AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk'
+AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones'
 
 Animation {
   id: string                         // crypto.randomUUID()
@@ -511,6 +526,54 @@ gcloud functions deploy lama-inpaint \
   --source functions/ --entry-point lama_inpaint \
   --project coloriage-anime-prod --region europe-west1
 ```
+
+## Cloud Function — SAM 2 (segmentation vidéo par zone)
+
+**Répertoire** : `sam2/` (Python 3.11, PyTorch + Meta SAM 2 Hiera Tiny via `git+facebookresearch/sam2`)
+
+**URL** : `https://sam2-segment-6gzhik6pka-ew.a.run.app` (configurable via `VITE_SAM2_FUNCTION_URL`)
+
+**Spécifications** : gen2, 4 CPU, 16GB RAM, timeout 540s, concurrency 1, min-instances 0
+
+**Protocole** :
+- `GET /` → health check (déclenche cold start, télécharge le checkpoint ~150 MB depuis HuggingFace au premier appel)
+- `POST /` → `{ video: base64-MP4, zones: [{ id: string, prompts: [{x, y, label: 0|1}] }] }` → `{ masks: { zoneId: RLEMask[] }, videoWidth, videoHeight, numFrames }`
+- `RLEMask = { size: [H, W], counts: [int] }` — format COCO uncompressed JSON-friendly, alterné bg/fg run lengths starting with bg (column-major)
+
+**Usage** : segmentation vidéo native pour le pipeline `members-bones` (étape 2 "Définir Zones"). Le client envoie la vidéo entière + des prompts SAM 2 (1-3 clics par zone) sur la frame 0. Le serveur charge SAM 2 Hiera Tiny (cache instance après cold start), décode la vidéo via OpenCV, init `predictor.init_state(video_path)`, ajoute les prompts via `add_new_points_or_box(frame_idx=0, obj_id, points, labels)`, propage avec `propagate_in_video()`, encode chaque masque binaire en RLE COCO uncompressed via `encode_rle_uncompressed()` (pure Python, JSON-friendly).
+
+**Limites** : max 50 MB par vidéo (HTTP 413), max 300 frames (cap CPU), max 5 zones. Cold start ~3-5 min (download model + init). Inference CPU ~30-90s pour vidéo courte.
+
+**Côté client** : `src/utils/sam2Segmentation.ts` (wrapper REST) + `src/utils/rleMask.ts` (decode/pointInMask/clampPointToMask/`decodeRLEMinusRLEs` pour soustraction body−pattes) + `src/utils/sam2Contour.ts` (`rleToContour` via worker `cv.findContours`, `smoothPolygonGaussian` 1D cyclique, `bridgeContourAtLegs` pour sauter les portions du contour body longeant les pattes, `temporalSmoothContours` pour le lissage frame-à-frame, `pointToArcLength`/`arcLengthToPoint` pour la projection curviligne). Les contours lissés alimentent les 5 étapes par zone (`MembersBonesContour*Step.tsx`) qui réutilisent les utilitaires curvilignes du pipeline rest (`curvilinearContour.ts`, `curvatureScaleSpace.ts`, `contourSpatialIndex.ts`).
+
+**Deploy** :
+```bash
+gcloud functions deploy sam2-segment \
+  --gen2 --runtime python311 --trigger-http --allow-unauthenticated \
+  --memory 16384MB --cpu 4 --timeout 540s --concurrency 1 \
+  --min-instances 0 --max-instances 2 \
+  --source sam2/ --entry-point sam2_segment \
+  --project coloriage-anime-prod --region europe-west1
+```
+
+## Serveur local SAM 2 MPS (Mac Apple Silicon)
+
+La Cloud Function SAM 2 en CPU est **trop lente** pour des vidéos > ~30 frames (la propagation SAM 2 sur 145 frames × 5 zones prend ~55 min en CPU et dépasse le timeout 9 min). Pour les sessions admin sur Mac M2/M3, on dispose d'un **serveur Flask local** qui expose la **même API REST** et utilise **PyTorch MPS** (GPU Metal) pour un speedup ~5-15× : `sam2-local/server.py` (port 8765).
+
+**Architecture** :
+- Helpers Python partagés dans `sam2/_common.py` (decode video, validation, run_inference). La Cloud Function et le serveur local importent les mêmes fonctions — refactor zero-coût.
+- Vite proxy (`vite.config.ts`) forwarde `https://localhost:5174/api/sam2/*` → `http://127.0.0.1:8765/*` (évite mixed-content puisque Vite est en HTTPS via basicSsl).
+- Le client TypeScript (`sam2Segmentation.ts`) bascule cloud ↔ local via la variable d'env Vite `VITE_SAM2_FUNCTION_URL` — le code REST est inchangé.
+
+**Bascule local ↔ cloud** : créer/éditer `.env.local` à la racine du projet puis **redémarrer Vite** (`npm run dev`, Vite ne hot-reload pas les env vars) :
+```
+VITE_SAM2_FUNCTION_URL=/api/sam2/
+```
+Pour repasser au cloud : commenter ou supprimer cette ligne et redémarrer Vite. La Cloud Function reste déployée comme fallback et pour les autres devs.
+
+**Setup et lancement** : voir `sam2-local/README.md`. Le pipeline admin (`MembersBonesZonesStep.tsx`) intègre un composant `LocalServerHelp.tsx` qui affiche les commandes shell prêtes à copier-coller (cliquer sur "Serveur SAM 2 local pas démarré ?").
+
+**MPS troubleshooting** : SAM 2 utilise des opérations transformer attention dont certaines ne sont pas implémentées sur MPS. Mitigation : variable d'env `PYTORCH_ENABLE_MPS_FALLBACK=1` (fallback CPU silencieux pour les ops manquantes), ou flag `--device cpu` au lancement du serveur.
 
 ## Conventions
 

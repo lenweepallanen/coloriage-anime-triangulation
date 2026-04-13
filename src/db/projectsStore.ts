@@ -54,6 +54,27 @@ interface MeshDoc {
   hasVideoFramesMesh: boolean
   hasWalkZoneFrames: boolean
   hasWalkBodyFrames: boolean
+  // SAM 2 zones (members-bones)
+  sam2Zones?: import('../types/project').SAM2Zone[]
+  sam2Prompts?: import('../types/project').SAM2Prompt[]
+  sam2VideoWidth?: number
+  sam2VideoHeight?: number
+  sam2Validated?: boolean
+  hasSam2MasksRLE?: boolean
+  // Pipeline triangulation par zone (étapes 3-8)
+  sam2ContourSmoothSigma?: number
+  sam2ContoursValidated?: boolean
+  hasSam2Contours?: boolean
+  sam2ContourOrigins?: Record<string, Point2D>
+  sam2ContourOriginTrackingValidated?: boolean
+  hasSam2ContourOriginFrames?: boolean
+  sam2ContourAnchors?: Record<string, Point2D[]>
+  sam2ContourSubdivisionPoints?: Record<string, Point2D[]>
+  sam2ContourSubdivisionParams?: Record<string, CurvilinearParam[]>
+  sam2ContourSubdivisionValidated?: boolean
+  sam2ContourAnchorTrackingValidated?: boolean
+  hasSam2ContourAnchorFrames?: boolean
+  hasSam2ContourSubdivisionFrames?: boolean
 }
 
 // Legacy formats (v1-v3)
@@ -381,6 +402,27 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     hasVideoFramesMesh: mesh.videoFramesMesh != null,
     hasWalkZoneFrames: mesh.walkZoneFrames != null,
     hasWalkBodyFrames: mesh.walkBodyFrames != null,
+    // SAM 2 (members-bones)
+    ...(mesh.sam2Zones != null && { sam2Zones: mesh.sam2Zones }),
+    ...(mesh.sam2Prompts != null && { sam2Prompts: mesh.sam2Prompts }),
+    ...(mesh.sam2VideoWidth != null && { sam2VideoWidth: mesh.sam2VideoWidth }),
+    ...(mesh.sam2VideoHeight != null && { sam2VideoHeight: mesh.sam2VideoHeight }),
+    ...(mesh.sam2Validated != null && { sam2Validated: mesh.sam2Validated }),
+    hasSam2MasksRLE: mesh.sam2MasksRLE != null,
+    // Pipeline triangulation par zone (étapes 3-8) — petits champs en Firestore, gros en Storage
+    ...(mesh.sam2ContourSmoothSigma != null && { sam2ContourSmoothSigma: mesh.sam2ContourSmoothSigma }),
+    ...(mesh.sam2ContoursValidated != null && { sam2ContoursValidated: mesh.sam2ContoursValidated }),
+    hasSam2Contours: mesh.sam2Contours != null,
+    ...(mesh.sam2ContourOrigins != null && { sam2ContourOrigins: mesh.sam2ContourOrigins }),
+    ...(mesh.sam2ContourOriginTrackingValidated != null && { sam2ContourOriginTrackingValidated: mesh.sam2ContourOriginTrackingValidated }),
+    hasSam2ContourOriginFrames: mesh.sam2ContourOriginFrames != null,
+    ...(mesh.sam2ContourAnchors != null && { sam2ContourAnchors: mesh.sam2ContourAnchors }),
+    ...(mesh.sam2ContourSubdivisionPoints != null && { sam2ContourSubdivisionPoints: mesh.sam2ContourSubdivisionPoints }),
+    ...(mesh.sam2ContourSubdivisionParams != null && { sam2ContourSubdivisionParams: mesh.sam2ContourSubdivisionParams }),
+    ...(mesh.sam2ContourSubdivisionValidated != null && { sam2ContourSubdivisionValidated: mesh.sam2ContourSubdivisionValidated }),
+    ...(mesh.sam2ContourAnchorTrackingValidated != null && { sam2ContourAnchorTrackingValidated: mesh.sam2ContourAnchorTrackingValidated }),
+    hasSam2ContourAnchorFrames: mesh.sam2ContourAnchorFrames != null,
+    hasSam2ContourSubdivisionFrames: mesh.sam2ContourSubdivisionFrames != null,
   }
 }
 
@@ -460,7 +502,9 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourAnchorKeyframes' | 'contourAnchorFrames' | 'contourSubdivisionFrames' |
   'contourCannyFrames' |
   'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh' |
-  'walkZoneFrames' | 'walkBodyFrames' | 'walkHiddenFaceFrames'>
+  'walkZoneFrames' | 'walkBodyFrames' | 'walkHiddenFaceFrames' |
+  'sam2MasksRLE' |
+  'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -545,6 +589,22 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     walkParams: d.walkParams ?? null,
     walkParamsValidated: d.walkParamsValidated ?? false,
     walkHiddenFaceValidated: d.walkHiddenFaceValidated ?? false,
+    // SAM 2 (members-bones)
+    sam2Zones: d.sam2Zones,
+    sam2Prompts: d.sam2Prompts,
+    sam2VideoWidth: d.sam2VideoWidth,
+    sam2VideoHeight: d.sam2VideoHeight,
+    sam2Validated: d.sam2Validated,
+    // Pipeline triangulation par zone (étapes 3-8)
+    sam2ContourSmoothSigma: d.sam2ContourSmoothSigma,
+    sam2ContoursValidated: d.sam2ContoursValidated,
+    sam2ContourOrigins: d.sam2ContourOrigins,
+    sam2ContourOriginTrackingValidated: d.sam2ContourOriginTrackingValidated,
+    sam2ContourAnchors: d.sam2ContourAnchors,
+    sam2ContourSubdivisionPoints: d.sam2ContourSubdivisionPoints,
+    sam2ContourSubdivisionParams: d.sam2ContourSubdivisionParams,
+    sam2ContourSubdivisionValidated: d.sam2ContourSubdivisionValidated,
+    sam2ContourAnchorTrackingValidated: d.sam2ContourAnchorTrackingValidated,
   }
 }
 
@@ -567,6 +627,11 @@ async function loadAnimationJSON(
   videoFramesMesh: Point2D[][] | null
   walkZoneFrames: Record<string, Point2D[][]> | null
   walkBodyFrames: Point2D[][] | null
+  sam2MasksRLE: Record<string, import('../types/project').RLEMask[]> | null
+  sam2Contours: Record<string, Point2D[][]> | null
+  sam2ContourOriginFrames: Record<string, Point2D[]> | null
+  sam2ContourAnchorFrames: Record<string, Point2D[][]> | null
+  sam2ContourSubdivisionFrames: Record<string, Point2D[][]> | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
   const path = (file: string) =>
@@ -585,6 +650,11 @@ async function loadAnimationJSON(
     meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(path('videoFramesMesh.json')) : null,
     meshDoc.hasWalkZoneFrames ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFrames.json')) : null,
     meshDoc.hasWalkBodyFrames ? downloadJSON<Point2D[][]>(path('walkBodyFrames.json')) : null,
+    meshDoc.hasSam2MasksRLE ? downloadJSON<Record<string, import('../types/project').RLEMask[]>>(path('sam2Masks.json')) : null,
+    meshDoc.hasSam2Contours ? downloadJSON<Record<string, Point2D[][]>>(path('sam2Contours.json')) : null,
+    meshDoc.hasSam2ContourOriginFrames ? downloadJSON<Record<string, Point2D[]>>(path('sam2ContourOriginFrames.json')) : null,
+    meshDoc.hasSam2ContourAnchorFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2ContourAnchorFrames.json')) : null,
+    meshDoc.hasSam2ContourSubdivisionFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2ContourSubdivisionFrames.json')) : null,
   ])
 
   return {
@@ -600,6 +670,11 @@ async function loadAnimationJSON(
     videoFramesMesh: downloads[9],
     walkZoneFrames: downloads[10],
     walkBodyFrames: downloads[11],
+    sam2MasksRLE: downloads[12] as Record<string, import('../types/project').RLEMask[]> | null,
+    sam2Contours: downloads[13] as Record<string, Point2D[][]> | null,
+    sam2ContourOriginFrames: downloads[14] as Record<string, Point2D[]> | null,
+    sam2ContourAnchorFrames: downloads[15] as Record<string, Point2D[][]> | null,
+    sam2ContourSubdivisionFrames: downloads[16] as Record<string, Point2D[][]> | null,
   }
 }
 
@@ -810,6 +885,11 @@ function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
     videoFramesMesh: null,
     walkZoneFrames: null,
     walkBodyFrames: null,
+    sam2MasksRLE: null,
+    sam2Contours: null,
+    sam2ContourOriginFrames: null,
+    sam2ContourAnchorFrames: null,
+    sam2ContourSubdivisionFrames: null,
   }
 }
 
@@ -935,6 +1015,8 @@ export type AnimationUploadField =
   | 'boneWeights'
   | 'videoFramesMesh'
   | 'walkZoneFrames' | 'walkBodyFrames'
+  | 'sam2MasksRLE'
+  | 'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames'
 
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound'
@@ -1009,7 +1091,21 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       const anim = project.animations.find(a => a.id === animationId)
       if (!anim) continue
 
-      const storagePath = animStoragePath(id, animationId, field === 'video' ? 'video' : field === 'audio' ? 'audio' : `${field}.json`)
+      // Map field name → storage filename (most are field+'.json', but sam2 has a custom filename)
+      const fileNameForField: Record<string, string> = {
+        sam2MasksRLE: 'sam2Masks.json',
+        sam2Contours: 'sam2Contours.json',
+        sam2ContourOriginFrames: 'sam2ContourOriginFrames.json',
+        sam2ContourAnchorFrames: 'sam2ContourAnchorFrames.json',
+        sam2ContourSubdivisionFrames: 'sam2ContourSubdivisionFrames.json',
+      }
+      const storagePath = animStoragePath(
+        id,
+        animationId,
+        field === 'video' ? 'video'
+          : field === 'audio' ? 'audio'
+          : (fileNameForField[field] ?? `${field}.json`)
+      )
 
       if (field === 'video' && anim.videoBlob) {
         console.log(`[Storage] Uploading video for animation ${animationId}`)
@@ -1037,9 +1133,15 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           videoFramesMesh: anim.mesh.videoFramesMesh,
           walkZoneFrames: anim.mesh.walkZoneFrames,
           walkBodyFrames: anim.mesh.walkBodyFrames,
+          sam2MasksRLE: anim.mesh.sam2MasksRLE,
+          sam2Contours: anim.mesh.sam2Contours,
+          sam2ContourOriginFrames: anim.mesh.sam2ContourOriginFrames,
+          sam2ContourAnchorFrames: anim.mesh.sam2ContourAnchorFrames,
+          sam2ContourSubdivisionFrames: anim.mesh.sam2ContourSubdivisionFrames,
         }
         const data = jsonFieldMap[field]
-        if (data && (Array.isArray(data) ? data.length > 0 : true)) {
+        const isNonEmpty = data != null && (Array.isArray(data) ? data.length > 0 : (typeof data === 'object' ? Object.keys(data).length > 0 : true))
+        if (isNonEmpty) {
           const json = JSON.stringify(data)
           const blob = new Blob([json], { type: 'application/json' })
           console.log(`[Storage] Uploading ${field} for animation ${animationId}`)
@@ -1070,6 +1172,11 @@ const ANIM_JSON_FILES = [
   'videoFramesMesh.json',
   'walkZoneFrames.json',
   'walkBodyFrames.json',
+  'sam2Masks.json',
+  'sam2Contours.json',
+  'sam2ContourOriginFrames.json',
+  'sam2ContourAnchorFrames.json',
+  'sam2ContourSubdivisionFrames.json',
 ]
 
 export async function deleteProject(id: string): Promise<void> {
@@ -1148,7 +1255,8 @@ const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'contourAnchorKeyframes', 'contourAnchorFrames',
   'contourSubdivisionFrames', 'contourCannyFrames',
   'anchorKeyframes', 'anchorFrames', 'boneWeights', 'videoFramesMesh',
-  'walkZoneFrames', 'walkBodyFrames',
+  'walkZoneFrames', 'walkBodyFrames', 'sam2MasksRLE',
+  'sam2Contours', 'sam2ContourOriginFrames', 'sam2ContourAnchorFrames', 'sam2ContourSubdivisionFrames',
 ]
 
 export async function duplicateProject(sourceId: string): Promise<Project> {

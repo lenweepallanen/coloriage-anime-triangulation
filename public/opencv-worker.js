@@ -765,6 +765,103 @@ function flowMatchTemplates(gray, lkPoints) {
   return results;
 }
 
+/**
+ * Template matching "jump" : compare 2 frames arbitraires (pas de tracking incrémental).
+ * Pour chaque point source, extrait un patch (templateSize×templateSize) dans la frame source,
+ * cherche la meilleure correspondance NCC dans une fenêtre de recherche autour de la même position
+ * dans la frame destination.
+ * Retourne les positions matchées (ou la position source si patch trop près du bord ou score < 0).
+ */
+function templateMatchJump(srcImageData, dstImageData, points, templateSize, searchRadius) {
+  var w = srcImageData.width;
+  var h = srcImageData.height;
+  var half = Math.floor(templateSize / 2);
+
+  var srcMat = new cv.Mat(h, w, cv.CV_8UC4);
+  srcMat.data.set(new Uint8Array(srcImageData.data));
+  var dstMat = new cv.Mat(h, w, cv.CV_8UC4);
+  dstMat.data.set(new Uint8Array(dstImageData.data));
+
+  var srcGray = new cv.Mat();
+  var dstGray = new cv.Mat();
+  cv.cvtColor(srcMat, srcGray, cv.COLOR_RGBA2GRAY);
+  cv.cvtColor(dstMat, dstGray, cv.COLOR_RGBA2GRAY);
+
+  var results = [];
+
+  try {
+    for (var i = 0; i < points.length; i++) {
+      var p = points[i];
+      var cx = Math.round(p.x);
+      var cy = Math.round(p.y);
+
+      // Extract template patch from source frame
+      var tx0 = Math.max(0, cx - half);
+      var ty0 = Math.max(0, cy - half);
+      var tx1 = Math.min(w, cx + half + 1);
+      var ty1 = Math.min(h, cy + half + 1);
+
+      if (tx1 - tx0 < templateSize * 0.5 || ty1 - ty0 < templateSize * 0.5) {
+        // Patch too small (point near edge), keep source position
+        results.push({ x: p.x, y: p.y, score: 0 });
+        continue;
+      }
+
+      var templateRect = new cv.Rect(tx0, ty0, tx1 - tx0, ty1 - ty0);
+      var template = srcGray.roi(templateRect).clone();
+      var tW = template.cols;
+      var tH = template.rows;
+
+      // Search ROI in destination frame, centered on source position
+      var sx0 = Math.max(0, cx - searchRadius);
+      var sy0 = Math.max(0, cy - searchRadius);
+      var sx1 = Math.min(w, cx + searchRadius + 1);
+      var sy1 = Math.min(h, cy + searchRadius + 1);
+      var sW = sx1 - sx0;
+      var sH = sy1 - sy0;
+
+      if (sW <= tW || sH <= tH) {
+        template.delete();
+        results.push({ x: p.x, y: p.y, score: 0 });
+        continue;
+      }
+
+      var searchRect = new cv.Rect(sx0, sy0, sW, sH);
+      var searchRegion = dstGray.roi(searchRect);
+      var resultMat = new cv.Mat();
+
+      try {
+        cv.matchTemplate(searchRegion, template, resultMat, cv.TM_CCOEFF_NORMED);
+        var minMax = cv.minMaxLoc(resultMat);
+        var bestScore = minMax.maxVal;
+        var bestLoc = minMax.maxLoc;
+
+        // Convert from result coords to image coords (top-left match → patch center)
+        // Patch center offset within the template
+        var matchOffsetX = cx - tx0;
+        var matchOffsetY = cy - ty0;
+        var matchX = sx0 + bestLoc.x + matchOffsetX;
+        var matchY = sy0 + bestLoc.y + matchOffsetY;
+
+        results.push({ x: matchX, y: matchY, score: bestScore });
+      } catch (e) {
+        results.push({ x: p.x, y: p.y, score: 0 });
+      } finally {
+        template.delete();
+        searchRegion.delete();
+        resultMat.delete();
+      }
+    }
+  } finally {
+    srcMat.delete();
+    dstMat.delete();
+    srcGray.delete();
+    dstGray.delete();
+  }
+
+  return results;
+}
+
 function flowCleanup() {
   if (flowPrevGray) { flowPrevGray.delete(); flowPrevGray = null; }
   if (flowPrevPts) { flowPrevPts.delete(); flowPrevPts = null; }
@@ -1109,6 +1206,72 @@ self.onmessage = async function(e) {
   if (type === 'flow-cleanup') {
     flowCleanup();
     self.postMessage({ type: 'flow-cleanup-done' });
+    return;
+  }
+
+  if (type === 'template-match-jump') {
+    try {
+      var srcImg = e.data.srcImageData;
+      var dstImg = e.data.dstImageData;
+      var pts = e.data.points || [];
+      var tplSize = e.data.templateSize || 31;
+      var searchR = e.data.searchRadius || 200;
+      var matched = templateMatchJump(srcImg, dstImg, pts, tplSize, searchR);
+      self.postMessage({ type: 'template-match-jump-result', points: matched });
+    } catch (err) {
+      console.error('Worker template-match-jump error:', err);
+      self.postMessage({ type: 'template-match-jump-result', points: null, error: err.message });
+    }
+    return;
+  }
+
+  // mask-to-contour: takes a binary mask (Uint8Array, row-major, 0/1) + dimensions
+  // and returns the largest external contour as an ordered array of {x, y} points.
+  // Used by sam2Contour.ts to extract polygon contours from SAM 2 RLE masks.
+  if (type === 'mask-to-contour') {
+    var mask = e.data.mask;          // Uint8Array length = w*h
+    var w = e.data.width;
+    var h = e.data.height;
+    var src = null;
+    var contours = null;
+    var hierarchy = null;
+    try {
+      src = cv.matFromArray(h, w, cv.CV_8UC1, mask);
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      // RETR_EXTERNAL = only outer contour, CHAIN_APPROX_NONE = keep every pixel
+      cv.findContours(src, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+
+      // Pick the largest contour by area
+      var bestIdx = -1;
+      var bestArea = 0;
+      for (var i = 0; i < contours.size(); i++) {
+        var c = contours.get(i);
+        var area = cv.contourArea(c, false);
+        if (area > bestArea) {
+          bestArea = area;
+          bestIdx = i;
+        }
+      }
+
+      var points = [];
+      if (bestIdx >= 0) {
+        var best = contours.get(bestIdx);
+        var data = best.data32S; // [x0, y0, x1, y1, ...]
+        for (var k = 0; k < data.length; k += 2) {
+          points.push({ x: data[k], y: data[k + 1] });
+        }
+      }
+
+      self.postMessage({ type: 'mask-to-contour-result', points: points });
+    } catch (err) {
+      console.error('Worker mask-to-contour error:', err);
+      self.postMessage({ type: 'mask-to-contour-result', points: null, error: err.message });
+    } finally {
+      if (src) src.delete();
+      if (contours) contours.delete();
+      if (hierarchy) hierarchy.delete();
+    }
     return;
   }
 
