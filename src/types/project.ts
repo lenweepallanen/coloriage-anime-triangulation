@@ -273,6 +273,7 @@ export interface SAM2Zone {
   id: string             // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
   label: string          // "Body", "Patte AVG", etc.
   color: string          // hex for the editor / overlay
+  zOrder?: number        // ordre de rendu (0 = derrière, plus grand = devant). Défini dans l'étape maillage.
 }
 
 /** RLE COCO uncompressed mask, JSON-friendly. counts is alternated bg/fg run lengths,
@@ -315,6 +316,40 @@ export interface WalkLimbSeparation {
   hiddenFaceZones?: HiddenFaceZone[];                          // 0-4 zones face cachée body
   // Hidden face limb zones (optional — extension de patte cachée derrière le corps)
   hiddenFaceLimbZones?: HiddenFaceLimbZone[];                  // 0-4 zones face cachée jambe
+}
+
+// ─── Project-level Triangulation (shared by all members-bones animations) ────
+
+export interface ProjectTriangulation {
+  // Étape 0 : Image de référence (colorée, pour SAM 2)
+  referenceImageBlob: Blob | null
+
+  // Étape 1 : Zones SAM 2 sur image
+  zones: SAM2Zone[]
+  prompts: SAM2Prompt[]
+  masksRLE: Record<string, RLEMask[]> | null   // 1 frame par zone
+  maskWidth: number
+  maskHeight: number
+  contours: Record<string, Point2D[]> | null    // zoneId → contour lissé (coords IMAGE)
+  contourSmoothSigma: number
+  bridgeThreshold: number
+  step1Validated: boolean
+
+  // Étape 2 : Maillage par zone
+  zoneContourCount: Record<string, number>                   // zoneId → nb points contour (slider)
+  zoneContourPoints: Record<string, Point2D[]>               // zoneId → vertices contour validés (éditables)
+  zoneContourValidated: Record<string, boolean>              // zoneId → contour verrouillé
+  zonePoints: Record<string, Point2D[]>                      // zoneId → vertices (contour + internes)
+  zoneTriangles: Record<string, [number, number, number][]>  // zoneId → triangles Delaunay
+  zoneDensity: Record<string, number>                        // zoneId → slider densité intérieure
+  bodyPoints: Point2D[]
+  bodyTriangles: [number, number, number][]
+  step2Validated: boolean
+
+  // Étape 3 : Faces cachées (même structure que Walk)
+  hiddenFaceZones: HiddenFaceZone[]          // corps caché derrière patte
+  hiddenFaceLimbZones: HiddenFaceLimbZone[]  // extension patte sous corps
+  step3Validated: boolean
 }
 
 export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones';
@@ -403,6 +438,7 @@ export interface Project {
   bodyZones: BodyZone[];
   markers: MarkerCorners | null;
   scene: Scene | null;
+  projectTriangulation: ProjectTriangulation | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

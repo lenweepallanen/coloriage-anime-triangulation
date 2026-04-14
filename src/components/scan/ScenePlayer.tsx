@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, type Project, type Animation, type Point2D, type MeshData } from '../../types/project'
+import { animationHasFrames, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -12,6 +12,23 @@ import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUti
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
+
+/** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
+function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
+  return {
+    zones: tri.zones.filter(z => z.id !== 'body').map((z, i) => ({
+      id: z.id, label: z.label, color: z.color, bezierNodes: [], zOrder: z.zOrder ?? (i + 1), legIndex: i,
+    })),
+    overlapMargin: 0,
+    zonePoints: tri.zonePoints,
+    zoneTriangles: tri.zoneTriangles,
+    bodyTriangleIndices: [],
+    bodyPoints: tri.bodyPoints,
+    bodyTriangles: tri.bodyTriangles,
+    hiddenFaceZones: tri.hiddenFaceZones,
+    hiddenFaceLimbZones: tri.hiddenFaceLimbZones,
+  }
+}
 
 interface Props {
   project: Project
@@ -277,13 +294,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     characterContainer.addChild(pixiMesh)
 
-    // --- Zone meshes for walk animations with limb separation ---
+    // --- Zone meshes for walk animations with limb separation or MB with project triangulation ---
     const walkAnims = project.animations.filter(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
+    const mbTriangAnims = project.projectTriangulation?.step3Validated
+      ? project.animations.filter(a => a.type === 'members-bones' && a.mesh?.walkZoneFrames)
+      : []
     const walkZoneMeshMap = new Map<string, ZoneMeshSetup>()
 
-    for (const wa of walkAnims) {
-      const sep = wa.mesh?.walkLimbSeparation
-      if (!sep) continue
+    const allZoneAnims = [
+      ...walkAnims.map(a => ({ anim: a, sep: a.mesh!.walkLimbSeparation! })),
+      ...mbTriangAnims.map(a => ({ anim: a, sep: buildPseudoSeparation(project.projectTriangulation!) })),
+    ]
+
+    for (const { anim: wa, sep } of allZoneAnims) {
 
       // Generate per-limb extension textures via texture mirroring (synchronous)
       let hflTextures: Record<string, PIXI.Texture> | undefined
@@ -390,7 +413,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         pixiMesh.visible = false
 
         // Create per-zone LoopPlayback
-        const sep = anim.mesh.walkLimbSeparation!
+        const sep = anim.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
+        if (!sep) return
         activeZonePlaybacks = sep.zones.map(zone => ({
           zoneId: zone.id,
           playback: new LoopPlayback(anim.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 }),

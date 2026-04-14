@@ -226,6 +226,17 @@ Symétrique au système body : quand le corps (animé) recouvre une partie de la
 
 Conséquence : les "lignes" de la patte se prolongent par symétrie autour de la corde, sans bande répétée (clamp en profondeur, pas de tiling cyclique).
 
+### Pipeline Triangulation Projet (4 étapes)
+
+Section dédiée dans `AdminLayout` (onglet "Triangulation"), indépendante du pipeline rest/oneshot/walk. Permet de créer une triangulation au niveau projet partagée par les animations `members-bones`.
+
+1. **Image référence** — Import image colorée (pas le coloriage N&B). Utilisée par SAM 2 pour segmenter les zones.
+2. **Zones SAM 2** — Placement clics foreground/background par zone (body + 4 pattes) sur l'image. Appel SAM 2 (Cloud Function ou serveur local MPS) → masques RLE → contours lissés par zone.
+3. **Maillage par zone** — Édition en 2 phases par zone : (a) contour subdivision (slider nb points + drag/insert/delete) → valider contour, (b) triangulation intérieure Delaunay (densité auto + points manuels). Z-order éditable par zone.
+4. **Faces cachées** — Même système que Walk : sélection 2 vertices boundary (A/B), bridge points manuels, Delaunay dans le polygone fermé. Split body visible / hidden face au rendu.
+
+**Rendu** : `buildPseudoSeparation()` convertit `ProjectTriangulation` en format `WalkLimbSeparation` pour réutiliser `zoneMeshRenderer.buildZoneMeshes()`. Le `zOrder` défini en étape 3 est propagé aux meshes PIXI.
+
 ## Workflow Scan (utilisateur final)
 
 **Orientation forcée** : toute la page scan est en mode paysage. `screen.orientation.lock('landscape')` au montage de `ScanPage`, avec fallback CSS `transform: rotate(90deg)` en portrait.
@@ -253,9 +264,12 @@ src/
 ├── pages/
 │   ├── HomePage.tsx            Liste projets
 │   ├── AdminPage.tsx           Onglets admin (10 étapes) + preview split-panel
+│   ├── admin/
+│   │   ├── AdminLayout.tsx     Layout admin avec navigation par sections (Paramètres, Animations, Zones, Scène, Triangulation)
+│   │   └── TriangulationSection.tsx  Section triangulation projet (4 étapes : Image réf, Zones SAM 2, Maillage, Faces cachées)
 │   └── ScanPage.tsx            Machine d'états scan
 ├── components/
-│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor + BoneEditorStep + BoneTriangulationStep + Walk*Steps)
+│   ├── admin/                  Étapes admin (10 étapes + support + AnimationManager + AdminPreview + BodyZoneEditor + ProjectImportSection + PhysicsAnimationEditor + BoneEditorStep + BoneTriangulationStep + Walk*Steps + ProjectTriang*Steps + MembersBones*Steps)
 │   ├── keyframes/              Éditeur de keyframes (éditeur canvas)
 │   ├── triangulation/          Éditeur maillage (canvas, interactions, dessin)
 │   └── scan/                   Composants scan (caméra, coins, processing, animation)
@@ -287,7 +301,8 @@ src/
 │   ├── limbMaskGenerator.ts    Génération masque binaire des zones pattes (Bézier dilatées) pour LaMa
 │   ├── lamaInpainting.ts       Client API Cloud Function LaMa (envoi scan+masque, réception inpainté)
 │   ├── zoneMeshRenderer.ts     Rendu PIXI.js par zone (build/update meshes séparés, z-order, split body/hidden face)
-│   └── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
+│   ├── multiAnimationPlayback.ts Machine d'états playback multi-animation (rest loop + oneshot transitions + physics overlay)
+│   └── membersBonesTriangSolver.ts Calcul animation members-bones par zone (auto-weights distance inverse, LBS par zone)
 └── styles/global.css
 public/
 ├── opencv.js                   Bibliothèque OpenCV.js compilée
@@ -332,6 +347,44 @@ Project {
   animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics + 0..N bones
   bodyZones: BodyZone[]              // Zones corporelles (triangles groupés par label)
   markers: MarkerCorners | null      // 4 coins marqueurs L
+  projectTriangulation: ProjectTriangulation | null  // Triangulation projet (SAM 2 + maillage par zone)
+}
+
+ProjectTriangulation {
+  // Étape 0 : Image de référence (colorée, pour SAM 2)
+  referenceImageBlob: Blob | null
+
+  // Étape 1 : Zones SAM 2 sur image
+  zones: SAM2Zone[]                                    // body + 4 pattes
+  prompts: SAM2Prompt[]                                // clics foreground/background
+  masksRLE: Record<string, RLEMask[]> | null           // 1 frame par zone
+  maskWidth, maskHeight: number
+  contours: Record<string, Point2D[]> | null           // contours lissés (coords image)
+  contourSmoothSigma, bridgeThreshold: number
+  step1Validated: boolean
+
+  // Étape 2 : Maillage par zone (2 phases : contour + triangulation)
+  zoneContourCount: Record<string, number>             // nb points contour (slider)
+  zoneContourPoints: Record<string, Point2D[]>         // vertices contour validés
+  zoneContourValidated: Record<string, boolean>        // contour verrouillé
+  zonePoints: Record<string, Point2D[]>                // vertices (contour + internes)
+  zoneTriangles: Record<string, [number,number,number][]>
+  zoneDensity: Record<string, number>                  // densité intérieure
+  bodyPoints: Point2D[]
+  bodyTriangles: [number,number,number][]
+  step2Validated: boolean
+
+  // Étape 3 : Faces cachées
+  hiddenFaceZones: HiddenFaceZone[]
+  hiddenFaceLimbZones: HiddenFaceLimbZone[]
+  step3Validated: boolean
+}
+
+SAM2Zone {
+  id: string               // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  label: string
+  color: string            // hex
+  zOrder?: number          // ordre rendu (0 = derrière, plus grand = devant)
 }
 
 // Adapter pattern — vue pour les step components (ne connaissent pas le multi-animation)

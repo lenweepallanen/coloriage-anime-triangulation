@@ -6,7 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -185,6 +185,35 @@ interface SceneDoc {
   speakSounds?: { id: string; name: string }[]
 }
 
+interface ProjectTriangulationDoc {
+  // Step 0
+  hasReferenceImage: boolean
+  // Step 1
+  zones: import('../types/project').SAM2Zone[]
+  prompts: import('../types/project').SAM2Prompt[]
+  hasMasksRLE: boolean
+  maskWidth: number
+  maskHeight: number
+  hasContours: boolean
+  contourSmoothSigma: number
+  bridgeThreshold: number
+  step1Validated: boolean
+  // Step 2
+  zoneContourCount?: Record<string, number>
+  zoneContourPoints?: Record<string, Point2D[]>
+  zoneContourValidated?: Record<string, boolean>
+  zonePoints: Record<string, Point2D[]>
+  zoneTriangles: Record<string, TriangleDoc[]>
+  zoneDensity: Record<string, number>
+  bodyPoints: Point2D[]
+  bodyTriangles: TriangleDoc[]
+  step2Validated: boolean
+  // Step 3
+  hiddenFaceZones: import('../types/project').HiddenFaceZone[]
+  hiddenFaceLimbZones: import('../types/project').HiddenFaceLimbZone[]
+  step3Validated: boolean
+}
+
 interface ProjectDoc {
   id: string
   name: string
@@ -197,6 +226,7 @@ interface ProjectDoc {
   bodyZones?: BodyZoneDoc[]
   markers: Project['markers']
   scene: SceneDoc | null
+  projectTriangulation?: ProjectTriangulationDoc | null
 }
 
 // Legacy project doc (v4 format — single mesh + video at root)
@@ -351,6 +381,67 @@ function limbSeparationFromDoc(doc: Record<string, unknown> | null | undefined):
   }
 
   return result
+}
+
+// --- Project Triangulation serialization ---
+
+function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulationDoc {
+  const zoneTrianglesDoc: Record<string, TriangleDoc[]> = {}
+  for (const [zoneId, tris] of Object.entries(tri.zoneTriangles ?? {})) {
+    zoneTrianglesDoc[zoneId] = triToDoc(tris)
+  }
+  return {
+    hasReferenceImage: tri.referenceImageBlob != null,
+    zones: tri.zones ?? [],
+    prompts: tri.prompts ?? [],
+    hasMasksRLE: tri.masksRLE != null,
+    maskWidth: tri.maskWidth ?? 0,
+    maskHeight: tri.maskHeight ?? 0,
+    hasContours: tri.contours != null,
+    contourSmoothSigma: tri.contourSmoothSigma ?? 3,
+    bridgeThreshold: tri.bridgeThreshold ?? 8,
+    step1Validated: tri.step1Validated ?? false,
+    zoneContourCount: tri.zoneContourCount ?? {},
+    zoneContourPoints: tri.zoneContourPoints ?? {},
+    zoneContourValidated: tri.zoneContourValidated ?? {},
+    zonePoints: tri.zonePoints ?? {},
+    zoneTriangles: zoneTrianglesDoc,
+    zoneDensity: tri.zoneDensity ?? {},
+    bodyPoints: tri.bodyPoints ?? [],
+    bodyTriangles: triToDoc(tri.bodyTriangles ?? []),
+    step2Validated: tri.step2Validated ?? false,
+    hiddenFaceZones: tri.hiddenFaceZones ?? [],
+    hiddenFaceLimbZones: tri.hiddenFaceLimbZones ?? [],
+    step3Validated: tri.step3Validated ?? false,
+  }
+}
+
+function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<ProjectTriangulation, 'referenceImageBlob' | 'masksRLE' | 'contours'> {
+  const zoneTriangles: Record<string, [number, number, number][]> = {}
+  for (const [zoneId, triDocs] of Object.entries(doc.zoneTriangles ?? {})) {
+    zoneTriangles[zoneId] = docToTri(triDocs as TriangleDoc[])
+  }
+  return {
+    zones: doc.zones ?? [],
+    prompts: doc.prompts ?? [],
+    maskWidth: doc.maskWidth ?? 0,
+    maskHeight: doc.maskHeight ?? 0,
+    contourSmoothSigma: doc.contourSmoothSigma ?? 3,
+    bridgeThreshold: doc.bridgeThreshold ?? 8,
+    step1Validated: doc.step1Validated ?? false,
+    zoneContourCount: doc.zoneContourCount ?? {},
+    zoneContourPoints: doc.zoneContourPoints ?? {},
+    zoneContourValidated: doc.zoneContourValidated ?? {},
+    zonePoints: doc.zonePoints ?? {},
+    zoneTriangles,
+    zoneDensity: doc.zoneDensity ?? {},
+    bodyPoints: doc.bodyPoints ?? [],
+    bodyTriangles: docToTri(doc.bodyTriangles ?? []),
+    step2Validated: doc.step2Validated ?? false,
+    hiddenFaceZones: doc.hiddenFaceZones ?? [],
+    hiddenFaceLimbZones: doc.hiddenFaceLimbZones ?? [],
+    step3Validated: doc.step3Validated ?? false,
+  }
 }
 
 // --- Animation storage path helpers ---
@@ -508,6 +599,7 @@ function toDoc(project: Project): ProjectDoc {
     ...(project.bodyZones.length > 0 && { bodyZones: project.bodyZones }),
     markers: project.markers,
     scene: project.scene ? sceneToDoc(project.scene) : null,
+    ...(project.projectTriangulation != null && { projectTriangulation: projectTriangulationToDoc(project.projectTriangulation) }),
   }
 }
 
@@ -822,6 +914,20 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     }
   }
 
+  // Load project triangulation if present
+  let projectTriangulation: ProjectTriangulation | null = null
+  if (projDoc.projectTriangulation) {
+    const triDoc = projDoc.projectTriangulation
+    const triBase = projectTriangulationFromDoc(triDoc)
+    const triPath = (file: string) => `projects/${id}/triangulation/${file}`
+    const [referenceImageBlob, masksRLE, contours] = await Promise.all([
+      triDoc.hasReferenceImage ? downloadBlob(triPath('referenceImage')) : null,
+      triDoc.hasMasksRLE ? downloadJSON<Record<string, import('../types/project').RLEMask[]>>(triPath('masksRLE.json')) : null,
+      triDoc.hasContours ? downloadJSON<Record<string, Point2D[]>>(triPath('contours.json')) : null,
+    ])
+    projectTriangulation = { ...triBase, referenceImageBlob, masksRLE, contours }
+  }
+
   return {
     id: projDoc.id,
     name: projDoc.name,
@@ -839,6 +945,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     })),
     markers: projDoc.markers,
     scene,
+    projectTriangulation,
   }
 }
 
@@ -890,6 +997,7 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     bodyZones: [],
     markers: data.markers,
     scene: null,
+    projectTriangulation: null,
   }
 }
 
@@ -947,6 +1055,7 @@ export async function createProject(name: string): Promise<Project> {
     bodyZones: [],
     markers: null,
     scene: null,
+    projectTriangulation: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
   console.log('[Firebase] Project created:', project.id)
@@ -993,6 +1102,7 @@ export async function getAllProjects(): Promise<Project[]> {
         bodyZones: [],
         markers: legacy.markers,
         scene: null,
+        projectTriangulation: null,
       }
     }
 
@@ -1026,6 +1136,7 @@ export async function getAllProjects(): Promise<Project[]> {
     })),
       markers: projDoc.markers,
       scene: null,
+      projectTriangulation: null,
     }
   })
 }
@@ -1045,6 +1156,7 @@ export type AnimationUploadField =
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound'
   | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
+  | 'triangulationReferenceImage' | 'triangulationMasks' | 'triangulationContours'
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string }
   | { deleteSpeakSoundId: string }
@@ -1082,6 +1194,28 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       uploads.push(
         uploadBlob(`projects/${id}/ambientSound`, project.ambientSoundBlob)
           .then(() => console.log('[Storage] Ambient sound uploaded'))
+      )
+    } else if (hint === 'triangulationReferenceImage' && project.projectTriangulation?.referenceImageBlob) {
+      console.log('[Storage] Uploading triangulation reference image for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/triangulation/referenceImage`, project.projectTriangulation.referenceImageBlob)
+          .then(() => console.log('[Storage] Triangulation reference image uploaded'))
+      )
+    } else if (hint === 'triangulationMasks' && project.projectTriangulation?.masksRLE) {
+      const json = JSON.stringify(project.projectTriangulation.masksRLE)
+      const blob = new Blob([json], { type: 'application/json' })
+      console.log('[Storage] Uploading triangulation masks for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/triangulation/masksRLE.json`, blob)
+          .then(() => console.log('[Storage] Triangulation masks uploaded'))
+      )
+    } else if (hint === 'triangulationContours' && project.projectTriangulation?.contours) {
+      const json = JSON.stringify(project.projectTriangulation.contours)
+      const blob = new Blob([json], { type: 'application/json' })
+      console.log('[Storage] Uploading triangulation contours for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/triangulation/contours.json`, blob)
+          .then(() => console.log('[Storage] Triangulation contours uploaded'))
       )
     } else if (typeof hint === 'string' && hint.startsWith('sceneBackgroundLayer') && project.scene) {
       const layerIdx = parseInt(hint.slice(-1))
@@ -1223,6 +1357,9 @@ export async function deleteProject(id: string): Promise<void> {
     `projects/${id}/sceneBackgroundLayer0`,
     `projects/${id}/sceneBackgroundLayer1`,
     `projects/${id}/sceneBackgroundLayer2`,
+    `projects/${id}/triangulation/referenceImage`,
+    `projects/${id}/triangulation/masksRLE.json`,
+    `projects/${id}/triangulation/contours.json`,
   ]
   for (const path of projectFiles) {
     deletions.push(deleteObject(ref(storage, path)).catch(() => {}))
@@ -1314,6 +1451,9 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   if (duplicate.originalImageBlob) hints.push('image')
   if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
   if (duplicate.ambientSoundBlob) hints.push('ambientSound')
+  if (duplicate.projectTriangulation?.referenceImageBlob) hints.push('triangulationReferenceImage')
+  if (duplicate.projectTriangulation?.masksRLE) hints.push('triangulationMasks')
+  if (duplicate.projectTriangulation?.contours) hints.push('triangulationContours')
   if (duplicate.scene) {
     duplicate.scene.backgroundLayers.forEach((l, i) => {
       if (l.imageBlob) hints.push(`sceneBackgroundLayer${i}` as UploadHint)

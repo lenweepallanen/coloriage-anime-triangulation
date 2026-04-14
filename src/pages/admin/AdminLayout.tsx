@@ -62,6 +62,9 @@ export default function AdminLayout() {
         <NavLink to="scene" className={({ isActive }) => `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''}`}>
           Scène
         </NavLink>
+        <NavLink to="triangulation" className={({ isActive }) => `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''}`}>
+          Triangulation
+        </NavLink>
       </nav>
 
       <div className="admin-layout-content">

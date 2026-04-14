@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, type Project, type Animation, type Point2D } from '../../types/project'
+import { animationHasFrames, type Project, type Animation, type Point2D, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -10,6 +10,28 @@ import { DeviceParallax } from '../../utils/deviceParallax'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
+
+/** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
+function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
+  return {
+    zones: tri.zones.filter(z => z.id !== 'body').map((z, i) => ({
+      id: z.id,
+      label: z.label,
+      color: z.color,
+      bezierNodes: [],
+      zOrder: z.zOrder ?? (i + 1),
+      legIndex: i,
+    })),
+    overlapMargin: 0,
+    zonePoints: tri.zonePoints,
+    zoneTriangles: tri.zoneTriangles,
+    bodyTriangleIndices: [],
+    bodyPoints: tri.bodyPoints,
+    bodyTriangles: tri.bodyTriangles,
+    hiddenFaceZones: tri.hiddenFaceZones,
+    hiddenFaceLimbZones: tri.hiddenFaceLimbZones,
+  }
+}
 
 interface Props {
   project: Project
@@ -307,6 +329,9 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     // In both cases, pure body + limbs use the original high-res scan texture
     let hfTexture: PIXI.Texture | undefined
     const walkAnim0 = project.animations.find(a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.hiddenFaceZones)
+    // Also check project triangulation hidden face zones
+    const triHiddenFace = project.projectTriangulation?.step3Validated && project.projectTriangulation.hiddenFaceZones.length > 0
+      ? project.projectTriangulation : null
     if (lamaCanvas) {
       hfTexture = PIXI.Texture.from(lamaCanvas)
     } else if (walkAnim0?.mesh?.walkLimbSeparation) {
@@ -321,6 +346,16 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
         }
         hfTexture = PIXI.Texture.from(hfCanvas)
       }
+    } else if (triHiddenFace && triHiddenFace.bodyPoints.length > 0 && triHiddenFace.bodyTriangles.length > 0) {
+      // Fallback: inpaint hidden face from project triangulation
+      const hfCanvas = document.createElement('canvas')
+      hfCanvas.width = scanCanvas.width
+      hfCanvas.height = scanCanvas.height
+      hfCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+      for (const hfz of triHiddenFace.hiddenFaceZones) {
+        inpaintHiddenFaceOnScan(hfCanvas, hfz, triHiddenFace.bodyPoints, triHiddenFace.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+      }
+      hfTexture = PIXI.Texture.from(hfCanvas)
     }
 
     // --- Mesh texture & geometry ---
@@ -348,21 +383,26 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       vertices[i * 2 + 1] = p.y * scale + offsetY
     })
 
-    // --- Check for walk animations with limb separation ---
-    // Find any walk animation with zone frames to enable multi-mesh z-order rendering
+    // --- Check for walk or members-bones animations with zone frames ---
     const walkAnim = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
+    // Members-bones animation with project triangulation zone frames
+    const mbTriangAnim = !walkAnim ? project.animations.find(a =>
+      a.type === 'members-bones' && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated
+    ) : null
     let zoneMeshSetup: ZoneMeshSetup | null = null
 
-    if (walkAnim?.mesh?.walkLimbSeparation) {
-      const sep = walkAnim.mesh.walkLimbSeparation
+    // Build zone separation from walk or project triangulation
+    const zoneSep = walkAnim?.mesh?.walkLimbSeparation
+      ?? (mbTriangAnim && project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
 
+    if (zoneSep) {
       // Generate per-limb extension textures via texture mirroring (synchronous)
       let hflTextures: Record<string, PIXI.Texture> | undefined
-      if (sep.hiddenFaceLimbZones && sep.hiddenFaceLimbZones.length > 0) {
+      if (zoneSep.hiddenFaceLimbZones && zoneSep.hiddenFaceLimbZones.length > 0) {
         hflTextures = {}
-        for (const hfl of sep.hiddenFaceLimbZones) {
-          const zonePts = sep.zonePoints[hfl.limbZoneId]
-          const zoneTris = sep.zoneTriangles[hfl.limbZoneId]
+        for (const hfl of zoneSep.hiddenFaceLimbZones) {
+          const zonePts = zoneSep.zonePoints[hfl.limbZoneId]
+          const zoneTris = zoneSep.zoneTriangles[hfl.limbZoneId]
           if (!zonePts || !zoneTris) continue
           const hflCanvas = document.createElement('canvas')
           hflCanvas.width = scanCanvas.width
@@ -374,7 +414,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       }
 
       zoneMeshSetup = buildZoneMeshes(
-        sep, allPoints, mesh.triangles, texture,
+        zoneSep, allPoints, mesh.triangles, texture,
         scanCanvas.width, scanCanvas.height, scale, offsetX, offsetY,
         contentAlignment ?? undefined, hfTexture, hflTextures,
       )
@@ -465,22 +505,22 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
         advancePlayback = (delta) => playback.advance(delta)
       }
 
-      // Walk zone mesh frame counter (for z-ordered multi-mesh during walk oneshot)
+      // Walk/MB zone mesh frame counter (for z-ordered multi-mesh during walk/MB oneshot)
+      const zoneAnim = walkAnim ?? mbTriangAnim  // animation that owns the zone frames
       let walkFrameCounter = 0
-      const walkZoneFrames = walkAnim?.mesh?.walkZoneFrames
-      const walkBodyFrames = walkAnim?.mesh?.walkBodyFrames
+      const walkZoneFrames = zoneAnim?.mesh?.walkZoneFrames
+      const walkBodyFrames = zoneAnim?.mesh?.walkBodyFrames
       const walkTotalFrames = walkBodyFrames?.length ?? 0
 
       // Debug: verify body data consistency
-      if (walkAnim?.mesh?.walkLimbSeparation) {
-        const sep = walkAnim.mesh.walkLimbSeparation
-        console.log('[Walk HF debug]', {
-          bodyPointsCount: sep.bodyPoints?.length ?? 0,
+      if (zoneSep) {
+        console.log('[Zone HF debug]', {
+          bodyPointsCount: zoneSep.bodyPoints?.length ?? 0,
           bodyFrameF0Count: walkBodyFrames?.[0]?.length ?? 0,
-          hfZones: sep.hiddenFaceZones?.map(z => ({
+          hfZones: zoneSep.hiddenFaceZones?.map(z => ({
             id: z.limbZoneId,
             triIndices: z.bodyTriangleIndices,
-            maxVertIdx: Math.max(...z.bodyTriangleIndices.flatMap(ti => sep.bodyTriangles?.[ti] ?? [])),
+            maxVertIdx: Math.max(...z.bodyTriangleIndices.flatMap(ti => zoneSep.bodyTriangles?.[ti] ?? [])),
           })),
           hfMeshes: zoneMeshSetup?.hiddenFaceMeshes?.map(m => ({ id: m.zoneId, numVerts: m.numVertices })),
           bodyMeshVerts: zoneMeshSetup?.bodyMesh?.numVertices,
@@ -494,8 +534,8 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
 
         // Check if we should use zone mesh rendering (walk animation active with separation)
         const activeOneshotId = hasOneshots ? (multiPlaybackRef.current as MultiAnimationPlayback)?.activeOneshotName : null
-        const isWalkZonePlaying = activeOneshotId && walkAnim && walkZoneFrames && walkBodyFrames && zoneMeshSetup
-          && activeOneshotId === walkAnim.name
+        const isWalkZonePlaying = activeOneshotId && zoneAnim && walkZoneFrames && walkBodyFrames && zoneMeshSetup
+          && activeOneshotId === zoneAnim.name
 
         if (isWalkZonePlaying && zoneMeshSetup) {
           // Multi-mesh z-ordered rendering for walk animation

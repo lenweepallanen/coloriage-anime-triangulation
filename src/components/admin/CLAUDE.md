@@ -293,6 +293,44 @@ Bouton "Calculer Animation" → `handleComputeARAP` :
 - Vertices colorés par catégorie : rouge (contour anchors), jaune (subdivision), cyan (anchors internes), blanc (internes)
 - Sauvegarde `videoFramesMesh` dans Storage
 
+## Pipeline Triangulation Projet (4 étapes)
+
+Section séparée dans `AdminLayout` (onglet "Triangulation"), gérée par `TriangulationSection.tsx`. Pipeline indépendant du pipeline rest/oneshot.
+
+| Fichier | Étape | Rôle |
+|---------|-------|------|
+| `TriangulationSection.tsx` (pages/admin/) | — | Layout + stepper 4 étapes + ReferenceImageStep inline |
+| `ProjectTriangZonesStep.tsx` | 2 | Placement clics SAM 2 par zone (body + 4 pattes) sur image réf → masques → contours lissés |
+| `ProjectTriangMeshStep.tsx` | 3 | Maillage par zone en 2 phases : contour subdivision → triangulation intérieure. Z-order éditable. |
+| `ProjectTriangHiddenFaceStep.tsx` | 4 | Faces cachées body/limb : sélection A/B boundary + bridge points + Delaunay |
+| `MembersBonesTriangulationStep.tsx` | — | Calcul animation members-bones par zone (auto-weights + LBS) → `walkZoneFrames`/`walkBodyFrames` |
+
+### ProjectTriangZonesStep (Étape 2 — Zones SAM 2)
+
+- Sélecteur zone active (5 boutons colorés : Body, Patte AVG/AVD/ARG/ARD)
+- Clic = placer prompt foreground, Shift+clic = background, clic droit = supprimer
+- Encode l'image comme faux WebM 1-frame (`encodePngAsFakeMp4`) pour l'API SAM 2
+- Passe `videoDimensions` connu pour bypass `readVideoDimensions` (le faux WebM peut être invalide pour `<video>`)
+- Extraction contours + lissage gaussien + bridge body-legs
+
+### ProjectTriangMeshStep (Étape 3 — Maillage par zone)
+
+**2 phases par zone :**
+1. **Contour** : slider nb points (8-120) rééchantillonne le contour SAM 2. Points draggables, insertion sur arête (clic), suppression (clic droit). "Valider contour" verrouille.
+2. **Triangulation** : Delaunay sur contour validé + points internes auto (densité slider) + manuels. "Rééditer contour" pour revenir en phase 1.
+
+**Z-order** : champ numérique par zone dans le panneau latéral. Sauvé sur `SAM2Zone.zOrder`, propagé au renderer via `buildPseudoSeparation()`.
+
+**Persistance** : `zoneContourCount`, `zoneContourPoints`, `zoneContourValidated` + `zonePoints`, `zoneTriangles`, `zoneDensity`.
+
+### ProjectTriangHiddenFaceStep (Étape 4 — Faces cachées)
+
+Même pattern que `WalkHiddenFaceStep` : body mode (face cachée derrière patte) + limb mode (extension patte sous corps). Utilise `triangulateHiddenFace()` / `triangulateHiddenFaceLimb()` de `limbSeparation.ts`.
+
+### MembersBonesTriangulationStep
+
+Calcul de l'animation par zone : auto-weights (distance inverse) + LBS. Produit `walkZoneFrames` + `walkBodyFrames` consommés par `AnimationPlayer` / `ScenePlayer` via `zoneMeshRenderer`.
+
 ## Composants support
 
 ### MarkerStep.tsx

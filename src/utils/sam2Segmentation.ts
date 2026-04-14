@@ -47,7 +47,7 @@ export async function requestSam2Segmentation(
   prompts: SAM2Prompt[],
   imageWidth: number,
   imageHeight: number,
-  options?: { timeoutMs?: number; onPhase?: (phase: SAM2Phase) => void }
+  options?: { timeoutMs?: number; onPhase?: (phase: SAM2Phase) => void; videoDimensions?: { width: number; height: number } }
 ): Promise<SAM2Result> {
   const timeoutMs = options?.timeoutMs ?? 600_000  // 10 min default (cold start)
   const onPhase = options?.onPhase
@@ -74,7 +74,7 @@ export async function requestSam2Segmentation(
 
     // Step 2: read video dimensions for image↔video coord conversion
     onPhase?.('uploading')
-    const videoDims = await readVideoDimensions(videoBlob)
+    const videoDims = options?.videoDimensions ?? await readVideoDimensions(videoBlob)
     console.log(`[SAM2] Video dims: ${videoDims.width}x${videoDims.height}`)
 
     // Convert prompts from image coords → video pixel coords
@@ -177,5 +177,57 @@ function blobToBase64(blob: Blob): Promise<string> {
     }
     reader.onerror = () => reject(new Error('Failed to encode video as base64'))
     reader.readAsDataURL(blob)
+  })
+}
+
+/**
+ * Encode a static image (PNG/JPEG) as a short 1-frame WebM video.
+ * This allows reusing the SAM 2 video segmentation endpoint on a single image.
+ */
+export async function encodePngAsFakeMp4(imageBlob: Blob): Promise<Blob> {
+  // Load image into a canvas
+  const img = await createImageBitmap(imageBlob)
+  const canvas = document.createElement('canvas')
+  canvas.width = img.width
+  canvas.height = img.height
+  const ctx = canvas.getContext('2d')!
+  ctx.drawImage(img, 0, 0)
+
+  // Choose a supported mimeType
+  const mimeTypes = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ]
+  const mimeType = mimeTypes.find(m => MediaRecorder.isTypeSupported(m))
+  if (!mimeType) {
+    throw new Error('MediaRecorder: aucun codec vidéo supporté (WebM VP8/VP9)')
+  }
+
+  // Capture stream at 25 FPS (automatic frames, more robust than manual requestFrame)
+  const stream = canvas.captureStream(25)
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 })
+
+  return new Promise<Blob>((resolve, reject) => {
+    const chunks: Blob[] = []
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data)
+    }
+    recorder.onstop = () => {
+      if (chunks.length === 0) {
+        reject(new Error('MediaRecorder: aucune donnée capturée'))
+        return
+      }
+      resolve(new Blob(chunks, { type: mimeType }))
+    }
+    recorder.onerror = () => reject(new Error('MediaRecorder: erreur d\'encodage'))
+
+    recorder.start()
+
+    // Record ~300ms (~7 frames at 25 FPS) to ensure a valid WebM container
+    setTimeout(() => {
+      recorder.stop()
+      stream.getTracks().forEach(t => t.stop())
+    }, 300)
   })
 }

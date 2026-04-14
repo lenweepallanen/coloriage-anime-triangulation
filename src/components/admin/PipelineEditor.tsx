@@ -29,6 +29,7 @@ import MembersBonesContourSubdivisionStep from './MembersBonesContourSubdivision
 import MembersBonesContourAnchorTrackingStep from './MembersBonesContourAnchorTrackingStep'
 import MembersBonesBoneStep from './MembersBonesBoneStep'
 import MembersBonesSmoothingStep from './MembersBonesSmoothingStep'
+import MembersBonesTriangulationStep from './MembersBonesTriangulationStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -61,6 +62,7 @@ const MEMBERS_BONES_STEPS = [
   'Tracking Anchors zones',
   'Bones par zone',
   'Lissage Bones',
+  'Triangulation + Anim',
 ] as const
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number]
@@ -93,6 +95,7 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Tracking Anchors zones': 'Track Anc.',
   'Bones par zone': 'Bones',
   'Lissage Bones': 'Lissage',
+  'Triangulation + Anim': 'Triang.',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -127,6 +130,7 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Tracking Anchors zones': return mesh?.sam2ContourAnchorTrackingValidated ? 'done' : 'pending'
     case 'Bones par zone': return mesh?.sam2BonesValidated ? 'done' : 'pending'
     case 'Lissage Bones': return mesh?.sam2SmoothingValidated ? 'done' : 'pending'
+    case 'Triangulation + Anim': return mesh?.walkZoneFrames != null ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -329,6 +333,9 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         )}
         {activeStep === 'Lissage Bones' && (
           <MembersBonesSmoothingStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Triangulation + Anim' && (
+          <MembersBonesTriangulationStep project={project} animation={animation} onSave={projectSave} />
         )}
       </div>
     </div>

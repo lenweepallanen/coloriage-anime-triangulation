@@ -62,6 +62,54 @@ export function generateLimbMask(
 }
 
 /**
+ * Generate a binary mask from polygon contours (for project triangulation leg zones).
+ * White = limb areas to inpaint, black = preserve.
+ * Used when zones are defined by SAM 2 contours instead of Bézier curves.
+ */
+export function generateLimbMaskFromContours(
+  contours: Record<string, Point2D[]>,
+  legZoneIds: string[],
+  scanW: number,
+  scanH: number,
+  imageW: number,
+  imageH: number,
+  contentAlignment?: ContentAlignment,
+  dilationPx = 8,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas')
+  canvas.width = scanW
+  canvas.height = scanH
+  const ctx = canvas.getContext('2d')!
+
+  ctx.fillStyle = '#000000'
+  ctx.fillRect(0, 0, scanW, scanH)
+
+  ctx.fillStyle = '#ffffff'
+  for (const zoneId of legZoneIds) {
+    const polygon = contours[zoneId]
+    if (!polygon || polygon.length < 3) continue
+
+    // Dilate polygon outward
+    const dilated = dilationPx > 0 ? expandPolygon(polygon, dilationPx) : polygon
+
+    // Convert image coords → scan canvas pixel coords
+    const scanPolygon = dilated.map(p =>
+      imageToScanPixel(p, imageW, imageH, scanW, scanH, contentAlignment)
+    )
+
+    ctx.beginPath()
+    ctx.moveTo(scanPolygon[0].x, scanPolygon[0].y)
+    for (let i = 1; i < scanPolygon.length; i++) {
+      ctx.lineTo(scanPolygon[i].x, scanPolygon[i].y)
+    }
+    ctx.closePath()
+    ctx.fill()
+  }
+
+  return canvas
+}
+
+/**
  * Generate a binary mask for a limb extension zone (hidden face limb).
  * White = extension area to inpaint, black = preserve.
  * The mask covers only the extension triangles of the specified zone.
