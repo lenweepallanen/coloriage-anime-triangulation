@@ -319,6 +319,14 @@ Section séparée dans `AdminLayout` (onglet "Triangulation"), gérée par `Tria
 1. **Contour** : slider nb points (8-120) rééchantillonne le contour SAM 2. Points draggables, insertion sur arête (clic), suppression (clic droit). "Valider contour" verrouille.
 2. **Triangulation** : Delaunay sur contour validé + points internes auto (densité slider) + manuels. "Rééditer contour" pour revenir en phase 1.
 
+**Filtrage body (trous aux pattes)** : après le Delaunay body, tout triangle dont au moins un sommet est dans un contour de patte validé est supprimé. Les points internes orphelins sont aussi supprimés par compaction (réindexation). Crée des trous larges sous les pattes, comblés en étape 4 ou par patch manuel.
+
+**Patch body (Ajouter / Relier / Déplacer)** : en phase 2 du body, 3 modes pour combler les trous (même pattern que `WalkZoneMeshStep`) :
+- **Ajouter** : clic = nouveau point connecté aux 2 plus proches vertices (`findTwoNearest`)
+- **Relier** : clic 1 = ancre (orange), clic 2+ = triangles chaînés
+- **Déplacer** : drag des points manuels (cyan)
+Points manuels en cyan, triangles manuels intégrés au mesh body. Reset automatique si la densité body change.
+
 **Z-order** : champ numérique par zone dans le panneau latéral. Sauvé sur `SAM2Zone.zOrder`, propagé au renderer via `buildPseudoSeparation()`.
 
 **Persistance** : `zoneContourCount`, `zoneContourPoints`, `zoneContourValidated` + `zonePoints`, `zoneTriangles`, `zoneDensity`.

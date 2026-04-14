@@ -10,8 +10,10 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { Project, Point2D, SAM2Zone } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
-import { triangulateZone, generateInternalPoints } from '../../utils/limbSeparation'
+import { triangulateZone, generateInternalPoints, findTwoNearest } from '../../utils/limbSeparation'
 import { pointInPolygon } from '../../utils/geometry'
+
+type BodyEditMode = 'add' | 'connect' | 'move'
 
 const POINT_RADIUS = 5
 const HIT_RADIUS = 10
@@ -86,9 +88,16 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     return init
   })
 
+  // ─── Body patch state (Ajouter / Relier / Déplacer) ───────────────
+  const [bodyExtraPts, setBodyExtraPts] = useState<Point2D[]>([])
+  const [bodyManualTris, setBodyManualTris] = useState<[number, number, number][]>([])
+  const [bodyEditMode, setBodyEditMode] = useState<BodyEditMode>('add')
+  const [connectAnchor, setConnectAnchor] = useState<number | null>(null)
+  const [connectLast, setConnectLast] = useState<number | null>(null)
+
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null)
   const [dragTarget, setDragTarget] = useState<{
-    zoneId: string; type: 'contour' | 'internal'; idx: number
+    zoneId: string; type: 'contour' | 'internal' | 'bodyExtra'; idx: number
   } | null>(null)
   const [saving, setSaving] = useState(false)
   const [imageLoaded, setImageLoaded] = useState(false)
@@ -213,7 +222,44 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       const autoInternal = generateInternalPoints(cPts, spacing)
       const manual = manualPoints[z.id] ?? []
       const allInternal = [...autoInternal, ...manual]
-      const triResult = triangulateZone(cPts, allInternal, cPts)
+      let triResult = triangulateZone(cPts, allInternal, cPts)
+
+      // Body only: remove triangles touching leg zones, compact orphan vertices,
+      // then append manual patch points + triangles
+      if (z.id === 'body') {
+        const legContours = allZones
+          .filter(lz => lz.id !== 'body' && contourValidated[lz.id] && contourPts[lz.id]?.length >= 3)
+          .map(lz => contourPts[lz.id])
+        if (legContours.length > 0) {
+          // Filter triangles
+          const filteredTris = triResult.triangles.filter(([a, b, c]) => {
+            const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
+            return !legContours.some(legC =>
+              pointInPolygon(pa, legC) || pointInPolygon(pb, legC) || pointInPolygon(pc, legC)
+            )
+          })
+          // Compact: keep only vertices referenced by surviving triangles
+          const usedSet = new Set<number>()
+          for (const [a, b, c] of filteredTris) { usedSet.add(a); usedSet.add(b); usedSet.add(c) }
+          // Always keep contour points (indices 0..contourCount-1)
+          for (let i = 0; i < cPts.length; i++) usedSet.add(i)
+          const usedArr = [...usedSet].sort((a, b) => a - b)
+          const oldToNew = new Map<number, number>()
+          const newPts: Point2D[] = []
+          for (const oldIdx of usedArr) {
+            oldToNew.set(oldIdx, newPts.length)
+            newPts.push(triResult.points[oldIdx])
+          }
+          const newTris = filteredTris.map(([a, b, c]) =>
+            [oldToNew.get(a)!, oldToNew.get(b)!, oldToNew.get(c)!] as [number, number, number]
+          )
+          triResult = { points: newPts, triangles: newTris }
+        }
+        // Append manual patch (extra points + manual triangles)
+        const allPts = [...triResult.points, ...bodyExtraPts]
+        triResult = { points: allPts, triangles: [...triResult.triangles, ...bodyManualTris] }
+      }
+
       result[z.id] = {
         points: triResult.points,
         triangles: triResult.triangles,
@@ -222,7 +268,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }
     return result
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allZones, contourPts, contourValidated, zoneDensity, manualPoints, imageLoaded])
+  }, [allZones, contourPts, contourValidated, zoneDensity, manualPoints, bodyExtraPts, bodyManualTris, imageLoaded])
 
   // ─── Draw ─────────────────────────────────────────────────────────
 
@@ -317,16 +363,40 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         // Phase 2: draw vertices
         const zm = zoneMeshes?.[activeZoneId]
         if (zm) {
+          // For body: compute boundary between auto and manual
+          const isBody = activeZoneId === 'body'
+          const autoPointCount = isBody ? (zm.points.length - bodyExtraPts.length) : zm.points.length
+
           for (let i = 0; i < zm.points.length; i++) {
             const p = zm.points[i]
             if (i < zm.contourCount) {
               // Contour point (read-only)
               ctx.fillStyle = hexToRgba(color, 0.5)
               ctx.beginPath(); ctx.arc(p.x, p.y, pr * 0.5, 0, Math.PI * 2); ctx.fill()
+            } else if (isBody && i >= autoPointCount) {
+              // Body extra point (patch mode) — cyan
+              ctx.fillStyle = '#06b6d4'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / t.scale
+              ctx.beginPath(); ctx.arc(p.x, p.y, pr * 1.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
             } else {
               // Internal point (editable)
               ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 1.5 / t.scale
               ctx.beginPath(); ctx.arc(p.x, p.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+            }
+          }
+
+          // Highlight connect anchor + last
+          if (isBody && bodyEditMode === 'connect' && connectAnchor !== null) {
+            const pa = zm.points[connectAnchor]
+            if (pa) {
+              ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2.5 / t.scale
+              ctx.beginPath(); ctx.arc(pa.x, pa.y, pr * 1.8, 0, Math.PI * 2); ctx.stroke()
+            }
+            if (connectLast !== null) {
+              const pl = zm.points[connectLast]
+              if (pl) {
+                ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 2 / t.scale
+                ctx.beginPath(); ctx.arc(pl.x, pl.y, pr * 1.5, 0, Math.PI * 2); ctx.stroke()
+              }
             }
           }
         }
@@ -335,7 +405,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
 
     ctx.restore()
     animFrameRef.current = requestAnimationFrame(draw)
-  }, [tri?.contours, zoneMeshes, allZones, activeZoneId, contourPts, contourCount, contourValidated, transformRef, imageLoaded])
+  }, [tri?.contours, zoneMeshes, allZones, activeZoneId, contourPts, contourCount, contourValidated, bodyExtraPts, bodyEditMode, connectAnchor, connectLast, transformRef, imageLoaded])
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw)
@@ -371,8 +441,47 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           setContourPts(prev => ({ ...prev, [activeZoneId]: newPts }))
           return
         }
+      } else if (activeZoneId === 'body') {
+        // Phase 2 body: Ajouter / Relier / Déplacer
+        const zm = zoneMeshes?.['body']
+        if (!zm) return
+
+        if (bodyEditMode === 'move') {
+          // Drag body extra points only
+          for (let i = bodyExtraPts.length - 1; i >= 0; i--) {
+            if (Math.hypot(bodyExtraPts[i].x - imgPt.x, bodyExtraPts[i].y - imgPt.y) < hitR) {
+              setDragTarget({ zoneId: 'body', type: 'bodyExtra', idx: i })
+              return
+            }
+          }
+          return
+        }
+
+        if (bodyEditMode === 'connect') {
+          // Click on any body point to build triangles
+          const hitIdx = hitTestBodyPoint(zm.points, imgPt, hitR)
+          if (hitIdx < 0) return
+          if (connectAnchor === null) {
+            setConnectAnchor(hitIdx); setConnectLast(null)
+          } else if (connectLast === null) {
+            setConnectLast(hitIdx)
+          } else {
+            setBodyManualTris(prev => [...prev, [connectAnchor!, connectLast!, hitIdx]])
+            setConnectLast(hitIdx)
+          }
+          return
+        }
+
+        if (bodyEditMode === 'add') {
+          // Add new point connected to 2 nearest vertices
+          const newIdx = zm.points.length
+          const [n1, n2] = findTwoNearest(imgPt, zm.points)
+          setBodyExtraPts(prev => [...prev, imgPt])
+          setBodyManualTris(prev => [...prev, [newIdx, n1, n2]])
+          return
+        }
       } else {
-        // Phase 2: try drag manual internal point
+        // Phase 2 leg zones: drag/add internal points
         const zm = zoneMeshes?.[activeZoneId]
         if (zm) {
           const manual = manualPoints[activeZoneId] ?? []
@@ -389,7 +498,6 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             }
           }
 
-          // Add new internal point inside polygon
           const cPtsZone = contourPts[activeZoneId]
           if (cPtsZone && pointInPolygon(imgPt, cPtsZone)) {
             setManualPoints(prev => ({
@@ -425,6 +533,12 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         arr[dragTarget.idx] = imgPt
         return { ...prev, [dragTarget.zoneId]: arr }
       })
+    } else if (dragTarget.type === 'bodyExtra') {
+      setBodyExtraPts(prev => {
+        const arr = [...prev]
+        arr[dragTarget.idx] = imgPt
+        return arr
+      })
     } else {
       setManualPoints(prev => {
         const arr = [...(prev[dragTarget.zoneId] ?? [])]
@@ -454,8 +568,32 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           return
         }
       }
+    } else if (activeZoneId === 'body') {
+      // Phase 2 body: delete body extra points (and their triangles)
+      const zm = zoneMeshes?.['body']
+      if (!zm) return
+      const autoPointCount = zm.points.length - bodyExtraPts.length
+      for (let i = bodyExtraPts.length - 1; i >= 0; i--) {
+        const globalIdx = autoPointCount + i
+        const p = zm.points[globalIdx]
+        if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+          // Remove point and all manual triangles referencing it
+          setBodyExtraPts(prev => { const a = [...prev]; a.splice(i, 1); return a })
+          setBodyManualTris(prev => {
+            // Reindex: remove tris referencing globalIdx, shift down indices > globalIdx
+            return prev
+              .filter(([a, b, c]) => a !== globalIdx && b !== globalIdx && c !== globalIdx)
+              .map(([a, b, c]) => [
+                a > globalIdx ? a - 1 : a,
+                b > globalIdx ? b - 1 : b,
+                c > globalIdx ? c - 1 : c,
+              ] as [number, number, number])
+          })
+          return
+        }
+      }
     } else {
-      // Phase 2: delete manual internal
+      // Phase 2 leg zones: delete manual internal
       const zm = zoneMeshes?.[activeZoneId]
       if (!zm) return
       const manual = manualPoints[activeZoneId] ?? []
@@ -478,6 +616,17 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }
   }
 
+  // ─── Body helpers ──────────────────────────────────────────────────
+
+  function hitTestBodyPoint(pts: Point2D[], imgPt: Point2D, hitR: number): number {
+    let best = -1, bestDist = hitR
+    for (let i = 0; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - imgPt.x, pts[i].y - imgPt.y)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    return best
+  }
+
   // ─── Validate contour → transition to Phase 2 ────────────────────
 
   function handleValidateContour(zoneId: string) {
@@ -496,6 +645,11 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   function handleDensityChange(zoneId: string, value: number) {
     setZoneDensity(prev => ({ ...prev, [zoneId]: value }))
     setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
+    // Reset body patch if body density changes (indices become invalid)
+    if (zoneId === 'body') {
+      setBodyExtraPts([]); setBodyManualTris([])
+      setConnectAnchor(null); setConnectLast(null)
+    }
   }
 
   // ─── Save ─────────────────────────────────────────────────────────
@@ -573,7 +727,11 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             ? 'Cliquez sur une zone pour l\'éditer.'
             : activePhase === 'contour'
               ? 'Drag = déplacer point. Clic sur arête = insérer. Clic droit = supprimer. Espace + drag = pan.'
-              : 'Clic = ajouter point interne. Drag = déplacer. Clic droit = supprimer. Contour verrouillé.'}
+              : activeZoneId === 'body'
+                ? bodyEditMode === 'add' ? 'Clic = ajouter point relié aux 2 plus proches. Clic droit = supprimer.'
+                : bodyEditMode === 'connect' ? 'Clic 1 = ancre (orange), clic 2 = dernier (vert), clic 3+ = triangle. Clic droit = supprimer.'
+                : 'Drag = déplacer points manuels (cyan). Clic droit = supprimer.'
+              : 'Clic = ajouter point interne. Drag = déplacer. Clic droit = supprimer.'}
         </div>
       </div>
 
@@ -707,6 +865,59 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               <span>Faible</span>
               <span>Dense</span>
             </div>
+
+            {/* Body patch mode: Ajouter / Relier / Déplacer */}
+            {activeZoneId === 'body' && (
+              <>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>
+                  Patch body (combler les trous) :
+                </div>
+                <div style={{
+                  display: 'flex', gap: 4, marginBottom: 8,
+                  padding: 4, borderRadius: 6, background: 'rgba(255,255,255,0.04)',
+                }}>
+                  {(['add', 'connect', 'move'] as const).map(mode => (
+                    <button
+                      key={mode}
+                      className={`btn-sm ${bodyEditMode === mode ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setBodyEditMode(mode)
+                        setConnectAnchor(null); setConnectLast(null)
+                      }}
+                      style={{ flex: 1, fontSize: 11 }}
+                    >
+                      {{ add: 'Ajouter', connect: 'Relier', move: 'Déplacer' }[mode]}
+                    </button>
+                  ))}
+                </div>
+                {bodyEditMode === 'connect' && connectAnchor !== null && (
+                  <button
+                    className="btn-sm btn-ghost"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setConnectAnchor(null); setConnectLast(null)
+                    }}
+                    style={{ width: '100%', fontSize: 11, marginBottom: 6 }}
+                  >
+                    Annuler sélection
+                  </button>
+                )}
+                {(bodyExtraPts.length > 0 || bodyManualTris.length > 0) && (
+                  <button
+                    className="btn-sm btn-danger"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setBodyExtraPts([]); setBodyManualTris([])
+                      setConnectAnchor(null); setConnectLast(null)
+                    }}
+                    style={{ width: '100%', fontSize: 11, marginBottom: 6 }}
+                  >
+                    Effacer le patch ({bodyExtraPts.length} pts, {bodyManualTris.length} tri)
+                  </button>
+                )}
+              </>
+            )}
 
             <button
               className="btn-ghost"

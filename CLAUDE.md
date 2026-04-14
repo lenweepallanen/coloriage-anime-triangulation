@@ -232,7 +232,7 @@ Section dédiée dans `AdminLayout` (onglet "Triangulation"), indépendante du p
 
 1. **Image référence** — Import image colorée (pas le coloriage N&B). Utilisée par SAM 2 pour segmenter les zones.
 2. **Zones SAM 2** — Placement clics foreground/background par zone (body + 4 pattes) sur l'image. Appel SAM 2 (Cloud Function ou serveur local MPS) → masques RLE → contours lissés par zone.
-3. **Maillage par zone** — Édition en 2 phases par zone : (a) contour subdivision (slider nb points + drag/insert/delete) → valider contour, (b) triangulation intérieure Delaunay (densité auto + points manuels). Z-order éditable par zone.
+3. **Maillage par zone** — Édition en 2 phases par zone : (a) contour subdivision (slider nb points + drag/insert/delete) → valider contour, (b) triangulation intérieure Delaunay (densité auto + points manuels). Le body est automatiquement troué aux zones pattes (tout triangle touchant une patte est supprimé, points orphelins compactés). Patch body Ajouter/Relier/Déplacer pour combler les trous. Z-order éditable par zone.
 4. **Faces cachées** — Même système que Walk : sélection 2 vertices boundary (A/B), bridge points manuels, Delaunay dans le polygone fermé. Split body visible / hidden face au rendu.
 
 **Rendu** : `buildPseudoSeparation()` convertit `ProjectTriangulation` en format `WalkLimbSeparation` pour réutiliser `zoneMeshRenderer.buildZoneMeshes()`. Le `zOrder` défini en étape 3 est propagé aux meshes PIXI.
