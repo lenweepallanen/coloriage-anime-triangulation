@@ -212,7 +212,16 @@ interface ProjectTriangulationDoc {
   contourSmoothSigma: number
   bridgeThreshold: number
   step1Validated: boolean
-  // Step 2
+  // Step 2 — nouvelles sous-phases curvilignes (V3)
+  zoneOrigins?: Record<string, Point2D>
+  zoneOriginsValidated?: Record<string, boolean>
+  zoneAnchors?: Record<string, Point2D[]>
+  zoneAnchorsValidated?: Record<string, boolean>
+  zoneSubdivisionPoints?: Record<string, Point2D[]>
+  zoneSubdivisionParams?: Record<string, CurvilinearParam[]>
+  zoneSubdivisionValidated?: Record<string, boolean>
+  zoneContourLength?: Record<string, number>
+  // Step 2 — legacy (slider)
   zoneContourCount?: Record<string, number>
   zoneContourPoints?: Record<string, Point2D[]>
   zoneContourValidated?: Record<string, boolean>
@@ -444,6 +453,16 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     contourSmoothSigma: tri.contourSmoothSigma ?? 3,
     bridgeThreshold: tri.bridgeThreshold ?? 8,
     step1Validated: tri.step1Validated ?? false,
+    // Curvilinear V3 fields
+    ...(tri.zoneOrigins != null && { zoneOrigins: tri.zoneOrigins }),
+    ...(tri.zoneOriginsValidated != null && { zoneOriginsValidated: tri.zoneOriginsValidated }),
+    ...(tri.zoneAnchors != null && { zoneAnchors: tri.zoneAnchors }),
+    ...(tri.zoneAnchorsValidated != null && { zoneAnchorsValidated: tri.zoneAnchorsValidated }),
+    ...(tri.zoneSubdivisionPoints != null && { zoneSubdivisionPoints: tri.zoneSubdivisionPoints }),
+    ...(tri.zoneSubdivisionParams != null && { zoneSubdivisionParams: tri.zoneSubdivisionParams }),
+    ...(tri.zoneSubdivisionValidated != null && { zoneSubdivisionValidated: tri.zoneSubdivisionValidated }),
+    ...(tri.zoneContourLength != null && { zoneContourLength: tri.zoneContourLength }),
+    // Legacy
     zoneContourCount: tri.zoneContourCount ?? {},
     zoneContourPoints: tri.zoneContourPoints ?? {},
     zoneContourValidated: tri.zoneContourValidated ?? {},
@@ -472,6 +491,14 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     contourSmoothSigma: doc.contourSmoothSigma ?? 3,
     bridgeThreshold: doc.bridgeThreshold ?? 8,
     step1Validated: doc.step1Validated ?? false,
+    zoneOrigins: doc.zoneOrigins,
+    zoneOriginsValidated: doc.zoneOriginsValidated,
+    zoneAnchors: doc.zoneAnchors,
+    zoneAnchorsValidated: doc.zoneAnchorsValidated,
+    zoneSubdivisionPoints: doc.zoneSubdivisionPoints,
+    zoneSubdivisionParams: doc.zoneSubdivisionParams,
+    zoneSubdivisionValidated: doc.zoneSubdivisionValidated,
+    zoneContourLength: doc.zoneContourLength,
     zoneContourCount: doc.zoneContourCount ?? {},
     zoneContourPoints: doc.zoneContourPoints ?? {},
     zoneContourValidated: doc.zoneContourValidated ?? {},

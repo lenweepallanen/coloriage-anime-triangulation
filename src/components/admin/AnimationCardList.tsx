@@ -212,7 +212,16 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
         <button className="btn-secondary" onClick={() => handleAdd('members-bones-v2')} disabled={saving}>
           + MB V2
         </button>
-        <button className="btn-secondary" onClick={() => handleAdd('members-bones-v3')} disabled={saving}>
+        <button
+          className="btn-secondary"
+          onClick={() => handleAdd('members-bones-v3')}
+          disabled={saving || !project.projectTriangulation?.step3Validated}
+          title={
+            project.projectTriangulation?.step3Validated
+              ? 'Créer une animation Members-Bones V3 (topologie héritée de la Triangulation projet)'
+              : 'Validez d\'abord la Triangulation projet jusqu\'à l\'étape Faces cachées (onglet Triangulation)'
+          }
+        >
           + MB V3
         </button>
       </div>

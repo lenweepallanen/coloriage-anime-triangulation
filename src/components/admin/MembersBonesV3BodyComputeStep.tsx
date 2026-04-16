@@ -1,14 +1,15 @@
 /**
  * MembersBonesV3BodyComputeStep — V3 étape "Calcul Corps".
  *
- * Le maillage body V3 est uniquement la triangulation Delaunay du contour
- * (anchors + subdivision body) — pas de points internes.
- * Conséquence : tous les vertices sont sur le contour, donc pour chaque frame,
- *   walkBodyFrames[f] = positions du contour body à la frame f (lissées si dispo).
- * Aucune résolution ARAP nécessaire (pas de vertex libre).
+ * Mode principal (projectTriangulation.step3Validated + zoneContourLength['body']) :
+ *   - Topologie héritée : projectTriangulation.bodyPoints / bodyTriangles
+ *   - Animation ARAP : les N premiers vertices (contour) sont pinnés aux positions
+ *     trackées+lissées par frame, les internes déforment via ARAP.
+ *   - walkBodyFrames stocké en coords IMAGE.
  *
- * Prerequisites: sam2ContourSubdivisionValidated + boundary frames disponibles
- * (sam2ContourAnchorTrackingValidated ; smoothing optionnel).
+ * Mode legacy fallback (projectTriangulation absent ou non validée) :
+ *   - Maillage body = Delaunay du contour seul (anchors+subdivision), sans internes.
+ *   - walkBodyFrames = positions du contour frame par frame.
  */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
@@ -17,6 +18,7 @@ import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { triangulateZone } from '../../utils/limbSeparation'
 import { buildV3BoundaryFrames, buildV3BoundaryFrame0 } from '../../utils/membersBonesBodyMesh'
+import { computeBodyAnimationARAP } from '../../utils/membersBonesTriangSolver'
 
 interface Props {
   project: Project
@@ -51,16 +53,36 @@ export default function MembersBonesV3BodyComputeStep({ project, animation, onSa
     return () => { URL.revokeObjectURL(url); imageRef.current = null }
   }, [project.originalImageBlob])
 
+  // ─── Compute mode ──────────────────────────────────────────────────────
+  // Mode héritage projectTriangulation : ARAP sur bodyPoints/bodyTriangles
+  // Mode fallback : Delaunay du contour seul (legacy)
+  const tri = project.projectTriangulation
+  const useInheritedTopology = !!(
+    tri?.step3Validated &&
+    tri.bodyPoints?.length &&
+    tri.bodyTriangles?.length &&
+    tri.zoneContourLength?.['body']
+  )
+
   // ─── Boundary (frame 0 + per-frame) in IMAGE coords ─────────────────────
+  // V3 hérité : frame 0 vient de projectTriangulation (déjà en coords image),
+  // les N premiers indices de bodyPoints = contour P0+anchors+subdivisions.
+  // Fallback legacy : helper qui lit sam2ContourAnchors/Subdivision (V1/V2).
   const boundary0 = useMemo(() => {
     if (!mesh || imgSize.w === 0) return null
+    if (useInheritedTopology && tri) {
+      const nContour = tri.zoneContourLength!['body']!
+      return tri.bodyPoints.slice(0, nContour)
+    }
     return buildV3BoundaryFrame0(mesh, imgSize.w, imgSize.h)
-  }, [mesh, imgSize])
+  }, [mesh, imgSize, useInheritedTopology, tri])
 
   const boundaryFrames = useMemo(() => {
     if (!mesh || imgSize.w === 0) return null
-    return buildV3BoundaryFrames(mesh, imgSize.w, imgSize.h)
-  }, [mesh, imgSize])
+    // Pass subParams pour produire l'ordre interleavé matchant tri.bodyPoints[0..nContour]
+    const subParams = useInheritedTopology ? tri?.zoneSubdivisionParams?.['body'] : undefined
+    return buildV3BoundaryFrames(mesh, imgSize.w, imgSize.h, subParams)
+  }, [mesh, imgSize, useInheritedTopology, tri])
 
   const totalFrames = boundaryFrames?.length ?? 0
   const hasResult = bodyFrames != null && bodyFrames.length > 0 && bodyTriangles != null
@@ -82,25 +104,37 @@ export default function MembersBonesV3BodyComputeStep({ project, animation, onSa
     }
   }, [imgSize, fitToCanvas])
 
-  // ─── Compute (Delaunay + boundary passthrough) ─────────────────────────
   const handleCompute = useCallback(async () => {
     if (!boundary0 || !boundaryFrames || boundaryFrames.length === 0) return
     setComputing(true)
     try {
-      // Delaunay du contour, filtré par le polygone du contour lui-même
-      const { triangles } = triangulateZone(boundary0, [], boundary0)
-      // walkBodyFrames = positions boundary frame par frame (copie défensive)
-      const frames = boundaryFrames.map(f => f.map(p => ({ x: p.x, y: p.y })))
-      setBodyTriangles(triangles)
-      setBodyFrames(frames)
+      if (useInheritedTopology && tri) {
+        // V3 mode héritage : ARAP avec topologie projet
+        const nContour = tri.zoneContourLength!['body']!
+        const expectedLen = nContour
+        if (boundary0.length !== expectedLen) {
+          throw new Error(
+            `Contour body tracké (${boundary0.length} pts) != contour Triangulation projet (${expectedLen} pts). Refaire le tracking anchors body.`
+          )
+        }
+        const frames = computeBodyAnimationARAP(tri, boundaryFrames)
+        setBodyTriangles(tri.bodyTriangles)
+        setBodyFrames(frames)
+      } else {
+        // Mode legacy : Delaunay du contour seul
+        const { triangles } = triangulateZone(boundary0, [], boundary0)
+        const frames = boundaryFrames.map(f => f.map(p => ({ x: p.x, y: p.y })))
+        setBodyTriangles(triangles)
+        setBodyFrames(frames)
+      }
       setCurrentFrame(0)
     } catch (err) {
-      console.error('[MBV3BodyCompute] Delaunay failed:', err)
-      alert(`Erreur triangulation : ${err instanceof Error ? err.message : err}`)
+      console.error('[MBV3BodyCompute] compute failed:', err)
+      alert(`Erreur calcul : ${err instanceof Error ? err.message : err}`)
     } finally {
       setComputing(false)
     }
-  }, [boundary0, boundaryFrames])
+  }, [boundary0, boundaryFrames, useInheritedTopology, tri])
 
   // ─── Save ──────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
@@ -208,8 +242,11 @@ export default function MembersBonesV3BodyComputeStep({ project, animation, onSa
 
   // ─── Render ────────────────────────────────────────────────────────────
   if (!project.originalImageBlob) return <div className="placeholder">Image projet manquante.</div>
-  if (!mesh?.sam2ContourSubdivisionValidated) {
-    return <div className="placeholder">Validez d&apos;abord la subdivision body (étape précédente).</div>
+  if (!tri?.step3Validated) {
+    return <div className="placeholder">Triangulation projet incomplète (étape 3 requise).</div>
+  }
+  if (!mesh?.sam2ContourAnchorTrackingValidated) {
+    return <div className="placeholder">Validez d&apos;abord le tracking anchors zones (étape 5).</div>
   }
   if (!boundary0 || boundary0.length < 3) {
     return <div className="placeholder">Contour body indisponible.</div>

@@ -1,61 +1,93 @@
 /**
  * ProjectTriangMeshStep — Step 2 of the project-level triangulation pipeline.
  *
- * Two-phase per-zone editing:
- *   Phase 1 (Contour): Resample SAM 2 contour → adjust count slider → drag/insert/delete → "Valider contour"
- *   Phase 2 (Triangulation): Auto internal points (density slider) + manual add/drag/delete → Delaunay
+ * Per-zone curvilinear mesh editor with 4 sub-phases:
+ *   1. P0          — Place origin point on smoothed SAM 2 contour (snap to curvature extrema)
+ *   2. Anchors     — Place characteristic anchors (auto-detect by curvature, P0 always [0])
+ *   3. Subdivision — Add subdivision points per segment (counters +/- per segment + global)
+ *   4. Triangulation — Delaunay on contour [P0, subdiv0, anchor1, subdiv1, ..., anchorN, subdivN]
+ *                       + auto internals (density slider) + manual points + body patch
+ *
+ * Save writes ALL curvilinear data + zonePoints/zoneTriangles + bodyPoints/bodyTriangles
+ * + zoneContourLength (= N first indices of zonePoints are the contour, pinned by ARAP V3).
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import type { Project, Point2D, SAM2Zone } from '../../types/project'
+import type { Project, Point2D, SAM2Zone, CurvilinearParam } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
-import { triangulateZone, generateInternalPoints, findTwoNearest } from '../../utils/limbSeparation'
+import { triangulateZone, generateInternalPoints } from '../../utils/limbSeparation'
 import { pointInPolygon } from '../../utils/geometry'
+import { detectCurvatureExtrema } from '../../utils/curvatureScaleSpace'
+import { reorderContourFromOrigin, subdivideContour, computeArcLengths } from '../../utils/curvilinearContour'
 
-type BodyEditMode = 'add' | 'connect' | 'move'
+type ZoneSubPhase = 'p0' | 'anchors' | 'subdivision' | 'triangulation'
 
 const POINT_RADIUS = 5
 const HIT_RADIUS = 10
 const DEFAULT_DENSITY = 5
-const DEFAULT_CONTOUR_COUNT = 30
+const DEFAULT_ANCHOR_COUNT = 6
+const DEFAULT_SEGMENT_SUBDIV = 3
+const TOP_CURVATURE_CANDIDATES = 20
+const P0_SNAP_RADIUS_PX = 50
 
 interface Props {
   project: Project
   onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
 }
 
-type ZonePhase = 'contour' | 'triangulation'
-
 export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const tri = project.projectTriangulation
 
-  // ─── Zone list ──────────────────────────────────────────────────────
+  // ─── Zone list (always include 'body') ────────────────────────────
   const allZones = useMemo<SAM2Zone[]>(() => {
     const zones = tri?.zones ?? []
-    // Ensure body is present
     if (!zones.find(z => z.id === 'body')) {
       return [...zones, { id: 'body', label: 'Corps', color: '#888888' }]
     }
     return zones
   }, [tri])
 
-  // ─── Per-zone contour state (Phase 1) ────────────────────────────
-  const [contourCount, setContourCount] = useState<Record<string, number>>(() => {
+  // ─── Per-zone curvilinear state ────────────────────────────────────
+  const [zoneOrigins, setZoneOrigins] = useState<Record<string, Point2D>>(() => tri?.zoneOrigins ?? {})
+  const [zoneOriginsValidated, setZoneOriginsValidated] = useState<Record<string, boolean>>(() => tri?.zoneOriginsValidated ?? {})
+  const [zoneAnchors, setZoneAnchors] = useState<Record<string, Point2D[]>>(() => tri?.zoneAnchors ?? {})
+  const [zoneAnchorsValidated, setZoneAnchorsValidated] = useState<Record<string, boolean>>(() => tri?.zoneAnchorsValidated ?? {})
+  const [zoneAnchorCount, setZoneAnchorCount] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {}
-    for (const z of allZones) init[z.id] = tri?.zoneContourCount?.[z.id] ?? DEFAULT_CONTOUR_COUNT
+    for (const z of allZones) init[z.id] = (tri?.zoneAnchors?.[z.id]?.length ?? DEFAULT_ANCHOR_COUNT)
+    return init
+  })
+  const [zoneSubdivisionParams, setZoneSubdivisionParams] = useState<Record<string, CurvilinearParam[]>>(() => tri?.zoneSubdivisionParams ?? {})
+  const [zoneSubdivisionPoints, setZoneSubdivisionPoints] = useState<Record<string, Point2D[]>>(() => tri?.zoneSubdivisionPoints ?? {})
+  const [zoneSubdivisionValidated, setZoneSubdivisionValidated] = useState<Record<string, boolean>>(() => tri?.zoneSubdivisionValidated ?? {})
+  // Per-zone, per-segment subdivision counts (segIdx → N)
+  const [zoneSegmentCounts, setZoneSegmentCounts] = useState<Record<string, number[]>>(() => {
+    const init: Record<string, number[]> = {}
+    for (const z of allZones) {
+      const params = tri?.zoneSubdivisionParams?.[z.id]
+      const anchors = tri?.zoneAnchors?.[z.id]
+      if (params && anchors && anchors.length > 0) {
+        // Reconstruct counts from params
+        const counts = new Array(anchors.length).fill(0)
+        for (const p of params) {
+          if (p.segmentIndex >= 0 && p.segmentIndex < counts.length) counts[p.segmentIndex]++
+        }
+        init[z.id] = counts
+      }
+    }
     return init
   })
 
-  const [contourPts, setContourPts] = useState<Record<string, Point2D[]>>(() => {
-    return tri?.zoneContourPoints ?? {}
+  // ─── Per-zone density, manual internals, body patch ───────────────
+  const [zoneDensity, setZoneDensity] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {}
+    for (const z of allZones) init[z.id] = tri?.zoneDensity?.[z.id] ?? DEFAULT_DENSITY
+    return init
   })
+  const [manualPoints, setManualPoints] = useState<Record<string, Point2D[]>>({})
 
-  const [contourValidated, setContourValidated] = useState<Record<string, boolean>>(() => {
-    return tri?.zoneContourValidated ?? {}
-  })
-
-  // ─── Per-zone z-order ──────────────────────────────────────────────
+  // ─── Z-order ──────────────────────────────────────────────────────
   const [zoneZOrder, setZoneZOrder] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {}
     for (let i = 0; i < allZones.length; i++) {
@@ -64,43 +96,17 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     return init
   })
 
-  // ─── Per-zone internal state (Phase 2) ───────────────────────────
-  const [zoneDensity, setZoneDensity] = useState<Record<string, number>>(() => {
-    const init: Record<string, number> = {}
-    for (const z of allZones) init[z.id] = tri?.zoneDensity?.[z.id] ?? DEFAULT_DENSITY
-    return init
-  })
-
-  const [manualPoints, setManualPoints] = useState<Record<string, Point2D[]>>(() => {
-    // Restore manual points from saved zonePoints (points after contour count)
-    const init: Record<string, Point2D[]> = {}
-    for (const z of allZones) {
-      const saved = tri?.zonePoints?.[z.id]
-      const cCount = tri?.zoneContourCount?.[z.id] ?? 0
-      if (saved && cCount > 0 && saved.length > cCount) {
-        // Auto-internal points are regenerated from density, manual are at the end
-        // We can't perfectly separate auto from manual on reload, so keep all extra as manual
-        init[z.id] = []
-      } else {
-        init[z.id] = []
-      }
-    }
-    return init
-  })
-
-  // ─── Body patch state (Ajouter / Relier / Déplacer) ───────────────
-  const [bodyExtraPts, setBodyExtraPts] = useState<Point2D[]>([])
-  const [bodyManualTris, setBodyManualTris] = useState<[number, number, number][]>([])
-  const [bodyEditMode, setBodyEditMode] = useState<BodyEditMode>('add')
-  const [connectAnchor, setConnectAnchor] = useState<number | null>(null)
-  const [connectLast, setConnectLast] = useState<number | null>(null)
-
+  // ─── UI state ─────────────────────────────────────────────────────
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null)
+  const [activeSubPhase, setActiveSubPhase] = useState<Record<string, ZoneSubPhase>>({})
+  const [activeSegment, setActiveSegment] = useState<number | null>(null) // for subdivision UI hover/select
   const [dragTarget, setDragTarget] = useState<{
-    zoneId: string; type: 'contour' | 'internal' | 'bodyExtra'; idx: number
+    zoneId: string; type: 'anchor' | 'p0' | 'internal' | 'bodyExtra'; idx: number
   } | null>(null)
   const [saving, setSaving] = useState(false)
   const [imageLoaded, setImageLoaded] = useState(false)
+  // Mirror transformRef to React state so overlay buttons reposition on pan/zoom
+  const [transformState, setTransformState] = useState({ scale: 1, offsetX: 0, offsetY: 0 })
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
@@ -109,53 +115,80 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
 
   // ─── Helpers ──────────────────────────────────────────────────────
 
-  function zonePhase(zoneId: string): ZonePhase {
-    return contourValidated[zoneId] ? 'triangulation' : 'contour'
+  /** Returns the currently-validated sub-phase index : 0=none, 1=p0, 2=anchors, 3=subdiv, 4=triangulation. */
+  function zoneStage(zoneId: string): number {
+    if (zoneSubdivisionValidated[zoneId]) return 4
+    if (zoneAnchorsValidated[zoneId]) return 3
+    if (zoneOriginsValidated[zoneId]) return 2
+    return 1
   }
 
-  /** Sample a closed polygon into N evenly-spaced vertices. */
-  function sampleContour(polygon: Point2D[], count: number): Point2D[] {
-    if (polygon.length < 3 || count < 3) return [...polygon]
-    let totalLen = 0
-    for (let i = 0; i < polygon.length; i++) {
-      const j = (i + 1) % polygon.length
-      totalLen += Math.hypot(polygon[j].x - polygon[i].x, polygon[j].y - polygon[i].y)
+  /** Get the currently-active sub-phase (default = next-to-validate). */
+  function getActiveSubPhase(zoneId: string): ZoneSubPhase {
+    const explicit = activeSubPhase[zoneId]
+    if (explicit) return explicit
+    const stage = zoneStage(zoneId)
+    if (stage <= 1) return 'p0'
+    if (stage === 2) return 'anchors'
+    if (stage === 3) return 'subdivision'
+    return 'triangulation'
+  }
+
+  function setSubPhase(zoneId: string, phase: ZoneSubPhase) {
+    setActiveSubPhase(prev => ({ ...prev, [zoneId]: phase }))
+  }
+
+  function getRefContour(zoneId: string): Point2D[] | null {
+    return tri?.contours?.[zoneId] ?? null
+  }
+
+  /** Top-K curvature extrema on the SAM 2 contour. Used as snap candidates for P0/anchors. */
+  function getTopExtrema(zoneId: string, k: number = TOP_CURVATURE_CANDIDATES): Point2D[] {
+    const contour = getRefContour(zoneId)
+    if (!contour || contour.length < 10) return []
+    return detectCurvatureExtrema(contour, k).map(c => c.position)
+  }
+
+  /** Snap a point to the nearest curvature extremum within snapRadius (or unbounded if snapRadius=0). */
+  function snapToExtremum(p: Point2D, candidates: Point2D[], snapRadius: number = 0): Point2D | null {
+    if (candidates.length === 0) return null
+    let best: Point2D | null = null
+    let bestDist = snapRadius > 0 ? snapRadius : Infinity
+    for (const c of candidates) {
+      const d = Math.hypot(c.x - p.x, c.y - p.y)
+      if (d < bestDist) { bestDist = d; best = c }
     }
-    const step = totalLen / count
-    const result: Point2D[] = []
-    let segIdx = 0, segStart = 0
-    for (let i = 0; i < count; i++) {
-      const targetDist = i * step
-      while (segIdx < polygon.length) {
-        const j = (segIdx + 1) % polygon.length
-        const segLen = Math.hypot(polygon[j].x - polygon[segIdx].x, polygon[j].y - polygon[segIdx].y)
-        if (segStart + segLen >= targetDist || segIdx === polygon.length - 1) {
-          const t = segLen > 0 ? (targetDist - segStart) / segLen : 0
-          result.push({
-            x: polygon[segIdx].x + t * (polygon[j].x - polygon[segIdx].x),
-            y: polygon[segIdx].y + t * (polygon[j].y - polygon[segIdx].y),
-          })
-          break
-        }
-        segStart += segLen
-        segIdx++
-      }
+    return best
+  }
+
+  /** Build the closed contour as [P0, subdiv_seg0, anchor_1, subdiv_seg1, ..., anchor_N, subdiv_segN]. */
+  function buildClosedContour(zoneId: string): Point2D[] | null {
+    const anchors = zoneAnchors[zoneId]
+    const subParams = zoneSubdivisionParams[zoneId]
+    const subPoints = zoneSubdivisionPoints[zoneId]
+    if (!anchors || anchors.length === 0 || !subParams || !subPoints) return null
+    const n = anchors.length
+    // Group subdivision points by segmentIndex
+    const bySegment: Point2D[][] = Array.from({ length: n }, () => [])
+    for (let i = 0; i < subParams.length; i++) {
+      const p = subParams[i]
+      const pt = subPoints[i]
+      if (!pt) continue
+      if (p.segmentIndex >= 0 && p.segmentIndex < n) bySegment[p.segmentIndex].push(pt)
     }
-    return result
+    // Assemble : anchor_i then subdivisions of segment_i (which leads to anchor_{i+1})
+    const out: Point2D[] = []
+    for (let i = 0; i < n; i++) {
+      out.push(anchors[i])
+      for (const sp of bySegment[i]) out.push(sp)
+    }
+    return out
   }
 
   function spacingForDensity(density: number): number {
     const img = imageRef.current
     const maxDim = img ? Math.max(img.naturalWidth, img.naturalHeight) : 800
     return maxDim / (density * 3 + 5)
-  }
-
-  /** Get current contour points for a zone (validated or resampled from SAM 2). */
-  function getContourPts(zoneId: string): Point2D[] {
-    if (contourPts[zoneId]?.length) return contourPts[zoneId]
-    const rawContour = tri?.contours?.[zoneId]
-    if (!rawContour || rawContour.length < 3) return []
-    return sampleContour(rawContour, contourCount[zoneId] ?? DEFAULT_CONTOUR_COUNT)
   }
 
   // ─── Load image ───────────────────────────────────────────────────
@@ -189,21 +222,66 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.originalImageBlob, tri?.referenceImageBlob])
 
-  // ─── Auto-resample contour when count slider changes ──────────────
+  // ─── Auto-detect anchors when entering Anchors phase or count changes ──
 
   useEffect(() => {
-    if (!activeZoneId || zonePhase(activeZoneId) !== 'contour') return
-    const rawContour = tri?.contours?.[activeZoneId]
-    if (!rawContour || rawContour.length < 3) return
-    const count = contourCount[activeZoneId] ?? DEFAULT_CONTOUR_COUNT
-    setContourPts(prev => ({
-      ...prev,
-      [activeZoneId]: sampleContour(rawContour, count),
-    }))
+    if (!activeZoneId) return
+    if (getActiveSubPhase(activeZoneId) !== 'anchors') return
+    if (zoneAnchorsValidated[activeZoneId]) return // don't auto-replace if already validated
+    const p0 = zoneOrigins[activeZoneId]
+    const refContour = getRefContour(activeZoneId)
+    if (!p0 || !refContour) return
+    // Only auto-fill if we don't have anchors yet (initial entry)
+    if (zoneAnchors[activeZoneId]?.length) return
+    const targetCount = zoneAnchorCount[activeZoneId] ?? DEFAULT_ANCHOR_COUNT
+    autoDetectAnchors(activeZoneId, p0, refContour, targetCount)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contourCount, activeZoneId])
+  }, [activeZoneId, activeSubPhase])
 
-  // ─── Compute zone meshes (Phase 2 zones only) ────────────────────
+  function autoDetectAnchors(zoneId: string, p0: Point2D, refContour: Point2D[], targetCount: number) {
+    // 1. Get top-K candidates already sorted by curvature score (NMS-spaced)
+    const pool = detectCurvatureExtrema(refContour, TOP_CURVATURE_CANDIDATES)
+      .filter(c => Math.hypot(c.position.x - p0.x, c.position.y - p0.y) > 20) // exclude very close to P0
+    // 2. Take top-(N-1) by curvature score (the array is already score-descending)
+    const selected = pool.slice(0, Math.max(0, targetCount - 1)).map(c => c.position)
+    // 3. Sort the selected N-1 by arc-length on contour reordered from P0 (chain order)
+    const ordered = reorderContourFromOrigin(refContour, p0)
+    const arcLens = computeArcLengths(ordered)
+    const totalLen = arcLens[arcLens.length - 1] || 1
+    function arcLengthOf(p: Point2D): number {
+      let bestIdx = 0, bestDist = Infinity
+      for (let i = 0; i < ordered.length; i++) {
+        const d = (ordered[i].x - p.x) ** 2 + (ordered[i].y - p.y) ** 2
+        if (d < bestDist) { bestDist = d; bestIdx = i }
+      }
+      return arcLens[bestIdx] / totalLen
+    }
+    const sortedByArc = selected
+      .map(p => ({ p, s: arcLengthOf(p) }))
+      .sort((a, b) => a.s - b.s)
+      .map(x => x.p)
+    setZoneAnchors(prev => ({ ...prev, [zoneId]: [p0, ...sortedByArc] }))
+  }
+
+  // ─── Recompute subdivision points when params/anchors change ──────
+
+  useEffect(() => {
+    for (const zoneId of Object.keys(zoneAnchors)) {
+      const anchors = zoneAnchors[zoneId]
+      const refContour = getRefContour(zoneId)
+      const p0 = zoneOrigins[zoneId]
+      const counts = zoneSegmentCounts[zoneId]
+      if (!anchors?.length || !refContour || !p0 || !counts) continue
+      // Use reordered contour from P0 for stable arc-length parametrization
+      const ordered = reorderContourFromOrigin(refContour, p0)
+      const { points, params } = subdivideContour(ordered, anchors, counts)
+      setZoneSubdivisionPoints(prev => ({ ...prev, [zoneId]: points }))
+      setZoneSubdivisionParams(prev => ({ ...prev, [zoneId]: params }))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoneAnchors, zoneSegmentCounts])
+
+  // ─── Compute zone meshes (sub-phase 4 only) ───────────────────────
 
   const zoneMeshes = useMemo(() => {
     if (!tri?.contours) return null
@@ -214,8 +292,9 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }> = {}
 
     for (const z of allZones) {
-      if (!contourValidated[z.id]) continue
-      const cPts = contourPts[z.id]
+      // Need to reach triangulation phase to compute mesh
+      if (zoneStage(z.id) < 4) continue
+      const cPts = buildClosedContour(z.id)
       if (!cPts || cPts.length < 3) continue
       const density = zoneDensity[z.id] ?? DEFAULT_DENSITY
       const spacing = spacingForDensity(density)
@@ -224,24 +303,22 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       const allInternal = [...autoInternal, ...manual]
       let triResult = triangulateZone(cPts, allInternal, cPts)
 
-      // Body only: remove triangles touching leg zones, compact orphan vertices,
-      // then append manual patch points + triangles
       if (z.id === 'body') {
+        // Filter triangles touching leg zones
         const legContours = allZones
-          .filter(lz => lz.id !== 'body' && contourValidated[lz.id] && contourPts[lz.id]?.length >= 3)
-          .map(lz => contourPts[lz.id])
+          .filter(lz => lz.id !== 'body' && zoneStage(lz.id) >= 4)
+          .map(lz => buildClosedContour(lz.id))
+          .filter((c): c is Point2D[] => !!c && c.length >= 3)
         if (legContours.length > 0) {
-          // Filter triangles
           const filteredTris = triResult.triangles.filter(([a, b, c]) => {
             const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
             return !legContours.some(legC =>
               pointInPolygon(pa, legC) || pointInPolygon(pb, legC) || pointInPolygon(pc, legC)
             )
           })
-          // Compact: keep only vertices referenced by surviving triangles
+          // Compact: keep contour points always, plus vertices used by surviving triangles
           const usedSet = new Set<number>()
           for (const [a, b, c] of filteredTris) { usedSet.add(a); usedSet.add(b); usedSet.add(c) }
-          // Always keep contour points (indices 0..contourCount-1)
           for (let i = 0; i < cPts.length; i++) usedSet.add(i)
           const usedArr = [...usedSet].sort((a, b) => a - b)
           const oldToNew = new Map<number, number>()
@@ -255,9 +332,6 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           )
           triResult = { points: newPts, triangles: newTris }
         }
-        // Append manual patch (extra points + manual triangles)
-        const allPts = [...triResult.points, ...bodyExtraPts]
-        triResult = { points: allPts, triangles: [...triResult.triangles, ...bodyManualTris] }
       }
 
       result[z.id] = {
@@ -268,7 +342,10 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }
     return result
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allZones, contourPts, contourValidated, zoneDensity, manualPoints, bodyExtraPts, bodyManualTris, imageLoaded])
+  }, [
+    allZones, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionValidated,
+    zoneDensity, manualPoints, imageLoaded,
+  ])
 
   // ─── Draw ─────────────────────────────────────────────────────────
 
@@ -297,7 +374,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     const contours = tri?.contours
     if (!contours) { ctx.restore(); return }
 
-    // Draw all zone SAM 2 contours as thin reference lines
+    // Draw all zone SAM 2 contours as faint reference lines
     for (const z of allZones) {
       const rawC = contours[z.id]
       if (!rawC || rawC.length < 3) continue
@@ -310,7 +387,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       ctx.stroke()
     }
 
-    // Draw Phase 2 zone meshes (triangulation)
+    // Draw zone meshes (triangulation phase)
     if (zoneMeshes) {
       for (const z of allZones) {
         const zm = zoneMeshes[z.id]
@@ -333,70 +410,109 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     if (activeZoneId) {
       const zone = allZones.find(z => z.id === activeZoneId)
       const color = zone?.color ?? '#888'
-      const phase = zonePhase(activeZoneId)
+      const phase = getActiveSubPhase(activeZoneId)
       const pr = POINT_RADIUS / t.scale
 
-      if (phase === 'contour') {
-        // Phase 1: draw editable contour
-        const pts = getContourPts(activeZoneId)
-        if (pts.length >= 2) {
-          // Contour edges
-          ctx.strokeStyle = hexToRgba(color, 0.8)
-          ctx.lineWidth = 2 / t.scale
-          ctx.beginPath()
-          ctx.moveTo(pts[0].x, pts[0].y)
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-          ctx.closePath()
-          ctx.stroke()
+      // Sub-phase P0 : top-K curvature extrema as snap candidates (orange)
+      if (phase === 'p0') {
+        const candidates = getTopExtrema(activeZoneId)
+        ctx.fillStyle = '#fb923c'
+        for (const c of candidates) {
+          ctx.globalAlpha = 0.7
+          ctx.beginPath(); ctx.arc(c.x, c.y, pr * 0.7, 0, Math.PI * 2); ctx.fill()
+        }
+        ctx.globalAlpha = 1
+        // P0 itself
+        const p0 = zoneOrigins[activeZoneId]
+        if (p0) {
+          ctx.fillStyle = '#ef4444'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
+          ctx.beginPath(); ctx.arc(p0.x, p0.y, pr * 1.4, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+        }
+      }
 
-          // Contour points
-          for (const p of pts) {
-            ctx.fillStyle = color
-            ctx.strokeStyle = '#fff'
-            ctx.lineWidth = 1.5 / t.scale
-            ctx.beginPath()
-            ctx.arc(p.x, p.y, pr, 0, Math.PI * 2)
-            ctx.fill(); ctx.stroke()
+      // Sub-phase Anchors / Subdivision / Triangulation : draw current anchors + subdivision
+      if (phase === 'anchors' || phase === 'subdivision' || phase === 'triangulation') {
+        const closedContour = buildClosedContour(activeZoneId)
+        const anchors = zoneAnchors[activeZoneId] ?? []
+        const subPoints = zoneSubdivisionPoints[activeZoneId] ?? []
+        const subParams = zoneSubdivisionParams[activeZoneId] ?? []
+
+        // In Anchors phase, show top-K curvature candidates as faint orange dots (placement pool)
+        if (phase === 'anchors') {
+          const candidates = getTopExtrema(activeZoneId)
+          ctx.fillStyle = '#fb923c'
+          ctx.globalAlpha = 0.35
+          for (const c of candidates) {
+            ctx.beginPath(); ctx.arc(c.x, c.y, pr * 0.8, 0, Math.PI * 2); ctx.fill()
+          }
+          ctx.globalAlpha = 1
+        }
+
+        // Closed contour line
+        if (closedContour && closedContour.length >= 3) {
+          ctx.strokeStyle = hexToRgba(color, 0.8)
+          ctx.lineWidth = 1.8 / t.scale
+          ctx.beginPath()
+          ctx.moveTo(closedContour[0].x, closedContour[0].y)
+          for (let i = 1; i < closedContour.length; i++) ctx.lineTo(closedContour[i].x, closedContour[i].y)
+          ctx.closePath(); ctx.stroke()
+        }
+
+        // Highlight active segment in subdivision phase
+        if (phase === 'subdivision' && activeSegment !== null && anchors.length > 0) {
+          const a = anchors[activeSegment]
+          const b = anchors[(activeSegment + 1) % anchors.length]
+          if (a && b) {
+            ctx.strokeStyle = '#22c55e'
+            ctx.lineWidth = 3 / t.scale
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
           }
         }
-      } else {
-        // Phase 2: draw vertices
-        const zm = zoneMeshes?.[activeZoneId]
-        if (zm) {
-          // For body: compute boundary between auto and manual
-          const isBody = activeZoneId === 'body'
-          const autoPointCount = isBody ? (zm.points.length - bodyExtraPts.length) : zm.points.length
 
-          for (let i = 0; i < zm.points.length; i++) {
-            const p = zm.points[i]
-            if (i < zm.contourCount) {
-              // Contour point (read-only)
-              ctx.fillStyle = hexToRgba(color, 0.5)
-              ctx.beginPath(); ctx.arc(p.x, p.y, pr * 0.5, 0, Math.PI * 2); ctx.fill()
-            } else if (isBody && i >= autoPointCount) {
-              // Body extra point (patch mode) — cyan
-              ctx.fillStyle = '#06b6d4'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / t.scale
-              ctx.beginPath(); ctx.arc(p.x, p.y, pr * 1.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
-            } else {
-              // Internal point (editable)
+        // Subdivision points (orange, well-visible in subdivision phase)
+        const isSubPhase = phase === 'subdivision'
+        for (let i = 0; i < subPoints.length; i++) {
+          const p = subPoints[i]
+          const segIdx = subParams[i]?.segmentIndex
+          const isHighlighted = isSubPhase && activeSegment !== null && segIdx === activeSegment
+          if (isSubPhase) {
+            ctx.fillStyle = isHighlighted ? '#22c55e' : '#fb923c'
+            ctx.strokeStyle = '#fff'
+            ctx.lineWidth = 1.2 / t.scale
+            ctx.beginPath(); ctx.arc(p.x, p.y, pr * 0.85, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          } else {
+            ctx.fillStyle = hexToRgba(color, 0.5)
+            ctx.beginPath(); ctx.arc(p.x, p.y, pr * 0.55, 0, Math.PI * 2); ctx.fill()
+          }
+        }
+
+        // Anchors (P0 = index 0, in red)
+        for (let i = 0; i < anchors.length; i++) {
+          const a = anchors[i]
+          if (i === 0) {
+            ctx.fillStyle = '#ef4444'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
+            ctx.beginPath(); ctx.arc(a.x, a.y, pr * 1.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          } else {
+            ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / t.scale
+            ctx.beginPath(); ctx.arc(a.x, a.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          }
+        }
+
+        // Triangulation phase : draw internal points (from zm.points) + manual points (cyan overlay)
+        if (phase === 'triangulation') {
+          const zm = zoneMeshes?.[activeZoneId]
+          if (zm) {
+            // Auto-internal (white)
+            for (let i = zm.contourCount; i < zm.points.length; i++) {
+              const p = zm.points[i]
               ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 1.5 / t.scale
               ctx.beginPath(); ctx.arc(p.x, p.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
             }
-          }
-
-          // Highlight connect anchor + last
-          if (isBody && bodyEditMode === 'connect' && connectAnchor !== null) {
-            const pa = zm.points[connectAnchor]
-            if (pa) {
-              ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2.5 / t.scale
-              ctx.beginPath(); ctx.arc(pa.x, pa.y, pr * 1.8, 0, Math.PI * 2); ctx.stroke()
-            }
-            if (connectLast !== null) {
-              const pl = zm.points[connectLast]
-              if (pl) {
-                ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 2 / t.scale
-                ctx.beginPath(); ctx.arc(pl.x, pl.y, pr * 1.5, 0, Math.PI * 2); ctx.stroke()
-              }
+            // Manual points (cyan, drawn on top)
+            const manual = manualPoints[activeZoneId] ?? []
+            for (const p of manual) {
+              ctx.fillStyle = '#06b6d4'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / t.scale
+              ctx.beginPath(); ctx.arc(p.x, p.y, pr * 1.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
             }
           }
         }
@@ -404,8 +520,19 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }
 
     ctx.restore()
+    // Sync transform state for overlay buttons repositioning
+    const cur = transformRef.current
+    setTransformState(prev => {
+      if (cur.scale === prev.scale && cur.offsetX === prev.offsetX && cur.offsetY === prev.offsetY) return prev
+      return { scale: cur.scale, offsetX: cur.offsetX, offsetY: cur.offsetY }
+    })
     animFrameRef.current = requestAnimationFrame(draw)
-  }, [tri?.contours, zoneMeshes, allZones, activeZoneId, contourPts, contourCount, contourValidated, bodyExtraPts, bodyEditMode, connectAnchor, connectLast, transformRef, imageLoaded])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tri?.contours, zoneMeshes, allZones, activeZoneId, activeSubPhase, activeSegment,
+    zoneOrigins, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionParams,
+    manualPoints, transformRef, imageLoaded,
+  ])
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw)
@@ -422,99 +549,90 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     const hitR = HIT_RADIUS / transformRef.current.scale
 
     if (activeZoneId) {
-      const phase = zonePhase(activeZoneId)
+      const phase = getActiveSubPhase(activeZoneId)
 
-      if (phase === 'contour') {
-        const pts = getContourPts(activeZoneId)
-        // Try drag existing contour point
-        for (let i = pts.length - 1; i >= 0; i--) {
-          if (Math.hypot(pts[i].x - imgPt.x, pts[i].y - imgPt.y) < hitR) {
-            setDragTarget({ zoneId: activeZoneId, type: 'contour', idx: i })
+      // ── P0 sub-phase : place P0 with snap to nearest curvature extremum ──
+      if (phase === 'p0') {
+        const candidates = getTopExtrema(activeZoneId)
+        const snapRadiusPx = P0_SNAP_RADIUS_PX
+        const snapped = snapToExtremum(imgPt, candidates, snapRadiusPx) ?? imgPt
+        setZoneOrigins(prev => ({ ...prev, [activeZoneId]: snapped }))
+        // Reset downstream
+        setZoneAnchors(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
+        setZoneAnchorsValidated(prev => ({ ...prev, [activeZoneId]: false }))
+        setZoneSubdivisionParams(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
+        setZoneSubdivisionPoints(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
+        setZoneSubdivisionValidated(prev => ({ ...prev, [activeZoneId]: false }))
+        setZoneSegmentCounts(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
+        return
+      }
+
+      // ── Anchors sub-phase : drag/add/remove ──
+      if (phase === 'anchors') {
+        const anchors = zoneAnchors[activeZoneId] ?? []
+        // Drag existing
+        for (let i = 0; i < anchors.length; i++) {
+          if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+            setDragTarget({ zoneId: activeZoneId, type: 'anchor', idx: i })
             return
           }
         }
-        // Try insert on edge
-        const insertIdx = findInsertOnEdge(pts, imgPt, hitR * 2)
-        if (insertIdx >= 0) {
-          const newPts = [...pts]
-          newPts.splice(insertIdx + 1, 0, imgPt)
-          setContourPts(prev => ({ ...prev, [activeZoneId]: newPts }))
-          return
+        // Add anchor (snap unbounded to curvature extremum)
+        const candidates = getTopExtrema(activeZoneId, 50)
+        const snapped = snapToExtremum(imgPt, candidates, 0) ?? imgPt
+        // Avoid duplicate of P0 or existing anchor
+        if (anchors.some(a => Math.hypot(a.x - snapped.x, a.y - snapped.y) < 5)) return
+        const newAnchors = sortAnchorsByArcLength([...anchors, snapped], activeZoneId)
+        setZoneAnchors(prev => ({ ...prev, [activeZoneId]: newAnchors }))
+        return
+      }
+
+      // ── Subdivision sub-phase : click on segment to highlight ──
+      if (phase === 'subdivision') {
+        const anchors = zoneAnchors[activeZoneId] ?? []
+        if (anchors.length < 2) return
+        // Find segment whose midpoint is closest to imgPt
+        let bestSeg = -1, bestDist = Infinity
+        for (let i = 0; i < anchors.length; i++) {
+          const a = anchors[i]
+          const b = anchors[(i + 1) % anchors.length]
+          const mx = (a.x + b.x) / 2
+          const my = (a.y + b.y) / 2
+          const d = Math.hypot(mx - imgPt.x, my - imgPt.y)
+          if (d < bestDist) { bestDist = d; bestSeg = i }
         }
-      } else if (activeZoneId === 'body') {
-        // Phase 2 body: Ajouter / Relier / Déplacer
-        const zm = zoneMeshes?.['body']
-        if (!zm) return
+        setActiveSegment(bestSeg)
+        return
+      }
 
-        if (bodyEditMode === 'move') {
-          // Drag body extra points only
-          for (let i = bodyExtraPts.length - 1; i >= 0; i--) {
-            if (Math.hypot(bodyExtraPts[i].x - imgPt.x, bodyExtraPts[i].y - imgPt.y) < hitR) {
-              setDragTarget({ zoneId: 'body', type: 'bodyExtra', idx: i })
-              return
-            }
-          }
-          return
-        }
-
-        if (bodyEditMode === 'connect') {
-          // Click on any body point to build triangles
-          const hitIdx = hitTestBodyPoint(zm.points, imgPt, hitR)
-          if (hitIdx < 0) return
-          if (connectAnchor === null) {
-            setConnectAnchor(hitIdx); setConnectLast(null)
-          } else if (connectLast === null) {
-            setConnectLast(hitIdx)
-          } else {
-            setBodyManualTris(prev => [...prev, [connectAnchor!, connectLast!, hitIdx]])
-            setConnectLast(hitIdx)
-          }
-          return
-        }
-
-        if (bodyEditMode === 'add') {
-          // Add new point connected to 2 nearest vertices
-          const newIdx = zm.points.length
-          const [n1, n2] = findTwoNearest(imgPt, zm.points)
-          setBodyExtraPts(prev => [...prev, imgPt])
-          setBodyManualTris(prev => [...prev, [newIdx, n1, n2]])
-          return
-        }
-      } else {
-        // Phase 2 leg zones: drag/add internal points
-        const zm = zoneMeshes?.[activeZoneId]
-        if (zm) {
-          const manual = manualPoints[activeZoneId] ?? []
-          const cPts = contourPts[activeZoneId] ?? []
-          const density = zoneDensity[activeZoneId] ?? DEFAULT_DENSITY
-          const autoCount = generateInternalPoints(cPts, spacingForDensity(density)).length
-          const manualStartIdx = cPts.length + autoCount
-
-          for (let i = manual.length - 1; i >= 0; i--) {
-            const p = zm.points[manualStartIdx + i]
-            if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
-              setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
-              return
-            }
-          }
-
-          const cPtsZone = contourPts[activeZoneId]
-          if (cPtsZone && pointInPolygon(imgPt, cPtsZone)) {
-            setManualPoints(prev => ({
-              ...prev,
-              [activeZoneId]: [...(prev[activeZoneId] ?? []), imgPt],
-            }))
+      // ── Triangulation sub-phase : click=add (re-Delaunay), drag=move, right-click=delete ──
+      if (phase === 'triangulation') {
+        const closedContour = buildClosedContour(activeZoneId)
+        if (!closedContour) return
+        const manual = manualPoints[activeZoneId] ?? []
+        // Try drag existing manual point (hit-test on position directly)
+        for (let i = manual.length - 1; i >= 0; i--) {
+          if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
+            setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
             return
           }
+        }
+        // Otherwise add point if inside the zone contour
+        if (pointInPolygon(imgPt, closedContour)) {
+          setManualPoints(prev => ({
+            ...prev,
+            [activeZoneId]: [...(prev[activeZoneId] ?? []), imgPt],
+          }))
+          return
         }
       }
     }
 
-    // Click outside active zone → select zone
-    const contours = tri?.contours
-    if (contours) {
+    // Click outside → select zone
+    const contoursMap = tri?.contours
+    if (contoursMap) {
       for (const z of allZones) {
-        const rawC = contours[z.id]
+        const rawC = contoursMap[z.id]
         if (rawC && pointInPolygon(imgPt, rawC)) {
           setActiveZoneId(z.id)
           return
@@ -527,19 +645,15 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   function handleMouseMove(e: React.MouseEvent) {
     if (!dragTarget) return
     const imgPt = screenToImage(e.clientX, e.clientY)
-    if (dragTarget.type === 'contour') {
-      setContourPts(prev => {
+    if (dragTarget.type === 'anchor') {
+      const candidates = getTopExtrema(dragTarget.zoneId, 50)
+      const snapped = snapToExtremum(imgPt, candidates, 0) ?? imgPt
+      setZoneAnchors(prev => {
         const arr = [...(prev[dragTarget.zoneId] ?? [])]
-        arr[dragTarget.idx] = imgPt
+        arr[dragTarget.idx] = snapped
         return { ...prev, [dragTarget.zoneId]: arr }
       })
-    } else if (dragTarget.type === 'bodyExtra') {
-      setBodyExtraPts(prev => {
-        const arr = [...prev]
-        arr[dragTarget.idx] = imgPt
-        return arr
-      })
-    } else {
+    } else if (dragTarget.type === 'internal') {
       setManualPoints(prev => {
         const arr = [...(prev[dragTarget.zoneId] ?? [])]
         arr[dragTarget.idx] = imgPt
@@ -548,62 +662,43 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }
   }
 
-  function handleMouseUp() { setDragTarget(null) }
+  function handleMouseUp() {
+    if (dragTarget?.type === 'anchor') {
+      // Re-sort anchors after drag
+      const zoneId = dragTarget.zoneId
+      const anchors = zoneAnchors[zoneId] ?? []
+      const sorted = sortAnchorsByArcLength(anchors, zoneId)
+      setZoneAnchors(prev => ({ ...prev, [zoneId]: sorted }))
+    }
+    setDragTarget(null)
+  }
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
     if (!activeZoneId) return
     const imgPt = screenToImage(e.clientX, e.clientY)
     const hitR = HIT_RADIUS / transformRef.current.scale
-    const phase = zonePhase(activeZoneId)
+    const phase = getActiveSubPhase(activeZoneId)
 
-    if (phase === 'contour') {
-      const pts = getContourPts(activeZoneId)
-      if (pts.length <= 3) return // minimum 3 points
-      for (let i = pts.length - 1; i >= 0; i--) {
-        if (Math.hypot(pts[i].x - imgPt.x, pts[i].y - imgPt.y) < hitR) {
-          const newPts = [...pts]
-          newPts.splice(i, 1)
-          setContourPts(prev => ({ ...prev, [activeZoneId]: newPts }))
+    // ── Anchors : right-click to remove (cannot remove P0=[0]) ──
+    if (phase === 'anchors') {
+      const anchors = zoneAnchors[activeZoneId] ?? []
+      for (let i = anchors.length - 1; i >= 1; i--) { // skip P0
+        if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+          const newAnchors = [...anchors]
+          newAnchors.splice(i, 1)
+          setZoneAnchors(prev => ({ ...prev, [activeZoneId]: newAnchors }))
           return
         }
       }
-    } else if (activeZoneId === 'body') {
-      // Phase 2 body: delete body extra points (and their triangles)
-      const zm = zoneMeshes?.['body']
-      if (!zm) return
-      const autoPointCount = zm.points.length - bodyExtraPts.length
-      for (let i = bodyExtraPts.length - 1; i >= 0; i--) {
-        const globalIdx = autoPointCount + i
-        const p = zm.points[globalIdx]
-        if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
-          // Remove point and all manual triangles referencing it
-          setBodyExtraPts(prev => { const a = [...prev]; a.splice(i, 1); return a })
-          setBodyManualTris(prev => {
-            // Reindex: remove tris referencing globalIdx, shift down indices > globalIdx
-            return prev
-              .filter(([a, b, c]) => a !== globalIdx && b !== globalIdx && c !== globalIdx)
-              .map(([a, b, c]) => [
-                a > globalIdx ? a - 1 : a,
-                b > globalIdx ? b - 1 : b,
-                c > globalIdx ? c - 1 : c,
-              ] as [number, number, number])
-          })
-          return
-        }
-      }
-    } else {
-      // Phase 2 leg zones: delete manual internal
-      const zm = zoneMeshes?.[activeZoneId]
-      if (!zm) return
+      return
+    }
+
+    // ── Triangulation : delete manual internal (body + legs, unified) ──
+    if (phase === 'triangulation') {
       const manual = manualPoints[activeZoneId] ?? []
-      const cPts = contourPts[activeZoneId] ?? []
-      const density = zoneDensity[activeZoneId] ?? DEFAULT_DENSITY
-      const autoCount = generateInternalPoints(cPts, spacingForDensity(density)).length
-      const manualStartIdx = cPts.length + autoCount
-
       for (let i = manual.length - 1; i >= 0; i--) {
-        const p = zm.points[manualStartIdx + i]
+        const p = manual[i]
         if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
           setManualPoints(prev => {
             const arr = [...(prev[activeZoneId] ?? [])]
@@ -616,45 +711,93 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     }
   }
 
-  // ─── Body helpers ──────────────────────────────────────────────────
+  // ─── Sort anchors by arc-length on contour (P0 stays at [0]) ──────
 
-  function hitTestBodyPoint(pts: Point2D[], imgPt: Point2D, hitR: number): number {
-    let best = -1, bestDist = hitR
-    for (let i = 0; i < pts.length; i++) {
-      const d = Math.hypot(pts[i].x - imgPt.x, pts[i].y - imgPt.y)
-      if (d < bestDist) { bestDist = d; best = i }
+  function sortAnchorsByArcLength(anchors: Point2D[], zoneId: string): Point2D[] {
+    if (anchors.length <= 1) return anchors
+    const refContour = getRefContour(zoneId)
+    const p0 = anchors[0]
+    if (!refContour || !p0) return anchors
+    const ordered = reorderContourFromOrigin(refContour, p0)
+    const arcLens = computeArcLengths(ordered)
+    const totalLen = arcLens[arcLens.length - 1] || 1
+    function arcLengthOf(p: Point2D): number {
+      let bestIdx = 0, bestDist = Infinity
+      for (let i = 0; i < ordered.length; i++) {
+        const d = (ordered[i].x - p.x) ** 2 + (ordered[i].y - p.y) ** 2
+        if (d < bestDist) { bestDist = d; bestIdx = i }
+      }
+      return arcLens[bestIdx] / totalLen
     }
-    return best
+    const rest = anchors.slice(1)
+      .map(p => ({ p, s: arcLengthOf(p) }))
+      .sort((a, b) => a.s - b.s)
+      .map(x => x.p)
+    return [p0, ...rest]
   }
 
-  // ─── Validate contour → transition to Phase 2 ────────────────────
+  // ─── Validation helpers ───────────────────────────────────────────
 
-  function handleValidateContour(zoneId: string) {
-    const pts = getContourPts(zoneId)
-    if (pts.length < 3) return
-    setContourPts(prev => ({ ...prev, [zoneId]: pts }))
-    setContourValidated(prev => ({ ...prev, [zoneId]: true }))
-    setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
+  function handleValidateP0() {
+    if (!activeZoneId) return
+    const p0 = zoneOrigins[activeZoneId]
+    if (!p0) return
+    setZoneOriginsValidated(prev => ({ ...prev, [activeZoneId]: true }))
+    setSubPhase(activeZoneId, 'anchors')
   }
 
-  function handleResetContour(zoneId: string) {
-    setContourValidated(prev => ({ ...prev, [zoneId]: false }))
-    setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
+  function handleValidateAnchors() {
+    if (!activeZoneId) return
+    const anchors = zoneAnchors[activeZoneId]
+    if (!anchors || anchors.length < 2) return
+    setZoneAnchorsValidated(prev => ({ ...prev, [activeZoneId]: true }))
+    // Initialize segment counts to default if not set
+    setZoneSegmentCounts(prev => {
+      if (prev[activeZoneId]?.length === anchors.length) return prev
+      return { ...prev, [activeZoneId]: new Array(anchors.length).fill(DEFAULT_SEGMENT_SUBDIV) }
+    })
+    setSubPhase(activeZoneId, 'subdivision')
+  }
+
+  function handleValidateSubdivision() {
+    if (!activeZoneId) return
+    setZoneSubdivisionValidated(prev => ({ ...prev, [activeZoneId]: true }))
+    setSubPhase(activeZoneId, 'triangulation')
+  }
+
+  function handleResetSubPhase(zoneId: string, phase: ZoneSubPhase) {
+    if (phase === 'p0' || phase === 'anchors') setZoneAnchorsValidated(prev => ({ ...prev, [zoneId]: false }))
+    if (phase === 'p0' || phase === 'anchors' || phase === 'subdivision') {
+      setZoneSubdivisionValidated(prev => ({ ...prev, [zoneId]: false }))
+    }
+    if (phase === 'p0') setZoneOriginsValidated(prev => ({ ...prev, [zoneId]: false }))
+    setSubPhase(zoneId, phase)
+  }
+
+  function handleSegmentCountChange(zoneId: string, segIdx: number, delta: number) {
+    setZoneSegmentCounts(prev => {
+      const arr = [...(prev[zoneId] ?? [])]
+      arr[segIdx] = Math.max(0, (arr[segIdx] ?? DEFAULT_SEGMENT_SUBDIV) + delta)
+      return { ...prev, [zoneId]: arr }
+    })
+  }
+
+  function handleGlobalSegmentCount(zoneId: string, delta: number) {
+    setZoneSegmentCounts(prev => {
+      const arr = [...(prev[zoneId] ?? [])]
+      for (let i = 0; i < arr.length; i++) arr[i] = Math.max(0, (arr[i] ?? DEFAULT_SEGMENT_SUBDIV) + delta)
+      return { ...prev, [zoneId]: arr }
+    })
   }
 
   function handleDensityChange(zoneId: string, value: number) {
     setZoneDensity(prev => ({ ...prev, [zoneId]: value }))
     setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
-    // Reset body patch if body density changes (indices become invalid)
-    if (zoneId === 'body') {
-      setBodyExtraPts([]); setBodyManualTris([])
-      setConnectAnchor(null); setConnectLast(null)
-    }
   }
 
   // ─── Save ─────────────────────────────────────────────────────────
 
-  const allContoursValidated = allZones.every(z => contourValidated[z.id])
+  const allZonesReady = allZones.every(z => zoneStage(z.id) >= 4)
 
   async function handleSave() {
     if (!tri || !zoneMeshes) return
@@ -662,15 +805,16 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     try {
       const newZonePoints: Record<string, Point2D[]> = {}
       const newZoneTriangles: Record<string, [number, number, number][]> = {}
+      const newZoneContourLength: Record<string, number> = {}
       for (const z of allZones) {
         const zm = zoneMeshes[z.id]
         if (zm) {
           newZonePoints[z.id] = zm.points
           newZoneTriangles[z.id] = zm.triangles
+          newZoneContourLength[z.id] = zm.contourCount
         }
       }
 
-      // Persist z-order onto zones
       const updatedZones = allZones.map(z => ({ ...z, zOrder: zoneZOrder[z.id] ?? 0 }))
 
       await onSave({
@@ -678,15 +822,23 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         projectTriangulation: {
           ...tri,
           zones: updatedZones,
-          zoneContourCount: { ...contourCount },
-          zoneContourPoints: { ...contourPts },
-          zoneContourValidated: { ...contourValidated },
+          // Curvilinear V3
+          zoneOrigins: { ...zoneOrigins },
+          zoneOriginsValidated: { ...zoneOriginsValidated },
+          zoneAnchors: { ...zoneAnchors },
+          zoneAnchorsValidated: { ...zoneAnchorsValidated },
+          zoneSubdivisionPoints: { ...zoneSubdivisionPoints },
+          zoneSubdivisionParams: { ...zoneSubdivisionParams },
+          zoneSubdivisionValidated: { ...zoneSubdivisionValidated },
+          zoneContourLength: newZoneContourLength,
+          // Triangulation
           zonePoints: newZonePoints,
           zoneTriangles: newZoneTriangles,
           zoneDensity: { ...zoneDensity },
           bodyPoints: newZonePoints['body'] ?? [],
           bodyTriangles: newZoneTriangles['body'] ?? [],
           step2Validated: true,
+          // Invalidate downstream (hidden faces refer to body indices)
           step3Validated: false,
         },
       })
@@ -699,16 +851,18 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   // ─── Render ───────────────────────────────────────────────────────
 
   if (!tri?.step1Validated) {
-    return <div style={{ padding: 20, color: '#f59e0b' }}>Validez d'abord les zones SAM 2 (étape précédente).</div>
+    return <div style={{ padding: 20, color: '#f59e0b' }}>Validez d&apos;abord les zones SAM 2 (étape précédente).</div>
   }
   if (!tri.contours || Object.keys(tri.contours).length === 0) {
-    return <div style={{ padding: 20, color: '#f59e0b' }}>Aucun contour disponible. Retournez à l'étape 1.</div>
+    return <div style={{ padding: 20, color: '#f59e0b' }}>Aucun contour disponible. Retournez à l&apos;étape 1.</div>
   }
 
-  const activePhase = activeZoneId ? zonePhase(activeZoneId) : null
+  const activePhase = activeZoneId ? getActiveSubPhase(activeZoneId) : null
   const activeZone = allZones.find(z => z.id === activeZoneId)
   const activeColor = activeZone?.color ?? '#888'
   const activeLabel = activeZone?.label ?? activeZoneId ?? ''
+  const activeAnchors = activeZoneId ? zoneAnchors[activeZoneId] ?? [] : []
+  const activeSegmentCounts = activeZoneId ? zoneSegmentCounts[activeZoneId] ?? [] : []
 
   return (
     <div style={{ display: 'flex', gap: 16, height: '100%' }}>
@@ -722,41 +876,96 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           onMouseUp={handleMouseUp}
           onContextMenu={handleContextMenu}
         />
+        {/* Floating per-segment +/- buttons (subdivision phase only) */}
+        {activeZoneId && activePhase === 'subdivision' && activeAnchors.length >= 2 && (
+          <div style={{ position: 'absolute', inset: 0, top: 0, height: 500, pointerEvents: 'none', overflow: 'hidden' }}>
+            {activeAnchors.map((_, i) => {
+              const a = activeAnchors[i]
+              const b = activeAnchors[(i + 1) % activeAnchors.length]
+              if (!a || !b) return null
+              const mx = (a.x + b.x) / 2
+              const my = (a.y + b.y) / 2
+              const sx = mx * transformState.scale + transformState.offsetX
+              const sy = my * transformState.scale + transformState.offsetY
+              const from = i === 0 ? 'P0' : String(i)
+              const to = i === activeAnchors.length - 1 ? 'P0' : String(i + 1)
+              const count = activeSegmentCounts[i] ?? DEFAULT_SEGMENT_SUBDIV
+              const isHighlighted = activeSegment === i
+              return (
+                <div
+                  key={i}
+                  onClick={(e) => { e.stopPropagation(); setActiveSegment(i) }}
+                  style={{
+                    position: 'absolute',
+                    left: sx,
+                    top: sy,
+                    transform: 'translate(-50%, -50%)',
+                    pointerEvents: 'auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    background: isHighlighted ? 'rgba(34,197,94,0.85)' : 'rgba(20,20,30,0.85)',
+                    border: `1px solid ${isHighlighted ? '#22c55e' : 'rgba(255,255,255,0.25)'}`,
+                    borderRadius: 4,
+                    padding: '2px 4px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                  }}
+                >
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleSegmentCountChange(activeZoneId, i, -1) }}
+                    style={{ width: 22, height: 22, fontSize: '0.85rem', fontWeight: 'bold', padding: 0, lineHeight: 1 }}
+                    title={`− segment [${from}→${to}]`}
+                  >−</button>
+                  <span style={{
+                    minWidth: 16, textAlign: 'center', fontSize: '0.8rem', fontWeight: 'bold',
+                    color: '#fff',
+                  }}>{count}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleSegmentCountChange(activeZoneId, i, +1) }}
+                    style={{ width: 22, height: 22, fontSize: '0.85rem', fontWeight: 'bold', padding: 0, lineHeight: 1 }}
+                    title={`+ segment [${from}→${to}]`}
+                  >+</button>
+                </div>
+              )
+            })}
+          </div>
+        )}
         <div style={{ padding: '8px 0', color: '#9ca3af', fontSize: 13 }}>
           {!activeZoneId
             ? 'Cliquez sur une zone pour l\'éditer.'
-            : activePhase === 'contour'
-              ? 'Drag = déplacer point. Clic sur arête = insérer. Clic droit = supprimer. Espace + drag = pan.'
-              : activeZoneId === 'body'
-                ? bodyEditMode === 'add' ? 'Clic = ajouter point relié aux 2 plus proches. Clic droit = supprimer.'
-                : bodyEditMode === 'connect' ? 'Clic 1 = ancre (orange), clic 2 = dernier (vert), clic 3+ = triangle. Clic droit = supprimer.'
-                : 'Drag = déplacer points manuels (cyan). Clic droit = supprimer.'
-              : 'Clic = ajouter point interne. Drag = déplacer. Clic droit = supprimer.'}
+            : activePhase === 'p0'
+              ? 'Clic = placer P0 (snap sur extremum courbure orange si à moins de 50px). Espace + drag = pan.'
+              : activePhase === 'anchors'
+                ? 'Clic = ajouter anchor (snap courbure). Drag = déplacer (snap). Clic droit = supprimer (P0 protégé).'
+                : activePhase === 'subdivision'
+                  ? 'Clic sur un segment pour le surligner. Utilisez les +/- pour ajouter/retirer des points.'
+                  : 'Clic = ajouter point. Drag = déplacer. Clic droit = supprimer.'}
         </div>
       </div>
 
       {/* Side panel */}
-      <div style={{ width: 270, flexShrink: 0, overflowY: 'auto' }}>
+      <div style={{ width: 290, flexShrink: 0, overflowY: 'auto' }}>
         <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>Maillage par zone</h3>
 
-        {/* Zone pills */}
+        {/* Zone pills + sub-phase mini stepper */}
         {allZones.map(zone => {
           const isActive = zone.id === activeZoneId
-          const phase = zonePhase(zone.id)
-          const zm = zoneMeshes?.[zone.id]
-          const cPts = getContourPts(zone.id)
+          const stage = zoneStage(zone.id)
+          const subPhase = isActive ? getActiveSubPhase(zone.id) : null
           return (
             <div
               key={zone.id}
-              onClick={() => setActiveZoneId(isActive ? null : zone.id)}
               style={{
                 padding: '8px 10px', marginBottom: 6, borderRadius: 6,
                 border: isActive ? `2px solid ${zone.color}` : '1px solid #374151',
                 background: isActive ? 'rgba(255,255,255,0.05)' : 'transparent',
-                cursor: 'pointer', fontSize: 13,
+                fontSize: 13,
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div
+                onClick={() => setActiveZoneId(isActive ? null : zone.id)}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+              >
                 <span style={{
                   width: 10, height: 10, borderRadius: '50%',
                   background: zone.color, flexShrink: 0,
@@ -764,16 +973,10 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                 <span style={{ color: '#e5e7eb', fontWeight: 500 }}>{zone.label}</span>
                 <span style={{
                   marginLeft: 'auto', fontSize: 10, padding: '1px 6px', borderRadius: 3,
-                  background: phase === 'triangulation' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
-                  color: phase === 'triangulation' ? '#22c55e' : '#f59e0b',
+                  background: stage === 4 ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
+                  color: stage === 4 ? '#22c55e' : '#f59e0b',
                 }}>
-                  {phase === 'triangulation' ? '✓ Contour' : 'Contour…'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                <span style={{ color: '#9ca3af', fontSize: 11, flex: 1 }}>
-                  {cPts.length} pts contour
-                  {zm ? ` · ${zm.triangles.length} tri` : ''}
+                  {stage === 4 ? '✓ Triang.' : `${stage - 1}/4`}
                 </span>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#9ca3af' }}
@@ -790,50 +993,144 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                       setZoneZOrder(prev => ({ ...prev, [zone.id]: v }))
                     }}
                     style={{
-                      width: 36, padding: '1px 4px', fontSize: 11,
+                      width: 32, padding: '1px 4px', fontSize: 11,
                       background: '#1e293b', color: '#e5e7eb', border: '1px solid #374151',
                       borderRadius: 3, textAlign: 'center',
                     }}
                   />
                 </label>
               </div>
+              {isActive && (
+                <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
+                  {(['p0', 'anchors', 'subdivision', 'triangulation'] as const).map((sp, i) => {
+                    const isCurrent = subPhase === sp
+                    const isReached = stage > i
+                    return (
+                      <button
+                        key={sp}
+                        onClick={() => setSubPhase(zone.id, sp)}
+                        className={isCurrent ? 'btn-sm btn-primary' : 'btn-sm btn-ghost'}
+                        style={{
+                          flex: 1, fontSize: 10, padding: '2px 4px',
+                          opacity: isReached ? 1 : 0.6,
+                        }}
+                      >
+                        {{ p0: 'P0', anchors: 'Anc.', subdivision: 'Subd.', triangulation: 'Tri.' }[sp]}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })}
 
         <hr style={{ border: 'none', borderTop: '1px solid #374151', margin: '12px 0' }} />
 
-        {/* Active zone controls */}
-        {activeZoneId && activePhase === 'contour' && (
+        {/* Active sub-phase controls */}
+        {activeZoneId && activePhase === 'p0' && (
           <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 6, marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: activeColor }} />
-              <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>
-                Contour : {activeLabel}
-              </span>
+              <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>P0 : {activeLabel}</span>
             </div>
-
-            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>
-              Nombre de points : {contourCount[activeZoneId] ?? DEFAULT_CONTOUR_COUNT}
-            </label>
-            <input
-              type="range"
-              min={8}
-              max={120}
-              value={contourCount[activeZoneId] ?? DEFAULT_CONTOUR_COUNT}
-              onChange={e => {
-                setContourCount(prev => ({ ...prev, [activeZoneId]: parseInt(e.target.value) }))
-              }}
-              style={{ width: '100%', marginBottom: 10 }}
-            />
-
+            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 8 }}>
+              {zoneOrigins[activeZoneId] ? 'P0 placé.' : 'Cliquez sur le contour (snap orange = extremum courbure).'}
+            </div>
             <button
               className="btn-primary"
-              onClick={() => handleValidateContour(activeZoneId)}
+              onClick={handleValidateP0}
+              disabled={!zoneOrigins[activeZoneId]}
               style={{ width: '100%' }}
-              disabled={getContourPts(activeZoneId).length < 3}
             >
-              Valider contour
+              Valider P0
+            </button>
+          </div>
+        )}
+
+        {activeZoneId && activePhase === 'anchors' && (
+          <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 6, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: activeColor }} />
+              <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>Anchors : {activeLabel}</span>
+            </div>
+            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>
+              Auto-détection : {zoneAnchorCount[activeZoneId] ?? DEFAULT_ANCHOR_COUNT} (P0 inclus)
+            </label>
+            <input
+              type="range" min={2} max={20}
+              value={zoneAnchorCount[activeZoneId] ?? DEFAULT_ANCHOR_COUNT}
+              onChange={e => {
+                const v = parseInt(e.target.value)
+                setZoneAnchorCount(prev => ({ ...prev, [activeZoneId]: v }))
+                const p0 = zoneOrigins[activeZoneId]
+                const refC = getRefContour(activeZoneId)
+                if (p0 && refC) autoDetectAnchors(activeZoneId, p0, refC, v)
+              }}
+              style={{ width: '100%', marginBottom: 8 }}
+            />
+            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 8 }}>
+              {activeAnchors.length} anchor{activeAnchors.length > 1 ? 's' : ''} placé{activeAnchors.length > 1 ? 's' : ''}.
+            </div>
+            <button
+              className="btn-ghost"
+              onClick={() => handleResetSubPhase(activeZoneId, 'p0')}
+              style={{ width: '100%', fontSize: 12, marginBottom: 6 }}
+            >
+              ← Re-placer P0
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleValidateAnchors}
+              disabled={activeAnchors.length < 2}
+              style={{ width: '100%' }}
+            >
+              Valider Anchors
+            </button>
+          </div>
+        )}
+
+        {activeZoneId && activePhase === 'subdivision' && (
+          <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 6, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: activeColor }} />
+              <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>Subdivision : {activeLabel}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              <button className="btn-sm btn-ghost" onClick={() => handleGlobalSegmentCount(activeZoneId, -1)}>− tous</button>
+              <button className="btn-sm btn-ghost" onClick={() => handleGlobalSegmentCount(activeZoneId, +1)}>+ tous</button>
+            </div>
+            <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 8 }}>
+              {activeAnchors.map((_, i) => (
+                <div key={i}
+                  onClick={() => setActiveSegment(i)}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '4px 6px', borderRadius: 4, cursor: 'pointer',
+                    background: activeSegment === i ? 'rgba(34,197,94,0.15)' : 'transparent',
+                    fontSize: 11, color: '#cbd5e1',
+                  }}
+                >
+                  <span>Seg {i}→{(i + 1) % activeAnchors.length}</span>
+                  <span style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                    <button className="btn-sm btn-ghost" style={{ padding: '0 6px', fontSize: 10 }}
+                      onClick={e => { e.stopPropagation(); handleSegmentCountChange(activeZoneId, i, -1) }}>−</button>
+                    <span style={{ minWidth: 20, textAlign: 'center' }}>{activeSegmentCounts[i] ?? 0}</span>
+                    <button className="btn-sm btn-ghost" style={{ padding: '0 6px', fontSize: 10 }}
+                      onClick={e => { e.stopPropagation(); handleSegmentCountChange(activeZoneId, i, +1) }}>+</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button
+              className="btn-ghost"
+              onClick={() => handleResetSubPhase(activeZoneId, 'anchors')}
+              style={{ width: '100%', fontSize: 12, marginBottom: 6 }}
+            >
+              ← Rééditer anchors
+            </button>
+            <button className="btn-primary" onClick={handleValidateSubdivision} style={{ width: '100%' }}>
+              Valider Subdivision
             </button>
           </div>
         )}
@@ -851,80 +1148,31 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               Densité intérieure : {zoneDensity[activeZoneId] ?? DEFAULT_DENSITY}
             </label>
             <input
-              type="range"
-              min={1}
-              max={10}
+              type="range" min={1} max={10}
               value={zoneDensity[activeZoneId] ?? DEFAULT_DENSITY}
               onChange={e => handleDensityChange(activeZoneId, parseInt(e.target.value))}
-              style={{ width: '100%', marginBottom: 6 }}
+              style={{ width: '100%', marginBottom: 10 }}
             />
-            <div style={{
-              display: 'flex', justifyContent: 'space-between',
-              fontSize: 11, color: '#6b7280', marginBottom: 10,
-            }}>
-              <span>Faible</span>
-              <span>Dense</span>
-            </div>
 
-            {/* Body patch mode: Ajouter / Relier / Déplacer */}
-            {activeZoneId === 'body' && (
-              <>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>
-                  Patch body (combler les trous) :
-                </div>
-                <div style={{
-                  display: 'flex', gap: 4, marginBottom: 8,
-                  padding: 4, borderRadius: 6, background: 'rgba(255,255,255,0.04)',
-                }}>
-                  {(['add', 'connect', 'move'] as const).map(mode => (
-                    <button
-                      key={mode}
-                      className={`btn-sm ${bodyEditMode === mode ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setBodyEditMode(mode)
-                        setConnectAnchor(null); setConnectLast(null)
-                      }}
-                      style={{ flex: 1, fontSize: 11 }}
-                    >
-                      {{ add: 'Ajouter', connect: 'Relier', move: 'Déplacer' }[mode]}
-                    </button>
-                  ))}
-                </div>
-                {bodyEditMode === 'connect' && connectAnchor !== null && (
-                  <button
-                    className="btn-sm btn-ghost"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setConnectAnchor(null); setConnectLast(null)
-                    }}
-                    style={{ width: '100%', fontSize: 11, marginBottom: 6 }}
-                  >
-                    Annuler sélection
-                  </button>
-                )}
-                {(bodyExtraPts.length > 0 || bodyManualTris.length > 0) && (
-                  <button
-                    className="btn-sm btn-danger"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setBodyExtraPts([]); setBodyManualTris([])
-                      setConnectAnchor(null); setConnectLast(null)
-                    }}
-                    style={{ width: '100%', fontSize: 11, marginBottom: 6 }}
-                  >
-                    Effacer le patch ({bodyExtraPts.length} pts, {bodyManualTris.length} tri)
-                  </button>
-                )}
-              </>
+            {(manualPoints[activeZoneId]?.length ?? 0) > 0 && (
+              <button
+                className="btn-sm btn-danger"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setManualPoints(prev => ({ ...prev, [activeZoneId]: [] }))
+                }}
+                style={{ width: '100%', fontSize: 11, marginBottom: 6 }}
+              >
+                Effacer les points manuels ({manualPoints[activeZoneId]?.length ?? 0})
+              </button>
             )}
 
             <button
               className="btn-ghost"
-              onClick={() => handleResetContour(activeZoneId)}
+              onClick={() => handleResetSubPhase(activeZoneId, 'subdivision')}
               style={{ width: '100%', fontSize: 12, marginBottom: 6 }}
             >
-              ← Rééditer le contour
+              ← Rééditer subdivision
             </button>
           </div>
         )}
@@ -933,14 +1181,14 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         <button
           className="btn-primary"
           onClick={handleSave}
-          disabled={saving || !allContoursValidated}
+          disabled={saving || !allZonesReady}
           style={{ width: '100%' }}
         >
           {saving ? 'Sauvegarde…' : 'Valider tout'}
         </button>
-        {!allContoursValidated && (
+        {!allZonesReady && (
           <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 6 }}>
-            Validez le contour de chaque zone avant de pouvoir valider.
+            Validez P0 + Anchors + Subdivision pour chaque zone.
           </div>
         )}
       </div>
@@ -957,26 +1205,3 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`
 }
 
-/** Find the contour edge closest to a point (for insert-on-edge). Returns index i such that the point should be inserted between pts[i] and pts[i+1], or -1. */
-function findInsertOnEdge(pts: Point2D[], p: Point2D, maxDist: number): number {
-  let bestDist = maxDist
-  let bestIdx = -1
-  for (let i = 0; i < pts.length; i++) {
-    const j = (i + 1) % pts.length
-    const d = pointToSegmentDist(p, pts[i], pts[j])
-    if (d < bestDist) {
-      bestDist = d
-      bestIdx = i
-    }
-  }
-  return bestIdx
-}
-
-function pointToSegmentDist(p: Point2D, a: Point2D, b: Point2D): number {
-  const dx = b.x - a.x, dy = b.y - a.y
-  const lenSq = dx * dx + dy * dy
-  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y)
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq
-  t = Math.max(0, Math.min(1, t))
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
-}

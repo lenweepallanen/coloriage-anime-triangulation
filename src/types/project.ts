@@ -369,10 +369,23 @@ export interface ProjectTriangulation {
   bridgeThreshold: number
   step1Validated: boolean
 
-  // Étape 2 : Maillage par zone
-  zoneContourCount: Record<string, number>                   // zoneId → nb points contour (slider)
-  zoneContourPoints: Record<string, Point2D[]>               // zoneId → vertices contour validés (éditables)
-  zoneContourValidated: Record<string, boolean>              // zoneId → contour verrouillé
+  // Étape 2 : Maillage par zone — placement curviligne (V3) + Delaunay interne
+  // Phase 1 : P0 par zone (coords image, snap courbure)
+  zoneOrigins?: Record<string, Point2D>                       // zoneId → P0
+  zoneOriginsValidated?: Record<string, boolean>              // zoneId → P0 validé
+  // Phase 2 : Anchors contour par zone (P0 inclus comme [0], tri arc-length depuis P0)
+  zoneAnchors?: Record<string, Point2D[]>                     // zoneId → anchors caractéristiques
+  zoneAnchorsValidated?: Record<string, boolean>              // zoneId → anchors validés
+  // Phase 3 : Subdivision par zone (params curvilignes + points générés)
+  zoneSubdivisionPoints?: Record<string, Point2D[]>           // zoneId → points subdivision
+  zoneSubdivisionParams?: Record<string, CurvilinearParam[]>  // zoneId → params curvilignes
+  zoneSubdivisionValidated?: Record<string, boolean>          // zoneId → subdivision validée
+  // Phase 4 : Delaunay interne + layout
+  zoneContourLength?: Record<string, number>                  // zoneId → nb points contour (contour = N premiers indices de zonePoints)
+  // Legacy (conservés pour migration) : utilisés quand zoneAnchors absent
+  zoneContourCount: Record<string, number>                   // zoneId → nb points contour (slider legacy)
+  zoneContourPoints: Record<string, Point2D[]>               // zoneId → vertices contour legacy
+  zoneContourValidated: Record<string, boolean>              // zoneId → contour verrouillé (legacy)
   zonePoints: Record<string, Point2D[]>                      // zoneId → vertices (contour + internes)
   zoneTriangles: Record<string, [number, number, number][]>  // zoneId → triangles Delaunay
   zoneDensity: Record<string, number>                        // zoneId → slider densité intérieure

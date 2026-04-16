@@ -20,9 +20,9 @@ import {
   resolveBodyChain,
   resolveSkeletonFrame,
   computeLegRestPose,
-  type LegRestPose,
   type Sam2SkeletonFrame,
 } from './sam2BoneSolver'
+import { precomputeARAP, batchSolveARAP } from './arapSolver'
 
 const WEIGHT_EPSILON = 1.0
 const WEIGHT_THRESHOLD = 0.01
@@ -444,6 +444,59 @@ export function computeLegAnimation(
   }
 
   return walkZoneFrames
+}
+
+// ─── V3: ARAP body animation from inherited topology ───────────────
+
+/**
+ * V3: Compute body animation via ARAP from `projectTriangulation` topology.
+ * The body contour vertices (first N indices of bodyPoints, where N comes from
+ * `zoneContourLength['body']`) are pinned at positions provided per frame
+ * (already in IMAGE coords, lissés ou bruts). Internal vertices deform via ARAP.
+ *
+ * Returns walkBodyFrames in IMAGE coords (length = bodyPoints.length per frame).
+ */
+export function computeBodyAnimationARAP(
+  triangulation: ProjectTriangulation,
+  smoothedContourFrames: Point2D[][],  // [frame][vertex] in IMAGE coords, length = N_contour per frame
+  onProgress?: (frame: number, total: number) => void,
+): Point2D[][] {
+  const bodyPoints = triangulation.bodyPoints
+  const bodyTriangles = triangulation.bodyTriangles
+  if (!bodyPoints?.length || !bodyTriangles?.length) {
+    throw new Error('[computeBodyAnimationARAP] missing bodyPoints/bodyTriangles')
+  }
+  if (!smoothedContourFrames?.length) {
+    throw new Error('[computeBodyAnimationARAP] missing contour frames')
+  }
+
+  // Determine N_contour : explicit field, else infer from frames length
+  const nContour = triangulation.zoneContourLength?.['body']
+    ?? smoothedContourFrames[0]?.length
+    ?? 0
+  if (nContour <= 0) {
+    throw new Error('[computeBodyAnimationARAP] zoneContourLength["body"] missing or invalid')
+  }
+  if (nContour > bodyPoints.length) {
+    throw new Error(`[computeBodyAnimationARAP] N_contour (${nContour}) > bodyPoints (${bodyPoints.length})`)
+  }
+
+  // Validate frames length
+  for (let f = 0; f < smoothedContourFrames.length; f++) {
+    if (smoothedContourFrames[f].length !== nContour) {
+      throw new Error(`[computeBodyAnimationARAP] frame ${f} has ${smoothedContourFrames[f].length} vertices, expected ${nContour}`)
+    }
+  }
+
+  // Pinned indices = first N_contour vertices of bodyPoints
+  const pinnedIndices: number[] = []
+  for (let i = 0; i < nContour; i++) pinnedIndices.push(i)
+
+  // Precompute ARAP system once with rest pose
+  const sys = precomputeARAP(bodyPoints, bodyTriangles, pinnedIndices)
+
+  // Batch solve : provides pinned positions per frame (already in same order as pinnedIndices)
+  return batchSolveARAP(sys, smoothedContourFrames, 3, onProgress)
 }
 
 // ─── Shared LBS ─────────────────────────────────────────────────────

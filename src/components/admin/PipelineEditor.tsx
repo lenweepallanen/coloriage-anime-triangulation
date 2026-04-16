@@ -37,6 +37,8 @@ import MembersBonesV2LegBoneStep from './MembersBonesV2LegBoneStep'
 import MembersBonesV2AnimComputeStep from './MembersBonesV2AnimComputeStep'
 import MembersBonesV2LegSmoothingStep from './MembersBonesV2LegSmoothingStep'
 import MembersBonesV3BodyComputeStep from './MembersBonesV3BodyComputeStep'
+import MembersBonesV3TrackingP0Step from './MembersBonesV3TrackingP0Step'
+import MembersBonesV3TrackingAnchorsStep from './MembersBonesV3TrackingAnchorsStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -94,10 +96,7 @@ const MEMBERS_BONES_V3_STEPS = [
   'Vidéo',
   'Définir Zones',
   'Lissage Contours',
-  'P0 par zone',
   'Tracking P0 zones',
-  'Anchors par zone',
-  'Subdivision par zone',
   'Tracking Anchors zones',
   'Lissage Anchor',
   'Calcul Corps V3',
@@ -380,8 +379,11 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'P0 par zone' && (
           <MembersBonesContourOriginStep project={stepView} onSave={stepSave} />
         )}
-        {activeStep === 'Tracking P0 zones' && (
+        {activeStep === 'Tracking P0 zones' && !isMembersBonesV3Anim && (
           <MembersBonesContourOriginTrackingStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Tracking P0 zones' && isMembersBonesV3Anim && (
+          <MembersBonesV3TrackingP0Step project={project} animation={animation} onSave={projectSave} />
         )}
         {activeStep === 'Anchors par zone' && (
           <MembersBonesContourAnchorsStep project={stepView} onSave={stepSave} />
@@ -389,8 +391,11 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'Subdivision par zone' && (
           <MembersBonesContourSubdivisionStep project={stepView} onSave={stepSave} />
         )}
-        {activeStep === 'Tracking Anchors zones' && (
+        {activeStep === 'Tracking Anchors zones' && !isMembersBonesV3Anim && (
           <MembersBonesContourAnchorTrackingStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Tracking Anchors zones' && isMembersBonesV3Anim && (
+          <MembersBonesV3TrackingAnchorsStep project={project} animation={animation} onSave={projectSave} />
         )}
         {activeStep === 'Bones par zone' && (
           <MembersBonesBoneStep project={stepView} onSave={stepSave} />

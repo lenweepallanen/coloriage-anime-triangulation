@@ -101,15 +101,30 @@ function EndpointRefEditor({
 
 const EMPTY_SET = new Set<number>()
 
-type EditMode = 'select' | 'place-hip' | 'place-foot' | 'place-knee' | 'place-hip-vertices'
+type EditMode = 'select' | 'place-hip' | 'place-foot' | 'place-knee' | 'place-hip-vertex'
 
 export default function MembersBonesV2LegBoneStep({ project, animation, onSave }: Props) {
   const mesh = animation.mesh
   const zones: SAM2Zone[] = useMemo(() => mesh?.sam2Zones ?? [], [mesh?.sam2Zones])
-  const sam2ContourAnchors = useMemo(() => mesh?.sam2ContourAnchors ?? {}, [mesh?.sam2ContourAnchors])
   const contoursAll = mesh?.sam2Contours ?? null
 
   const anchorFrames = useMemo(() => mesh?.sam2ContourAnchorFrames ?? {}, [mesh?.sam2ContourAnchorFrames])
+
+  // Frame 0 anchors par zone, en VIDEO coords. V2 : mesh.sam2ContourAnchors (déjà video coords).
+  // V3 : pas de sam2ContourAnchors → fallback sur sam2ContourAnchorFrames[zone][0] (anchors trackés frame 0).
+  const sam2ContourAnchors = useMemo<Record<string, Point2D[]>>(() => {
+    const v2 = mesh?.sam2ContourAnchors
+    if (v2 && Object.keys(v2).length > 0) return v2
+    const result: Record<string, Point2D[]> = {}
+    const af = mesh?.sam2ContourAnchorFrames
+    if (af) {
+      for (const zoneId of Object.keys(af)) {
+        const frame0 = af[zoneId]?.[0]
+        if (frame0 && frame0.length > 0) result[zoneId] = frame0
+      }
+    }
+    return result
+  }, [mesh?.sam2ContourAnchors, mesh?.sam2ContourAnchorFrames])
 
   const totalFrames = useMemo(() => {
     if (!contoursAll) return 0
@@ -117,15 +132,19 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
     return first?.length ?? 0
   }, [contoursAll])
 
-  // Image dimensions (from project image)
+  // Image (project image) — used as high-res background option
   const [imgSize, setImgSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+  const imageRef = useRef<HTMLImageElement | null>(null)
   useEffect(() => {
     if (!project.originalImageBlob) return
     const url = URL.createObjectURL(project.originalImageBlob)
     const img = new Image()
-    img.onload = () => setImgSize({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onload = () => {
+      imageRef.current = img
+      setImgSize({ w: img.naturalWidth, h: img.naturalHeight })
+    }
     img.src = url
-    return () => URL.revokeObjectURL(url)
+    return () => { URL.revokeObjectURL(url); imageRef.current = null }
   }, [project.originalImageBlob])
 
   // Body mesh : V2 reads from projectTriangulation, V3 from sam2 + v3 internals
@@ -170,15 +189,14 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
 
   // The leg whose hip/foot/knee we're placing
   const placingLegIdRef = useRef<string | null>(null)
-  // In-progress hip vertices being placed (multi-click selection 1-3)
-  const [pendingHipVertices, setPendingHipVertices] = useState<number[]>([])
 
   // Drag state (ref to avoid re-render storms during drag)
   const draggingRef = useRef<{ type: 'knee' | 'hip-vertex'; legId: string } | null>(null)
   const didDragRef = useRef(false)
 
   // ----- Visibility toggles -----
-  const [showVideo, setShowVideo] = useState(true)
+  const [showImage, setShowImage] = useState(true)
+  const [showVideo, setShowVideo] = useState(false)
   const [showMasks, setShowMasks] = useState(true)
   const [showSkeleton, setShowSkeleton] = useState(true)
   const [showAnchors, setShowAnchors] = useState(true)
@@ -192,6 +210,7 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
   // ----- Phase -----
   const isValidated = mesh?.sam2BonesValidated === true
   const [saving, setSaving] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null)
 
   // ----- Video element + canvas -----
   const [videoReady, setVideoReady] = useState(false)
@@ -255,10 +274,12 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
   }, [animation.videoBlob])
 
   useEffect(() => {
+    // Fit canvas to SAM 2 video dims (canonical data coord space) — pas videoSize qui peut différer.
     if (!videoReady || fittedRef.current) return
-    fitToCanvas(videoSize.w, videoSize.h)
+    if (vidW <= 1 || vidH <= 1) return
+    fitToCanvas(vidW, vidH)
     fittedRef.current = true
-  }, [videoReady, videoSize, fitToCanvas])
+  }, [videoReady, vidW, vidH, fitToCanvas])
 
   // ─── Canvas resize ────────────────────────────────────────────────────
 
@@ -415,38 +436,29 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
   }, [isValidated, screenToImage, transformRef, skeleton, anchorFrames, totalFrames, legRestPoses, currentFrame, bodyVerticesVidForFrame, walkBodyFrames, imgToVid, isPanning, spaceDown])
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!draggingRef.current) return
+    const drag = draggingRef.current
+    if (!drag) return
     didDragRef.current = true
     const vidPos = screenToImage(e.clientX, e.clientY)
-    if (draggingRef.current.type === 'knee') {
+    const legId = drag.legId
+    if (drag.type === 'knee') {
       setSkeleton(s => ({
         ...s,
-        legs: s.legs.map(l =>
-          l.id === draggingRef.current!.legId ? { ...l, kneeRestPos: vidPos } : l
-        ),
+        legs: s.legs.map(l => l.id === legId ? { ...l, kneeRestPos: vidPos } : l),
       }))
-    } else if (draggingRef.current.type === 'hip-vertex') {
+    } else if (drag.type === 'hip-vertex') {
       const imgPos = vidToImg(vidPos)
       const vertexIdx = findNearestBodyVertex(imgPos, currentFrame)
       if (vertexIdx == null) return
-      const legId = draggingRef.current.legId
       setSkeleton(s => ({
         ...s,
-        legs: s.legs.map(l => {
-          if (l.id !== legId) return l
-          // Drag updates the FIRST vertex of the barycentre, keep others as-is
-          const refs = getHipBodyVertexRefs(l)
-          const next = refs ? [...refs.indices] : [vertexIdx]
-          next[0] = vertexIdx
-          const w = refs ? refs.weights : [1]
-          return {
-            ...l,
-            hipMode: 'body-vertex' as const,
-            hipBodyVertexIndices: next,
-            hipBodyVertexWeights: w,
-            hipBodyVertexIndex: null,
-          }
-        }),
+        legs: s.legs.map(l => l.id === legId ? {
+          ...l,
+          hipMode: 'body-vertex' as const,
+          hipBodyVertexIndex: vertexIdx,
+          hipBodyVertexIndices: null,
+          hipBodyVertexWeights: null,
+        } : l),
       }))
     }
   }, [screenToImage, vidToImg, findNearestBodyVertex, currentFrame])
@@ -456,28 +468,6 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
   }, [])
 
   // ─── Canvas click handler ─────────────────────────────────────────────
-
-  const finalizeHipVertices = useCallback((legId: string, indices: number[]) => {
-    if (indices.length === 0) {
-      setEditMode('select')
-      setPendingHipVertices([])
-      return
-    }
-    const n = indices.length
-    const weights = new Array<number>(n).fill(1 / n)
-    setSkeleton(s => ({
-      ...s,
-      legs: s.legs.map(l => l.id === legId ? {
-        ...l,
-        hipMode: 'body-vertex' as const,
-        hipBodyVertexIndices: indices,
-        hipBodyVertexWeights: weights,
-        hipBodyVertexIndex: null,
-      } : l),
-    }))
-    setEditMode('select')
-    setPendingHipVertices([])
-  }, [])
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning.current || spaceDown.current) return
@@ -526,31 +516,29 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
       setEditMode('select')
     }
 
-    if (editMode === 'place-hip-vertices') {
+    if (editMode === 'place-hip-vertex') {
       const legId = placingLegIdRef.current
       if (!legId) return
       const imgPos = vidToImg(vidPos)
       const vertexIdx = findNearestBodyVertex(imgPos, currentFrame)
       if (vertexIdx == null) return
-      // Avoid duplicate consecutive selection
-      if (pendingHipVertices.includes(vertexIdx)) return
-      const next = [...pendingHipVertices, vertexIdx]
-      // Auto-finalize when reaching 3 vertices
-      if (next.length >= 3) {
-        finalizeHipVertices(legId, next)
-        return
-      }
-      setPendingHipVertices(next)
+      setSkeleton(s => ({
+        ...s,
+        legs: s.legs.map(l => l.id === legId ? {
+          ...l,
+          hipMode: 'body-vertex' as const,
+          hipBodyVertexIndex: vertexIdx,
+          hipBodyVertexIndices: null,
+          hipBodyVertexWeights: null,
+        } : l),
+      }))
+      setEditMode('select')
     }
-  }, [editMode, screenToImage, clickToEndpointRef, vidToImg, findNearestBodyVertex, currentFrame, isPanning, spaceDown, pendingHipVertices, finalizeHipVertices])
+  }, [editMode, screenToImage, clickToEndpointRef, vidToImg, findNearestBodyVertex, currentFrame, isPanning, spaceDown])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
-    if (editMode === 'place-hip-vertices') {
-      const legId = placingLegIdRef.current
-      if (legId) finalizeHipVertices(legId, pendingHipVertices)
-    }
-  }, [editMode, pendingHipVertices, finalizeHipVertices])
+  }, [])
 
   // ─── Draw loop ────────────────────────────────────────────────────────
 
@@ -559,15 +547,18 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
     let rafId = 0
     function draw() {
       if (!running) return
+      // Toujours rescheduler en début pour que toute exception interne ne tue pas la rAF chain.
+      rafId = requestAnimationFrame(draw)
       const canvas = canvasRef.current
-      if (!canvas) {
-        rafId = requestAnimationFrame(draw)
-        return
+      if (!canvas) return
+      if (canvas.width === 0 || canvas.height === 0) return
+      try {
+        drawFrame(canvas)
+      } catch (err) {
+        console.error('[V3-LegBone] draw error:', err)
       }
-      if (canvas.width === 0 || canvas.height === 0) {
-        rafId = requestAnimationFrame(draw)
-        return
-      }
+    }
+    function drawFrame(canvas: HTMLCanvasElement) {
       const ctx = canvas.getContext('2d')!
       const dpr = window.devicePixelRatio || 1
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -581,10 +572,24 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
       ctx.translate(t.offsetX, t.offsetY)
       ctx.scale(t.scale, t.scale)
 
-      // 1. Video frame
+      // 1a. Image projet (haute res) — bypass canvas transform pour rendu net
+      // L'image est rendue directement en pixels canvas pour éviter le downsampling
+      // que ferait drawImage si la dest était dans l'espace transformé video coords.
+      const img = imageRef.current
+      const dw = vidW * t.scale
+      const dh = vidH * t.scale
+      if (showImage && img && imgSize.w > 0 && dw > 0 && dh > 0) {
+        ctx.save()
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.drawImage(img, t.offsetX, t.offsetY, dw, dh)
+        ctx.restore()
+      }
+
+      // 1b. Video frame (overlay si toggled, sinon image seule sert de fond)
+      // Stretched to vidW × vidH (canonical SAM 2 coord space) pour s'aligner avec les overlays.
       const video = videoRef.current
-      if (showVideo && video && videoReady) {
-        ctx.drawImage(video, 0, 0)
+      if (showVideo && video && videoReady && vidW > 0 && vidH > 0) {
+        ctx.drawImage(video, 0, 0, vidW, vidH)
       }
 
       // 2. Zone contours (smoothed contours, video coords)
@@ -633,7 +638,7 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
           ctx.globalAlpha = 1
 
           // Body vertices as clickable dots — enlarged when placing a body-vertex hip
-          const placing = editMode === 'place-hip-vertices'
+          const placing = editMode === 'place-hip-vertex'
           const vr = (placing ? 3 : 1.8) / t.scale
           ctx.fillStyle = placing ? '#fbbf24' : '#22c55e'
           ctx.globalAlpha = placing ? 1 : 0.7
@@ -644,22 +649,6 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
             ctx.fill()
           }
           ctx.globalAlpha = 1
-
-          // Highlight the in-progress hip vertex selections during placement
-          if (placing && pendingHipVertices.length > 0) {
-            ctx.fillStyle = '#ec4899'
-            ctx.strokeStyle = '#fff'
-            ctx.lineWidth = 1.5 / t.scale
-            const hr = 5 / t.scale
-            for (const idx of pendingHipVertices) {
-              if (idx >= bpts.length) continue
-              const v = imgToVid(bpts[idx])
-              ctx.beginPath()
-              ctx.arc(v.x, v.y, hr, 0, Math.PI * 2)
-              ctx.fill()
-              ctx.stroke()
-            }
-          }
         }
       }
 
@@ -815,16 +804,16 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
       }
 
       ctx.restore()
-      rafId = requestAnimationFrame(draw)
     }
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
   }, [
-    videoReady, showVideo, showMasks, showSkeleton, showAnchors, showBody,
+    videoReady, showImage, showVideo, showMasks, showSkeleton, showAnchors, showBody,
     skeleton, currentFrame, totalFrames, anchorFrames, legRestPoses,
-    selectedLegId, editMode, pendingHipVertices,
+    selectedLegId, editMode,
     zones, sam2ContourAnchors, contoursAll, videoSize, transformRef,
     bodyTriangles, walkBodyFrames, imgToVid, bodyVerticesVidForFrame,
+    imgSize, vidW, vidH,
   ])
 
   // ─── Save / Validate ──────────────────────────────────────────────────
@@ -835,7 +824,8 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
     try {
       const updatedMesh = {
         ...mesh,
-        sam2Skeleton: { bodyChain: mesh.sam2Skeleton!.bodyChain, legs: skeleton.legs },
+        // V3 : pas de bodyChain (body animé par ARAP). V2 : préserver bodyChain défini en step "Bones Corps".
+        sam2Skeleton: { bodyChain: mesh.sam2Skeleton?.bodyChain ?? [], legs: skeleton.legs },
         sam2BonesValidated: validate,
         // Silent downstream invalidation (V2) — leg compute + leg smoothing are stale.
         ...(validate ? {
@@ -848,6 +838,7 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
         a.id === animation.id ? { ...a, mesh: updatedMesh } : a
       )
       await onSave({ ...project, animations: updatedAnimations })
+      setLastSavedAt(Date.now())
     } finally {
       setSaving(false)
     }
@@ -981,7 +972,10 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
   // ─── Render ───────────────────────────────────────────────────────────
 
   if (!animation.videoBlob) return <div className="placeholder">Importez d&apos;abord une video (etape 1).</div>
-  if (!mesh?.sam2BodyBonesValidated) return <div className="placeholder">Validez d&apos;abord les bones du corps (etape precedente).</div>
+  // V3 : pas de "Bones Corps" — body animé par ARAP. V2 : flag sam2BodyBonesValidated requis.
+  if (animation.type !== 'members-bones-v3' && !mesh?.sam2BodyBonesValidated) {
+    return <div className="placeholder">Validez d&apos;abord les bones du corps (etape precedente).</div>
+  }
   if (!walkBodyFrames) return <div className="placeholder">Calculez d&apos;abord l&apos;animation du corps (etape precedente).</div>
 
   return (
@@ -989,6 +983,10 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
       {/* Toolbar: toggles + actions */}
       <div className="triangulation-toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
         <span style={{ fontWeight: 'bold' }}>Bones Pattes</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: '0.85rem' }}>
+          <input type="checkbox" checked={showImage} onChange={e => setShowImage(e.target.checked)} />
+          Image
+        </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: '0.85rem' }}>
           <input type="checkbox" checked={showVideo} onChange={e => setShowVideo(e.target.checked)} />
           Video
@@ -1009,13 +1007,28 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
           <input type="checkbox" checked={showAnchors} onChange={e => setShowAnchors(e.target.checked)} />
           Anchors
         </label>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          {lastSavedAt != null && !saving && (
+            <span style={{ fontSize: 11, color: '#22c55e' }}>
+              ✓ Sauvegardé à {new Date(lastSavedAt).toLocaleTimeString()}
+            </span>
+          )}
           {!isValidated && (
             <>
-              <button className="btn-secondary" onClick={() => handleSave(false)} disabled={saving}>
+              <button
+                className="btn-secondary"
+                onClick={() => handleSave(false)}
+                disabled={saving}
+                title="Sauvegarde l'état actuel des pattes (persistant) sans valider l'étape"
+              >
                 {saving ? 'Sauvegarde...' : 'Sauvegarder'}
               </button>
-              <button className="btn-primary" onClick={() => handleSave(true)} disabled={saving || !canValidate}>
+              <button
+                className="btn-primary"
+                onClick={() => handleSave(true)}
+                disabled={saving || !canValidate}
+                title={canValidate ? 'Valide l\'étape (toutes pattes complètes)' : 'Toutes les pattes doivent être complètes pour valider'}
+              >
                 {saving ? 'Validation...' : 'Valider'}
               </button>
             </>
@@ -1061,29 +1074,13 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
                 + Patte
               </button>
             </div>
-            {(editMode === 'place-hip' || editMode === 'place-foot' || editMode === 'place-knee' || editMode === 'place-hip-vertices') && (
+            {(editMode === 'place-hip' || editMode === 'place-foot' || editMode === 'place-knee' || editMode === 'place-hip-vertex') && (
               <div style={{ color: '#fbbf24', fontSize: 11, marginBottom: 4 }}>
                 {editMode === 'place-hip' && 'Cliquez sur le canvas pour placer la hanche (anchor)...'}
                 {editMode === 'place-foot' && 'Cliquez sur le canvas pour placer le pied...'}
                 {editMode === 'place-knee' && 'Cliquez sur le canvas pour placer le genou...'}
-                {editMode === 'place-hip-vertices' && (
-                  <>
-                    Cliquez 1 à 3 vertices body (en rose : {pendingHipVertices.length}/3).
-                    Clic droit ou bouton "Terminer" pour valider.
-                    <button
-                      className="btn-sm btn-primary"
-                      onClick={() => {
-                        const lid = placingLegIdRef.current
-                        if (lid) finalizeHipVertices(lid, pendingHipVertices)
-                      }}
-                      disabled={pendingHipVertices.length === 0}
-                      style={{ marginLeft: 4 }}
-                    >
-                      Terminer
-                    </button>
-                  </>
-                )}
-                <button className="btn-sm btn-ghost" onClick={() => { setEditMode('select'); setPendingHipVertices([]) }} style={{ marginLeft: 4 }}>Annuler</button>
+                {editMode === 'place-hip-vertex' && 'Cliquez sur un vertex body pour lier la hanche.'}
+                <button className="btn-sm btn-ghost" onClick={() => { setEditMode('select') }} style={{ marginLeft: 4 }}>Annuler</button>
               </div>
             )}
             {skeleton.legs.map((leg) => {
@@ -1174,27 +1171,23 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
 
                         {hipMode === 'body-vertex' && (() => {
                           const refs = getHipBodyVertexRefs(leg)
+                          const idx = refs?.indices[0]
                           return (
                             <div style={{ fontSize: 11, marginBottom: 4 }}>
-                              {refs && refs.indices.length > 0 ? (
-                                <span>
-                                  Barycentre body :{' '}
-                                  <strong>{refs.indices.map(i => `#${i}`).join(' + ')}</strong>
-                                  {' '}({refs.indices.length} vertex{refs.indices.length > 1 ? 'es' : ''})
-                                </span>
+                              {idx != null ? (
+                                <span>Vertex body : <strong>#{idx}</strong></span>
                               ) : (
-                                <span style={{ color: '#888' }}>Cliquez 1-3 vertices du body mesh</span>
+                                <span style={{ color: '#888' }}>Cliquez un vertex du body mesh</span>
                               )}
                               <button
                                 className="btn-sm btn-ghost"
                                 onClick={() => {
                                   placingLegIdRef.current = leg.id
-                                  setPendingHipVertices([])
-                                  setEditMode('place-hip-vertices')
+                                  setEditMode('place-hip-vertex')
                                 }}
                                 style={{ marginLeft: 4 }}
                               >
-                                {refs && refs.indices.length > 0 ? 'Replacer' : 'Placer'}
+                                {idx != null ? 'Replacer' : 'Placer'}
                               </button>
                             </div>
                           )
