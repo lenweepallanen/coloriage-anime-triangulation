@@ -73,6 +73,20 @@ export async function generateAutoMesh(
   return { contourPoints, internalPoints }
 }
 
+/**
+ * Generate a Poisson-style grid of internal points within a closed polygon.
+ * Spacing is derived from `density` (1-10, lower = sparser).
+ * Points within ~40% of spacing from the polygon boundary are skipped.
+ */
+export function generateInternalPointsInPolygon(
+  polygon: Point2D[],
+  width: number,
+  height: number,
+  density: number,
+): Point2D[] {
+  return generateInternalPoints(polygon, width, height, density)
+}
+
 function generateInternalPoints(
   contourPoints: Point2D[],
   width: number,

@@ -315,13 +315,17 @@ Section séparée dans `AdminLayout` (onglet "Triangulation"), gérée par `Tria
 
 ### ProjectTriangMeshStep (Étape 3 — Maillage par zone)
 
-**2 phases par zone :**
-1. **Contour** : slider nb points (8-120) rééchantillonne le contour SAM 2. Points draggables, insertion sur arête (clic), suppression (clic droit). "Valider contour" verrouille.
-2. **Triangulation** : Delaunay sur contour validé + points internes auto (densité slider) + manuels. "Rééditer contour" pour revenir en phase 1.
+**4 sous-phases par zone** (curvilignes, alignées sur le pipeline rest) :
+1. **Placement P0** : clic sur le contour lissé avec snap sur top-20 extrema de courbure (`detectCurvatureExtrema`). Définit `s=0` de la zone. Sauvegarde `zoneOrigins[zoneId]`.
+2. **Anchors contour** : auto-détection par courbure (slider 4-20 pts, P0 inclus comme [0]) + édition manuelle (add/drag/delete). Tri par arc-length depuis P0. Sauvegarde `zoneAnchors[zoneId]`.
+3. **Subdivision** : compteurs +/- par segment (`anchor_i → anchor_{i+1}`) et global. Utilise `subdivideContour` pour produire les points + params curvilignes. Sauvegarde `zoneSubdivisionPoints/Params[zoneId]`.
+4. **Triangulation** : Delaunay sur `[P0, subdivs_seg0, anchor_1, subdivs_seg1, ..., anchor_N, subdivs_segN]` (contour fermé) + points internes auto (densité slider) + manuels. "Rééditer contour" pour revenir à la phase 1/2/3.
+
+**Invariant d'indexation** : `zonePoints[zoneId]` est ordonné `[...contour_curviligne, ...internes]`. `zoneContourLength[zoneId]` = N premiers indices (contour pinned en ARAP V3). Cet ordre rend les faces cachées et l'animation V3 naturellement alignées.
 
 **Filtrage body (trous aux pattes)** : après le Delaunay body, tout triangle dont au moins un sommet est dans un contour de patte validé est supprimé. Les points internes orphelins sont aussi supprimés par compaction (réindexation). Crée des trous larges sous les pattes, comblés en étape 4 ou par patch manuel.
 
-**Patch body (Ajouter / Relier / Déplacer)** : en phase 2 du body, 3 modes pour combler les trous (même pattern que `WalkZoneMeshStep`) :
+**Patch body (Ajouter / Relier / Déplacer)** : en phase 4 du body, 3 modes pour combler les trous (même pattern que `WalkZoneMeshStep`) :
 - **Ajouter** : clic = nouveau point connecté aux 2 plus proches vertices (`findTwoNearest`)
 - **Relier** : clic 1 = ancre (orange), clic 2+ = triangles chaînés
 - **Déplacer** : drag des points manuels (cyan)
@@ -329,7 +333,7 @@ Points manuels en cyan, triangles manuels intégrés au mesh body. Reset automat
 
 **Z-order** : champ numérique par zone dans le panneau latéral. Sauvé sur `SAM2Zone.zOrder`, propagé au renderer via `buildPseudoSeparation()`.
 
-**Persistance** : `zoneContourCount`, `zoneContourPoints`, `zoneContourValidated` + `zonePoints`, `zoneTriangles`, `zoneDensity`.
+**Persistance** : `zoneOrigins` + `zoneAnchors` + `zoneSubdivisionPoints/Params` + `zonePoints`, `zoneTriangles`, `zoneDensity`, `zoneContourLength`, flags `zoneOriginsValidated`/`zoneAnchorsValidated`/`zoneSubdivisionValidated`. Invalidation cascade : revalider P0 vide anchors/subdivision/triangulation aval.
 
 ### ProjectTriangHiddenFaceStep (Étape 4 — Faces cachées)
 
@@ -346,6 +350,46 @@ Place les 4 marqueurs L aux coins de l'image pour la détection au scan. Auto-pl
 
 ### PdfStep.tsx
 Génère et télécharge le PDF coloriage avec image + overlay maillage + marqueurs L. Utilise `generateTemplatePDF()`. Preview dans iframe avant téléchargement.
+
+## Pipeline Members-Bones V2 (15 étapes)
+
+Variante qui sépare le calcul corps et pattes pour permettre l'attachement d'un hip de patte à un vertex du maillage corps animé (`Sam2LegBone.hipBodyVertexIndex`), et qui insère 3 lissages aux frontières de données (entrées anchors, sortie maillage corps, sortie maillage pattes). Partage les étapes 1-8 avec la V1 members-bones.
+
+| Fichier | Étape | Rôle |
+|---------|-------|------|
+| `MembersBonesSmoothingStep.tsx` | 9 "Lissage Anchor" (V2) / 10 "Lissage Bones" (V1) | Butterworth sur `sam2ContourAnchorFrames` + `sam2ContourSubdivisionFrames` + `sam2ContourOriginFrames` avec le même cutoff. V1 ignore les deux derniers à la lecture. |
+| `MembersBonesV2BodyBoneStep.tsx` | 10 "Bones Corps" | Éditeur body chain uniquement (colonne vertébrale). Valide `sam2BodyBonesValidated` et invalide tout l'aval V2. |
+| `MembersBonesV2BodyComputeStep.tsx` | 11 "Calcul Corps" | LBS body via body chain + `projectTriangulation.body*`. Lit les anchors lissés si dispo. Produit `walkBodyFrames`. |
+| `MembersBonesV2BodySmoothingStep.tsx` | 12 "Lissage Maillage Corps" (NEW) | Butterworth sur `walkBodyFrames` (chaque vertex corps). Slider cutoff dédié. Toggle preview brut/lissé. Produit `walkBodyFramesSmoothed`. |
+| `MembersBonesV2LegBoneStep.tsx` | 13 "Bones Pattes" | Éditeur leg bones uniquement (body chain read-only). Supporte hip par anchor OR par body vertex (`hipBodyVertexIndex`). Preview utilise `walkBodyFramesSmoothed ?? walkBodyFrames`. |
+| `MembersBonesV2AnimComputeStep.tsx` | 14 "Calcul Pattes" | LBS pattes par zone. Utilise `walkBodyFramesSmoothed ?? walkBodyFrames` pour les hip body-vertex. Produit `walkZoneFrames`. |
+| `MembersBonesV2LegSmoothingStep.tsx` | 15 "Lissage Maillage Pattes" (NEW) | Butterworth sur `walkZoneFrames` zone par zone. Slider cutoff dédié. Toggle preview brut/lissé. Produit `walkZoneFramesSmoothed`. |
+
+**Invalidation silencieuse** : chaque sauvegarde amont remet à `false`/`null` les flags `validated` et les sorties des étapes en aval. Aucun badge ni auto re-run — le stepper affiche "pending" (cercle gris).
+
+## Pipeline Members-Bones V3 (11 étapes)
+
+Refonte majeure qui **hérite toute la topologie** (body + 4 pattes, P0 + anchors + subdivision + vertices internes + triangles + hidden faces) de `projectTriangulation`. Le body est animé par **ARAP** (plus de `bodyChain` LBS). Pré-requis : `project.projectTriangulation?.step3Validated === true` — la création d'une animation V3 est bloquée sinon.
+
+| Fichier | Étape | Rôle |
+|---------|-------|------|
+| `ImportStep.tsx` | 1 "Vidéo" | Upload vidéo autonome |
+| `MembersBonesZonesStep.tsx` | 2 "Zones SAM 2 vidéo" | SAM 2 sur vidéo → masques par frame |
+| `MembersBonesContourSmoothingStep.tsx` | 3 "Lissage Contours" | Contours lissés + bridge body-legs + lissage temporel |
+| `MembersBonesV3TrackingP0Step.tsx` | 4 "Tracking P0 zones" | Déterministe : `projectTriangulation.zoneOrigins` mappé image→vidéo + snap courbure + continuité |
+| `MembersBonesV3TrackingAnchorsStep.tsx` | 5 "Tracking Anchors zones" | Déterministe : anchors+subdivs échantillonnés à `s_i` par arc-length sur contour de chaque frame + snap courbure (anchors) |
+| `MembersBonesSmoothingStep.tsx` | 6 "Lissage Anchor Frames" | Butterworth sur origin + anchor + subdivision frames |
+| `MembersBonesV3BodyComputeStep.tsx` | 7 "Calc Body ARAP" | `precomputeARAP(bodyPoints, bodyTriangles, pinnedContourIndices)` depuis `projectTriangulation`, solve par frame. Produit `walkBodyFrames` |
+| `MembersBonesV2BodySmoothingStep.tsx` | 8 "Lissage Maillage Body" | Butterworth sur `walkBodyFrames` (partagé avec V2) |
+| `MembersBonesV2LegBoneStep.tsx` | 9 "Bones Pattes" | Leg bones uniquement (pas de `bodyChain` en V3). Hip par anchor ou body vertex (partagé avec V2) |
+| `MembersBonesV2AnimComputeStep.tsx` | 10 "Calc Pattes LBS" | LBS par zone via `projectTriangulation.zonePoints/zoneTriangles`, hip body-vertex via `walkBodyFramesSmoothed ?? walkBodyFrames` (partagé avec V2) |
+| `MembersBonesV2LegSmoothingStep.tsx` | 11 "Lissage Maillage Pattes" | Butterworth par zone (partagé avec V2) |
+
+**Différences clés vs V2** :
+- Plus de `MembersBonesContourOriginStep`, `MembersBonesContourAnchorsStep`, `MembersBonesContourSubdivisionStep` — hérités de la Triangulation projet.
+- Plus de `MembersBonesV2BodyBoneStep` / `MembersBonesV2BodyComputeStep` — ARAP remplace le body chain LBS.
+- Solver ARAP body : `computeBodyAnimationARAP(projectTriangulation, smoothedContourFrames, imgW, imgH, vidW, vidH)` dans `membersBonesTriangSolver.ts` — wrappe `arapSolver.precomputeARAP` + `batchSolveARAP` avec les N premiers indices contour (`zoneContourLength['body']`) pinnés.
+- Gate création V3 dans `AnimationManager.tsx` : bouton `+ Members-Bones V3` grisé tant que `projectTriangulation.step3Validated !== true`.
 
 ## Convention d'indexation
 

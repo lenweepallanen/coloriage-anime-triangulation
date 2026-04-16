@@ -78,10 +78,24 @@ interface MeshDoc {
   // Étape 9 "Bones par zone"
   sam2Skeleton?: import('../types/project').Sam2Skeleton
   sam2BonesValidated?: boolean
-  // Étape 10 "Lissage Bones"
+  sam2BodyBonesValidated?: boolean  // V2: body chain validated separately
+  // Étape 10 "Lissage Bones" / V2 "Lissage Anchor"
   sam2SmoothingCutoffHz?: number
   sam2SmoothingValidated?: boolean
   hasSam2SmoothedAnchorFrames?: boolean
+  hasSam2SmoothedSubdivisionFrames?: boolean
+  hasSam2SmoothedContourOriginFrames?: boolean
+  // V2 "Lissage Maillage Corps"
+  walkBodyFramesSmoothingCutoffHz?: number
+  walkBodyFramesSmoothingValidated?: boolean
+  hasWalkBodyFramesSmoothed?: boolean
+  // V2 "Lissage Maillage Pattes"
+  walkZoneFramesSmoothingCutoffHz?: number
+  walkZoneFramesSmoothingValidated?: boolean
+  hasWalkZoneFramesSmoothed?: boolean
+  // V3 "Calcul Corps" (Delaunay du contour body, pas d'internes)
+  v3BodyTriangles?: TriangleDoc[]
+  v3BodyTriangulationValidated?: boolean
 }
 
 // Legacy formats (v1-v3)
@@ -279,6 +293,35 @@ function triToDoc(tri: [number, number, number][]): TriangleDoc[] {
 
 function docToTri(docs: TriangleDoc[]): [number, number, number][] {
   return docs.map(t => [t.a, t.b, t.c] as [number, number, number])
+}
+
+/**
+ * Migrate legacy V2 Sam2LegBone single-vertex hip (`hipBodyVertexIndex`) to the
+ * V3 multi-vertex form (`hipBodyVertexIndices`/`hipBodyVertexWeights` + `hipMode`).
+ * Idempotent : if `hipBodyVertexIndices` is already set, the leg is left untouched.
+ */
+function migrateSam2Skeleton(skel: import('../types/project').Sam2Skeleton): import('../types/project').Sam2Skeleton {
+  let changed = false
+  const legs = skel.legs.map(leg => {
+    const hasNew = leg.hipBodyVertexIndices && leg.hipBodyVertexIndices.length > 0
+    const hasLegacy = leg.hipBodyVertexIndex != null
+    if (!hasNew && hasLegacy) {
+      changed = true
+      return {
+        ...leg,
+        hipMode: 'body-vertex' as const,
+        hipBodyVertexIndices: [leg.hipBodyVertexIndex!],
+        hipBodyVertexWeights: [1],
+        hipBodyVertexIndex: null,
+      }
+    }
+    if (!leg.hipMode) {
+      changed = true
+      return { ...leg, hipMode: hasNew || hasLegacy ? 'body-vertex' as const : 'anchor' as const }
+    }
+    return leg
+  })
+  return changed ? { ...skel, legs } : skel
 }
 
 // Serialize WalkLimbSeparation for Firestore (convert nested arrays to {a,b,c} objects)
@@ -524,10 +567,24 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     // Étape 9 "Bones par zone"
     ...(mesh.sam2Skeleton != null && { sam2Skeleton: mesh.sam2Skeleton }),
     ...(mesh.sam2BonesValidated != null && { sam2BonesValidated: mesh.sam2BonesValidated }),
-    // Étape 10 "Lissage Bones"
+    ...(mesh.sam2BodyBonesValidated != null && { sam2BodyBonesValidated: mesh.sam2BodyBonesValidated }),
+    // Étape 10 "Lissage Bones" / V2 "Lissage Anchor"
     ...(mesh.sam2SmoothingCutoffHz != null && { sam2SmoothingCutoffHz: mesh.sam2SmoothingCutoffHz }),
     ...(mesh.sam2SmoothingValidated != null && { sam2SmoothingValidated: mesh.sam2SmoothingValidated }),
     hasSam2SmoothedAnchorFrames: mesh.sam2SmoothedAnchorFrames != null,
+    hasSam2SmoothedSubdivisionFrames: mesh.sam2SmoothedSubdivisionFrames != null,
+    hasSam2SmoothedContourOriginFrames: mesh.sam2SmoothedContourOriginFrames != null,
+    // V2 "Lissage Maillage Corps"
+    ...(mesh.walkBodyFramesSmoothingCutoffHz != null && { walkBodyFramesSmoothingCutoffHz: mesh.walkBodyFramesSmoothingCutoffHz }),
+    ...(mesh.walkBodyFramesSmoothingValidated != null && { walkBodyFramesSmoothingValidated: mesh.walkBodyFramesSmoothingValidated }),
+    hasWalkBodyFramesSmoothed: mesh.walkBodyFramesSmoothed != null,
+    // V2 "Lissage Maillage Pattes"
+    ...(mesh.walkZoneFramesSmoothingCutoffHz != null && { walkZoneFramesSmoothingCutoffHz: mesh.walkZoneFramesSmoothingCutoffHz }),
+    ...(mesh.walkZoneFramesSmoothingValidated != null && { walkZoneFramesSmoothingValidated: mesh.walkZoneFramesSmoothingValidated }),
+    hasWalkZoneFramesSmoothed: mesh.walkZoneFramesSmoothed != null,
+    // V3 "Calcul Corps" — petits champs en Firestore
+    ...(mesh.v3BodyTriangles != null && { v3BodyTriangles: triToDoc(mesh.v3BodyTriangles) }),
+    ...(mesh.v3BodyTriangulationValidated != null && { v3BodyTriangulationValidated: mesh.v3BodyTriangulationValidated }),
   }
 }
 
@@ -609,8 +666,10 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'contourCannyFrames' |
   'anchorKeyframes' | 'anchorFrames' | 'boneWeights' | 'videoFramesMesh' |
   'walkZoneFrames' | 'walkBodyFrames' | 'walkHiddenFaceFrames' |
+  'walkBodyFramesSmoothed' | 'walkZoneFramesSmoothed' |
   'sam2MasksRLE' |
-  'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames' | 'sam2SmoothedAnchorFrames'>
+  'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames' |
+  'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -712,11 +771,21 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     sam2ContourSubdivisionValidated: d.sam2ContourSubdivisionValidated,
     sam2ContourAnchorTrackingValidated: d.sam2ContourAnchorTrackingValidated,
     // Étape 9 "Bones par zone"
-    sam2Skeleton: d.sam2Skeleton,
+    sam2Skeleton: d.sam2Skeleton ? migrateSam2Skeleton(d.sam2Skeleton) : d.sam2Skeleton,
     sam2BonesValidated: d.sam2BonesValidated,
-    // Étape 10 "Lissage Bones"
+    sam2BodyBonesValidated: d.sam2BodyBonesValidated,
+    // Étape 10 "Lissage Bones" / V2 "Lissage Anchor"
     sam2SmoothingCutoffHz: d.sam2SmoothingCutoffHz,
     sam2SmoothingValidated: d.sam2SmoothingValidated,
+    // V2 "Lissage Maillage Corps"
+    walkBodyFramesSmoothingCutoffHz: d.walkBodyFramesSmoothingCutoffHz,
+    walkBodyFramesSmoothingValidated: d.walkBodyFramesSmoothingValidated,
+    // V2 "Lissage Maillage Pattes"
+    walkZoneFramesSmoothingCutoffHz: d.walkZoneFramesSmoothingCutoffHz,
+    walkZoneFramesSmoothingValidated: d.walkZoneFramesSmoothingValidated,
+    // V3 "Calcul Corps"
+    v3BodyTriangles: d.v3BodyTriangles ? docToTri(d.v3BodyTriangles) : undefined,
+    v3BodyTriangulationValidated: d.v3BodyTriangulationValidated,
   }
 }
 
@@ -745,6 +814,10 @@ async function loadAnimationJSON(
   sam2ContourAnchorFrames: Record<string, Point2D[][]> | null
   sam2ContourSubdivisionFrames: Record<string, Point2D[][]> | null
   sam2SmoothedAnchorFrames: Record<string, Point2D[][]> | null
+  sam2SmoothedSubdivisionFrames: Record<string, Point2D[][]> | null
+  sam2SmoothedContourOriginFrames: Record<string, Point2D[]> | null
+  walkBodyFramesSmoothed: Point2D[][] | null
+  walkZoneFramesSmoothed: Record<string, Point2D[][]> | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
   const path = (file: string) =>
@@ -769,6 +842,10 @@ async function loadAnimationJSON(
     meshDoc.hasSam2ContourAnchorFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2ContourAnchorFrames.json')) : null,
     meshDoc.hasSam2ContourSubdivisionFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2ContourSubdivisionFrames.json')) : null,
     meshDoc.hasSam2SmoothedAnchorFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2SmoothedAnchorFrames.json')) : null,
+    meshDoc.hasSam2SmoothedSubdivisionFrames ? downloadJSON<Record<string, Point2D[][]>>(path('sam2SmoothedSubdivisionFrames.json')) : null,
+    meshDoc.hasSam2SmoothedContourOriginFrames ? downloadJSON<Record<string, Point2D[]>>(path('sam2SmoothedContourOriginFrames.json')) : null,
+    meshDoc.hasWalkBodyFramesSmoothed ? downloadJSON<Point2D[][]>(path('walkBodyFramesSmoothed.json')) : null,
+    meshDoc.hasWalkZoneFramesSmoothed ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFramesSmoothed.json')) : null,
   ])
 
   return {
@@ -790,6 +867,10 @@ async function loadAnimationJSON(
     sam2ContourAnchorFrames: downloads[15] as Record<string, Point2D[][]> | null,
     sam2ContourSubdivisionFrames: downloads[16] as Record<string, Point2D[][]> | null,
     sam2SmoothedAnchorFrames: downloads[17] as Record<string, Point2D[][]> | null,
+    sam2SmoothedSubdivisionFrames: downloads[18] as Record<string, Point2D[][]> | null,
+    sam2SmoothedContourOriginFrames: downloads[19] as Record<string, Point2D[]> | null,
+    walkBodyFramesSmoothed: downloads[20] as Point2D[][] | null,
+    walkZoneFramesSmoothed: downloads[21] as Record<string, Point2D[][]> | null,
   }
 }
 
@@ -1022,6 +1103,10 @@ function meshShellFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshData {
     sam2ContourAnchorFrames: null,
     sam2ContourSubdivisionFrames: null,
     sam2SmoothedAnchorFrames: null,
+    sam2SmoothedSubdivisionFrames: null,
+    sam2SmoothedContourOriginFrames: null,
+    walkBodyFramesSmoothed: null,
+    walkZoneFramesSmoothed: null,
   }
 }
 
@@ -1150,8 +1235,10 @@ export type AnimationUploadField =
   | 'boneWeights'
   | 'videoFramesMesh'
   | 'walkZoneFrames' | 'walkBodyFrames'
+  | 'walkBodyFramesSmoothed' | 'walkZoneFramesSmoothed'
   | 'sam2MasksRLE'
   | 'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames'
+  | 'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames'
 
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound'
@@ -1298,6 +1385,10 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           sam2ContourAnchorFrames: anim.mesh.sam2ContourAnchorFrames,
           sam2ContourSubdivisionFrames: anim.mesh.sam2ContourSubdivisionFrames,
           sam2SmoothedAnchorFrames: anim.mesh.sam2SmoothedAnchorFrames,
+          sam2SmoothedSubdivisionFrames: anim.mesh.sam2SmoothedSubdivisionFrames,
+          sam2SmoothedContourOriginFrames: anim.mesh.sam2SmoothedContourOriginFrames,
+          walkBodyFramesSmoothed: anim.mesh.walkBodyFramesSmoothed,
+          walkZoneFramesSmoothed: anim.mesh.walkZoneFramesSmoothed,
         }
         const data = jsonFieldMap[field]
         const isNonEmpty = data != null && (Array.isArray(data) ? data.length > 0 : (typeof data === 'object' ? Object.keys(data).length > 0 : true))
@@ -1338,6 +1429,10 @@ const ANIM_JSON_FILES = [
   'sam2ContourAnchorFrames.json',
   'sam2ContourSubdivisionFrames.json',
   'sam2SmoothedAnchorFrames.json',
+  'sam2SmoothedSubdivisionFrames.json',
+  'sam2SmoothedContourOriginFrames.json',
+  'walkBodyFramesSmoothed.json',
+  'walkZoneFramesSmoothed.json',
 ]
 
 export async function deleteProject(id: string): Promise<void> {
@@ -1419,8 +1514,11 @@ const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'contourAnchorKeyframes', 'contourAnchorFrames',
   'contourSubdivisionFrames', 'contourCannyFrames',
   'anchorKeyframes', 'anchorFrames', 'boneWeights', 'videoFramesMesh',
-  'walkZoneFrames', 'walkBodyFrames', 'sam2MasksRLE',
+  'walkZoneFrames', 'walkBodyFrames',
+  'walkBodyFramesSmoothed', 'walkZoneFramesSmoothed',
+  'sam2MasksRLE',
   'sam2Contours', 'sam2ContourOriginFrames', 'sam2ContourAnchorFrames', 'sam2ContourSubdivisionFrames',
+  'sam2SmoothedAnchorFrames', 'sam2SmoothedSubdivisionFrames', 'sam2SmoothedContourOriginFrames',
 ]
 
 export async function duplicateProject(sourceId: string): Promise<Project> {

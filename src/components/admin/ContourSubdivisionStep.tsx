@@ -37,6 +37,8 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
 
   const [countsPerSegment, setCountsPerSegment] = useState<number[]>(inferInitialCounts)
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
+  // Mirror transformRef to React state so overlay buttons reposition on pan/zoom
+  const [transformState, setTransformState] = useState({ scale: 1, offsetX: 0, offsetY: 0 })
   const [subdivisionPoints, setSubdivisionPoints] = useState<Point2D[]>(
     mesh?.contourSubdivisionPoints ?? []
   )
@@ -262,6 +264,12 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
     function loop() {
       if (!running) return
       drawScene()
+      // Sync transform state for overlay buttons repositioning
+      const cur = transformRef.current
+      setTransformState(prev => {
+        if (cur.scale === prev.scale && cur.offsetX === prev.offsetX && cur.offsetY === prev.offsetY) return prev
+        return { scale: cur.scale, offsetX: cur.offsetX, offsetY: cur.offsetY }
+      })
       animFrameRef.current = requestAnimationFrame(loop)
     }
     loop()
@@ -269,7 +277,7 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
       running = false
       cancelAnimationFrame(animFrameRef.current)
     }
-  }, [drawScene])
+  }, [drawScene, transformRef])
 
   // Resize observer
   useEffect(() => {
@@ -406,10 +414,62 @@ export default function ContourSubdivisionStep({ project, onSave }: Props) {
         </span>
       </div>
 
-      <canvas
-        ref={canvasRef}
-        className="triangulation-canvas"
-      />
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        <canvas
+          ref={canvasRef}
+          className="triangulation-canvas"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+        />
+        {/* Per-segment overlay buttons at segment midpoints */}
+        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+          {Array.from({ length: numSegments }, (_, i) => {
+            const a = contourAnchors[i]
+            const b = contourAnchors[(i + 1) % numSegments]
+            if (!a || !b) return null
+            const mx = (a.x + b.x) / 2
+            const my = (a.y + b.y) / 2
+            const sx = mx * transformState.scale + transformState.offsetX
+            const sy = my * transformState.scale + transformState.offsetY
+            const isSelected = selectedSegment === i
+            return (
+              <div
+                key={i}
+                style={{
+                  position: 'absolute',
+                  left: sx,
+                  top: sy,
+                  transform: 'translate(-50%, -50%)',
+                  pointerEvents: 'auto',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  background: isSelected ? 'rgba(34,197,94,0.9)' : 'rgba(20,20,30,0.85)',
+                  border: isSelected ? '2px solid #22c55e' : '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 4,
+                  padding: '2px 4px',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                }}
+                onClick={() => setSelectedSegment(isSelected ? null : i)}
+              >
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSegmentCount(i, -1) }}
+                  style={{ width: 22, height: 22, fontSize: '0.85rem', fontWeight: 'bold', padding: 0, lineHeight: 1 }}
+                  title={`− segment ${i + 1}→${((i + 1) % numSegments) + 1}`}
+                >−</button>
+                <span style={{
+                  minWidth: 16, textAlign: 'center', fontSize: '0.8rem', fontWeight: 'bold',
+                  color: '#fff',
+                }}>{countsPerSegment[i] ?? 0}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSegmentCount(i, 1) }}
+                  style={{ width: 22, height: 22, fontSize: '0.85rem', fontWeight: 'bold', padding: 0, lineHeight: 1 }}
+                  title={`+ segment ${i + 1}→${((i + 1) % numSegments) + 1}`}
+                >+</button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }

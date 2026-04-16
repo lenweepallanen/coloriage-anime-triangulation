@@ -387,7 +387,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     const walkAnim = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
     // Members-bones animation with project triangulation zone frames
     const mbTriangAnim = !walkAnim ? project.animations.find(a =>
-      a.type === 'members-bones' && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated
+      (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3') && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated
     ) : null
     let zoneMeshSetup: ZoneMeshSetup | null = null
 

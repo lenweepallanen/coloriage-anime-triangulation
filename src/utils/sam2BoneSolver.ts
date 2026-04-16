@@ -9,6 +9,48 @@
 import type { Point2D, Sam2Skeleton, Sam2BodyJoint, Sam2LegBone, Sam2BoneEndpointRef, ElbowMode } from '../types/project'
 import { solveElbowIK, getElbowParams } from './boneSolver'
 
+/**
+ * Resolve effective hip body-vertex indices and weights for a leg.
+ * Migrates legacy V2 single-vertex (`hipBodyVertexIndex`) to multi-vertex form on the fly.
+ * Returns null if the leg does not use a body-vertex hip.
+ */
+export function getHipBodyVertexRefs(leg: Sam2LegBone): { indices: number[]; weights: number[] } | null {
+  // Modern V3 form
+  if (leg.hipBodyVertexIndices && leg.hipBodyVertexIndices.length > 0) {
+    const n = leg.hipBodyVertexIndices.length
+    const w = leg.hipBodyVertexWeights && leg.hipBodyVertexWeights.length === n
+      ? leg.hipBodyVertexWeights
+      : new Array(n).fill(1 / n)
+    return { indices: leg.hipBodyVertexIndices, weights: w }
+  }
+  // V2 legacy single-vertex
+  if (leg.hipBodyVertexIndex != null) {
+    return { indices: [leg.hipBodyVertexIndex], weights: [1] }
+  }
+  return null
+}
+
+/**
+ * Compute the hip world-space position from a barycentre of body vertices.
+ * `bodyVertexPositions` is the body mesh frame positions in the same coord space (e.g. video coords).
+ */
+function computeBodyBarycentricHip(
+  refs: { indices: number[]; weights: number[] },
+  bodyVertexPositions: Point2D[],
+): Point2D | null {
+  let x = 0, y = 0, wsum = 0
+  for (let i = 0; i < refs.indices.length; i++) {
+    const p = bodyVertexPositions[refs.indices[i]]
+    if (!p) continue
+    const w = refs.weights[i]
+    x += w * p.x
+    y += w * p.y
+    wsum += w
+  }
+  if (wsum === 0) return null
+  return { x: x / wsum, y: y / wsum }
+}
+
 // ─── Endpoint computation ───────────────────────────────────────────────
 
 /**
@@ -79,12 +121,22 @@ export interface LegRestPose {
 
 /**
  * Compute rest pose for a leg bone at frame 0.
+ * Dispatches the hip resolution:
+ *  - body-vertex hip (1-3 vertices barycentre) when refs+bodyFramesF0Vid available
+ *  - else anchor-based hip via leg.hip ref
  */
 export function computeLegRestPose(
   leg: Sam2LegBone,
   anchorFrames: Record<string, Point2D[][]>,
+  bodyFramesF0Vid?: Point2D[] | null,
 ): LegRestPose {
-  const hip = computeSam2Endpoint(leg.hip, anchorFrames, 0)
+  const hipRefs = getHipBodyVertexRefs(leg)
+  let hip: Point2D
+  if (hipRefs && bodyFramesF0Vid) {
+    hip = computeBodyBarycentricHip(hipRefs, bodyFramesF0Vid) ?? computeSam2Endpoint(leg.hip, anchorFrames, 0)
+  } else {
+    hip = computeSam2Endpoint(leg.hip, anchorFrames, 0)
+  }
   const foot = computeSam2Endpoint(leg.foot, anchorFrames, 0)
   // Default knee to midpoint if not placed yet
   const knee = (leg.kneeRestPos.x === 0 && leg.kneeRestPos.y === 0)
@@ -133,6 +185,7 @@ export interface LegFrame {
 
 /**
  * Resolve a leg bone for one frame: hip, foot, and knee (via IK).
+ * V2: hipOverride replaces anchor-based hip when provided.
  */
 export function resolveLegBone(
   leg: Sam2LegBone,
@@ -141,8 +194,9 @@ export function resolveLegBone(
   restPose: LegRestPose,
   prevKnee: Point2D | null,
   centroid: Point2D | null,
+  hipOverride?: Point2D | null,
 ): LegFrame {
-  const hip = computeSam2Endpoint(leg.hip, anchorFrames, frameIdx)
+  const hip = hipOverride ?? computeSam2Endpoint(leg.hip, anchorFrames, frameIdx)
   const foot = computeSam2Endpoint(leg.foot, anchorFrames, frameIdx)
   const side = chooseBendSide(
     leg.kneeMode, hip, foot,
@@ -162,6 +216,8 @@ export interface Sam2SkeletonFrame {
 
 /**
  * Resolve the entire skeleton for a given frame.
+ * V2: bodyVertexPositionsVid provides animated body vertex positions (video coords)
+ * for legs that use hipBodyVertexIndex.
  */
 export function resolveSkeletonFrame(
   skeleton: Sam2Skeleton,
@@ -169,6 +225,7 @@ export function resolveSkeletonFrame(
   frameIdx: number,
   legRestPoses: LegRestPose[],
   prevFrame: Sam2SkeletonFrame | null,
+  bodyVertexPositionsVid?: Point2D[] | null,
 ): Sam2SkeletonFrame {
   const bodyJoints = resolveBodyChain(skeleton.bodyChain, anchorFrames, frameIdx)
 
@@ -181,14 +238,19 @@ export function resolveSkeletonFrame(
   }
 
   const legs = skeleton.legs.map((leg, i) => {
+    const hipRefs = getHipBodyVertexRefs(leg)
+    const hipOverride = (hipRefs && bodyVertexPositionsVid)
+      ? computeBodyBarycentricHip(hipRefs, bodyVertexPositionsVid)
+      : null
+
     const restPose = legRestPoses[i]
     if (!restPose) {
-      const hip = computeSam2Endpoint(leg.hip, anchorFrames, frameIdx)
+      const hip = hipOverride ?? computeSam2Endpoint(leg.hip, anchorFrames, frameIdx)
       const foot = computeSam2Endpoint(leg.foot, anchorFrames, frameIdx)
       return { hip, foot, knee: { x: (hip.x + foot.x) / 2, y: (hip.y + foot.y) / 2 } }
     }
     const prevKnee = prevFrame?.legs[i]?.knee ?? null
-    return resolveLegBone(leg, anchorFrames, frameIdx, restPose, prevKnee, centroid)
+    return resolveLegBone(leg, anchorFrames, frameIdx, restPose, prevKnee, centroid, hipOverride)
   })
 
   return { bodyJoints, legs }

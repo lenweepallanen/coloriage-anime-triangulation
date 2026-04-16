@@ -297,7 +297,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // --- Zone meshes for walk animations with limb separation or MB with project triangulation ---
     const walkAnims = project.animations.filter(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
     const mbTriangAnims = project.projectTriangulation?.step3Validated
-      ? project.animations.filter(a => a.type === 'members-bones' && a.mesh?.walkZoneFrames)
+      ? project.animations.filter(a => (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3') && a.mesh?.walkZoneFrames)
       : []
     const walkZoneMeshMap = new Map<string, ZoneMeshSetup>()
 

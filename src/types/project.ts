@@ -62,6 +62,11 @@ export interface Sam2BodyJoint {
   ref: Sam2BoneEndpointRef;
 }
 
+/** Leg bone hip mode
+ *  - 'anchor'      → barycentric on zone anchors (default V2)
+ *  - 'body-vertex' → barycentre de 1 à 3 vertices du body mesh (V2 legacy 1-vertex + V3 multi) */
+export type Sam2LegHipMode = 'anchor' | 'body-vertex'
+
 /** Leg bone with IK knee (reuses ElbowMode from bone animations) */
 export interface Sam2LegBone {
   id: string;
@@ -71,6 +76,14 @@ export interface Sam2LegBone {
   foot: Sam2BoneEndpointRef;
   kneeRestPos: Point2D;     // rest pose knee position (video coords)
   kneeMode: ElbowMode;      // 'rest' | 'centroid' | 'continuity'
+  /** V2 legacy : 1 vertex body. Migré au load en hipBodyVertexIndices=[idx]. */
+  hipBodyVertexIndex?: number | null;
+  /** Mode de calcul du hip. Défaut 'anchor' (back-compat). */
+  hipMode?: Sam2LegHipMode;
+  /** Indices dans le body mesh — [idx] (1 vertex) | [idx1,idx2] | [idx1,idx2,idx3]. */
+  hipBodyVertexIndices?: number[] | null;
+  /** Poids associés (somme = 1). Défaut équirépartis si null/absent. */
+  hipBodyVertexWeights?: number[] | null;
 }
 
 /** Complete skeleton definition for members-bones animations */
@@ -170,10 +183,31 @@ export interface MeshData {
   sam2Skeleton?: Sam2Skeleton;
   sam2BonesValidated?: boolean;
 
-  // Étape 10 "Lissage Bones" — lissage temporel des anchor frames pour stabiliser les bones
+  // V2 : body chain validée séparément (members-bones-v2)
+  sam2BodyBonesValidated?: boolean;
+
+  // Étape 10 "Lissage Bones" / V2 "Lissage Anchor" — lissage temporel des entrées tracking
   sam2SmoothedAnchorFrames?: Record<string, Point2D[][]> | null;
+  // V2 extension : lissage des subdivisions et P0 avec le même cutoff (cohérence contour)
+  sam2SmoothedSubdivisionFrames?: Record<string, Point2D[][]> | null;
+  sam2SmoothedContourOriginFrames?: Record<string, Point2D[]> | null;
   sam2SmoothingCutoffHz?: number;  // Butterworth cutoff frequency (défaut 4)
   sam2SmoothingValidated?: boolean;
+
+  // V3 "Calcul Corps" — triangulation Delaunay du contour body uniquement (pas d'internes).
+  // Indices dans [...sam2ContourAnchors['body'], ...sam2ContourSubdivisionPoints['body']].
+  v3BodyTriangles?: [number, number, number][];
+  v3BodyTriangulationValidated?: boolean;
+
+  // V2 "Lissage Maillage Corps" — lissage temporel de walkBodyFrames
+  walkBodyFramesSmoothed?: Point2D[][] | null;
+  walkBodyFramesSmoothingCutoffHz?: number;
+  walkBodyFramesSmoothingValidated?: boolean;
+
+  // V2 "Lissage Maillage Pattes" — lissage temporel de walkZoneFrames
+  walkZoneFramesSmoothed?: Record<string, Point2D[][]> | null;
+  walkZoneFramesSmoothingCutoffHz?: number;
+  walkZoneFramesSmoothingValidated?: boolean;
 
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;
@@ -352,7 +386,7 @@ export interface ProjectTriangulation {
   step3Validated: boolean
 }
 
-export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones';
+export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3';
 
 export interface Animation {
   id: string;

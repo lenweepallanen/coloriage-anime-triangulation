@@ -1,8 +1,9 @@
 /**
- * MembersBonesSmoothingStep — Step 10 for members-bones animations.
+ * MembersBonesSmoothingStep — V1 "Lissage Bones" / V2 "Lissage Anchor".
  *
- * Applies temporal smoothing (Butterworth low-pass) to the tracked anchor frames
- * to eliminate bone jitter. Previews raw vs smoothed skeleton overlay on video.
+ * Applies temporal smoothing (Butterworth low-pass) to tracked frames with the
+ * same cutoff : contour anchors (always), subdivisions (V2), P0 origins (V2).
+ * V1 pipeline ignores the extra smoothed fields ; V2 compute steps consume them.
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
@@ -17,6 +18,8 @@ import FrameNavigator from '../keyframes/FrameNavigator'
 interface Props {
   project: ProjectStepView
   onSave: (project: ProjectStepView, uploadOnly?: StepUploadHint[]) => Promise<void>
+  /** V2 passe true : masque le squelette (pas encore défini dans la narration du pipeline V2) */
+  hideSkeleton?: boolean
 }
 
 const VIDEO_FPS = 24
@@ -28,11 +31,12 @@ const BONE_COLORS = [
 ]
 function getBoneColor(i: number) { return BONE_COLORS[i % BONE_COLORS.length] }
 
-export default function MembersBonesSmoothingStep({ project, onSave }: Props) {
+export default function MembersBonesSmoothingStep({ project, onSave, hideSkeleton = false }: Props) {
   const mesh = project.mesh
   const zones: SAM2Zone[] = useMemo(() => mesh?.sam2Zones ?? [], [mesh?.sam2Zones])
-  const sam2ContourAnchors = useMemo(() => mesh?.sam2ContourAnchors ?? {}, [mesh?.sam2ContourAnchors])
   const rawAnchorFrames = useMemo(() => mesh?.sam2ContourAnchorFrames ?? {}, [mesh?.sam2ContourAnchorFrames])
+  const rawSubdivisionFrames = useMemo(() => mesh?.sam2ContourSubdivisionFrames ?? {}, [mesh?.sam2ContourSubdivisionFrames])
+  const rawContourOriginFrames = useMemo(() => mesh?.sam2ContourOriginFrames ?? {}, [mesh?.sam2ContourOriginFrames])
   const contoursAll = mesh?.sam2Contours ?? null
   const skeleton = mesh?.sam2Skeleton ?? { bodyChain: [], legs: [] }
 
@@ -46,6 +50,12 @@ export default function MembersBonesSmoothingStep({ project, onSave }: Props) {
   const [cutoffHz, setCutoffHz] = useState(() => mesh?.sam2SmoothingCutoffHz ?? 4)
   const [smoothedFrames, setSmoothedFrames] = useState<Record<string, Point2D[][]> | null>(
     () => mesh?.sam2SmoothedAnchorFrames ?? null
+  )
+  const [smoothedSubdivisionFrames, setSmoothedSubdivisionFrames] = useState<Record<string, Point2D[][]> | null>(
+    () => mesh?.sam2SmoothedSubdivisionFrames ?? null
+  )
+  const [smoothedOriginFrames, setSmoothedOriginFrames] = useState<Record<string, Point2D[]> | null>(
+    () => mesh?.sam2SmoothedContourOriginFrames ?? null
   )
   const [showRaw, setShowRaw] = useState(false)
 
@@ -130,36 +140,70 @@ export default function MembersBonesSmoothingStep({ project, onSave }: Props) {
     setComputing(true)
     // Defer to let UI update
     setTimeout(() => {
-      const result: Record<string, Point2D[][]> = {}
+      // 1. Anchors
+      const anchorsOut: Record<string, Point2D[][]> = {}
       for (const zoneId of Object.keys(rawAnchorFrames)) {
         const frames = rawAnchorFrames[zoneId]
-        if (!frames || frames.length < 7) {
-          result[zoneId] = frames
-          continue
-        }
-        result[zoneId] = applyTemporalSmoothing(frames, undefined, cutoffHz, VIDEO_FPS)
+        if (!frames || frames.length < 7) { anchorsOut[zoneId] = frames; continue }
+        anchorsOut[zoneId] = applyTemporalSmoothing(frames, undefined, cutoffHz, VIDEO_FPS)
       }
-      setSmoothedFrames(result)
+      setSmoothedFrames(anchorsOut)
+
+      // 2. Subdivisions (same cutoff, per zone)
+      const subsOut: Record<string, Point2D[][]> = {}
+      for (const zoneId of Object.keys(rawSubdivisionFrames)) {
+        const frames = rawSubdivisionFrames[zoneId]
+        if (!frames || frames.length < 7) { subsOut[zoneId] = frames; continue }
+        subsOut[zoneId] = applyTemporalSmoothing(frames, undefined, cutoffHz, VIDEO_FPS)
+      }
+      setSmoothedSubdivisionFrames(Object.keys(subsOut).length > 0 ? subsOut : null)
+
+      // 3. Contour origins (1 point per frame → wrap as frame of length 1)
+      const originsOut: Record<string, Point2D[]> = {}
+      for (const zoneId of Object.keys(rawContourOriginFrames)) {
+        const origins = rawContourOriginFrames[zoneId]
+        if (!origins || origins.length < 7) { originsOut[zoneId] = origins; continue }
+        const wrapped: Point2D[][] = origins.map(p => [p])
+        const smoothed = applyTemporalSmoothing(wrapped, undefined, cutoffHz, VIDEO_FPS)
+        originsOut[zoneId] = smoothed.map(f => f[0])
+      }
+      setSmoothedOriginFrames(Object.keys(originsOut).length > 0 ? originsOut : null)
+
       setComputing(false)
     }, 0)
-  }, [rawAnchorFrames, cutoffHz])
+  }, [rawAnchorFrames, rawSubdivisionFrames, rawContourOriginFrames, cutoffHz])
 
   // ─── Save ─────────────────────────────────────────────────────────────
   const handleSave = useCallback(async (validate: boolean) => {
     if (!mesh || !smoothedFrames || saving) return
     setSaving(true)
     try {
+      const hints: StepUploadHint[] = ['sam2SmoothedAnchorFrames']
+      if (smoothedSubdivisionFrames) hints.push('sam2SmoothedSubdivisionFrames')
+      if (smoothedOriginFrames) hints.push('sam2SmoothedContourOriginFrames')
+      // Re-validation invalidates downstream V2 steps (silent)
       await onSave({
         ...project,
         mesh: {
           ...mesh,
           sam2SmoothedAnchorFrames: smoothedFrames,
+          sam2SmoothedSubdivisionFrames: smoothedSubdivisionFrames,
+          sam2SmoothedContourOriginFrames: smoothedOriginFrames,
           sam2SmoothingCutoffHz: cutoffHz,
           sam2SmoothingValidated: validate,
+          // Silent downstream invalidation (V2 pipeline)
+          ...(validate ? {
+            walkBodyFrames: null,
+            walkBodyFramesSmoothed: null,
+            walkBodyFramesSmoothingValidated: false,
+            walkZoneFrames: null,
+            walkZoneFramesSmoothed: null,
+            walkZoneFramesSmoothingValidated: false,
+          } : {}),
         },
-      }, ['sam2SmoothedAnchorFrames'])
+      }, hints)
     } finally { setSaving(false) }
-  }, [mesh, smoothedFrames, saving, onSave, project, cutoffHz])
+  }, [mesh, smoothedFrames, smoothedSubdivisionFrames, smoothedOriginFrames, saving, onSave, project, cutoffHz])
 
   // ─── Draw loop ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -194,21 +238,53 @@ export default function MembersBonesSmoothingStep({ project, onSave }: Props) {
         }
       }
 
-      // Skeleton (draw raw in red if showing comparison, active in normal colors)
+      // Skeleton (draw raw in red if showing comparison, active in normal colors) — hidden in V2
       const safeFrame = Math.max(0, Math.min(totalFrames - 1, currentFrame))
       const hasFrames = Object.keys(activeFrames).length > 0
 
-      // If showing raw overlay while smoothed exists, draw raw skeleton faintly
-      if (showRaw && smoothedFrames && hasFrames && totalFrames > 0) {
-        const smoothFrame = resolveSkeletonFrame(skeleton, smoothedFrames, safeFrame, legRestPoses, null)
-        drawSkeleton(ctx, t.scale, smoothFrame, skeleton, 0.3, '#888')
+      if (!hideSkeleton) {
+        // If showing raw overlay while smoothed exists, draw raw skeleton faintly
+        if (showRaw && smoothedFrames && hasFrames && totalFrames > 0) {
+          const smoothFrame = resolveSkeletonFrame(skeleton, smoothedFrames, safeFrame, legRestPoses, null)
+          drawSkeleton(ctx, t.scale, smoothFrame, skeleton, 0.3, '#888')
+        }
+
+        // Active skeleton
+        if (hasFrames && totalFrames > 0 && (skeleton.bodyChain.length >= 2 || skeleton.legs.length > 0)) {
+          const frame = resolveSkeletonFrame(skeleton, activeFrames, safeFrame, legRestPoses, prevFrameRef.current)
+          prevFrameRef.current = frame
+          drawSkeleton(ctx, t.scale, frame, skeleton, 1, null)
+        }
       }
 
-      // Active skeleton
-      if (hasFrames && totalFrames > 0 && (skeleton.bodyChain.length >= 2 || skeleton.legs.length > 0)) {
-        const frame = resolveSkeletonFrame(skeleton, activeFrames, safeFrame, legRestPoses, prevFrameRef.current)
-        prevFrameRef.current = frame
-        drawSkeleton(ctx, t.scale, frame, skeleton, 1, null)
+      // Anchor dots (visual feedback of smoothing effect — always drawn)
+      if (hasFrames && totalFrames > 0) {
+        const r = 3 / t.scale
+        for (const z of zones) {
+          const anchors = activeFrames[z.id]?.[safeFrame]
+          if (!anchors) continue
+          ctx.fillStyle = z.color
+          ctx.strokeStyle = '#fff'
+          ctx.lineWidth = 1 / t.scale
+          for (const p of anchors) {
+            ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          }
+        }
+
+        // Overlay raw anchors faintly when comparison
+        if (!showRaw && smoothedFrames && Object.keys(rawAnchorFrames).length > 0) {
+          ctx.fillStyle = '#ef4444'
+          ctx.globalAlpha = 0.35
+          const rr = 2.2 / t.scale
+          for (const z of zones) {
+            const raw = rawAnchorFrames[z.id]?.[safeFrame]
+            if (!raw) continue
+            for (const p of raw) {
+              ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, Math.PI * 2); ctx.fill()
+            }
+          }
+          ctx.globalAlpha = 1
+        }
       }
 
       ctx.restore()
@@ -216,11 +292,11 @@ export default function MembersBonesSmoothingStep({ project, onSave }: Props) {
     }
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
-  }, [videoReady, currentFrame, totalFrames, activeFrames, smoothedFrames, showRaw, skeleton, legRestPoses, zones, contoursAll, transformRef])
+  }, [videoReady, currentFrame, totalFrames, activeFrames, smoothedFrames, rawAnchorFrames, showRaw, skeleton, legRestPoses, zones, contoursAll, transformRef, hideSkeleton])
 
   // ─── Guard returns ────────────────────────────────────────────────────
   if (!project.videoBlob) return <div className="placeholder">Importez d'abord une vidéo.</div>
-  if (!mesh?.sam2BonesValidated) return <div className="placeholder">Validez d'abord les bones (étape précédente).</div>
+  if (!mesh?.sam2ContourAnchorTrackingValidated) return <div className="placeholder">Validez d'abord le tracking des anchors (étape précédente).</div>
 
   return (
     <div className="triangulation-step">

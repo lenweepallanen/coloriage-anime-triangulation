@@ -38,6 +38,7 @@ Un projet contient **plusieurs animations** partageant la même image et géomé
 - **Bone** (0+) : animations par déformation squelettique. Pipeline 7 étapes (vidéo + tracking des anchors comme oneshot, puis définition de bones + calcul par skinning au lieu d'ARAP). Self-contained comme physics — hérite la géométrie de rest, produit son propre `videoFramesMesh`. Utilisé comme oneshot/overlay dans le playback.
 - **Walk** (0+) : animations de marche procédurale quadrupède. Pipeline 6 étapes (squelette 18 keypoints, séparation membres par courbes Bézier, édition maillage zone par zone, face cachée derrière les pattes, paramètres cinématiques, calcul LBS). Pas de vidéo ni tracking — les positions sont calculées par cinématique inverse + LBS. Produit `videoFramesMesh` + `walkZoneFrames`/`walkBodyFrames` pour le rendu séparé par zone.
 - **Members-Bones** (0+) : type **autonome** (n'hérite pas la géométrie rest). Pipeline 4 étapes (Vidéo, Définir Zones, Définition Points, Tracking Points). Combine **SAM 2** (Meta 2024, segmentation vidéo native via Cloud Function) pour segmenter le body + 4 pattes par zone, et **CoTracker3** (Meta 2024, Cloud Function existante) pour le tracking de points caractéristiques. Pipeline robuste aux occlusions : les points caractéristiques sont auto-tagués à leur zone via le masque SAM 2 frame 0, et **clampés dans leur zone** au tracking si CoTracker les fait drift hors de leur masque. Stockage : `mesh.sam2Zones`/`sam2Prompts`/`sam2MasksRLE` (RLE COCO compact) + `mesh.anchorPointZoneIds` parallèle à `anchorPoints`.
+- **Members-Bones-V3** (0+) : variante qui **hérite toute la topologie** (body + 4 pattes, P0 + anchors + subdivision + internes) de `projectTriangulation`. Plus de `bodyChain` : le body est animé par **ARAP** depuis les anchors contour trackés. Pipeline 11 étapes (Vidéo → Zones SAM2 vidéo → Lissage contours → Tracking P0 / Anchors / Subdivision déterministe sur contours vidéo → Lissage anchors Butterworth → Calc Body ARAP + Butterworth post-ARAP → Bones Pattes → Calc Pattes LBS + Butterworth post-LBS). Pré-requis : `projectTriangulation.step3Validated === true`. V3 bloque la création tant que la Triangulation projet n'est pas complète. Faces cachées alignées naturellement (même topologie body/pattes).
 
 ### Topologie partagée
 
@@ -138,7 +139,46 @@ Pipeline "contour-first" avec coordonnées curvilignes. Un point d'origine P0 d�
 9. **Bones par zone** — Définition du squelette : **colonne vertébrale** (chaîne de joints, multi-clic puis clic droit pour finir) + **pattes** (hip/foot par barycentre sur anchors, genou par IK 2-bones draggable). Chaque endpoint est positionné par barycentre entre 1-2 anchors de zone (`Sam2BoneEndpointRef { zoneId, anchorIndexA, anchorIndexB, t }`). Preview vidéo + contours lissés + squelette animé frame par frame. `mesh.sam2Skeleton`, `mesh.sam2BonesValidated`.
 10. **Lissage Bones** — Lissage temporel Butterworth (cutoff Hz configurable) sur les anchor frames pour éliminer le tremblement des bones. Stocke `mesh.sam2SmoothedAnchorFrames` séparément (les frames bruts restent intacts). Preview comparaison brut/lissé. `mesh.sam2SmoothingValidated`.
 
+### Pipeline members-bones-v2 (15 étapes — corps + pattes séparés, lissage multi-niveaux)
+
+Variante du pipeline members-bones qui découple le calcul du maillage corps et celui des pattes, avec lissage à 3 frontières de données. Partage les étapes 1-8 avec la V1. À partir de l'étape 9, la séparation corps/pattes permet d'attacher le hip d'une patte à un vertex du maillage corps animé (`hipBodyVertexIndex`).
+
+1-8. Identique au pipeline V1 (Vidéo, Définir Zones, Lissage Contours, P0 par zone, Tracking P0 zones, Anchors par zone, Subdivision par zone, Tracking Anchors zones).
+9. **Lissage Anchor** — Lissage temporel Butterworth (cutoff Hz configurable) sur `sam2ContourAnchorFrames` **et** `sam2ContourSubdivisionFrames` **et** `sam2ContourOriginFrames` avec le même cutoff. Produit `sam2SmoothedAnchorFrames`/`sam2SmoothedSubdivisionFrames`/`sam2SmoothedContourOriginFrames`. `mesh.sam2SmoothingValidated`.
+10. **Bones Corps** — Définition de la colonne vertébrale uniquement (chaîne de joints). `mesh.sam2Skeleton.bodyChain`, `mesh.sam2BodyBonesValidated`.
+11. **Calcul Corps** — Calcul LBS du maillage corps via la body chain + `projectTriangulation.bodyPoints/bodyTriangles`. Lit les anchors lissés si disponibles. Produit `mesh.walkBodyFrames`.
+12. **Lissage Maillage Corps** — **NOUVEAU** — Lissage Butterworth sur `walkBodyFrames` (chaque vertex corps indépendamment). Slider cutoff propre. Toggle preview brut/lissé. Produit `mesh.walkBodyFramesSmoothed` (gardé séparément du brut). `mesh.walkBodyFramesSmoothingValidated`. Essentiel pour les pattes avec hip `hipBodyVertexIndex`.
+13. **Bones Pattes** — Définition des leg bones (hip/foot par barycentre anchors OR hip par body vertex, genou IK). Preview utilise `walkBodyFramesSmoothed ?? walkBodyFrames`. `mesh.sam2Skeleton.legs`, `mesh.sam2BonesValidated`.
+14. **Calcul Pattes** — Calcul LBS par patte via `projectTriangulation.zonePoints/zoneTriangles`, utilise `walkBodyFramesSmoothed ?? walkBodyFrames` comme override de hip body-vertex par frame. Produit `mesh.walkZoneFrames`.
+15. **Lissage Maillage Pattes** — **NOUVEAU** — Lissage Butterworth sur `walkZoneFrames` zone par zone. Slider cutoff propre. Toggle preview brut/lissé. Produit `mesh.walkZoneFramesSmoothed`. `mesh.walkZoneFramesSmoothingValidated`.
+
+**Invalidation cascade (silencieuse)** : toute re-validation d'une étape amont remet les flags `validated` des étapes en aval à `false` et vide leurs champs de sortie. Pas de badge UI ni de re-run automatique — le stepper affiche simplement le cercle gris "pending".
+
 **Pourquoi pas d'optical flow** : le contour SAM 2 lissé fournit déjà une géométrie cohérente frame par frame, donc le tracking se réduit à un échantillonnage par coordonnée curviligne. CoTracker a été retiré (ne servait à rien après SAM 2). Aucune ressource cloud nécessaire après l'étape 2 (calcul SAM 2).
+
+### Pipeline members-bones-v3 (11 étapes — topologie héritée de Triangulation projet + ARAP body)
+
+Refonte majeure : V3 supprime la duplication de topologie entre `projectTriangulation` et l'animation members-bones. Toute la topologie (body + 4 pattes, P0 + anchors + subdivision + vertices internes + triangles + hidden faces) est définie **une seule fois** dans la Triangulation projet (voir section "Pipeline Triangulation Projet"). V3 se contente de tracker ces anchors sur la vidéo, anime le body par **ARAP** (plus de `bodyChain` LBS), et anime les pattes par LBS comme en V2.
+
+**Pré-requis** : `project.projectTriangulation?.step3Validated === true` (Triangulation projet complète jusqu'aux faces cachées). La création d'une animation V3 est bloquée sinon.
+
+1. **Vidéo** — Upload vidéo d'animation (autonome).
+2. **Zones SAM 2 vidéo** — SAM 2 natif sur la vidéo pour produire des masques par frame par zone (réutilise `MembersBonesZonesStep`). Les zones sont celles définies dans `projectTriangulation.zones`.
+3. **Lissage Contours** — Extraction contours + lissage gaussien + bridge body-legs + lissage temporel (réutilise `MembersBonesContourSmoothingStep`). `mesh.sam2Contours`.
+4. **Tracking P0 zones** — Déterministe. Pour chaque zone, `projectTriangulation.zoneOrigins[zoneId]` (coords image) est mappé image→vidéo et snappé sur l'extremum de courbure le plus proche sur le contour vidéo frame 0. Frames suivantes : continuité par extremum le plus proche. `mesh.sam2ContourOriginFrames`.
+5. **Tracking Anchors zones** — Déterministe. Pour chaque anchor (P0 inclus) + chaque point de subdivision issu de `projectTriangulation.zoneAnchors/zoneSubdivisionParams`, échantillonnage à coordonnée curviligne `s_i` sur le contour de chaque frame + snap courbure pour les anchors (pas de snap pour subdivisions). `mesh.sam2ContourAnchorFrames` + `sam2ContourSubdivisionFrames`.
+6. **Lissage Anchor Frames** — Butterworth sur origin + anchor + subdivision frames (réutilise `MembersBonesSmoothingStep`). `mesh.sam2SmoothedAnchorFrames` etc.
+7. **Calc Animation Body (ARAP)** — `precomputeARAP(bodyVertices, bodyTriangles, pinnedContourIndices)` depuis `projectTriangulation.bodyPoints/bodyTriangles`, avec les N premiers indices pinnés (contour body = P0 + anchors + subdivisions). Solve par frame avec positions cibles = contour body vidéo tracké et lissé. Produit `mesh.walkBodyFrames` en coords vidéo.
+8. **Lissage Maillage Body** — Butterworth sur `walkBodyFrames` (chaque vertex body). Réutilise `MembersBonesV2BodySmoothingStep`. `mesh.walkBodyFramesSmoothed`.
+9. **Bones Pattes** — Définition leg bones hip/foot/genou (réutilise `MembersBonesV2LegBoneStep`). Pas de `bodyChain` en V3. Hip par barycentre anchors ou par body vertex (`hipBodyVertexIndex`). `mesh.sam2Skeleton.legs`.
+10. **Calc Pattes (LBS)** — LBS par patte via `projectTriangulation.zonePoints/zoneTriangles`, utilise `walkBodyFramesSmoothed ?? walkBodyFrames` comme override hip body-vertex. `mesh.walkZoneFrames`.
+11. **Lissage Maillage Pattes** — Butterworth sur `walkZoneFrames` zone par zone (réutilise `MembersBonesV2LegSmoothingStep`). `mesh.walkZoneFramesSmoothed`.
+
+**Différences clés vs V2** :
+- Plus de P0/anchors/subdivision définis dans l'animation — hérités de `projectTriangulation`.
+- Plus de `bodyChain` ni de "Bones Corps" / "Calcul Corps" LBS — ARAP remplace tout.
+- Body et pattes partagent la même topologie que les hidden faces → alignement naturel au rendu.
+- V2 reste disponible en parallèle pour projets legacy ; pas de migration automatique.
 
 ### Pipeline bone (7 étapes)
 1. **Vidéo** — Upload vidéo d'animation (image héritée du projet)
@@ -228,11 +268,19 @@ Conséquence : les "lignes" de la patte se prolongent par symétrie autour de la
 
 ### Pipeline Triangulation Projet (4 étapes)
 
-Section dédiée dans `AdminLayout` (onglet "Triangulation"), indépendante du pipeline rest/oneshot/walk. Permet de créer une triangulation au niveau projet partagée par les animations `members-bones`.
+Section dédiée dans `AdminLayout` (onglet "Triangulation"), indépendante du pipeline rest/oneshot/walk. Permet de créer une triangulation au niveau projet partagée par les animations `members-bones` / `members-bones-v3`.
 
 1. **Image référence** — Import image colorée (pas le coloriage N&B). Utilisée par SAM 2 pour segmenter les zones.
 2. **Zones SAM 2** — Placement clics foreground/background par zone (body + 4 pattes) sur l'image. Appel SAM 2 (Cloud Function ou serveur local MPS) → masques RLE → contours lissés par zone.
-3. **Maillage par zone** — Édition en 2 phases par zone : (a) contour subdivision (slider nb points + drag/insert/delete) → valider contour, (b) triangulation intérieure Delaunay (densité auto + points manuels). Le body est automatiquement troué aux zones pattes (tout triangle touchant une patte est supprimé, points orphelins compactés). Patch body Ajouter/Relier/Déplacer pour combler les trous. Z-order éditable par zone.
+3. **Maillage par zone** — Édition **curvilignée** en 4 sous-phases par zone puis Delaunay interne :
+   - (a) **Placement P0** — clic sur le contour lissé avec snap sur top-20 extrema de courbure (`detectCurvatureExtrema`). Définit `s=0` de la zone.
+   - (b) **Anchors contour** — auto-détection par courbure (P0 inclus comme [0]) + édition manuelle (add/drag/delete). Tri par arc-length depuis P0.
+   - (c) **Subdivision** — compteurs +/- par segment et global. Utilise `subdivideContour` pour produire points + params curvilignes.
+   - (d) **Triangulation intérieure** — Delaunay sur `[P0, subdivision_seg0, anchor_1, subdivision_seg1, ..., anchor_N, subdivision_segN]` + points internes auto (densité slider) + manuels. Patch body Ajouter/Relier/Déplacer pour combler les trous. Z-order éditable.
+
+   Le body est automatiquement troué aux zones pattes (tout triangle touchant une patte est supprimé, points orphelins compactés).
+
+   **Invariant d'indexation** : `zonePoints[zoneId]` est ordonné `[P0, subdiv_seg0..., anchor_1, subdiv_seg1..., ..., anchor_N, subdiv_segN..., ...internes]`. Les N premiers indices (= `zoneContourLength[zoneId]`) sont le contour "trackable" par V3 ; les suivants sont les internes déformés par ARAP.
 4. **Faces cachées** — Même système que Walk : sélection 2 vertices boundary (A/B), bridge points manuels, Delaunay dans le polygone fermé. Split body visible / hidden face au rendu.
 
 **Rendu** : `buildPseudoSeparation()` convertit `ProjectTriangulation` en format `WalkLimbSeparation` pour réutiliser `zoneMeshRenderer.buildZoneMeshes()`. Le `zOrder` défini en étape 3 est propagé aux meshes PIXI.
@@ -312,7 +360,7 @@ public/
 ## Modèle de données
 
 ```typescript
-AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones'
+AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3'
 
 Animation {
   id: string                         // crypto.randomUUID()
@@ -363,14 +411,23 @@ ProjectTriangulation {
   contourSmoothSigma, bridgeThreshold: number
   step1Validated: boolean
 
-  // Étape 2 : Maillage par zone (2 phases : contour + triangulation)
-  zoneContourCount: Record<string, number>             // nb points contour (slider)
-  zoneContourPoints: Record<string, Point2D[]>         // vertices contour validés
-  zoneContourValidated: Record<string, boolean>        // contour verrouillé
-  zonePoints: Record<string, Point2D[]>                // vertices (contour + internes)
+  // Étape 2 : Maillage par zone (4 sous-phases curvilignes + Delaunay)
+  // 2a : P0 par zone (coords image)
+  zoneOrigins: Record<string, Point2D>
+  zoneOriginsValidated: Record<string, boolean>
+  // 2b : Anchors contour par zone (P0 inclus comme [0], tri arc-length depuis P0)
+  zoneAnchors: Record<string, Point2D[]>
+  zoneAnchorsValidated: Record<string, boolean>
+  // 2c : Subdivision par zone (params curvilignes + points résultants)
+  zoneSubdivisionPoints: Record<string, Point2D[]>
+  zoneSubdivisionParams: Record<string, CurvilinearParam[]>
+  zoneSubdivisionValidated: Record<string, boolean>
+  // 2d : Triangulation Delaunay intérieure
+  zonePoints: Record<string, Point2D[]>                // [P0, subdivs_seg0, anchor_1, subdivs_seg1, ..., anchor_N, subdivs_segN, ...internes]
   zoneTriangles: Record<string, [number,number,number][]>
   zoneDensity: Record<string, number>                  // densité intérieure
-  bodyPoints: Point2D[]
+  zoneContourLength: Record<string, number>            // N premiers indices de zonePoints = contour (pinned ARAP)
+  bodyPoints: Point2D[]                                // rééindexé (compacté) après filtrage trous pattes
   bodyTriangles: [number,number,number][]
   step2Validated: boolean
 

@@ -30,6 +30,13 @@ import MembersBonesContourAnchorTrackingStep from './MembersBonesContourAnchorTr
 import MembersBonesBoneStep from './MembersBonesBoneStep'
 import MembersBonesSmoothingStep from './MembersBonesSmoothingStep'
 import MembersBonesTriangulationStep from './MembersBonesTriangulationStep'
+import MembersBonesV2BodyBoneStep from './MembersBonesV2BodyBoneStep'
+import MembersBonesV2BodyComputeStep from './MembersBonesV2BodyComputeStep'
+import MembersBonesV2BodySmoothingStep from './MembersBonesV2BodySmoothingStep'
+import MembersBonesV2LegBoneStep from './MembersBonesV2LegBoneStep'
+import MembersBonesV2AnimComputeStep from './MembersBonesV2AnimComputeStep'
+import MembersBonesV2LegSmoothingStep from './MembersBonesV2LegSmoothingStep'
+import MembersBonesV3BodyComputeStep from './MembersBonesV3BodyComputeStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -65,7 +72,42 @@ const MEMBERS_BONES_STEPS = [
   'Triangulation + Anim',
 ] as const
 
-type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number]
+const MEMBERS_BONES_V2_STEPS = [
+  'Vidéo',
+  'Définir Zones',
+  'Lissage Contours',
+  'P0 par zone',
+  'Tracking P0 zones',
+  'Anchors par zone',
+  'Subdivision par zone',
+  'Tracking Anchors zones',
+  'Lissage Anchor',
+  'Bones Corps',
+  'Calcul Corps',
+  'Lissage Maillage Corps',
+  'Bones Pattes',
+  'Calcul Pattes',
+  'Lissage Maillage Pattes',
+] as const
+
+const MEMBERS_BONES_V3_STEPS = [
+  'Vidéo',
+  'Définir Zones',
+  'Lissage Contours',
+  'P0 par zone',
+  'Tracking P0 zones',
+  'Anchors par zone',
+  'Subdivision par zone',
+  'Tracking Anchors zones',
+  'Lissage Anchor',
+  'Calcul Corps V3',
+  'Lissage Maillage Corps',
+  'Bones Pattes',
+  'Calcul Pattes',
+  'Lissage Maillage Pattes',
+] as const
+
+type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number] | (typeof MEMBERS_BONES_V2_STEPS)[number] | (typeof MEMBERS_BONES_V3_STEPS)[number]
 
 const STEP_SHORT_LABELS: Record<string, string> = {
   'Vidéo': 'Vidéo',
@@ -96,6 +138,14 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Bones par zone': 'Bones',
   'Lissage Bones': 'Lissage',
   'Triangulation + Anim': 'Triang.',
+  'Bones Corps': 'Bones Corps',
+  'Calcul Corps': 'Calc. Corps',
+  'Bones Pattes': 'Bones Pattes',
+  'Lissage Anchor': 'Lissage Anc.',
+  'Lissage Maillage Corps': 'Liss. Mail. Corps',
+  'Calcul Pattes': 'Calc. Pattes',
+  'Lissage Maillage Pattes': 'Liss. Mail. Pattes',
+  'Calcul Corps V3': 'Calc. Corps V3',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -131,6 +181,14 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Bones par zone': return mesh?.sam2BonesValidated ? 'done' : 'pending'
     case 'Lissage Bones': return mesh?.sam2SmoothingValidated ? 'done' : 'pending'
     case 'Triangulation + Anim': return mesh?.walkZoneFrames != null ? 'done' : 'pending'
+    case 'Bones Corps': return mesh?.sam2BodyBonesValidated ? 'done' : 'pending'
+    case 'Calcul Corps': return mesh?.walkBodyFrames != null ? 'done' : 'pending'
+    case 'Bones Pattes': return mesh?.sam2BonesValidated ? 'done' : 'pending'
+    case 'Lissage Anchor': return mesh?.sam2SmoothingValidated ? 'done' : 'pending'
+    case 'Lissage Maillage Corps': return mesh?.walkBodyFramesSmoothingValidated ? 'done' : 'pending'
+    case 'Calcul Pattes': return mesh?.walkZoneFrames != null ? 'done' : 'pending'
+    case 'Lissage Maillage Pattes': return mesh?.walkZoneFramesSmoothingValidated ? 'done' : 'pending'
+    case 'Calcul Corps V3': return (mesh?.v3BodyTriangulationValidated && mesh?.walkBodyFrames != null) ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -149,6 +207,8 @@ export function getAnimationCompletionStatus(animation: Animation): { done: numb
     : animation.type === 'bone' ? BONE_STEPS
     : animation.type === 'walk' ? WALK_STEPS
     : animation.type === 'members-bones' ? MEMBERS_BONES_STEPS
+    : animation.type === 'members-bones-v2' ? MEMBERS_BONES_V2_STEPS
+    : animation.type === 'members-bones-v3' ? MEMBERS_BONES_V3_STEPS
     : ONESHOT_STEPS
   const mesh = animation.mesh
   const hasVideo = animation.videoBlob != null
@@ -173,11 +233,15 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
   const isBoneAnim = animation.type === 'bone'
   const isWalkAnim = animation.type === 'walk'
   const isMembersBonesAnim = animation.type === 'members-bones'
+  const isMembersBonesV2Anim = animation.type === 'members-bones-v2'
+  const isMembersBonesV3Anim = animation.type === 'members-bones-v3'
   const availableSteps = isRestAnim ? REST_STEPS
     : isPhysicsAnim ? PHYSICS_STEPS
     : isBoneAnim ? BONE_STEPS
     : isWalkAnim ? WALK_STEPS
     : isMembersBonesAnim ? MEMBERS_BONES_STEPS
+    : isMembersBonesV2Anim ? MEMBERS_BONES_V2_STEPS
+    : isMembersBonesV3Anim ? MEMBERS_BONES_V3_STEPS
     : ONESHOT_STEPS
   const [activeStep, setActiveStep] = useState<Step>(availableSteps[0] as Step)
 
@@ -336,6 +400,32 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         )}
         {activeStep === 'Triangulation + Anim' && (
           <MembersBonesTriangulationStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {/* V2 steps */}
+        {activeStep === 'Lissage Anchor' && (
+          <MembersBonesSmoothingStep project={stepView} onSave={stepSave} hideSkeleton />
+        )}
+        {activeStep === 'Bones Corps' && (
+          <MembersBonesV2BodyBoneStep project={stepView} onSave={stepSave} />
+        )}
+        {activeStep === 'Calcul Corps' && (
+          <MembersBonesV2BodyComputeStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Lissage Maillage Corps' && (
+          <MembersBonesV2BodySmoothingStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Bones Pattes' && (
+          <MembersBonesV2LegBoneStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Calcul Pattes' && (
+          <MembersBonesV2AnimComputeStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Lissage Maillage Pattes' && (
+          <MembersBonesV2LegSmoothingStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {/* V3 steps */}
+        {activeStep === 'Calcul Corps V3' && (
+          <MembersBonesV3BodyComputeStep project={project} animation={animation} onSave={projectSave} />
         )}
       </div>
     </div>

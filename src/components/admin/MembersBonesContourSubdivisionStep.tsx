@@ -50,6 +50,8 @@ export default function MembersBonesContourSubdivisionStep({ project, onSave }: 
     return init
   })
   const [saving, setSaving] = useState(false)
+  // Mirror transformRef to React state so overlay buttons reposition on pan/zoom
+  const [transformState, setTransformState] = useState({ scale: 1, offsetX: 0, offsetY: 0 })
 
   // Active zone's data
   const activeZone = zones.find(z => z.id === activeZoneId)
@@ -233,6 +235,12 @@ export default function MembersBonesContourSubdivisionStep({ project, onSave }: 
       }
 
       ctx.restore()
+      // Sync transform state for overlay buttons repositioning
+      const cur = transformRef.current
+      setTransformState(prev => {
+        if (cur.scale === prev.scale && cur.offsetX === prev.offsetX && cur.offsetY === prev.offsetY) return prev
+        return { scale: cur.scale, offsetX: cur.offsetX, offsetY: cur.offsetY }
+      })
       rafId = requestAnimationFrame(draw)
     }
     rafId = requestAnimationFrame(draw)
@@ -390,8 +398,60 @@ export default function MembersBonesContourSubdivisionStep({ project, onSave }: 
         </span>
       </div>
 
-      <div ref={containerRef} className="keyframe-editor-canvas-container" style={{ flex: 1 }}>
+      <div ref={containerRef} className="keyframe-editor-canvas-container" style={{ flex: 1, position: 'relative' }}>
         <canvas ref={canvasRef} />
+        {/* Per-segment overlay buttons at segment midpoints (video coords → screen) */}
+        {activeAnchors.length >= 2 && (
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+            {activeAnchors.map((_, i) => {
+              const a = activeAnchors[i]
+              const b = activeAnchors[(i + 1) % activeAnchors.length]
+              if (!a || !b) return null
+              const mx = (a.x + b.x) / 2
+              const my = (a.y + b.y) / 2
+              const sx = mx * transformState.scale + transformState.offsetX
+              const sy = my * transformState.scale + transformState.offsetY
+              const from = i === 0 ? 'P0' : String(i)
+              const to = i === activeAnchors.length - 1 ? 'P0' : String(i + 1)
+              const count = (counts[activeZoneId] ?? [])[i] ?? DEFAULT_PER_SEGMENT
+              return (
+                <div
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    left: sx,
+                    top: sy,
+                    transform: 'translate(-50%, -50%)',
+                    pointerEvents: 'auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    background: 'rgba(20,20,30,0.85)',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    borderRadius: 4,
+                    padding: '2px 4px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                  }}
+                >
+                  <button
+                    onClick={() => adjustSegment(i, -1)}
+                    style={{ width: 22, height: 22, fontSize: '0.85rem', fontWeight: 'bold', padding: 0, lineHeight: 1 }}
+                    title={`− segment [${from}→${to}]`}
+                  >−</button>
+                  <span style={{
+                    minWidth: 16, textAlign: 'center', fontSize: '0.8rem', fontWeight: 'bold',
+                    color: '#fff',
+                  }}>{count}</span>
+                  <button
+                    onClick={() => adjustSegment(i, 1)}
+                    style={{ width: 22, height: 22, fontSize: '0.85rem', fontWeight: 'bold', padding: 0, lineHeight: 1 }}
+                    title={`+ segment [${from}→${to}]`}
+                  >+</button>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -17,6 +17,7 @@ import {
   type AffineMatrix,
 } from './boneSolver'
 import {
+  resolveBodyChain,
   resolveSkeletonFrame,
   computeLegRestPose,
   type LegRestPose,
@@ -242,6 +243,210 @@ export function computeTriangAnimation(
 
   return { walkZoneFrames, walkBodyFrames }
 }
+
+// ─── V2: Split body/leg computation ─────────────────────────────────
+
+function imageToVideo(p: Point2D, imgW: number, imgH: number, vidW: number, vidH: number): Point2D {
+  return { x: p.x * (vidW / imgW), y: p.y * (imgH > 0 ? vidH / imgH : 1) }
+}
+
+/**
+ * V2: Compute auto-weights for body vertices only (body chain sub-bones).
+ */
+export function computeBodyAutoWeights(
+  triangulation: ProjectTriangulation,
+  skeleton: Sam2Skeleton,
+  anchorFrames: Record<string, Point2D[][]>,
+  imgW: number, imgH: number,
+  vidW: number, vidH: number,
+): number[][] {
+  const legRestPoses = skeleton.legs.map(leg => computeLegRestPose(leg, anchorFrames))
+  const frame0 = resolveSkeletonFrame(skeleton, anchorFrames, 0, legRestPoses, null)
+  const bodyJointsImg = frame0.bodyJoints.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+
+  const bodySubBones: { head: Point2D; tail: Point2D }[] = []
+  for (let i = 0; i < bodyJointsImg.length - 1; i++) {
+    bodySubBones.push({ head: bodyJointsImg[i], tail: bodyJointsImg[i + 1] })
+  }
+
+  return computeWeightsForVertices(triangulation.bodyPoints, bodySubBones)
+}
+
+/**
+ * V2: Compute body animation only (LBS with body chain sub-bones).
+ * Returns walkBodyFrames in IMAGE coords.
+ */
+export function computeBodyAnimation(
+  triangulation: ProjectTriangulation,
+  skeleton: Sam2Skeleton,
+  anchorFrames: Record<string, Point2D[][]>,
+  bodyWeights: number[][],
+  imgW: number, imgH: number,
+  vidW: number, vidH: number,
+  onProgress?: (frame: number, total: number) => void,
+): Point2D[][] {
+  const firstZoneFrames = Object.values(anchorFrames)[0]
+  if (!firstZoneFrames || firstZoneFrames.length === 0) return []
+  const totalFrames = firstZoneFrames.length
+
+  const legRestPoses = skeleton.legs.map(leg => computeLegRestPose(leg, anchorFrames))
+  const restFrame = resolveSkeletonFrame(skeleton, anchorFrames, 0, legRestPoses, null)
+  const restBodyJoints = restFrame.bodyJoints.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+
+  const restBodySubBones: { head: Point2D; tail: Point2D }[] = []
+  for (let i = 0; i < restBodyJoints.length - 1; i++) {
+    restBodySubBones.push({ head: restBodyJoints[i], tail: restBodyJoints[i + 1] })
+  }
+
+  const walkBodyFrames: Point2D[][] = new Array(totalFrames)
+
+  for (let f = 0; f < totalFrames; f++) {
+    const bodyJoints = resolveBodyChain(skeleton.bodyChain, anchorFrames, f)
+    const currBodyJoints = bodyJoints.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+
+    const bodyMatrices: AffineMatrix[] = []
+    for (let i = 0; i < restBodySubBones.length; i++) {
+      const rest = restBodySubBones[i]
+      const curr = { head: currBodyJoints[i], tail: currBodyJoints[i + 1] }
+      bodyMatrices.push(boneLocalMatrix(computeBoneTransform(rest.head, rest.tail, curr.head, curr.tail)))
+    }
+    walkBodyFrames[f] = lbsDeform(triangulation.bodyPoints, bodyWeights, bodyMatrices)
+    onProgress?.(f + 1, totalFrames)
+  }
+
+  return walkBodyFrames
+}
+
+/**
+ * V2: Compute auto-weights for leg zone vertices only (2 sub-bones per leg).
+ * Uses walkBodyFrames frame 0 for legs with hipBodyVertexIndex.
+ */
+export function computeLegAutoWeights(
+  triangulation: ProjectTriangulation,
+  skeleton: Sam2Skeleton,
+  anchorFrames: Record<string, Point2D[][]>,
+  imgW: number, imgH: number,
+  vidW: number, vidH: number,
+  walkBodyFramesF0?: Point2D[] | null,
+): Record<string, number[][]> {
+  // Convert body frame 0 to video coords for leg rest pose computation
+  const bodyF0Vid = walkBodyFramesF0
+    ? walkBodyFramesF0.map(p => imageToVideo(p, imgW, imgH, vidW, vidH))
+    : null
+
+  const legRestPoses = skeleton.legs.map(leg => computeLegRestPose(leg, anchorFrames, bodyF0Vid))
+  const frame0 = resolveSkeletonFrame(skeleton, anchorFrames, 0, legRestPoses, null, bodyF0Vid)
+
+  const legsImg = frame0.legs.map(leg => ({
+    hip: videoToImage(leg.hip, imgW, imgH, vidW, vidH),
+    foot: videoToImage(leg.foot, imgW, imgH, vidW, vidH),
+    knee: videoToImage(leg.knee, imgW, imgH, vidW, vidH),
+  }))
+
+  const zoneWeights: Record<string, number[][]> = {}
+  for (let li = 0; li < skeleton.legs.length; li++) {
+    const leg = skeleton.legs[li]
+    const legImg = legsImg[li]
+    const legSubBones = [
+      { head: legImg.hip, tail: legImg.knee },
+      { head: legImg.knee, tail: legImg.foot },
+    ]
+    const zonePts = triangulation.zonePoints[leg.zoneId]
+    if (zonePts) {
+      zoneWeights[leg.zoneId] = computeWeightsForVertices(zonePts, legSubBones)
+    }
+  }
+
+  return zoneWeights
+}
+
+/**
+ * V2: Compute leg animation only (LBS per zone), using walkBodyFrames for
+ * legs with hipBodyVertexIndex. Returns walkZoneFrames in IMAGE coords.
+ */
+export function computeLegAnimation(
+  triangulation: ProjectTriangulation,
+  skeleton: Sam2Skeleton,
+  anchorFrames: Record<string, Point2D[][]>,
+  zoneWeights: Record<string, number[][]>,
+  walkBodyFrames: Point2D[][],
+  imgW: number, imgH: number,
+  vidW: number, vidH: number,
+  onProgress?: (frame: number, total: number) => void,
+): Record<string, Point2D[][]> {
+  const firstZoneFrames = Object.values(anchorFrames)[0]
+  if (!firstZoneFrames || firstZoneFrames.length === 0) return {}
+  const totalFrames = firstZoneFrames.length
+
+  // Convert body frame 0 to video coords for rest pose
+  const bodyF0Vid = walkBodyFrames[0]
+    ? walkBodyFrames[0].map(p => imageToVideo(p, imgW, imgH, vidW, vidH))
+    : null
+
+  const legRestPoses = skeleton.legs.map(leg => computeLegRestPose(leg, anchorFrames, bodyF0Vid))
+  const restFrame = resolveSkeletonFrame(skeleton, anchorFrames, 0, legRestPoses, null, bodyF0Vid)
+
+  const restLegs = restFrame.legs.map(leg => ({
+    hip: videoToImage(leg.hip, imgW, imgH, vidW, vidH),
+    foot: videoToImage(leg.foot, imgW, imgH, vidW, vidH),
+    knee: videoToImage(leg.knee, imgW, imgH, vidW, vidH),
+  }))
+
+  const restLegSubBones: Record<string, { head: Point2D; tail: Point2D }[]> = {}
+  for (let li = 0; li < skeleton.legs.length; li++) {
+    const zoneId = skeleton.legs[li].zoneId
+    restLegSubBones[zoneId] = [
+      { head: restLegs[li].hip, tail: restLegs[li].knee },
+      { head: restLegs[li].knee, tail: restLegs[li].foot },
+    ]
+  }
+
+  const walkZoneFrames: Record<string, Point2D[][]> = {}
+  for (const leg of skeleton.legs) {
+    walkZoneFrames[leg.zoneId] = new Array(totalFrames)
+  }
+
+  let prevFrame: Sam2SkeletonFrame | null = null
+
+  for (let f = 0; f < totalFrames; f++) {
+    // Convert current body frame to video coords for hip override
+    const bodyFVid = walkBodyFrames[f]
+      ? walkBodyFrames[f].map(p => imageToVideo(p, imgW, imgH, vidW, vidH))
+      : null
+
+    const skelFrame = resolveSkeletonFrame(skeleton, anchorFrames, f, legRestPoses, prevFrame, bodyFVid)
+    prevFrame = skelFrame
+
+    const currLegs = skelFrame.legs.map(leg => ({
+      hip: videoToImage(leg.hip, imgW, imgH, vidW, vidH),
+      foot: videoToImage(leg.foot, imgW, imgH, vidW, vidH),
+      knee: videoToImage(leg.knee, imgW, imgH, vidW, vidH),
+    }))
+
+    for (let li = 0; li < skeleton.legs.length; li++) {
+      const zoneId = skeleton.legs[li].zoneId
+      const restSubs = restLegSubBones[zoneId]
+      if (!restSubs) continue
+
+      const legMatrices: AffineMatrix[] = [
+        boneLocalMatrix(computeBoneTransform(restSubs[0].head, restSubs[0].tail, currLegs[li].hip, currLegs[li].knee)),
+        boneLocalMatrix(computeBoneTransform(restSubs[1].head, restSubs[1].tail, currLegs[li].knee, currLegs[li].foot)),
+      ]
+
+      const zonePts = triangulation.zonePoints[zoneId]
+      const zoneW = zoneWeights[zoneId]
+      if (zonePts && zoneW) {
+        walkZoneFrames[zoneId][f] = lbsDeform(zonePts, zoneW, legMatrices)
+      }
+    }
+
+    onProgress?.(f + 1, totalFrames)
+  }
+
+  return walkZoneFrames
+}
+
+// ─── Shared LBS ─────────────────────────────────────────────────────
 
 /** Apply LBS: for each vertex, blend affine-transformed position by weights. */
 function lbsDeform(
