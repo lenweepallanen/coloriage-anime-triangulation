@@ -158,6 +158,10 @@ export interface MeshData {
   sam2Contours?: Record<string, Point2D[][]> | null;  // zoneId → polygone par frame
   sam2ContourSmoothSigma?: number;                    // sigma utilisé pour le lissage (UI)
   sam2ContoursValidated?: boolean;
+  // Validité par zone par frame (détection automatique d'occlusion via aire de masque).
+  // Une frame invalide est ignorée par les trackings V3 et interpolée linéairement.
+  sam2ZoneValidFrames?: Record<string, boolean[]> | null;
+  sam2ZoneMinAreaFraction?: number;                   // seuil utilisé (UI)
 
   // Étape 4 "P0 par zone" — placement statique frame 0
   sam2ContourOrigins?: Record<string, Point2D>;       // zoneId → P0
@@ -208,6 +212,13 @@ export interface MeshData {
   walkZoneFramesSmoothed?: Record<string, Point2D[][]> | null;
   walkZoneFramesSmoothingCutoffHz?: number;
   walkZoneFramesSmoothingValidated?: boolean;
+
+  // V3 "Lissage Bones Pattes" — pré-résolution hip/knee/foot par patte par frame
+  // (video coords) puis Butterworth temporel. Coupe le jitter du knee IK à la source.
+  sam2LegBoneFrames?: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> | null;
+  sam2LegBoneFramesSmoothed?: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> | null;
+  sam2LegBoneSmoothingCutoffHz?: number;
+  sam2LegBoneSmoothingValidated?: boolean;
 
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;

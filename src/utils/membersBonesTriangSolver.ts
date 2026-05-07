@@ -446,6 +446,76 @@ export function computeLegAnimation(
   return walkZoneFrames
 }
 
+// ─── V3: Leg LBS from pre-resolved (smoothed) hip/knee/foot per frame ──
+
+/**
+ * V3 variant of computeLegAnimation that bypasses per-frame skeleton resolution
+ * (resolveSkeletonFrame + IK 2-bones) and instead consumes pre-resolved hip/knee/foot
+ * trajectories per zone (typically Butterworth-smoothed at the Lissage Bones Pattes step).
+ *
+ * legBoneFrames are in VIDEO coords (same as resolveSkeletonFrame output).
+ * Frame 0 of legBoneFrames is taken as the rest pose for each leg.
+ */
+export function computeLegAnimationFromBoneFrames(
+  triangulation: ProjectTriangulation,
+  skeleton: Sam2Skeleton,
+  legBoneFrames: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }>,
+  zoneWeights: Record<string, number[][]>,
+  imgW: number, imgH: number,
+  vidW: number, vidH: number,
+  onProgress?: (frame: number, total: number) => void,
+): Record<string, Point2D[][]> {
+  const firstZoneId = skeleton.legs[0]?.zoneId
+  const firstFrames = firstZoneId ? legBoneFrames[firstZoneId] : null
+  if (!firstFrames || firstFrames.hip.length === 0) return {}
+  const totalFrames = firstFrames.hip.length
+
+  // Rest pose per leg (frame 0, image coords)
+  const restLegSubBones: Record<string, { head: Point2D; tail: Point2D }[]> = {}
+  for (const leg of skeleton.legs) {
+    const f = legBoneFrames[leg.zoneId]
+    if (!f) continue
+    const hip0 = videoToImage(f.hip[0], imgW, imgH, vidW, vidH)
+    const knee0 = videoToImage(f.knee[0], imgW, imgH, vidW, vidH)
+    const foot0 = videoToImage(f.foot[0], imgW, imgH, vidW, vidH)
+    restLegSubBones[leg.zoneId] = [
+      { head: hip0, tail: knee0 },
+      { head: knee0, tail: foot0 },
+    ]
+  }
+
+  const walkZoneFrames: Record<string, Point2D[][]> = {}
+  for (const leg of skeleton.legs) {
+    walkZoneFrames[leg.zoneId] = new Array(totalFrames)
+  }
+
+  for (let f = 0; f < totalFrames; f++) {
+    for (const leg of skeleton.legs) {
+      const fr = legBoneFrames[leg.zoneId]
+      const restSubs = restLegSubBones[leg.zoneId]
+      if (!fr || !restSubs) continue
+
+      const hip = videoToImage(fr.hip[f], imgW, imgH, vidW, vidH)
+      const knee = videoToImage(fr.knee[f], imgW, imgH, vidW, vidH)
+      const foot = videoToImage(fr.foot[f], imgW, imgH, vidW, vidH)
+
+      const legMatrices: AffineMatrix[] = [
+        boneLocalMatrix(computeBoneTransform(restSubs[0].head, restSubs[0].tail, hip, knee)),
+        boneLocalMatrix(computeBoneTransform(restSubs[1].head, restSubs[1].tail, knee, foot)),
+      ]
+
+      const zonePts = triangulation.zonePoints[leg.zoneId]
+      const zoneW = zoneWeights[leg.zoneId]
+      if (zonePts && zoneW) {
+        walkZoneFrames[leg.zoneId][f] = lbsDeform(zonePts, zoneW, legMatrices)
+      }
+    }
+    onProgress?.(f + 1, totalFrames)
+  }
+
+  return walkZoneFrames
+}
+
 // ─── V3: ARAP body animation from inherited topology ───────────────
 
 /**

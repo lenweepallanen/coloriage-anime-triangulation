@@ -832,6 +832,10 @@ export default function MembersBonesV2LegBoneStep({ project, animation, onSave }
           walkZoneFrames: null,
           walkZoneFramesSmoothed: null,
           walkZoneFramesSmoothingValidated: false,
+          // V3: leg bone smoothing is also stale.
+          sam2LegBoneFrames: null,
+          sam2LegBoneFramesSmoothed: null,
+          sam2LegBoneSmoothingValidated: false,
         } : {}),
       }
       const updatedAnimations = project.animations.map(a =>

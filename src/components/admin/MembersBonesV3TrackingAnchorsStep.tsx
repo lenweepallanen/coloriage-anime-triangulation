@@ -17,6 +17,7 @@ import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { reorderContourFromOrigin, computeArcLengths, computeSubdivisionForFrame } from '../../utils/curvilinearContour'
 import { arcLengthToPoint } from '../../utils/sam2Contour'
+import { interpolatePointArrayFrames } from '../../utils/sam2ValidFrames'
 import FrameNavigator from '../keyframes/FrameNavigator'
 
 const VIDEO_FPS = 24
@@ -276,8 +277,14 @@ export default function MembersBonesV3TrackingAnchorsStep({ project, animation, 
           perFrameSubs.push(subdivVideo)
         }
 
-        newAnchorFrames[z.id] = perFrameAnchors
-        newSubdivisionFrames[z.id] = perFrameSubs
+        const validZ = mesh.sam2ZoneValidFrames?.[z.id]
+        if (validZ && validZ.length === perFrameAnchors.length) {
+          newAnchorFrames[z.id] = interpolatePointArrayFrames(perFrameAnchors, validZ)
+          newSubdivisionFrames[z.id] = interpolatePointArrayFrames(perFrameSubs, validZ)
+        } else {
+          newAnchorFrames[z.id] = perFrameAnchors
+          newSubdivisionFrames[z.id] = perFrameSubs
+        }
       }
 
       setAnchorFrames(newAnchorFrames)

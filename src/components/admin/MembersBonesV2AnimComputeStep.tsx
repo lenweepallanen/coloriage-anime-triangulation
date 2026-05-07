@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import type { Project, Animation, Point2D } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
-import { computeLegAutoWeights, computeLegAnimation } from '../../utils/membersBonesTriangSolver'
+import { computeLegAutoWeights, computeLegAnimation, computeLegAnimationFromBoneFrames } from '../../utils/membersBonesTriangSolver'
 import { resolveSkeletonFrame, computeLegRestPose } from '../../utils/sam2BoneSolver'
 import type { LegRestPose } from '../../utils/sam2BoneSolver'
 import { getMembersBonesBodyMesh } from '../../utils/membersBonesBodyMesh'
@@ -103,13 +103,23 @@ export default function MembersBonesV2AnimComputeStep({ project, animation, onSa
         bodyFrames[0],
       )
 
-      // Phase 2: leg animation (uses full bodyFrames for hip override per frame)
-      const result = computeLegAnimation(
-        tri, mesh.sam2Skeleton, anchorFrames,
-        zoneWeights, bodyFrames,
-        imgSize.w, imgSize.h, vidW, vidH,
-        (frame, total) => setProgress({ frame, total }),
-      )
+      // Phase 2: leg animation
+      // V3 fast path: if smoothed leg bone frames are available, bypass per-frame
+      // skeleton resolution and use pre-resolved hip/knee/foot directly.
+      const smoothedLegBones = mesh.sam2LegBoneFramesSmoothed
+      const result = (smoothedLegBones && Object.keys(smoothedLegBones).length > 0)
+        ? computeLegAnimationFromBoneFrames(
+            tri, mesh.sam2Skeleton, smoothedLegBones,
+            zoneWeights,
+            imgSize.w, imgSize.h, vidW, vidH,
+            (frame, total) => setProgress({ frame, total }),
+          )
+        : computeLegAnimation(
+            tri, mesh.sam2Skeleton, anchorFrames,
+            zoneWeights, bodyFrames,
+            imgSize.w, imgSize.h, vidW, vidH,
+            (frame, total) => setProgress({ frame, total }),
+          )
 
       setZoneFrames(result)
       setCurrentFrame(0)

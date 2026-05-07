@@ -39,6 +39,8 @@ import MembersBonesV2LegSmoothingStep from './MembersBonesV2LegSmoothingStep'
 import MembersBonesV3BodyComputeStep from './MembersBonesV3BodyComputeStep'
 import MembersBonesV3TrackingP0Step from './MembersBonesV3TrackingP0Step'
 import MembersBonesV3TrackingAnchorsStep from './MembersBonesV3TrackingAnchorsStep'
+import MembersBonesV3LegBoneSmoothingStep from './MembersBonesV3LegBoneSmoothingStep'
+import MembersBonesV3LoopPreviewStep from './MembersBonesV3LoopPreviewStep'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -102,8 +104,10 @@ const MEMBERS_BONES_V3_STEPS = [
   'Calcul Corps V3',
   'Lissage Maillage Corps',
   'Bones Pattes',
+  'Lissage Bones Pattes',
   'Calcul Pattes',
   'Lissage Maillage Pattes',
+  'Preview Boucle',
 ] as const
 
 type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number] | (typeof MEMBERS_BONES_V2_STEPS)[number] | (typeof MEMBERS_BONES_V3_STEPS)[number]
@@ -145,6 +149,8 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Calcul Pattes': 'Calc. Pattes',
   'Lissage Maillage Pattes': 'Liss. Mail. Pattes',
   'Calcul Corps V3': 'Calc. Corps V3',
+  'Lissage Bones Pattes': 'Liss. Bones Pat.',
+  'Preview Boucle': 'Preview Loop',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -188,6 +194,8 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Calcul Pattes': return mesh?.walkZoneFrames != null ? 'done' : 'pending'
     case 'Lissage Maillage Pattes': return mesh?.walkZoneFramesSmoothingValidated ? 'done' : 'pending'
     case 'Calcul Corps V3': return (mesh?.v3BodyTriangulationValidated && mesh?.walkBodyFrames != null) ? 'done' : 'pending'
+    case 'Lissage Bones Pattes': return mesh?.sam2LegBoneSmoothingValidated ? 'done' : 'pending'
+    case 'Preview Boucle': return 'pending' // preview-only, never marked done
     default: return 'pending'
   }
 }
@@ -431,6 +439,12 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {/* V3 steps */}
         {activeStep === 'Calcul Corps V3' && (
           <MembersBonesV3BodyComputeStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Lissage Bones Pattes' && (
+          <MembersBonesV3LegBoneSmoothingStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Preview Boucle' && (
+          <MembersBonesV3LoopPreviewStep project={project} animation={animation} />
         )}
       </div>
     </div>

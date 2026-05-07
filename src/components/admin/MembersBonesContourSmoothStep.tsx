@@ -4,6 +4,7 @@ import type { StepUploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { rleToContour, smoothPolygonGaussian, bridgeContourAtLegs, temporalSmoothContours } from '../../utils/sam2Contour'
 import { decodeRLEMinusRLEs } from '../../utils/rleMask'
+import { detectValidFrames, countInvalidFrames, DEFAULT_MIN_AREA_FRACTION } from '../../utils/sam2ValidFrames'
 import { flowMaskToContour } from '../../utils/perspectiveCorrection'
 import FrameNavigator from '../keyframes/FrameNavigator'
 
@@ -41,7 +42,15 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
   // ----- State -----
   const [sigma, setSigma] = useState<number>(() => mesh?.sam2ContourSmoothSigma ?? DEFAULT_SIGMA)
   const [bridgeThreshold, setBridgeThreshold] = useState(8)
+  const [minAreaPct, setMinAreaPct] = useState<number>(() =>
+    (mesh?.sam2ZoneMinAreaFraction ?? DEFAULT_MIN_AREA_FRACTION) * 100
+  )
   const [contours, setContours] = useState<Record<string, Point2D[][]> | null>(() => mesh?.sam2Contours ?? null)
+  const validFrames = useMemo(() => {
+    if (!masks) return null
+    return detectValidFrames(masks, minAreaPct / 100)
+  }, [masks, minAreaPct])
+  const invalidCounts = useMemo(() => (validFrames ? countInvalidFrames(validFrames) : {}), [validFrames])
   const [computing, setComputing] = useState(false)
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [saving, setSaving] = useState(false)
@@ -162,8 +171,10 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
           if (!polys || polys.length === 0) continue
           const poly = polys[safeFrame]
           if (!poly || poly.length < 2) continue
+          const isInvalid = validFrames?.[z.id]?.[safeFrame] === false
           ctx.strokeStyle = z.color
           ctx.lineWidth = 2 / t.scale
+          ctx.setLineDash(isInvalid ? [8 / t.scale, 6 / t.scale] : [])
           ctx.beginPath()
           ctx.moveTo(poly[0].x * sx, poly[0].y * sy)
           for (let i = 1; i < poly.length; i++) {
@@ -171,15 +182,39 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
           }
           ctx.closePath()
           ctx.stroke()
+          ctx.setLineDash([])
         }
       }
 
       ctx.restore()
+
+      // Invalid-frame overlay (CSS coords, on top of transform)
+      if (validFrames) {
+        const safeFrame = Math.min(currentFrame, totalFrames - 1)
+        const invalidZones = zones.filter(z => validFrames[z.id]?.[safeFrame] === false)
+        if (invalidZones.length > 0) {
+          ctx.save()
+          ctx.strokeStyle = '#ef4444'
+          ctx.lineWidth = 6
+          ctx.setLineDash([12, 8])
+          ctx.strokeRect(3, 3, cssW - 6, cssH - 6)
+          ctx.setLineDash([])
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.92)'
+          ctx.fillRect(0, 0, cssW, 28)
+          ctx.fillStyle = '#fff'
+          ctx.font = 'bold 13px sans-serif'
+          ctx.textBaseline = 'middle'
+          const label = `Frame ${safeFrame} invalide — zones perdues : ${invalidZones.map(z => z.id).join(', ')}`
+          ctx.fillText(label, 10, 14)
+          ctx.restore()
+        }
+      }
+
       rafId = requestAnimationFrame(draw)
     }
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
-  }, [videoReady, contours, currentFrame, transformRef, zones, sam2W, sam2H, videoSize, totalFrames])
+  }, [videoReady, contours, currentFrame, transformRef, zones, sam2W, sam2H, videoSize, totalFrames, validFrames])
 
   // ----- Compute contours for all zones × all frames -----
   async function handleCompute() {
@@ -279,6 +314,8 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
         sam2Contours: contours,
         sam2ContourSmoothSigma: sigma,
         sam2ContoursValidated: true,
+        sam2ZoneValidFrames: validFrames,
+        sam2ZoneMinAreaFraction: minAreaPct / 100,
         // invalidate downstream zones
         sam2ContourOrigins: undefined,
         sam2ContourOriginFrames: null,
@@ -344,6 +381,21 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
           <span style={{ fontSize: '0.85rem', minWidth: 28, textAlign: 'right' }}>{bridgeThreshold}px</span>
         </label>
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: '0.85rem' }}>Aire min :</span>
+          <input
+            type="range"
+            min={0.1}
+            max={5}
+            step={0.1}
+            value={minAreaPct}
+            onChange={(e) => setMinAreaPct(parseFloat(e.target.value))}
+            disabled={computing}
+            style={{ width: 100 }}
+          />
+          <span style={{ fontSize: '0.85rem', minWidth: 36, textAlign: 'right' }}>{minAreaPct.toFixed(1)}%</span>
+        </label>
+
         <button
           className="btn-primary"
           onClick={handleCompute}
@@ -367,6 +419,17 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
           {contours ? ' | ✓ Contours calculés' : ''}
         </span>
       </div>
+
+      {validFrames && Object.values(invalidCounts).some(n => n > 0) && (
+        <div style={{ padding: '4px 16px', fontSize: '0.8rem', color: '#f59e0b' }}>
+          ⚠ Frames invalides détectées (zone occultée) :{' '}
+          {Object.entries(invalidCounts)
+            .filter(([, n]) => n > 0)
+            .map(([z, n]) => `${z}: ${n}`)
+            .join(' · ')}
+          {' '}— les positions seront interpolées au tracking V3.
+        </div>
+      )}
 
       <div className="triangulation-help">
         <span>
@@ -394,6 +457,64 @@ export default function MembersBonesContourSmoothStep({ project, onSave }: Props
             <span style={{ fontWeight: 'bold', color: 'var(--color-text)' }}>Preview contours lissés</span>
             <span>Frame {currentFrame + 1} / {totalFrames}</span>
           </div>
+          {validFrames && (
+            <div style={{ padding: '0 16px 4px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {zones.map(z => {
+                const v = validFrames[z.id]
+                if (!v || v.length === 0) return null
+                const invalidCount = v.filter(b => !b).length
+                return (
+                  <div key={z.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem' }}>
+                    <span style={{ width: 70, color: z.color, fontWeight: 'bold' }}>{z.id}</span>
+                    <div
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const f = Math.round(((e.clientX - rect.left) / rect.width) * (v.length - 1))
+                        setCurrentFrame(Math.max(0, Math.min(v.length - 1, f)))
+                      }}
+                      style={{
+                        position: 'relative',
+                        flex: 1,
+                        height: 10,
+                        background: '#2a2a2a',
+                        borderRadius: 2,
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                      }}
+                      title={`${invalidCount} frame${invalidCount !== 1 ? 's' : ''} invalide${invalidCount !== 1 ? 's' : ''}`}
+                    >
+                      {v.map((ok, i) => ok ? null : (
+                        <div
+                          key={i}
+                          style={{
+                            position: 'absolute',
+                            left: `${(i / v.length) * 100}%`,
+                            width: `${Math.max(100 / v.length, 0.5)}%`,
+                            top: 0,
+                            bottom: 0,
+                            background: '#ef4444',
+                          }}
+                        />
+                      ))}
+                      {/* Cursor */}
+                      <div style={{
+                        position: 'absolute',
+                        left: `${(currentFrame / Math.max(v.length - 1, 1)) * 100}%`,
+                        top: -1,
+                        bottom: -1,
+                        width: 2,
+                        background: '#fff',
+                        transform: 'translateX(-1px)',
+                      }} />
+                    </div>
+                    <span style={{ width: 50, textAlign: 'right', color: invalidCount > 0 ? '#ef4444' : 'var(--color-muted)' }}>
+                      {invalidCount > 0 ? `${invalidCount} ✗` : 'ok'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
           <FrameNavigator
             currentFrame={currentFrame}
             totalFrames={totalFrames}

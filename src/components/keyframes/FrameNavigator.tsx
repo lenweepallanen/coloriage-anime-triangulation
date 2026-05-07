@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 interface Props {
   currentFrame: number
@@ -115,8 +115,86 @@ export default function FrameNavigator({ currentFrame, totalFrames, editedFrames
 
   // Standard frame-by-frame mode
   return (
+    <FrameNavigatorStandard
+      currentFrame={currentFrame}
+      lastFrame={lastFrame}
+      go={go}
+      onNavigate={onNavigate}
+      editedFrames={editedFrames}
+      markers={markers}
+    />
+  )
+}
+
+interface StandardProps {
+  currentFrame: number
+  lastFrame: number
+  go: (delta: number) => void
+  onNavigate: (frame: number) => void
+  editedFrames: Set<number>
+  markers: number[]
+}
+
+function FrameNavigatorStandard({ currentFrame, lastFrame, go, onNavigate, editedFrames, markers }: StandardProps) {
+  const [playing, setPlaying] = useState(false)
+  const playingRef = useRef(false)
+  playingRef.current = playing
+  const currentFrameRef = useRef(currentFrame)
+  currentFrameRef.current = currentFrame
+
+  // Stop playing automatically when reaching the end
+  useEffect(() => {
+    if (playing && currentFrame >= lastFrame) setPlaying(false)
+  }, [playing, currentFrame, lastFrame])
+
+  // 24 FPS playback loop driving onNavigate
+  useEffect(() => {
+    if (!playing) return
+    let raf = 0
+    let last = performance.now()
+    let acc = 0
+    const msPerFrame = 1000 / 24
+    const tick = (now: number) => {
+      if (!playingRef.current) return
+      acc += now - last
+      last = now
+      if (acc >= msPerFrame) {
+        const steps = Math.floor(acc / msPerFrame)
+        acc -= steps * msPerFrame
+        const next = currentFrameRef.current + steps
+        if (next >= lastFrame) {
+          onNavigate(lastFrame)
+          return
+        }
+        onNavigate(next)
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [playing, lastFrame, onNavigate])
+
+  const togglePlay = useCallback(() => {
+    if (currentFrameRef.current >= lastFrame) onNavigate(0)
+    setPlaying(p => !p)
+  }, [lastFrame, onNavigate])
+
+  // Space bar shortcut
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.code === 'Space') { e.preventDefault(); togglePlay() }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [togglePlay])
+
+  return (
     <div className="frame-navigator">
       <div className="frame-nav-buttons">
+        <button onClick={togglePlay} title={playing ? 'Pause (espace)' : 'Play (espace)'}>
+          {playing ? '⏸' : '▶'}
+        </button>
         <button onClick={() => go(-5)} disabled={currentFrame < 1} title="-5 frames (Shift+←)">
           &#x21E4;
         </button>

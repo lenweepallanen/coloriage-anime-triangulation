@@ -17,6 +17,7 @@ import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { pointToArcLength, arcLengthToPoint } from '../../utils/sam2Contour'
 import { detectGlobalCurvatureExtrema } from '../../utils/curvatureScaleSpace'
+import { interpolatePointFrames } from '../../utils/sam2ValidFrames'
 import FrameNavigator from '../keyframes/FrameNavigator'
 
 const VIDEO_FPS = 24
@@ -222,7 +223,10 @@ export default function MembersBonesV3TrackingP0Step({ project, animation, onSav
           }
           return { x: raw.x * scaleX, y: raw.y * scaleY }
         })
-        result[z.id] = perFrame
+        const validZ = mesh.sam2ZoneValidFrames?.[z.id]
+        result[z.id] = validZ && validZ.length === perFrame.length
+          ? interpolatePointFrames(perFrame, validZ)
+          : perFrame
       }
       setOriginFrames(result)
       console.log(`[V3-origin-tracking] computed ${zones.length} zones × ${totalFrames} frames`)
