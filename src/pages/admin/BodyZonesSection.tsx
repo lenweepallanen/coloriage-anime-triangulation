@@ -1,17 +1,18 @@
 import { useAdminContext } from './AdminLayout'
 import BodyZoneEditor from '../../components/admin/BodyZoneEditor'
+import { getGeometryOwner } from '../../types/project'
 
 export default function BodyZonesSection() {
   const { project, save } = useAdminContext()
 
-  const restAnim = project.animations.find(a => a.type === 'rest')
-  const hasTopology = restAnim?.mesh?.topologyLocked === true
-    && restAnim.mesh.triangles.length > 0
+  const owner = getGeometryOwner(project.animations)
+  const hasTopology = owner?.mesh?.topologyLocked === true
+    && owner.mesh.triangles.length > 0
 
   if (!hasTopology) {
     return (
       <div className="admin-section-disabled">
-        <p>Verrouillez la topologie dans l'étape Triangulation de l'animation rest pour accéder à l'éditeur de zones corporelles.</p>
+        <p>Verrouillez la topologie d'une animation pour accéder à l'éditeur de zones corporelles.</p>
       </div>
     )
   }

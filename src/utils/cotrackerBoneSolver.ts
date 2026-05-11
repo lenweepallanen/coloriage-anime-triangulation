@@ -12,9 +12,7 @@ import type {
   CoTrackerBodyJoint,
   CoTrackerLegBone,
   CoTrackerEndpointRef,
-  ElbowMode,
 } from '../types/project'
-import { solveElbowIK, getElbowParams } from './boneSolver'
 
 /** Normalise weights → sum to 1. Returns uniform if degenerate. */
 export function normalizeWeights(weights: number[]): number[] {
@@ -85,13 +83,12 @@ export function resolveCoTrackerBodyChain(
 
 // ─── Leg rest pose & per-frame resolution ───────────────────────────────
 
+/**
+ * Rest pose of a leg : the full joint chain [hip, ...joints, foot] resolved at
+ * frame 0 in VIDEO coords. `chain.length === 2 + leg.joints.length`.
+ */
 export interface CoTrackerLegRestPose {
-  hip: Point2D
-  foot: Point2D
-  knee: Point2D
-  len1: number
-  len2: number
-  bendSide: number
+  chain: Point2D[]
 }
 
 function bodyBarycentricHip(
@@ -114,77 +111,42 @@ function bodyBarycentricHip(
   return { x: x / ws, y: y / ws }
 }
 
+/** Resolve the full joint chain of a leg [hip, ...joints, foot] at a given frame. */
+export function resolveCoTrackerLegChain(
+  leg: CoTrackerLegBone,
+  cotrackerFrames: Record<string, Point2D[]>,
+  frameIdx: number,
+  bodyVertexPositions?: Point2D[] | null,
+): Point2D[] {
+  const bodyHip = bodyBarycentricHip(leg.hipBodyVertexIndices, leg.hipBodyVertexWeights, bodyVertexPositions ?? [])
+  const hip = (bodyHip && bodyVertexPositions) ? bodyHip : resolveEndpointFrame(leg.hip, cotrackerFrames, frameIdx)
+  const mids = (leg.joints ?? []).map(j => resolveEndpointFrame(j, cotrackerFrames, frameIdx))
+  const foot = resolveEndpointFrame(leg.foot, cotrackerFrames, frameIdx)
+  return [hip, ...mids, foot]
+}
+
 export function computeCoTrackerLegRestPose(
   leg: CoTrackerLegBone,
   cotrackerFrames: Record<string, Point2D[]>,
   bodyFramesF0?: Point2D[] | null,
 ): CoTrackerLegRestPose {
-  let hip: Point2D
-  const bodyHip = bodyBarycentricHip(leg.hipBodyVertexIndices, leg.hipBodyVertexWeights, bodyFramesF0 ?? [])
-  if (bodyHip && bodyFramesF0) {
-    hip = bodyHip
-  } else {
-    hip = resolveEndpointFrame(leg.hip, cotrackerFrames, 0)
-  }
-  const foot = resolveEndpointFrame(leg.foot, cotrackerFrames, 0)
-  const knee = (leg.kneeRestPos.x === 0 && leg.kneeRestPos.y === 0)
-    ? { x: (hip.x + foot.x) / 2, y: (hip.y + foot.y) / 2 }
-    : leg.kneeRestPos
-  const params = getElbowParams(hip, foot, knee)
-  return { hip, foot, knee, ...params }
-}
-
-function chooseBendSide(
-  mode: ElbowMode,
-  hip: Point2D, foot: Point2D,
-  len1: number, len2: number,
-  restBendSide: number,
-  centroid: Point2D | null,
-  prevKnee: Point2D | null,
-): number {
-  if (mode === 'rest') return restBendSide
-  if (mode === 'centroid' && centroid) {
-    const ePlus = solveElbowIK(hip, foot, len1, len2, +1)
-    const eMinus = solveElbowIK(hip, foot, len1, len2, -1)
-    const dPlus = (ePlus.x - centroid.x) ** 2 + (ePlus.y - centroid.y) ** 2
-    const dMinus = (eMinus.x - centroid.x) ** 2 + (eMinus.y - centroid.y) ** 2
-    return dPlus <= dMinus ? +1 : -1
-  }
-  if (mode === 'continuity' && prevKnee) {
-    const ePlus = solveElbowIK(hip, foot, len1, len2, +1)
-    const eMinus = solveElbowIK(hip, foot, len1, len2, -1)
-    const dPlus = (ePlus.x - prevKnee.x) ** 2 + (ePlus.y - prevKnee.y) ** 2
-    const dMinus = (eMinus.x - prevKnee.x) ** 2 + (eMinus.y - prevKnee.y) ** 2
-    return dPlus <= dMinus ? +1 : -1
-  }
-  return restBendSide
+  return { chain: resolveCoTrackerLegChain(leg, cotrackerFrames, 0, bodyFramesF0) }
 }
 
 export interface CoTrackerLegFrame {
-  hip: Point2D
-  foot: Point2D
-  knee: Point2D
+  chain: Point2D[]   // [hip, ...joints, foot]
 }
 
 export function resolveCoTrackerLeg(
   leg: CoTrackerLegBone,
   cotrackerFrames: Record<string, Point2D[]>,
   frameIdx: number,
-  restPose: CoTrackerLegRestPose,
-  prevKnee: Point2D | null,
-  centroid: Point2D | null,
+  _restPose: CoTrackerLegRestPose,
+  _prevFrame: CoTrackerLegFrame | null,
+  _centroid: Point2D | null,
   bodyVertexPositions?: Point2D[] | null,
 ): CoTrackerLegFrame {
-  const bodyHip = bodyBarycentricHip(leg.hipBodyVertexIndices, leg.hipBodyVertexWeights, bodyVertexPositions ?? [])
-  const hip = (bodyHip && bodyVertexPositions) ? bodyHip : resolveEndpointFrame(leg.hip, cotrackerFrames, frameIdx)
-  const foot = resolveEndpointFrame(leg.foot, cotrackerFrames, frameIdx)
-  const side = chooseBendSide(
-    leg.kneeMode, hip, foot,
-    restPose.len1, restPose.len2, restPose.bendSide,
-    centroid, prevKnee,
-  )
-  const knee = solveElbowIK(hip, foot, restPose.len1, restPose.len2, side)
-  return { hip, foot, knee }
+  return { chain: resolveCoTrackerLegChain(leg, cotrackerFrames, frameIdx, bodyVertexPositions) }
 }
 
 export interface CoTrackerSkeletonFrame {
@@ -196,29 +158,13 @@ export function resolveCoTrackerSkeletonFrame(
   skeleton: CoTrackerSkeleton,
   cotrackerFrames: Record<string, Point2D[]>,
   frameIdx: number,
-  legRestPoses: CoTrackerLegRestPose[],
-  prevFrame: CoTrackerSkeletonFrame | null,
+  _legRestPoses: CoTrackerLegRestPose[],
+  _prevFrame: CoTrackerSkeletonFrame | null,
   bodyVertexPositions?: Point2D[] | null,
 ): CoTrackerSkeletonFrame {
   const bodyJoints = resolveCoTrackerBodyChain(skeleton.bodyChain, cotrackerFrames, frameIdx)
-
-  let centroid: Point2D | null = null
-  if (bodyJoints.length > 0) {
-    let cx = 0, cy = 0
-    for (const p of bodyJoints) { cx += p.x; cy += p.y }
-    centroid = { x: cx / bodyJoints.length, y: cy / bodyJoints.length }
-  }
-
-  const legs = skeleton.legs.map((leg, i) => {
-    const restPose = legRestPoses[i]
-    if (!restPose) {
-      const hip = resolveEndpointFrame(leg.hip, cotrackerFrames, frameIdx)
-      const foot = resolveEndpointFrame(leg.foot, cotrackerFrames, frameIdx)
-      return { hip, foot, knee: { x: (hip.x + foot.x) / 2, y: (hip.y + foot.y) / 2 } }
-    }
-    const prevKnee = prevFrame?.legs[i]?.knee ?? null
-    return resolveCoTrackerLeg(leg, cotrackerFrames, frameIdx, restPose, prevKnee, centroid, bodyVertexPositions)
-  })
-
+  const legs = skeleton.legs.map(leg => ({
+    chain: resolveCoTrackerLegChain(leg, cotrackerFrames, frameIdx, bodyVertexPositions),
+  }))
   return { bodyJoints, legs }
 }

@@ -110,7 +110,7 @@ export interface LBSComputeResult {
   walkBodyFrames: Point2D[][]
   walkZoneFrames: Record<string, Point2D[][]>
   cotrackerBodyJointFrames: Point2D[][]
-  cotrackerLegBoneFrames: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }>
+  cotrackerLegBoneFrames: Record<string, { chain: Point2D[][] }>
 }
 
 export async function runCoTrackerLBSCompute(
@@ -154,13 +154,12 @@ export async function runCoTrackerLBSCompute(
   const legWeights: Record<string, number[][]> = {}
   for (let li = 0; li < skeleton.legs.length; li++) {
     const leg = skeleton.legs[li]
-    const rp = legRestPoses[li]
-    const hipI = videoToImage(rp.hip, imgW, imgH, vidW, vidH)
-    const kneeI = videoToImage(rp.knee, imgW, imgH, vidW, vidH)
-    const footI = videoToImage(rp.foot, imgW, imgH, vidW, vidH)
-    legSubBones[leg.zoneId] = [{ head: hipI, tail: kneeI }, { head: kneeI, tail: footI }]
+    const chainImg = legRestPoses[li].chain.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+    const subs: { head: Point2D; tail: Point2D }[] = []
+    for (let i = 0; i < chainImg.length - 1; i++) subs.push({ head: chainImg[i], tail: chainImg[i + 1] })
+    legSubBones[leg.zoneId] = subs
     const zonePts = tri.zonePoints[leg.zoneId]
-    if (zonePts) legWeights[leg.zoneId] = computeWeights(zonePts, legSubBones[leg.zoneId], power, epsilon)
+    if (zonePts && subs.length > 0) legWeights[leg.zoneId] = computeWeights(zonePts, subs, power, epsilon)
   }
 
   // ── Pre-compute ARAP systems if needed ───────────────────────────
@@ -188,10 +187,11 @@ export async function runCoTrackerLBSCompute(
   const walkBodyFrames: Point2D[][] = new Array(totalFrames)
   const walkZoneFrames: Record<string, Point2D[][]> = {}
   const cotrackerBodyJointFrames: Point2D[][] = []
-  const cotrackerLegBoneFrames: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> = {}
+  const cotrackerLegBoneFrames: Record<string, { chain: Point2D[][] }> = {}
   for (const leg of skeleton.legs) {
     walkZoneFrames[leg.zoneId] = new Array(totalFrames)
-    cotrackerLegBoneFrames[leg.zoneId] = { hip: [], knee: [], foot: [] }
+    const chainLen = 2 + (leg.joints?.length ?? 0)
+    cotrackerLegBoneFrames[leg.zoneId] = { chain: Array.from({ length: chainLen }, () => []) }
   }
   for (let j = 0; j < skeleton.bodyChain.length; j++) cotrackerBodyJointFrames.push([])
 
@@ -202,9 +202,8 @@ export async function runCoTrackerLBSCompute(
     skf.bodyJoints.forEach((p, j) => { cotrackerBodyJointFrames[j].push(p) })
     skf.legs.forEach((legF, li) => {
       const zoneId = skeleton.legs[li].zoneId
-      cotrackerLegBoneFrames[zoneId].hip.push(legF.hip)
-      cotrackerLegBoneFrames[zoneId].knee.push(legF.knee)
-      cotrackerLegBoneFrames[zoneId].foot.push(legF.foot)
+      const chainStore = cotrackerLegBoneFrames[zoneId].chain
+      legF.chain.forEach((p, i) => { chainStore[i].push(p) })
     })
 
     const bodyJointsImg = skf.bodyJoints.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
@@ -219,17 +218,15 @@ export async function runCoTrackerLBSCompute(
     for (let li = 0; li < skeleton.legs.length; li++) {
       const leg = skeleton.legs[li]
       const legF = skf.legs[li]
-      const hipI = videoToImage(legF.hip, imgW, imgH, vidW, vidH)
-      const kneeI = videoToImage(legF.knee, imgW, imgH, vidW, vidH)
-      const footI = videoToImage(legF.foot, imgW, imgH, vidW, vidH)
+      const chainImg = legF.chain.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
       const rest = legSubBones[leg.zoneId]
-      const matrices: AffineMatrix[] = [
-        boneLocalMatrix(computeBoneTransform(rest[0].head, rest[0].tail, hipI, kneeI)),
-        boneLocalMatrix(computeBoneTransform(rest[1].head, rest[1].tail, kneeI, footI)),
-      ]
+      const matrices: AffineMatrix[] = []
+      for (let i = 0; i < rest.length; i++) {
+        matrices.push(boneLocalMatrix(computeBoneTransform(rest[i].head, rest[i].tail, chainImg[i], chainImg[i + 1])))
+      }
       const zonePts = tri.zonePoints[leg.zoneId]
       const zoneW = legWeights[leg.zoneId]
-      if (zonePts && zoneW) {
+      if (zonePts && zoneW && matrices.length > 0) {
         walkZoneFrames[leg.zoneId][f] = skinVerticesSubBones(zonePts, zoneW, matrices)
       }
     }

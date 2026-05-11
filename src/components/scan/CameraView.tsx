@@ -86,7 +86,6 @@ export default function CameraView({ onCapture }: Props) {
   const [matchedCount, setMatchedCount] = useState(0)
   const [allStable, setAllStable] = useState(false)
   const [qualityIssue, setQualityIssue] = useState<QualityIssue | null>(null)
-  const [autoCapturing, setAutoCapturing] = useState(false)
   const [showFlash, setShowFlash] = useState(false)
   const [torchOn, setTorchOn] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
@@ -99,8 +98,6 @@ export default function CameraView({ onCapture }: Props) {
   const downscaleDimsRef = useRef({ w: 0, h: 0 })
   const lastDetectedCornersRef = useRef<Point2D[] | null>(null)
   const qualityRef = useRef<{ issues: QualityIssue[] }>({ issues: [] })
-  const autoCaptureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const capturePhotoRef = useRef<(() => void) | null>(null)
 
   const MATCH_THRESHOLD = 0.30
 
@@ -160,10 +157,6 @@ export default function CameraView({ onCapture }: Props) {
       clearTimeout(detectionTimerRef.current)
       detectionTimerRef.current = null
     }
-    if (autoCaptureTimerRef.current) {
-      clearTimeout(autoCaptureTimerRef.current)
-      autoCaptureTimerRef.current = null
-    }
     setDetectCallback(null)
     if (stream) {
       stream.getTracks().forEach(track => track.stop())
@@ -173,7 +166,6 @@ export default function CameraView({ onCapture }: Props) {
     setMatchedCount(0)
     setAllStable(false)
     setQualityIssue(null)
-    setAutoCapturing(false)
     setTorchOn(false)
     setTorchSupported(false)
     matchedGuidesRef.current = [false, false, false, false]
@@ -291,18 +283,6 @@ export default function CameraView({ onCapture }: Props) {
     guides.forEach((pos, i) => {
       drawCornerGuide(ctx, pos.x, pos.y, i, matched[i], armLen)
     })
-
-    if (matched.every(m => m)) {
-      ctx.strokeStyle = 'rgba(0, 255, 0, 0.25)'
-      ctx.lineWidth = 2
-      ctx.setLineDash([8, 6])
-      ctx.beginPath()
-      ctx.moveTo(guides[0].x, guides[0].y)
-      for (let i = 1; i < 4; i++) ctx.lineTo(guides[i].x, guides[i].y)
-      ctx.closePath()
-      ctx.stroke()
-      ctx.setLineDash([])
-    }
   }, [getGuidePositions, drawCornerGuide])
 
   const capturePhoto = useCallback(() => {
@@ -311,10 +291,6 @@ export default function CameraView({ onCapture }: Props) {
     setShowFlash(true)
     setTimeout(() => setShowFlash(false), 200)
 
-    if (autoCaptureTimerRef.current) {
-      clearTimeout(autoCaptureTimerRef.current)
-      autoCaptureTimerRef.current = null
-    }
     if (detectionTimerRef.current) {
       clearTimeout(detectionTimerRef.current)
       detectionTimerRef.current = null
@@ -351,9 +327,6 @@ export default function CameraView({ onCapture }: Props) {
       }
     }, 'image/jpeg', 0.95)
   }, [getSquareCrop, onCapture, stopCamera])
-
-  // Keep ref in sync for auto-capture timer
-  capturePhotoRef.current = capturePhoto
 
   useEffect(() => {
     if (!isCameraActive) return
@@ -431,19 +404,6 @@ export default function CameraView({ onCapture }: Props) {
         setQualityIssue(null)
       }
 
-      const readyForAutoCapture = stableFramesRef.current >= 6 && qi.issues.length === 0
-      if (readyForAutoCapture && !autoCaptureTimerRef.current) {
-        setAutoCapturing(true)
-        autoCaptureTimerRef.current = setTimeout(() => {
-          autoCaptureTimerRef.current = null
-          capturePhotoRef.current?.()
-        }, 1000)
-      } else if (!readyForAutoCapture && autoCaptureTimerRef.current) {
-        clearTimeout(autoCaptureTimerRef.current)
-        autoCaptureTimerRef.current = null
-        setAutoCapturing(false)
-      }
-
       drawOverlay()
 
       if (isCameraActive) {
@@ -488,18 +448,13 @@ export default function CameraView({ onCapture }: Props) {
         clearTimeout(detectionTimerRef.current)
         detectionTimerRef.current = null
       }
-      if (autoCaptureTimerRef.current) {
-        clearTimeout(autoCaptureTimerRef.current)
-        autoCaptureTimerRef.current = null
-      }
       setDetectCallback(null)
     }
   }, [isCameraActive, drawOverlay, getGuidePositions, getSquareCrop, opencvLoading])
 
   const getStatusText = () => {
     if (opencvLoading) return 'Chargement de la detection...'
-    if (autoCapturing) return 'Photo automatique...'
-    if (allStable && !qualityIssue) return 'Parfait !'
+    if (allStable && !qualityIssue) return 'Pret — appuyez sur Capturer'
 
     if (qualityIssue === 'tooDark' || qualityIssue === 'tooBright' || qualityIssue === 'glare') {
       return ISSUE_MESSAGES[qualityIssue]
@@ -518,7 +473,6 @@ export default function CameraView({ onCapture }: Props) {
   }
 
   const getStatusClass = () => {
-    if (autoCapturing) return 'camera-status-bar--success'
     if (allStable && !qualityIssue) return 'camera-status-bar--success'
     if (qualityIssue === 'tooDark' || qualityIssue === 'tooBright' || qualityIssue === 'glare') {
       return 'camera-status-bar--error'
@@ -550,12 +504,6 @@ export default function CameraView({ onCapture }: Props) {
         )}
 
         {showFlash && <div className="camera-flash" />}
-
-        {autoCapturing && (
-          <div className="camera-progress-bar">
-            <div className="camera-progress-fill" />
-          </div>
-        )}
       </div>
 
       <canvas ref={captureCanvasRef} style={{ display: 'none' }} />
@@ -602,7 +550,7 @@ export default function CameraView({ onCapture }: Props) {
               onClick={capturePhoto}
               className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
             >
-              {allStable && !qualityIssue ? 'Capturer !' : 'Prendre la photo'}
+              Capturer
             </button>
             <button onClick={stopCamera} className="btn-cancel">
               Annuler

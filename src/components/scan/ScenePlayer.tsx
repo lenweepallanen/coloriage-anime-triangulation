@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
+import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -124,7 +124,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   useEffect(() => { playingRef.current = playing }, [playing])
 
   const scene = project.scene!
-  const restAnim = project.animations.find(a => a.type === 'rest')
+  // Animation idle de la scène : on suit le 1er rest point si une animation est
+  // sélectionnée, sinon on prend la 1ère loop ready, puis fallback legacy rest.
+  const firstRp = scene.restPoints[0]
+  const restAnim = getIdleAnimation(project.animations, firstRp?.restAnimationId)
+    ?? getGeometryOwner(project.animations)
 
   const animMap = useRef(new Map<string, Animation>())
   useEffect(() => {
@@ -297,7 +301,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // --- Zone meshes for walk animations with limb separation or MB with project triangulation ---
     const walkAnims = project.animations.filter(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
     const mbTriangAnims = project.projectTriangulation?.step3Validated
-      ? project.animations.filter(a => (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3') && a.mesh?.walkZoneFrames)
+      ? project.animations.filter(a => (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3' || a.type === 'cotracker-bones') && a.mesh?.walkZoneFrames)
       : []
     const walkZoneMeshMap = new Map<string, ZoneMeshSetup>()
 
@@ -457,12 +461,48 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
 
     function setupInteractionAnimation(restAnimId: string | undefined, availableAnimIds: string[]) {
-      // Deactivate zone meshes when switching to interaction mode
+      const restId = restAnimId || restAnim?.id
+      const rest = restId ? animMap.current.get(restId) : null
+
+      // Cas zone-based (walk / members-bones-v*) : utiliser walkBodyFrames + walkZoneFrames
+      // exactement comme setupMovementAnimation. La main pixiMesh est cachée.
+      if (rest && rest.mesh?.walkZoneFrames && rest.mesh.walkBodyFrames && walkZoneMeshMap.has(rest.id)) {
+        activateZoneMeshes(rest.id)
+        pixiMesh.visible = false
+
+        const sep = rest.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
+        if (!sep) return
+        activeZonePlaybacks = sep.zones.map(zone => ({
+          zoneId: zone.id,
+          playback: new LoopPlayback(rest.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 }),
+        }))
+        activeBodyPlayback = new LoopPlayback(rest.mesh.walkBodyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 })
+
+        // Positions legacy pour blending / hit-test ; oneshots non supportés ici (le rest
+        // est zone-based, les overlays mesh classique ne s'alignent pas).
+        const legacyFrames = rest.mesh.videoFramesMesh
+        if (legacyFrames && legacyFrames.length > 0) {
+          const legacyPb = new LoopPlayback(legacyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 })
+          currentGetPositions = () => legacyPb.getPositions()
+          currentAdvance = (delta) => {
+            legacyPb.advance(delta)
+            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
+            activeBodyPlayback?.advance(delta)
+          }
+        } else {
+          currentGetPositions = () => allPoints
+          currentAdvance = (delta) => {
+            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
+            activeBodyPlayback?.advance(delta)
+          }
+        }
+        return
+      }
+
+      // Cas standard (single mesh) : pixiMesh + videoFramesMesh
       activateZoneMeshes(null)
       pixiMesh.visible = true
 
-      const restId = restAnimId || restAnim?.id
-      const rest = restId ? animMap.current.get(restId) : null
       const restFrames = rest?.mesh?.videoFramesMesh || mesh.videoFramesMesh
       if (!restFrames || restFrames.length === 0) {
         currentGetPositions = () => allPoints

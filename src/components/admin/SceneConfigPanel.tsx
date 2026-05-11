@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { animationHasFrames, type SceneRestPoint, type SceneTransition, type SceneSegment, type Animation, type SpeakSound, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
+import { animationHasFrames, isLoopAnimation, type SceneRestPoint, type SceneTransition, type SceneSegment, type Animation, type SpeakSound, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
 import type { TimelineSelection } from './SceneTimeline'
 
 interface Props {
@@ -38,8 +38,10 @@ export default function SceneConfigPanel({
   onSpeakSoundDelete,
 }: Props) {
   const readyAnimations = animations.filter(a => animationHasFrames(a))
-  const restAnimations = readyAnimations.filter(a => a.type === 'rest')
-  const nonRestAnimations = readyAnimations.filter(a => a.type !== 'rest')
+  // Idle (animation principale d'un rest point) : uniquement les loops.
+  // Aléatoire / mappings de zones : uniquement les oneshots.
+  const loopAnimations = readyAnimations.filter(isLoopAnimation)
+  const oneshotAnimations = readyAnimations.filter(a => !isLoopAnimation(a))
 
   if (selection.type === 'restPoint') {
     const rp = restPoints[selection.index]
@@ -53,24 +55,27 @@ export default function SceneConfigPanel({
         </div>
 
         <div className="scene-config-panel-field">
-          <label>Animation rest</label>
+          <label>Animation idle (loop)</label>
           <select
             value={rp.restAnimationId ?? ''}
             onChange={(e) => onRestPointChange(selection.index, {
               ...rp, restAnimationId: e.target.value || undefined,
             })}
           >
-            <option value="">(Rest par défaut)</option>
-            {restAnimations.map(a => (
+            <option value="">(Aucune)</option>
+            {loopAnimations.map(a => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </select>
+          {loopAnimations.length === 0 && (
+            <span className="scene-config-panel-empty">Aucune animation en mode loop. Bascule une animation en loop depuis sa carte.</span>
+          )}
         </div>
 
         <div className="scene-config-panel-field">
-          <label>Animation Aléatoire</label>
+          <label>Animations aléatoires (oneshot)</label>
           <div className="scene-config-panel-checkboxes">
-            {nonRestAnimations.map(a => {
+            {oneshotAnimations.map(a => {
               const checked = rp.randomAnimationIds?.includes(a.id) ?? false
               return (
                 <label key={a.id} className="scene-config-panel-checkbox">
@@ -91,8 +96,8 @@ export default function SceneConfigPanel({
                 </label>
               )
             })}
-            {nonRestAnimations.length === 0 && (
-              <span className="scene-config-panel-empty">Aucune animation oneshot/physics disponible</span>
+            {oneshotAnimations.length === 0 && (
+              <span className="scene-config-panel-empty">Aucune animation oneshot disponible</span>
             )}
           </div>
         </div>
@@ -102,7 +107,7 @@ export default function SceneConfigPanel({
             rp={rp}
             rpIndex={selection.index}
             bodyZones={bodyZones}
-            animations={nonRestAnimations}
+            animations={oneshotAnimations}
             onRestPointChange={onRestPointChange}
           />
         )}

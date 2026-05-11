@@ -42,21 +42,17 @@ export default function CoTrackerBonesBoneSmoothingStep({ project, animation, on
         smoothedPerFrame.map(fr => fr[j])
       )
 
-      // Same for legs : { hip, knee, foot } each is Point2D[] per frame
+      // Legs : smooth each joint of the chain independently
       const legFrames = mesh!.cotrackerLegBoneFrames!
       const smoothedLegs: typeof legFrames = {}
+      const smoothPart = (arr: Point2D[]): Point2D[] => {
+        if (arr.length === 0) return arr
+        const wrapped: Point2D[][] = arr.map(p => [p])
+        const sm = applyTemporalSmoothing(wrapped, undefined, cutoff, 24)
+        return sm.map(f => f[0])
+      }
       for (const [zoneId, parts] of Object.entries(legFrames)) {
-        const smoothPart = (arr: Point2D[]): Point2D[] => {
-          if (arr.length === 0) return arr
-          const wrapped: Point2D[][] = arr.map(p => [p])
-          const sm = applyTemporalSmoothing(wrapped, undefined, cutoff, 24)
-          return sm.map(f => f[0])
-        }
-        smoothedLegs[zoneId] = {
-          hip: smoothPart(parts.hip),
-          knee: smoothPart(parts.knee),
-          foot: smoothPart(parts.foot),
-        }
+        smoothedLegs[zoneId] = { chain: parts.chain.map(smoothPart) }
       }
 
       const updatedAnim: Animation = {

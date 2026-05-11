@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { Animation } from '../../types/project'
+import type { Animation, AnimationPlaybackMode } from '../../types/project'
+import { getPlaybackMode } from '../../types/project'
 
 interface Props {
   animation: Animation
@@ -8,24 +9,29 @@ interface Props {
   onRename: (newName: string) => void
   onDelete: () => void
   onDuplicate: () => void
-  onSetAsRest: () => void
+  onSetPlaybackMode: (mode: AnimationPlaybackMode) => void
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  rest: 'Rest',
-  oneshot: 'Oneshot',
+  rest: 'Vidéo',
+  oneshot: 'Vidéo',
   physics: 'Physics',
   bone: 'Bone',
   walk: 'Walk',
+  'members-bones': 'MB',
+  'members-bones-v2': 'MB-V2',
+  'members-bones-v3': 'MB-V3',
+  'cotracker-bones': 'CoTracker',
 }
 
 export default function AnimationCard({
-  animation, completionStatus, onEdit, onRename, onDelete, onDuplicate, onSetAsRest,
+  animation, completionStatus, onEdit, onRename, onDelete, onDuplicate, onSetPlaybackMode,
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [nameValue, setNameValue] = useState(animation.name)
 
-  const isRest = animation.type === 'rest'
+  const playbackMode = getPlaybackMode(animation)
+  const isLoop = playbackMode === 'loop'
   const isComplete = completionStatus.done === completionStatus.total
 
   const handleConfirmRename = () => {
@@ -37,10 +43,13 @@ export default function AnimationCard({
   }
 
   return (
-    <div className={`anim-card anim-card--${animation.type}`}>
+    <div className={`anim-card anim-card--${animation.type} anim-card--${playbackMode}`}>
       <div className="anim-card-header">
         <span className={`anim-card-badge anim-card-badge--${animation.type}`}>
-          {TYPE_LABELS[animation.type]}
+          {TYPE_LABELS[animation.type] ?? animation.type}
+        </span>
+        <span className={`anim-card-badge anim-card-badge--${playbackMode}`} title="Mode de lecture">
+          {isLoop ? '🔁 Loop' : '▶ Oneshot'}
         </span>
         <span className="anim-card-completion">
           {isComplete ? (
@@ -76,12 +85,14 @@ export default function AnimationCard({
         <button className="btn-primary btn-sm" onClick={onEdit}>Éditer</button>
         <button className="btn-ghost btn-sm" onClick={() => { setNameValue(animation.name); setEditing(true) }}>Renommer</button>
         <button className="btn-ghost btn-sm" onClick={onDuplicate}>Dupliquer</button>
-        {!isRest && (
-          <button className="btn-ghost btn-sm" onClick={onSetAsRest}>Définir Rest</button>
-        )}
-        {!isRest && (
-          <button className="btn-danger btn-sm" onClick={onDelete}>Supprimer</button>
-        )}
+        <button
+          className="btn-ghost btn-sm"
+          onClick={() => onSetPlaybackMode(isLoop ? 'oneshot' : 'loop')}
+          title={isLoop ? 'Basculer en lecture oneshot' : 'Basculer en lecture loop (idle)'}
+        >
+          {isLoop ? '→ Oneshot' : '→ Loop'}
+        </button>
+        <button className="btn-danger btn-sm" onClick={onDelete}>Supprimer</button>
       </div>
     </div>
   )

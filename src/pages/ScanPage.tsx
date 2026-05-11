@@ -6,7 +6,7 @@ import CornerAdjustment from '../components/scan/CornerAdjustment'
 import { useScanProcessor } from '../components/scan/ScanProcessor'
 import AnimationPlayer from '../components/scan/AnimationPlayer'
 import ScenePlayer from '../components/scan/ScenePlayer'
-import { generateLimbMask } from '../utils/limbMaskGenerator'
+import { generateLimbMask, generateLimbMaskFromContours } from '../utils/limbMaskGenerator'
 import { requestLamaInpainting } from '../utils/lamaInpainting'
 import { renderIsolatedLimbDebug } from '../utils/hiddenFaceTexture'
 import type { Point2D, Project } from '../types/project'
@@ -18,8 +18,11 @@ export default function ScanPage() {
   if (loading) return <div className="loading">Chargement...</div>
   if (!project) return <Navigate to="/" replace />
 
-  const restAnim = project.animations.find(a => a.type === 'rest')
-  const hasMesh = restAnim?.mesh && restAnim.mesh.triangles.length > 0
+  // Géométrie disponible : soit pipeline legacy (mesh.triangles), soit pipeline autonome
+  // (projectTriangulation step3 validée, partagée par les anims members-bones-v3/cotracker-bones).
+  const hasLegacyMesh = project.animations.some(a => a.mesh != null && (a.mesh.triangles?.length ?? 0) > 0)
+  const hasProjectTri = project.projectTriangulation?.step3Validated === true
+  const hasMesh = hasLegacyMesh || hasProjectTri
 
   if (!project.originalImageBlob || !hasMesh) {
     return (
@@ -65,30 +68,47 @@ function ScanFlow({ project }: { project: Project }) {
     if (!processor.rectifiedCanvas || lamaStartedRef.current) return
     lamaStartedRef.current = true
 
-    // Find walk animation with limb separation zones
+    // Sources possibles de zones pattes : (1) animation walk avec Bézier,
+    // (2) projectTriangulation avec contours SAM 2 (members-bones-v3 etc.)
     const walkAnim = project.animations.find(
       a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.zones?.length
     )
-    if (!walkAnim?.mesh?.walkLimbSeparation) {
+    const sep = walkAnim?.mesh?.walkLimbSeparation ?? null
+    const tri = project.projectTriangulation
+    const triLegZoneIds = tri?.contours
+      ? tri.zones.filter(z => z.id !== 'body').map(z => z.id).filter(id => tri.contours![id]?.length)
+      : []
+    const hasTriLegs = !!tri?.contours && triLegZoneIds.length > 0
+
+    if (!sep && !hasTriLegs) {
       setLamaStatus('not-needed')
       return
     }
 
-    const sep = walkAnim.mesh.walkLimbSeparation
-    console.log('[LimbExt] sep keys:', Object.keys(sep), 'hiddenFaceLimbZones:', sep.hiddenFaceLimbZones, 'hiddenFaceZones:', sep.hiddenFaceZones?.length)
+    if (sep) {
+      console.log('[LimbExt] sep keys:', Object.keys(sep), 'hiddenFaceLimbZones:', sep.hiddenFaceLimbZones, 'hiddenFaceZones:', sep.hiddenFaceZones?.length)
+    }
     const scanCanvas = processor.rectifiedCanvas
 
     ;(async () => {
       try {
         setLamaStatus('generating-mask')
 
-        // Generate binary mask from limb zone Bézier polygons
-        const maskCanvas = generateLimbMask(
-          sep.zones,
-          scanCanvas.width, scanCanvas.height,
-          scanCanvas.width, scanCanvas.height,
-          processor.contentAlignment ?? undefined,
-        )
+        // Génération du masque : priorité walk Bézier, sinon contours SAM 2 projet
+        const maskCanvas = sep
+          ? generateLimbMask(
+              sep.zones,
+              scanCanvas.width, scanCanvas.height,
+              scanCanvas.width, scanCanvas.height,
+              processor.contentAlignment ?? undefined,
+            )
+          : generateLimbMaskFromContours(
+              tri!.contours!,
+              triLegZoneIds,
+              scanCanvas.width, scanCanvas.height,
+              scanCanvas.width, scanCanvas.height,
+              processor.contentAlignment ?? undefined,
+            )
         setLamaMaskUrl(maskCanvas.toDataURL())
 
         setLamaStatus('warmup')

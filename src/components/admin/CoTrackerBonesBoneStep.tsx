@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Project, Animation, Point2D,
-  CoTrackerSkeleton, CoTrackerBodyJoint, CoTrackerLegBone, CoTrackerEndpointRef, ElbowMode,
+  CoTrackerSkeleton, CoTrackerBodyJoint, CoTrackerLegBone, CoTrackerEndpointRef,
 } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
@@ -32,12 +32,12 @@ const LEG_LABELS: Record<string, string> = {
 
 type PickTarget =
   | { kind: 'body-joint'; index: number }
-  | { kind: 'leg'; zoneId: string; field: 'hip' | 'foot' }
+  | { kind: 'leg-joint'; zoneId: string; jointIndex: number } // 0 = hip, last = foot
 
 type Mode =
   | { kind: 'idle' }
   | { kind: 'place-chain' }
-  | { kind: 'place-leg'; zoneId: string; step: 'hip' | 'foot' }
+  | { kind: 'place-leg-chain'; zoneId: string }
   | { kind: 'assign-bary' }
 
 const JOINT_HIT_R = 12       // video px
@@ -88,7 +88,18 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
 
   // ── Position resolution (uses barycentre if defined, else draft) ──
   function jointKey(j: CoTrackerBodyJoint) { return `body:${j.id}` }
-  function legKey(l: CoTrackerLegBone, f: 'hip' | 'foot') { return `leg:${l.id}:${f}` }
+  function legJointKey(l: CoTrackerLegBone, jointIndex: number) { return `leg:${l.id}:${jointIndex}` }
+  function legChainRefs(leg: CoTrackerLegBone): CoTrackerEndpointRef[] {
+    return [leg.hip, ...(leg.joints ?? []), leg.foot]
+  }
+  function legChainLen(leg: CoTrackerLegBone): number {
+    return 2 + (leg.joints?.length ?? 0)
+  }
+  function setLegChainAt(leg: CoTrackerLegBone, jointIndex: number, ref: CoTrackerEndpointRef): CoTrackerLegBone {
+    const refs = legChainRefs(leg)
+    refs[jointIndex] = ref
+    return { ...leg, hip: refs[0], foot: refs[refs.length - 1], joints: refs.slice(1, -1) }
+  }
 
   function endpointPos(ref: CoTrackerEndpointRef, key: string): Point2D | null {
     if (ref.pointIds.length > 0 && cotrackerFrames) {
@@ -153,21 +164,28 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
 
       // Legs
       for (const leg of skeleton.legs) {
-        const hip = endpointPos(leg.hip, legKey(leg, 'hip'))
-        const foot = endpointPos(leg.foot, legKey(leg, 'foot'))
-        if (hip && foot) {
-          ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 2
-          ctx.beginPath(); ctx.moveTo(hip.x, hip.y); ctx.lineTo(foot.x, foot.y); ctx.stroke()
+        const refs = legChainRefs(leg)
+        const positions = refs.map((ref, ji) => endpointPos(ref, legJointKey(leg, ji)))
+        // Chain segments
+        ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 2
+        ctx.beginPath()
+        let started = false
+        for (const p of positions) {
+          if (!p) { started = false; continue }
+          if (!started) { ctx.moveTo(p.x, p.y); started = true }
+          else ctx.lineTo(p.x, p.y)
         }
-        for (const [pos, field] of [[hip, 'hip'], [foot, 'foot']] as const) {
-          if (!pos) continue
-          const ref = field === 'hip' ? leg.hip : leg.foot
-          const isPicked = pick?.kind === 'leg' && pick.zoneId === leg.zoneId && pick.field === field
+        ctx.stroke()
+        // Joints
+        positions.forEach((pos, ji) => {
+          if (!pos) return
+          const ref = refs[ji]
+          const isPicked = pick?.kind === 'leg-joint' && pick.zoneId === leg.zoneId && pick.jointIndex === ji
           const isDraft = ref.pointIds.length === 0
           ctx.fillStyle = isDraft ? '#94a3b8' : '#fb923c'
           ctx.beginPath(); ctx.arc(pos.x, pos.y, isPicked ? 7 : 5, 0, Math.PI * 2); ctx.fill()
           if (isPicked) { ctx.strokeStyle = '#fde047'; ctx.lineWidth = 2; ctx.stroke() }
-        }
+        })
       }
     }
     let raf = 0
@@ -223,34 +241,56 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       return
     }
 
-    if (mode.kind === 'place-leg') {
-      const { zoneId, step } = mode
+    if (mode.kind === 'place-leg-chain') {
+      const { zoneId } = mode
       const nearestIds = nearestTrackerIds(p)
+      const newRef: CoTrackerEndpointRef = nearestIds.length > 0
+        ? makeEndpointRef(nearestIds)
+        : { pointIds: [], weights: [] }
       let leg = skeleton.legs.find(l => l.zoneId === zoneId)
-      const initialRef = nearestIds.length > 0 ? makeEndpointRef(nearestIds) : { pointIds: [], weights: [] }
+      let newJointIndex = 0
       if (!leg) {
+        // First click → create leg with hip only (foot still draft = same position)
         leg = {
           id: crypto.randomUUID(),
           zoneId, name: LEG_LABELS[zoneId] ?? zoneId,
-          hip: step === 'hip' ? initialRef : { pointIds: [], weights: [] },
-          foot: step === 'foot' ? initialRef : { pointIds: [], weights: [] },
-          kneeRestPos: { x: 0, y: 0 },
-          kneeMode: 'rest' as ElbowMode,
+          hip: newRef,
+          joints: [],
+          foot: { pointIds: [], weights: [] },
         }
-        setSkeleton(sk => ({ ...sk, legs: [...sk.legs, leg!] }))
+        const newLeg = leg
+        setSkeleton(sk => ({ ...sk, legs: [...sk.legs, newLeg] }))
+        newJointIndex = 0
       } else {
-        setSkeleton(sk => {
-          const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
-          if (idx < 0) return sk
-          const newLegs = sk.legs.slice()
-          newLegs[idx] = { ...newLegs[idx], [step]: initialRef } as CoTrackerLegBone
-          return { ...sk, legs: newLegs }
-        })
+        // Append : if foot is still empty (no point + no draft) → fill foot.
+        // Otherwise insert a new joint between hip/joints and foot.
+        const footIsDraftEmpty = leg.foot.pointIds.length === 0
+          && !drafts[`leg:${leg.id}:${legChainLen(leg) - 1}`]
+        if (footIsDraftEmpty) {
+          newJointIndex = legChainLen(leg) - 1
+          setSkeleton(sk => {
+            const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+            if (idx < 0) return sk
+            const newLegs = sk.legs.slice()
+            newLegs[idx] = { ...newLegs[idx], foot: newRef }
+            return { ...sk, legs: newLegs }
+          })
+        } else {
+          newJointIndex = (leg.joints?.length ?? 0) + 1
+          setSkeleton(sk => {
+            const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+            if (idx < 0) return sk
+            const newLegs = sk.legs.slice()
+            const cur = newLegs[idx]
+            newLegs[idx] = { ...cur, joints: [...(cur.joints ?? []), newRef] } as CoTrackerLegBone
+            return { ...sk, legs: newLegs }
+          })
+        }
       }
-      if (nearestIds.length === 0) setDrafts(d => ({ ...d, [`leg:${leg!.id}:${step}`]: p }))
-      setPick({ kind: 'leg', zoneId, field: step })
-      if (step === 'hip') setMode({ kind: 'place-leg', zoneId, step: 'foot' })
-      else setMode({ kind: 'idle' })
+      if (nearestIds.length === 0) {
+        setDrafts(d => ({ ...d, [`leg:${leg!.id}:${newJointIndex}`]: p }))
+      }
+      setPick({ kind: 'leg-joint', zoneId, jointIndex: newJointIndex })
       return
     }
 
@@ -279,15 +319,15 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       }
     })
     for (const leg of skeleton.legs) {
-      for (const field of ['hip', 'foot'] as const) {
-        const ref = field === 'hip' ? leg.hip : leg.foot
-        const pos = endpointPos(ref, legKey(leg, field))
-        if (!pos) continue
+      const refs = legChainRefs(leg)
+      refs.forEach((ref, ji) => {
+        const pos = endpointPos(ref, legJointKey(leg, ji))
+        if (!pos) return
         const d2 = (pos.x - p.x) ** 2 + (pos.y - p.y) ** 2
         if (d2 < JOINT_HIT_R * JOINT_HIT_R && (!best || d2 < best.d2)) {
-          best = { d2, target: { kind: 'leg', zoneId: leg.zoneId, field } }
+          best = { d2, target: { kind: 'leg-joint', zoneId: leg.zoneId, jointIndex: ji } }
         }
-      }
+      })
     }
     if (best) setPick(best.target)
     else setPick(null)
@@ -312,10 +352,12 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       const legIdx = sk.legs.findIndex(l => l.zoneId === pick.zoneId)
       if (legIdx < 0) return sk
       const leg = sk.legs[legIdx]
-      const cur = pick.field === 'hip' ? leg.hip : leg.foot
+      const refs = legChainRefs(leg)
+      const cur = refs[pick.jointIndex]
+      if (!cur) return sk
       const newIds = toggleId(cur.pointIds, pointId)
       const newLegs = sk.legs.slice()
-      newLegs[legIdx] = { ...leg, [pick.field]: makeEndpointRef(newIds) } as CoTrackerLegBone
+      newLegs[legIdx] = setLegChainAt(leg, pick.jointIndex, makeEndpointRef(newIds))
       return { ...sk, legs: newLegs }
     })
   }
@@ -325,8 +367,25 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     setPick(null)
   }
   function startPlaceLeg(zoneId: string) {
-    setMode({ kind: 'place-leg', zoneId, step: 'hip' })
+    setMode({ kind: 'place-leg-chain', zoneId })
     setPick(null)
+  }
+  function removeLegJoint(zoneId: string, jointIndex: number) {
+    setSkeleton(sk => {
+      const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+      if (idx < 0) return sk
+      const leg = sk.legs[idx]
+      const joints = leg.joints ?? []
+      // Only intermediate joints can be removed (not hip / foot).
+      if (jointIndex <= 0 || jointIndex >= 1 + joints.length) return sk
+      const newJoints = joints.slice()
+      newJoints.splice(jointIndex - 1, 1)
+      const newLegs = sk.legs.slice()
+      newLegs[idx] = { ...leg, joints: newJoints }
+      return { ...sk, legs: newLegs }
+    })
+    setDrafts(d => { const c = { ...d }; delete c[`leg:${skeleton.legs.find(l => l.zoneId === zoneId)?.id}:${jointIndex}`]; return c })
+    if (pick?.kind === 'leg-joint' && pick.zoneId === zoneId && pick.jointIndex === jointIndex) setPick(null)
   }
   function startAssignBary() {
     if (!pick) return
@@ -349,9 +408,11 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     const leg = skeleton.legs.find(l => l.zoneId === zoneId)
     setSkeleton(sk => ({ ...sk, legs: sk.legs.filter(l => l.zoneId !== zoneId) }))
     if (leg) setDrafts(d => {
-      const c = { ...d }; delete c[`leg:${leg.id}:hip`]; delete c[`leg:${leg.id}:foot`]; return c
+      const c = { ...d }
+      for (let i = 0; i < legChainLen(leg); i++) delete c[`leg:${leg.id}:${i}`]
+      return c
     })
-    if (pick?.kind === 'leg' && pick.zoneId === zoneId) setPick(null)
+    if (pick?.kind === 'leg-joint' && pick.zoneId === zoneId) setPick(null)
   }
 
   async function handleValidate() {
@@ -363,6 +424,11 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     for (const leg of skeleton.legs) {
       if (leg.hip.pointIds.length === 0 || leg.foot.pointIds.length === 0) {
         setError(`Patte ${leg.name} : hip et foot doivent référencer ≥ 1 point`); return
+      }
+      for (let i = 0; i < (leg.joints?.length ?? 0); i++) {
+        if (leg.joints[i].pointIds.length === 0) {
+          setError(`Patte ${leg.name} : joint intermédiaire #${i + 1} sans barycentre`); return
+        }
       }
     }
     const updatedAnim: Animation = {
@@ -385,15 +451,25 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     return <div className="step-content"><p>Lancez d'abord CoTracker3 à l'étape 2.</p></div>
   }
 
+  function legJointLabel(leg: CoTrackerLegBone, ji: number): string {
+    const len = legChainLen(leg)
+    if (ji === 0) return 'hip'
+    if (ji === len - 1) return 'foot'
+    return `joint ${ji}`
+  }
+
   const pickLabel = pick
     ? pick.kind === 'body-joint'
       ? `Joint "${skeleton.bodyChain[pick.index]?.name ?? '?'}"`
-      : `${LEG_LABELS[pick.zoneId] ?? pick.zoneId} — ${pick.field}`
+      : (() => {
+          const leg = skeleton.legs.find(l => l.zoneId === pick.zoneId)
+          return leg ? `${LEG_LABELS[pick.zoneId] ?? pick.zoneId} — ${legJointLabel(leg, pick.jointIndex)}` : pick.zoneId
+        })()
     : null
 
   const modeBanner = (() => {
     if (mode.kind === 'place-chain') return 'Cliquez successivement sur le canvas pour poser les joints de la body chain (barycentre = tracker le plus proche). Terminez quand vous avez fini.'
-    if (mode.kind === 'place-leg') return `Cliquez pour poser ${mode.step === 'hip' ? 'le hip' : 'le foot'} de ${LEG_LABELS[mode.zoneId]} (barycentre = tracker le plus proche)`
+    if (mode.kind === 'place-leg-chain') return `Cliquez successivement pour poser hip, joints intermédiaires (genoux, cheville, …) et foot de ${LEG_LABELS[mode.zoneId]}. Le 1er clic = hip, le dernier avant terminer = foot. Terminez quand vous avez fini.`
     if (mode.kind === 'assign-bary') return `Cliquez les points trackers pour les ajouter/retirer du barycentre — ${pickLabel}`
     return null
   })()
@@ -426,7 +502,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
               <span>{modeBanner}</span>
               {mode.kind === 'assign-bary'
                 ? <button className="btn-primary btn-sm" onClick={validateBary}>Valider barycentre</button>
-                : mode.kind === 'place-chain'
+                : (mode.kind === 'place-chain' || mode.kind === 'place-leg-chain')
                 ? <button className="btn-primary btn-sm" onClick={cancelMode}>Terminer chaîne</button>
                 : <button className="btn-ghost btn-sm" onClick={cancelMode}>Annuler</button>}
             </div>
@@ -481,29 +557,47 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
                   </div>
                 )
               }
+              const refs = legChainRefs(leg)
               return (
                 <div key={z} style={{ border: '1px solid #444', padding: 6, marginBottom: 4 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{LEG_LABELS[z]}</span>
+                    <span>{LEG_LABELS[z]} ({refs.length} joints)</span>
                     <button className="btn-icon btn-sm" onClick={() => deleteLeg(z)}>×</button>
                   </div>
-                  {(['hip', 'foot'] as const).map(field => {
-                    const ref = field === 'hip' ? leg.hip : leg.foot
-                    const isPicked = pick?.kind === 'leg' && pick.zoneId === z && pick.field === field
-                    const isDraft = ref.pointIds.length === 0
-                    return (
-                      <button
-                        key={field}
-                        onClick={() => setPick({ kind: 'leg', zoneId: z, field })}
-                        style={{
-                          background: isPicked ? '#1e3a5f' : 'transparent',
-                          border: '1px solid #444',
-                          color: isDraft ? '#94a3b8' : '#fff',
-                          padding: '2px 6px', fontSize: 11, margin: 2,
-                        }}
-                      >{field} ({ref.pointIds.length}){isDraft ? ' ⚠' : ''}</button>
-                    )
-                  })}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                    {refs.map((ref, ji) => {
+                      const isPicked = pick?.kind === 'leg-joint' && pick.zoneId === z && pick.jointIndex === ji
+                      const isDraft = ref.pointIds.length === 0
+                      const label = legJointLabel(leg, ji)
+                      const isMid = ji > 0 && ji < refs.length - 1
+                      return (
+                        <span key={ji} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                          <button
+                            onClick={() => setPick({ kind: 'leg-joint', zoneId: z, jointIndex: ji })}
+                            style={{
+                              background: isPicked ? '#1e3a5f' : 'transparent',
+                              border: '1px solid #444',
+                              color: isDraft ? '#94a3b8' : '#fff',
+                              padding: '2px 6px', fontSize: 11, marginRight: 1,
+                            }}
+                          >{label} ({ref.pointIds.length}){isDraft ? ' ⚠' : ''}</button>
+                          {isMid && (
+                            <button
+                              className="btn-icon btn-sm"
+                              title="Supprimer ce joint"
+                              onClick={() => removeLegJoint(z, ji)}
+                            >×</button>
+                          )}
+                        </span>
+                      )
+                    })}
+                  </div>
+                  <button
+                    className="btn-ghost btn-sm"
+                    style={{ marginTop: 4, fontSize: 11 }}
+                    onClick={() => startPlaceLeg(z)}
+                    disabled={mode.kind !== 'idle'}
+                  >+ Joint (clic canvas)</button>
                 </div>
               )
             })}
@@ -521,9 +615,13 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
                   Ajouter points barycentres
                 </button>
                 {(() => {
-                  const ref = pick.kind === 'body-joint'
-                    ? skeleton.bodyChain[pick.index]?.ref
-                    : skeleton.legs.find(l => l.zoneId === pick.zoneId)?.[pick.field]
+                  let ref: CoTrackerEndpointRef | undefined
+                  if (pick.kind === 'body-joint') {
+                    ref = skeleton.bodyChain[pick.index]?.ref
+                  } else {
+                    const leg = skeleton.legs.find(l => l.zoneId === pick.zoneId)
+                    if (leg) ref = legChainRefs(leg)[pick.jointIndex]
+                  }
                   if (!ref || ref.pointIds.length === 0) {
                     return <p style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>Aucun point.</p>
                   }
@@ -570,5 +668,6 @@ function isPointInCurrentEndpoint(pointId: string, pick: PickTarget | null, sk: 
   if (pick.kind === 'body-joint') return sk.bodyChain[pick.index]?.ref.pointIds.includes(pointId) ?? false
   const leg = sk.legs.find(l => l.zoneId === pick.zoneId)
   if (!leg) return false
-  return (pick.field === 'hip' ? leg.hip : leg.foot).pointIds.includes(pointId)
+  const refs = [leg.hip, ...(leg.joints ?? []), leg.foot]
+  return refs[pick.jointIndex]?.pointIds.includes(pointId) ?? false
 }

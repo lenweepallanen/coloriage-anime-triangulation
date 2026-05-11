@@ -233,8 +233,10 @@ export interface MeshData {
   cotrackerSkeleton?: CoTrackerSkeleton;
   cotrackerBonesValidated?: boolean;
   // Étape 5 : lissage Butterworth des positions joints (pré-résolution IK)
-  cotrackerLegBoneFrames?: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> | null;
-  cotrackerLegBoneFramesSmoothed?: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> | null;
+  // Chaîne complète par patte : chain[i][f] = position du joint i à la frame f.
+  // chain[0] = hip, chain[N-1] = foot, intermédiaires entre. Coords vidéo.
+  cotrackerLegBoneFrames?: Record<string, { chain: Point2D[][] }> | null;
+  cotrackerLegBoneFramesSmoothed?: Record<string, { chain: Point2D[][] }> | null;
   cotrackerBodyJointFrames?: Point2D[][] | null;          // [jointIdx][frameIdx]
   cotrackerBodyJointFramesSmoothed?: Point2D[][] | null;
   cotrackerBoneSmoothingCutoffHz?: number;
@@ -472,9 +474,10 @@ export interface CoTrackerLegBone {
   zoneId: string;       // 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
   name: string;
   hip: CoTrackerEndpointRef;
+  // Joints intermédiaires (0..N) entre hip et foot. Chaîne complète = [hip, ...joints, foot].
+  // Chaque joint est un barycentre N-aire de points CoTracker (comme la body chain).
+  joints: CoTrackerEndpointRef[];
   foot: CoTrackerEndpointRef;
-  kneeRestPos: Point2D;
-  kneeMode: ElbowMode;
   // Optionnel : hip attaché à un body vertex (override) — comme V2/V3
   hipBodyVertexIndices?: number[] | null;
   hipBodyVertexWeights?: number[] | null;
@@ -506,10 +509,21 @@ export const DEFAULT_COTRACKER_LBS_PARAMS: CoTrackerLBSParams = {
   areaStrength: 0.5,
 };
 
+/**
+ * Mode de lecture d'une animation, orthogonal à son type de pipeline.
+ * - 'loop'    : jouable en boucle infinie (idle, fond), avec crossfade.
+ * - 'oneshot' : jouée une seule fois sur déclenchement.
+ */
+export type AnimationPlaybackMode = 'loop' | 'oneshot';
+
 export interface Animation {
   id: string;
   name: string;
   type: AnimationType;
+  /**
+   * Mode de lecture. Optionnel pour rétro-compat (projets legacy : voir getPlaybackMode).
+   */
+  playbackMode?: AnimationPlaybackMode;
   createdAt: number;
   videoBlob: Blob | null;
   mesh: MeshData | null;
@@ -520,12 +534,52 @@ export interface Animation {
   audioEnabled: boolean;
 }
 
+/**
+ * Mode de lecture effectif. Par défaut : 'oneshot' (migration safe).
+ * Le type 'rest' n'est plus traité spécialement — un projet legacy avec une
+ * animation rest devra être basculé manuellement en 'loop' par l'utilisateur.
+ */
+export function getPlaybackMode(anim: Animation): AnimationPlaybackMode {
+  return anim.playbackMode ?? 'oneshot';
+}
+
+export function isLoopAnimation(anim: Animation): boolean {
+  return getPlaybackMode(anim) === 'loop';
+}
+
 /** Check if an animation has computed frames (single mesh or separated zones). */
 export function animationHasFrames(anim: Animation): boolean {
   const m = anim.mesh
   if (!m) return false
   return (m.videoFramesMesh != null && m.videoFramesMesh.length > 0)
     || (m.walkZoneFrames != null && m.walkBodyFrames != null)
+}
+
+/**
+ * Animation utilisée pour le playback "idle" d'une scène ou du player legacy.
+ * Priorité : 1) animation explicitement référencée par `preferredId` ; 2) première
+ * animation en mode loop avec frames ; 3) première animation legacy `type === 'rest'`
+ * avec frames ; 4) première animation prête tout court.
+ */
+export function getIdleAnimation(animations: Animation[], preferredId?: string): Animation | undefined {
+  if (preferredId) {
+    const explicit = animations.find(a => a.id === preferredId)
+    if (explicit && animationHasFrames(explicit)) return explicit
+  }
+  const ready = animations.filter(animationHasFrames)
+  return ready.find(isLoopAnimation) ?? ready.find(a => a.type === 'rest') ?? ready[0]
+}
+
+/**
+ * Animation source de la topologie partagée (= mesh affiché à l'admin pour les
+ * éditeurs transverses : zones corporelles, scène, preview). En legacy c'est
+ * l'animation `type === 'rest'`. Fallback : n'importe quelle animation avec un
+ * mesh dont la topologie est verrouillée, ou à défaut un mesh quelconque.
+ */
+export function getGeometryOwner(animations: Animation[]): Animation | undefined {
+  return animations.find(a => a.type === 'rest')
+    ?? animations.find(a => a.mesh?.topologyLocked === true)
+    ?? animations.find(a => a.mesh != null && (a.mesh.triangles?.length ?? 0) > 0)
 }
 
 export interface SceneRestPoint {

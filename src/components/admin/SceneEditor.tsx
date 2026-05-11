@@ -141,7 +141,10 @@ export default function SceneEditor({ project, onSave }: Props) {
     }
   }, [project.originalImageBlob])
 
-  const frontLayer = scene.backgroundLayers[2]
+  // Dimensions de référence : front layer en priorité, sinon n'importe quel layer importé.
+  const frontLayer = scene.backgroundLayers[2].imageBlob != null
+    ? scene.backgroundLayers[2]
+    : (scene.backgroundLayers.find(l => l.imageBlob != null) ?? scene.backgroundLayers[2])
 
   // Layer preview URLs
   useEffect(() => {
@@ -151,7 +154,8 @@ export default function SceneEditor({ project, onSave }: Props) {
       urls.push(blob ? URL.createObjectURL(blob) : null)
     }
     setLayerPreviewUrls(urls)
-    setBgImageUrl(urls[2])
+    // Fond timeline : front layer en priorité, sinon premier layer importé.
+    setBgImageUrl(urls[2] ?? urls.find(u => u != null) ?? null)
     return () => { for (const u of urls) if (u) URL.revokeObjectURL(u) }
   }, [scene.backgroundLayers[0]?.imageBlob, scene.backgroundLayers[1]?.imageBlob, scene.backgroundLayers[2]?.imageBlob]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -175,8 +179,8 @@ export default function SceneEditor({ project, onSave }: Props) {
           depthFactor: newLayers[layerIndex].depthFactor,
         }
         const updated: Scene = { ...scene, backgroundLayers: newLayers }
-        // Auto-create rest points when importing front layer for the first time
-        if (layerIndex === 2 && updated.restPoints.length === 0) {
+        // Auto-create rest points dès l'import du 1er layer (n'importe lequel).
+        if (updated.restPoints.length === 0) {
           const firstRp = createRestPoint(Math.round(img.naturalWidth * 0.3))
           const secondRp = createRestPoint(Math.round(img.naturalWidth * 0.7))
           updated.restPoints = [firstRp, secondRp]
@@ -478,9 +482,10 @@ export default function SceneEditor({ project, onSave }: Props) {
     previewProjectRef.current = null
   }, [])
 
-  const hasScene = scene.backgroundLayers[2].imageBlob != null
+  // Au moins un layer importé suffit (front layer pas obligatoire).
+  const hasScene = scene.backgroundLayers.some(l => l.imageBlob != null)
   const canPreview = hasScene && scene.restPoints.length > 0 && project.originalImageBlob != null
-    && project.animations.some(a => a.type === 'rest' && animationHasFrames(a))
+    && project.animations.some(animationHasFrames)
 
   return (
     <div className="scene-editor">

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Project, Animation, AnimationType, MeshData } from '../../types/project'
+import type { Project, Animation, AnimationPlaybackMode, MeshData } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import AnimationCard from './AnimationCard'
 import { getAnimationCompletionStatus } from './PipelineEditor'
@@ -121,6 +121,9 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
       id: crypto.randomUUID(),
       name,
       type,
+      // Le mode de lecture est explicite et indépendant du type. Par défaut, les nouvelles
+      // animations sont créées en 'oneshot' (l'utilisateur passe en 'loop' depuis la carte).
+      playbackMode: 'oneshot',
       createdAt: Date.now(),
       videoBlob: null,
       mesh: inheritedMesh,
@@ -137,7 +140,7 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
 
   async function handleDelete(animId: string) {
     const anim = project.animations.find(a => a.id === animId)
-    if (!anim || anim.type === 'rest') return
+    if (!anim) return
     if (!confirm(`Supprimer "${anim.name}" ?`)) return
     setSaving(true)
     await onSave({ ...project, animations: project.animations.filter(a => a.id !== animId) })
@@ -161,19 +164,16 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
       id: crypto.randomUUID(),
       name: `${source.name} (copie)`,
       createdAt: Date.now(),
-      type: source.type === 'rest' ? 'oneshot' : source.type,
     }
     setSaving(true)
     await onSave({ ...project, animations: [...project.animations, copy] })
     setSaving(false)
   }
 
-  async function handleSetAsRest(animId: string) {
-    const newAnims = project.animations.map(a => {
-      if (a.id === animId) return { ...a, type: 'rest' as AnimationType }
-      if (a.type === 'rest') return { ...a, type: 'oneshot' as AnimationType }
-      return a
-    })
+  async function handleSetPlaybackMode(animId: string, mode: AnimationPlaybackMode) {
+    const newAnims = project.animations.map(a =>
+      a.id === animId ? { ...a, playbackMode: mode } : a
+    )
     setSaving(true)
     await onSave({ ...project, animations: newAnims })
     setSaving(false)
@@ -191,14 +191,14 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
             onRename={(name) => handleRename(anim.id, name)}
             onDelete={() => handleDelete(anim.id)}
             onDuplicate={() => handleDuplicate(anim.id)}
-            onSetAsRest={() => handleSetAsRest(anim.id)}
+            onSetPlaybackMode={(mode) => handleSetPlaybackMode(anim.id, mode)}
           />
         ))}
       </div>
 
       <div className="anim-card-add-row">
         <button className="btn-secondary" onClick={() => handleAdd('oneshot')} disabled={saving}>
-          + Oneshot
+          + Vidéo (6 étapes)
         </button>
         <button className="btn-secondary" onClick={() => handleAdd('physics')} disabled={saving}>
           + Physics

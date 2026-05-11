@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, type Project, type Animation, type Point2D, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
+import { animationHasFrames, getIdleAnimation, isLoopAnimation, type Project, type Animation, type Point2D, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -149,9 +149,10 @@ function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
 // --- Helper: get rest animation and ready oneshot animations ---
 
 function getAnimationData(project: Project) {
-  const restAnim = project.animations.find(a => a.type === 'rest')
+  const restAnim = getIdleAnimation(project.animations)
+  // Tout ce qui est prêt et n'est pas l'animation idle est considéré comme oneshot.
   const readyOneshots: Animation[] = project.animations.filter(
-    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone' || a.type === 'walk') && animationHasFrames(a)
+    a => a.id !== restAnim?.id && animationHasFrames(a) && !isLoopAnimation(a)
   )
   return { restAnim, readyOneshots }
 }
@@ -387,7 +388,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     const walkAnim = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
     // Members-bones animation with project triangulation zone frames
     const mbTriangAnim = !walkAnim ? project.animations.find(a =>
-      (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3') && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated
+      (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3' || a.type === 'cotracker-bones') && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated
     ) : null
     let zoneMeshSetup: ZoneMeshSetup | null = null
 
@@ -442,7 +443,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     const audioElements = new Map<string, HTMLAudioElement>()
     const audioUrls: string[] = []
     for (const anim of project.animations) {
-      if (anim.type !== 'rest' && anim.audioBlob && anim.audioEnabled) {
+      if (anim.id !== restAnim?.id && anim.audioBlob && anim.audioEnabled) {
         const url = URL.createObjectURL(anim.audioBlob)
         audioUrls.push(url)
         const audio = new Audio(url)

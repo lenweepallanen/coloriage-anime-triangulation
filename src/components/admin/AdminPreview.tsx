@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, type Project, type Animation, type Point2D } from '../../types/project'
+import { animationHasFrames, isLoopAnimation, type Project, type Animation, type Point2D } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
@@ -15,10 +15,11 @@ interface Props {
 
 
 function getAnimationData(project: Project) {
-  const restAnim = project.animations.find(a => a.type === 'rest')
-  const readyOneshots: Animation[] = project.animations.filter(
-    a => (a.type === 'oneshot' || a.type === 'physics' || a.type === 'bone' || a.type === 'walk') && animationHasFrames(a)
-  )
+  // L'animation idle est la 1ère animation en mode 'loop' avec frames calculées.
+  // Fallback : la 1ère animation avec frames, peu importe son mode.
+  const ready = project.animations.filter(animationHasFrames)
+  const restAnim: Animation | undefined = ready.find(isLoopAnimation) ?? ready[0]
+  const readyOneshots: Animation[] = ready.filter(a => a.id !== restAnim?.id)
   return { restAnim, readyOneshots }
 }
 
@@ -200,11 +201,11 @@ export default function AdminPreview({ project, style }: Props) {
           overlay: a.physicsOverlay ?? false,
         }))
 
-      // Audio elements (oneshot + physics only, not rest)
+      // Audio elements : pour tous les oneshots déclenchables (pas l'animation idle).
       const audioElements = new Map<string, HTMLAudioElement>()
       const audioUrls: string[] = []
       for (const anim of project.animations) {
-        if (anim.type !== 'rest' && anim.audioBlob && anim.audioEnabled) {
+        if (anim.id !== restAnim?.id && anim.audioBlob && anim.audioEnabled) {
           const url = URL.createObjectURL(anim.audioBlob)
           audioUrls.push(url)
           const audio = new Audio(url)

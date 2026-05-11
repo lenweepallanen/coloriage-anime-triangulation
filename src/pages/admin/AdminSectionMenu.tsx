@@ -1,12 +1,15 @@
 import { Link } from 'react-router-dom'
 import { useAdminContext } from './AdminLayout'
+import { getGeometryOwner } from '../../types/project'
 
 export default function AdminSectionMenu() {
-  const { project, canPreview } = useAdminContext()
+  const { project, canEditScene } = useAdminContext()
 
-  const restAnim = project.animations.find(a => a.type === 'rest')
-  const hasTopology = restAnim?.mesh?.topologyLocked === true
-    && (restAnim.mesh.triangles?.length ?? 0) > 0
+  // Zones corporelles : on a besoin d'une animation détenant une topologie verrouillée
+  // (rest legacy ou n'importe quel mesh avec topologyLocked).
+  const owner = getGeometryOwner(project.animations)
+  const hasTopology = owner?.mesh?.topologyLocked === true
+    && (owner.mesh.triangles?.length ?? 0) > 0
 
   return (
     <div className="admin-section-menu">
@@ -53,9 +56,9 @@ export default function AdminSectionMenu() {
       </Link>
 
       <Link
-        to={canPreview ? 'scene' : '#'}
-        className={`admin-section-card ${!canPreview ? 'admin-section-card--disabled' : ''}`}
-        onClick={e => { if (!canPreview) e.preventDefault() }}
+        to={canEditScene ? 'scene' : '#'}
+        className={`admin-section-card ${!canEditScene ? 'admin-section-card--disabled' : ''}`}
+        onClick={e => { if (!canEditScene) e.preventDefault() }}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="32" height="32">
           <rect x="2" y="3" width="20" height="14" rx="2" />
@@ -65,9 +68,9 @@ export default function AdminSectionMenu() {
         </svg>
         <span className="admin-section-card-title">Scène</span>
         <span className="admin-section-card-desc">
-          {canPreview
+          {canEditScene
             ? 'Éditeur de scène et transitions'
-            : 'Complétez le pipeline rest pour accéder à la scène'}
+            : 'Complétez au moins une animation pour accéder à la scène'}
         </span>
       </Link>
     </div>

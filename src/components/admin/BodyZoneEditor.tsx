@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
-import type { Project, Point2D, BodyZone } from '../../types/project'
+import { getGeometryOwner, type Project, type Point2D, type BodyZone } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { findTriangleAtPoint } from '../../utils/bodyZoneUtils'
@@ -20,8 +20,10 @@ export default function BodyZoneEditor({ project, onSave }: Props) {
   const [imageLoaded, setImageLoaded] = useState(false)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
 
-  const restAnim = project.animations.find(a => a.type === 'rest')!
-  const mesh = restAnim.mesh!
+  // Source de la topologie : rest legacy si présent, sinon n'importe quelle animation
+  // avec topologie verrouillée (members-bones autonomes notamment).
+  const owner = getGeometryOwner(project.animations)!
+  const mesh = owner.mesh!
 
   const allPoints: Point2D[] = [
     ...mesh.contourAnchors,

@@ -143,6 +143,8 @@ interface AnimationDoc {
   id: string
   name: string
   type: AnimationType
+  /** 'loop' | 'oneshot'. Optionnel pour rétro-compat : migration → 'oneshot' par défaut. */
+  playbackMode?: 'loop' | 'oneshot'
   createdAt: number
   hasVideo: boolean
   hasAudio: boolean
@@ -644,6 +646,7 @@ function animToDoc(anim: Animation): AnimationDoc {
     id: anim.id,
     name: anim.name,
     type: anim.type,
+    ...(anim.playbackMode != null && { playbackMode: anim.playbackMode }),
     createdAt: anim.createdAt,
     hasVideo: anim.videoBlob != null,
     hasAudio: anim.audioBlob != null,
@@ -997,6 +1000,9 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         id: animDoc.id,
         name: animDoc.name,
         type: animDoc.type,
+        // Migration : projets legacy n'ont pas de playbackMode → 'oneshot' par défaut
+        // (l'utilisateur recoche manuellement en 'loop' depuis l'éditeur d'animation).
+        playbackMode: animDoc.playbackMode ?? 'oneshot',
         createdAt: animDoc.createdAt,
         videoBlob,
         mesh,
@@ -1122,6 +1128,7 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     id: crypto.randomUUID(),
     name: 'Animation',
     type: 'rest',
+    playbackMode: 'oneshot',
     createdAt: data.createdAt,
     videoBlob,
     mesh,
@@ -1181,10 +1188,11 @@ export async function getProjectThumbnail(projectId: string): Promise<Blob | nul
 }
 
 export async function createProject(name: string): Promise<Project> {
-  const restAnimation: Animation = {
+  const defaultAnimation: Animation = {
     id: crypto.randomUUID(),
     name: 'Animation',
     type: 'rest',
+    playbackMode: 'loop',
     createdAt: Date.now(),
     videoBlob: null,
     mesh: null,
@@ -1202,7 +1210,7 @@ export async function createProject(name: string): Promise<Project> {
     backgroundVideoBlob: null,
     ambientSoundBlob: null,
     ambientSoundEnabled: false,
-    animations: [restAnimation],
+    animations: [defaultAnimation],
     bodyZones: [],
     markers: null,
     scene: null,
@@ -1232,6 +1240,7 @@ export async function getAllProjects(): Promise<Project[]> {
         id: 'legacy-placeholder',
         name: 'Animation',
         type: 'rest',
+        playbackMode: 'oneshot',
         createdAt: legacy.createdAt,
         videoBlob: null,
         mesh: legacy.mesh ? meshShellFromDoc(legacy.mesh as MeshDoc | LegacyMeshDoc) : null,

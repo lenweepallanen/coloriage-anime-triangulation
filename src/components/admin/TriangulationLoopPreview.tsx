@@ -236,21 +236,23 @@ export default function TriangulationLoopPreview({
             overlay.lineStyle(3, 0xfb923c, 0.95)
             for (const leg of skeleton.legs) {
               const lf = legBoneFrames[leg.zoneId]
-              if (!lf) continue
-              const hip = lf.hip?.[f] ?? lf.hip?.[lf.hip.length - 1]
-              const knee = lf.knee?.[f] ?? lf.knee?.[lf.knee.length - 1]
-              const foot = lf.foot?.[f] ?? lf.foot?.[lf.foot.length - 1]
-              if (!hip || !knee || !foot) continue
-              const H = toScreen(hip.x, hip.y), K = toScreen(knee.x, knee.y), F = toScreen(foot.x, foot.y)
-              overlay.moveTo(H.x, H.y).lineTo(K.x, K.y).lineTo(F.x, F.y)
+              if (!lf || !lf.chain || lf.chain.length < 2) continue
+              const pts = lf.chain.map(traj => traj?.[f] ?? traj?.[traj.length - 1]).filter(Boolean) as { x: number; y: number }[]
+              if (pts.length < 2) continue
+              const first = toScreen(pts[0].x, pts[0].y)
+              overlay.moveTo(first.x, first.y)
+              for (let i = 1; i < pts.length; i++) {
+                const s = toScreen(pts[i].x, pts[i].y)
+                overlay.lineTo(s.x, s.y)
+              }
             }
             overlay.lineStyle(0)
             overlay.beginFill(0xfb923c)
             for (const leg of skeleton.legs) {
               const lf = legBoneFrames[leg.zoneId]
-              if (!lf) continue
-              for (const part of [lf.hip, lf.knee, lf.foot]) {
-                const v = part?.[f] ?? part?.[part.length - 1]
+              if (!lf || !lf.chain) continue
+              for (const traj of lf.chain) {
+                const v = traj?.[f] ?? traj?.[traj.length - 1]
                 if (!v) continue
                 const s = toScreen(v.x, v.y)
                 overlay.drawCircle(s.x, s.y, 4)

@@ -7,6 +7,7 @@ export interface AdminContext {
   project: Project
   save: (updated: Project, hints?: UploadHint[]) => Promise<void>
   canPreview: boolean
+  canEditScene: boolean
 }
 
 export function useAdminContext() {
@@ -20,10 +21,11 @@ export default function AdminLayout() {
   if (loading) return <div className="loading">Chargement du projet...</div>
   if (!project) return <Navigate to="/" replace />
 
-  const restAnim = project.animations.find(a => a.type === 'rest')
-  const canPreview = restAnim != null && animationHasFrames(restAnim)
+  // Activé dès qu'une animation a des frames calculées (peu importe son type / playback mode).
+  const canPreview = project.animations.some(animationHasFrames)
+  const canEditScene = canPreview
 
-  const context: AdminContext = { project, save, canPreview }
+  const context: AdminContext = { project, save, canPreview, canEditScene }
 
   return (
     <div className="admin-layout">
@@ -38,7 +40,7 @@ export default function AdminLayout() {
             to={canPreview ? `/scan/${project.id}` : '#'}
             className={`admin-scanner-btn ${!canPreview ? 'admin-scanner-btn--disabled' : ''}`}
             onClick={e => { if (!canPreview) e.preventDefault() }}
-            title={canPreview ? 'Scanner le coloriage' : 'Complétez le pipeline rest pour scanner'}
+            title={canPreview ? 'Scanner le coloriage' : 'Complétez au moins une animation pour scanner'}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
               <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
