@@ -20,7 +20,7 @@ export function generateLimbMask(
   imageW: number,
   imageH: number,
   contentAlignment?: ContentAlignment,
-  dilationPx = 8,
+  dilationPx = 16,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = scanW
@@ -74,7 +74,7 @@ export function generateLimbMaskFromContours(
   imageW: number,
   imageH: number,
   contentAlignment?: ContentAlignment,
-  dilationPx = 8,
+  dilationPx = 16,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = scanW

@@ -9,13 +9,26 @@ function linear(t: number): number {
   return Math.max(0, Math.min(1, t))
 }
 
-const EASING_FUNCTIONS: Record<SegmentEasing, (t: number) => number> = {
-  smoothstep,
-  linear,
+/** Cubique de Hermite f(0)=0, f(1)=1 avec dérivées prescrites m0, m1. */
+function hermite(m0: number, m1: number): (t: number) => number {
+  return (t: number) => {
+    const c = Math.max(0, Math.min(1, t))
+    const c2 = c * c
+    const c3 = c2 * c
+    return m0 * (c3 - 2 * c2 + c) + (-2 * c3 + 3 * c2) + m1 * (c3 - c2)
+  }
 }
 
-function resolveEasing(easing?: SegmentEasing): (t: number) => number {
-  return EASING_FUNCTIONS[easing ?? 'smoothstep']
+/** Dérivée intrinsèque de l'easing à une borne, pour le matching de vitesse au voisin.
+ *  Pour ease-out/ease-in à la borne "matching", on retourne 1 (vitesse linéaire) afin
+ *  d'éviter la circularité — le matching réel se fait côté segment courant. */
+function intrinsicSlope(easing: SegmentEasing | undefined, side: 'start' | 'end'): number {
+  switch (easing ?? 'smoothstep') {
+    case 'smoothstep': return 0
+    case 'linear': return 1
+    case 'ease-out': return side === 'start' ? 1 : 0
+    case 'ease-in':  return side === 'start' ? 0 : 1
+  }
 }
 
 export type SceneState = 'interaction' | 'segment' | 'blend'
@@ -145,6 +158,43 @@ export class ScenePlayback {
     this.startSegment(transitionIndex, 0)
   }
 
+  /** Construit l'easing du segment courant, avec matching de vitesse aux voisins
+   *  pour les types 'ease-out' (départ ← vitesse du segment précédent) et
+   *  'ease-in' (fin → vitesse du segment suivant). */
+  private buildSegmentEasing(transition: SceneTransition, segmentIndex: number, xPositions: number[]): (t: number) => number {
+    const segment = transition.segments[segmentIndex]
+    const easing: SegmentEasing = segment.easing ?? 'smoothstep'
+    if (easing === 'smoothstep') return smoothstep
+    if (easing === 'linear') return linear
+
+    const dxCur = xPositions[segmentIndex + 1] - xPositions[segmentIndex]
+    const durCur = segment.duration
+
+    if (easing === 'ease-out') {
+      // m0 = pente normalisée à l'entrée qui matche la vitesse pixel de fin du segment précédent
+      let m0 = 1
+      const prev = transition.segments[segmentIndex - 1]
+      if (prev && Math.abs(dxCur) > 1e-6 && durCur > 0 && prev.duration > 0) {
+        const dxPrev = xPositions[segmentIndex] - xPositions[segmentIndex - 1]
+        const prevEndSlope = intrinsicSlope(prev.easing, 'end')
+        // vitesse pixel fin prev = prevEndSlope * dxPrev / prev.duration
+        // pente normalisée requise à t=0 : m0 * dxCur / durCur = vitesse pixel
+        m0 = (prevEndSlope * dxPrev / prev.duration) * durCur / dxCur
+      }
+      return hermite(m0, 0)
+    }
+
+    // ease-in
+    let m1 = 1
+    const next = transition.segments[segmentIndex + 1]
+    if (next && Math.abs(dxCur) > 1e-6 && durCur > 0 && next.duration > 0) {
+      const dxNext = xPositions[segmentIndex + 2] - xPositions[segmentIndex + 1]
+      const nextStartSlope = intrinsicSlope(next.easing, 'start')
+      m1 = (nextStartSlope * dxNext / next.duration) * durCur / dxCur
+    }
+    return hermite(0, m1)
+  }
+
   /** Start a single segment within a transition */
   private startSegment(transitionIndex: number, segmentIndex: number): void {
     const transition = this.getTransition(transitionIndex)!
@@ -160,7 +210,7 @@ export class ScenePlayback {
     this.segmentEndX = this.computeOffsetForX(xPositions[segmentIndex + 1])
     this.segmentDuration = segment.duration
     this._currentSegmentAnimationId = segment.animationId
-    this._currentSegmentEasing = resolveEasing(segment.easing)
+    this._currentSegmentEasing = this.buildSegmentEasing(transition, segmentIndex, xPositions)
     this._currentTransitionIndex = transitionIndex
     this._currentSegmentIndex = segmentIndex
 
@@ -284,6 +334,13 @@ export class ScenePlayback {
   get currentSegmentAnimationId(): string | undefined {
     if (this._state !== 'segment') return undefined
     return this._currentSegmentAnimationId
+  }
+
+  /** Current segment object (during movement) */
+  get currentSegment(): SceneSegment | undefined {
+    if (this._state !== 'segment') return undefined
+    const transition = this.getTransition(this._currentTransitionIndex)
+    return transition?.segments[this._currentSegmentIndex]
   }
 
   /** Rest animation ID for the current rest point */

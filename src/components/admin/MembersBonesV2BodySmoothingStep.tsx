@@ -286,7 +286,7 @@ export default function MembersBonesV2BodySmoothingStep({ project, animation, on
           <span style={{ color: '#888', fontSize: 11 }}>Frame {currentFrame}/{totalFrames}</span>
         </div>
       )}
-      <TriangulationLoopPreview project={project} animation={animation} />
+      <TriangulationLoopPreview project={project} animation={animation} onSave={onSave} />
     </div>
   )
 }

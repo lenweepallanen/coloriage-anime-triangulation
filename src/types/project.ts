@@ -590,6 +590,7 @@ export interface SceneRestPoint {
   zoneAnimationMappings?: ZoneAnimationMapping[];
   speakSoundIds?: string[];
   helpTexts?: string[];
+  arrivalCrossfadeMs?: number;
 }
 
 export interface SpeakSound {
@@ -597,12 +598,13 @@ export interface SpeakSound {
   name: string;
 }
 
-export type SegmentEasing = 'smoothstep' | 'linear';
+export type SegmentEasing = 'smoothstep' | 'linear' | 'ease-out' | 'ease-in';
 
 export interface SceneSegment {
   duration: number;
   animationId?: string;
   easing?: SegmentEasing;
+  crossfadeMs?: number;
 }
 
 export interface SceneTransition {

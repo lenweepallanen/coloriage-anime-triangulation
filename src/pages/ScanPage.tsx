@@ -127,7 +127,7 @@ function ScanFlow({ project }: { project: Project }) {
       }
 
       // Generate limb extension debug images
-      // Search ALL walk animations for hiddenFaceLimbZones
+      // Search ALL walk animations for hiddenFaceLimbZones, then fallback to projectTriangulation (CoTracker3/V3)
       const debugImgs: { label: string; isolatedUrl: string }[] = []
       for (const wa of project.animations) {
         if (wa.type !== 'walk') continue
@@ -140,7 +140,26 @@ function ScanFlow({ project }: { project: Project }) {
           const zone = wSep.zones.find(z => z.id === hfl.limbZoneId)
           const label = zone?.label ?? hfl.limbZoneId
 
-          // Render isolated limb: visible part (scan) + extension (mirrored from limb)
+          const isolatedCanvas = renderIsolatedLimbDebug(
+            scanCanvas, hfl, zonePts, zoneTris,
+            scanCanvas.width, scanCanvas.height,
+            processor.contentAlignment ?? undefined,
+          )
+
+          debugImgs.push({
+            label,
+            isolatedUrl: isolatedCanvas.toDataURL(),
+          })
+        }
+      }
+      if (debugImgs.length === 0 && tri?.hiddenFaceLimbZones?.length) {
+        for (const hfl of tri.hiddenFaceLimbZones) {
+          const zonePts = tri.zonePoints?.[hfl.limbZoneId]
+          const zoneTris = tri.zoneTriangles?.[hfl.limbZoneId]
+          if (!zonePts || !zoneTris) continue
+          const zone = tri.zones.find(z => z.id === hfl.limbZoneId)
+          const label = zone?.label ?? hfl.limbZoneId
+
           const isolatedCanvas = renderIsolatedLimbDebug(
             scanCanvas, hfl, zonePts, zoneTris,
             scanCanvas.width, scanCanvas.height,
@@ -322,7 +341,7 @@ function ScanFlow({ project }: { project: Project }) {
               <h4>6. Inpainting extensions de pattes</h4>
               {limbExtDebugImages.length === 0 && (
                 <div style={{ color: '#999', fontSize: 13, padding: 12, border: '1px dashed #ccc', borderRadius: 8 }}>
-                  Aucune face cachee jambe definie. (hiddenFaceLimbZones absent dans les donnees du walk)
+                  Aucune face cachee jambe definie. (hiddenFaceLimbZones absent du walk et de projectTriangulation)
                 </div>
               )}
               {limbExtDebugImages.map((img, i) => (

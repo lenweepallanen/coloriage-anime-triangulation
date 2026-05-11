@@ -122,6 +122,20 @@ export default function SceneConfigPanel({
           onSpeakSoundDelete={onSpeakSoundDelete}
         />
 
+        <div className="scene-config-panel-field">
+          <label>Fondu d'arrivée (ms) — {rp.arrivalCrossfadeMs ?? 290}</label>
+          <input
+            type="range"
+            min={0}
+            max={3000}
+            step={10}
+            value={rp.arrivalCrossfadeMs ?? 290}
+            onChange={(e) => onRestPointChange(selection.index, {
+              ...rp, arrivalCrossfadeMs: parseInt(e.target.value, 10),
+            })}
+          />
+        </div>
+
         <HelpTextsSection
           rp={rp}
           rpIndex={selection.index}
@@ -181,12 +195,28 @@ export default function SceneConfigPanel({
           <select
             value={segment.easing ?? 'smoothstep'}
             onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
-              ...segment, easing: e.target.value as 'smoothstep' | 'linear',
+              ...segment, easing: e.target.value as 'smoothstep' | 'linear' | 'ease-out' | 'ease-in',
             })}
           >
             <option value="smoothstep">Ease in-out (accélère/décélère)</option>
             <option value="linear">Linéaire (vitesse constante)</option>
+            <option value="ease-out">Ralentir à la fin (départ continu du segment précédent)</option>
+            <option value="ease-in">Accélérer au début (fin continue vers le segment suivant)</option>
           </select>
+        </div>
+
+        <div className="scene-config-panel-field">
+          <label>Fondu (ms) — {segment.crossfadeMs ?? 290}</label>
+          <input
+            type="range"
+            min={0}
+            max={1500}
+            step={10}
+            value={segment.crossfadeMs ?? 290}
+            onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
+              ...segment, crossfadeMs: parseInt(e.target.value, 10),
+            })}
+          />
         </div>
       </div>
     )

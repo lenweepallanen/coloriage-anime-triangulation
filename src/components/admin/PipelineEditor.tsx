@@ -362,7 +362,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'Preview Animation' && isCoTrackerBonesAnim && (
           <div className="step-content">
             <h2>Preview Animation</h2>
-            <TriangulationLoopPreview project={project} animation={animation} mode="textured" height={520} background="#fff" />
+            <TriangulationLoopPreview project={project} animation={animation} mode="textured" height={520} background="#fff" onSave={projectSave} />
           </div>
         )}
         {activeStep === 'Triangulation' && !isBoneAnim && (
@@ -490,7 +490,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
           <MembersBonesV3LegBoneSmoothingStep project={project} animation={animation} onSave={projectSave} />
         )}
         {activeStep === 'Preview Boucle' && (
-          <MembersBonesV3LoopPreviewStep project={project} animation={animation} />
+          <MembersBonesV3LoopPreviewStep project={project} animation={animation} onSave={projectSave} />
         )}
       </div>
     </div>

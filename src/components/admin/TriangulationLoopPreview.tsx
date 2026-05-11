@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Animation, ProjectTriangulation, WalkLimbSeparation } from '../../types/project'
+import type { Project, Animation, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
@@ -24,6 +24,8 @@ interface Props {
   mode?: 'textured' | 'wireframe'
   /** Background color (hex string for CSS + number 0xRRGGBB for PIXI). Défaut sombre. */
   background?: string
+  /** Si fourni, affiche un bouton "Sauvegarder crossfade" qui persiste mesh.crossfadeFrames. */
+  onSave?: (project: Project, hints?: UploadHint[]) => Promise<void>
 }
 
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -48,7 +50,7 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
 }
 
 export default function TriangulationLoopPreview({
-  project, animation, height = 360, preferSmoothed = true, mode = 'textured', background = '#111',
+  project, animation, height = 360, preferSmoothed = true, mode = 'textured', background = '#111', onSave,
 }: Props) {
   const bgNum = parseInt(background.replace('#', ''), 16)
   const mesh = animation.mesh
@@ -67,7 +69,9 @@ export default function TriangulationLoopPreview({
     [mesh?.walkZoneFramesSmoothed, mesh?.walkZoneFrames, preferSmoothed],
   )
 
-  const [crossfade, setCrossfade] = useState(7)
+  const [crossfade, setCrossfade] = useState(mesh?.crossfadeFrames ?? 7)
+  const savedCrossfade = mesh?.crossfadeFrames ?? 7
+  const [saving, setSaving] = useState(false)
   const [speed, setSpeed] = useState(1.0)
   const [playing, setPlaying] = useState(true)
   const [showMesh, setShowMesh] = useState(mode === 'wireframe')
@@ -300,6 +304,26 @@ export default function TriangulationLoopPreview({
             onChange={e => setCrossfade(parseInt(e.target.value))} style={{ width: 80 }} />
           <span style={{ minWidth: 28, textAlign: 'right' }}>{crossfade}</span>
         </label>
+        {onSave && (
+          <button
+            className="btn-primary btn-sm"
+            disabled={saving || crossfade === savedCrossfade}
+            onClick={async () => {
+              if (!mesh) return
+              setSaving(true)
+              try {
+                const updatedAnimations = project.animations.map(a =>
+                  a.id === animation.id ? { ...a, mesh: { ...mesh, crossfadeFrames: crossfade } } : a,
+                )
+                await onSave({ ...project, animations: updatedAnimations })
+              } finally {
+                setSaving(false)
+              }
+            }}
+          >
+            {saving ? 'Sauvegarde…' : crossfade === savedCrossfade ? '✓ Sauvegardé' : 'Sauvegarder'}
+          </button>
+        )}
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
           Vitesse
           <input type="range" min={0.25} max={2} step={0.05} value={speed}

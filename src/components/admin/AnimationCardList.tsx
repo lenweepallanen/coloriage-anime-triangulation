@@ -88,7 +88,16 @@ interface Props {
 
 export default function AnimationCardList({ project, onSave, onEditAnimation }: Props) {
   const [saving, setSaving] = useState(false)
+  const [cotrackerInheritFrom, setCotrackerInheritFrom] = useState<string>('')
   const restAnim = project.animations.find(a => a.type === 'rest')
+
+  // Sources d'héritage possibles pour cotracker-bones : animations du même type
+  // ayant au moins des points CoTracker définis à frame 0 (l'étape "Points" est passée).
+  const cotrackerSources = project.animations.filter(a =>
+    a.type === 'cotracker-bones'
+    && a.mesh?.cotrackerPoints
+    && a.mesh.cotrackerPoints.length > 0
+  )
 
   async function handleAdd(type: 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones') {
     const isPhysics = type === 'physics'
@@ -114,9 +123,29 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
                   ? `CoTracker ${project.animations.filter(a => a.type === 'cotracker-bones').length + 1}`
                   : `Animation ${project.animations.length + 1}`
     // Members-bones (v1, v2, v3) et cotracker-bones sont autonomes : pas d'héritage rest
-    const inheritedMesh = (isMembersBones || isMembersBonesV2 || isMembersBonesV3 || isCoTrackerBones)
+    let inheritedMesh: MeshData | null = (isMembersBones || isMembersBonesV2 || isMembersBonesV3 || isCoTrackerBones)
       ? createEmptyMesh()
       : (restAnim?.mesh ? { ...createEmptyMesh(), ...copySharedGeometry(restAnim.mesh) } : null)
+
+    // Héritage CoTracker + Bones : copie des points frame 0 + squelette + params LBS
+    // depuis une animation existante. Tracking et frames calculés sont volontairement
+    // exclus pour forcer un re-tracking sur la nouvelle vidéo.
+    if (isCoTrackerBones && cotrackerInheritFrom && inheritedMesh) {
+      const source = project.animations.find(a => a.id === cotrackerInheritFrom)
+      const sm = source?.mesh
+      if (sm) {
+        inheritedMesh = {
+          ...inheritedMesh,
+          cotrackerPoints: sm.cotrackerPoints ? sm.cotrackerPoints.map(p => ({
+            ...p,
+            prompts: p.prompts.map(pr => ({ ...pr })),
+          })) : undefined,
+          cotrackerSkeleton: sm.cotrackerSkeleton ? JSON.parse(JSON.stringify(sm.cotrackerSkeleton)) : undefined,
+          cotrackerBonesValidated: !!sm.cotrackerBonesValidated,
+          cotrackerLBSParams: sm.cotrackerLBSParams ? { ...sm.cotrackerLBSParams } : undefined,
+        }
+      }
+    }
     const newAnim: Animation = {
       id: crypto.randomUUID(),
       name,
@@ -233,12 +262,34 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
           disabled={saving || !project.projectTriangulation?.step3Validated}
           title={
             project.projectTriangulation?.step3Validated
-              ? 'Créer une animation CoTracker + Bones (topologie héritée de la Triangulation projet)'
+              ? (cotrackerInheritFrom
+                  ? 'Créer en héritant des points CoTracker et bones de l\'animation sélectionnée'
+                  : 'Créer une animation CoTracker + Bones (topologie héritée de la Triangulation projet)')
               : 'Validez d\'abord la Triangulation projet jusqu\'à l\'étape Faces cachées (onglet Triangulation)'
           }
         >
           + CoTracker + Bones
         </button>
+        <select
+          value={cotrackerInheritFrom}
+          onChange={(e) => setCotrackerInheritFrom(e.target.value)}
+          disabled={saving || cotrackerSources.length === 0}
+          title={
+            cotrackerSources.length === 0
+              ? 'Aucune animation CoTracker existante avec points à frame 0'
+              : 'Hériter les points CoTracker (frame 0) + bones d\'une animation existante'
+          }
+          style={{ marginLeft: 4 }}
+        >
+          <option value="">
+            {cotrackerSources.length === 0
+              ? 'CoTracker : aucune source à hériter'
+              : 'CoTracker : sans héritage'}
+          </option>
+          {cotrackerSources.map(a => (
+            <option key={a.id} value={a.id}>↳ Hériter de {a.name}</option>
+          ))}
+        </select>
       </div>
     </div>
   )

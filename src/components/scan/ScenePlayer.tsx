@@ -4,6 +4,7 @@ import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, t
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
+import { OncePlayback } from '../../utils/oncePlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { ScenePlayback } from '../../utils/scenePlayback'
@@ -387,14 +388,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     let currentGetPositions: () => Point2D[] = () => allPoints
     let currentAdvance: (delta: number) => void = () => {}
 
-    let blendFrom: Point2D[] | null = null
-    let blendTo: (() => Point2D[]) | null = null
-    let blendProgress = 0
-    const blendDuration = 7 / 24
+    let crossfadeProgress = 1   // 1 = no fade in progress
+    let crossfadeDuration = 290 / 1000   // seconds
+    let currentAdvanceEaseIn = false   // true = ramp new playback's delta during fade (segment → rest)
+    let prevGetPositions: (() => Point2D[]) | null = null
+    let prevAdvance: ((delta: number) => void) | null = null
 
     // Zone playback state for walk animations
-    let activeZonePlaybacks: { zoneId: string; playback: LoopPlayback }[] | null = null
-    let activeBodyPlayback: LoopPlayback | null = null
+    let activeZonePlaybacks: { zoneId: string; playback: LoopPlayback | OncePlayback }[] | null = null
+    let activeBodyPlayback: LoopPlayback | OncePlayback | null = null
+    let prevZonePlaybacks: { zoneId: string; playback: LoopPlayback | OncePlayback }[] | null = null
+    let prevBodyPlayback: LoopPlayback | OncePlayback | null = null
+    let prevWalkZoneAnimId: string | null = null
 
     function activateZoneMeshes(animId: string | null) {
       // Hide all zone setups
@@ -540,10 +545,38 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
 
     let currentMultiPlaybackRef: MultiAnimationPlayback | null = null
+    let lastSegmentCrossfadeMs: number | null = null
+    let lastSegmentAnimId: string | undefined = undefined
 
-    function switchAnimation(newState: SceneState) {
-      blendFrom = currentGetPositions()
-      blendProgress = 0
+    let zoneOneshotBody: OncePlayback | null = null
+
+    function beginCrossfade(durationMs: number, easeInNew: boolean) {
+      // Hide any leftover prev container (if a previous fade hadn't finished yet)
+      if (prevWalkZoneAnimId && prevWalkZoneAnimId !== activeWalkZoneAnimId) {
+        const oldSetup = walkZoneMeshMap.get(prevWalkZoneAnimId)
+        if (oldSetup) { oldSetup.container.visible = false; oldSetup.container.alpha = 1 }
+      }
+
+      // Stash current playback state as "prev" — it will keep advancing during the fade.
+      prevGetPositions = currentGetPositions
+      prevAdvance = currentAdvance
+      prevZonePlaybacks = activeZonePlaybacks
+      prevBodyPlayback = activeBodyPlayback
+      prevWalkZoneAnimId = activeWalkZoneAnimId
+
+      crossfadeProgress = 0
+      crossfadeDuration = Math.max(durationMs, 1) / 1000
+      currentAdvanceEaseIn = easeInNew
+
+      // Reset live refs so setup* doesn't accidentally inherit
+      activeZonePlaybacks = null
+      activeBodyPlayback = null
+    }
+
+    function switchAnimation(newState: SceneState, durationMs: number, easeInNew: boolean) {
+      // Any scene-state-driven switch cancels an in-progress zone oneshot.
+      zoneOneshotBody = null
+      beginCrossfade(durationMs, easeInNew)
 
       if (newState === 'segment') {
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
@@ -551,7 +584,59 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const rp = scenePlayback.currentRestPoint
         setupInteractionAnimation(rp?.restAnimationId, rp?.randomAnimationIds ?? [])
       }
-      blendTo = currentGetPositions
+
+    }
+
+    /**
+     * Trigger a zone-based (walk / members-bones-v*) oneshot from the interaction state.
+     * Plays the animation once (OncePlayback per zone + body), then auto-reverts to the
+     * current rest point setup. Ignored if a oneshot is already in flight or the anim
+     * is not zone-based / not ready.
+     */
+    function triggerZoneOneshot(animId: string): boolean {
+      if (zoneOneshotBody) return false
+      const anim = animMap.current.get(animId)
+      if (!anim || !anim.mesh?.walkZoneFrames || !anim.mesh.walkBodyFrames || !walkZoneMeshMap.has(anim.id)) return false
+      const sep = anim.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
+      if (!sep) return false
+
+      beginCrossfade(290, false)
+      activateZoneMeshes(anim.id)
+      pixiMesh.visible = false
+
+      const fps = 24
+      activeZonePlaybacks = sep.zones.map(zone => ({
+        zoneId: zone.id,
+        playback: new OncePlayback(anim.mesh!.walkZoneFrames![zone.id], { fps }),
+      }))
+      const bodyPb = new OncePlayback(anim.mesh.walkBodyFrames, { fps })
+      activeBodyPlayback = bodyPb
+      zoneOneshotBody = bodyPb
+
+      const legacyFrames = anim.mesh.videoFramesMesh
+      if (legacyFrames && legacyFrames.length > 0) {
+        const legacyPb = new OncePlayback(legacyFrames, { fps })
+        currentGetPositions = () => legacyPb.getPositions()
+        currentAdvance = (delta) => {
+          legacyPb.advance(delta)
+          activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
+          activeBodyPlayback?.advance(delta)
+        }
+      } else {
+        currentGetPositions = () => allPoints
+        currentAdvance = (delta) => {
+          activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
+          activeBodyPlayback?.advance(delta)
+        }
+      }
+      return true
+    }
+
+    function revertFromZoneOneshot() {
+      zoneOneshotBody = null
+      beginCrossfade(290, false)
+      const rp = scenePlayback.currentRestPoint
+      setupInteractionAnimation(rp?.restAnimationId, rp?.randomAnimationIds ?? [])
     }
 
     // Initialize based on scene playback initial state
@@ -566,6 +651,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
 
     let prevSceneState: SceneState = initialState
+    lastSegmentAnimId = scenePlayback.currentSegmentAnimationId
+    lastSegmentCrossfadeMs = scenePlayback.currentSegment?.crossfadeMs ?? null
 
     // --- Zone touch detection (pointer event) ---
     const onPointerDown = (e: PointerEvent) => {
@@ -580,8 +667,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (!zoneId) return
       const rp = scenePlayback.currentRestPoint
       const mapping = rp?.zoneAnimationMappings?.find(m => m.zoneId === zoneId)
-      if (mapping && currentMultiPlaybackRef) {
+      if (!mapping) return
+      if (currentMultiPlaybackRef) {
         currentMultiPlaybackRef.requestOneshot(mapping.animationId)
+      } else {
+        triggerZoneOneshot(mapping.animationId)
       }
     }
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -593,22 +683,70 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (playingRef.current) {
         scenePlayback.update(deltaSeconds)
         const newState = scenePlayback.currentState
+        const newSegAnimId = scenePlayback.currentSegmentAnimationId
+        const segCrossfade = scenePlayback.currentSegment?.crossfadeMs ?? 290
 
-        if (newState !== prevSceneState) {
+        // State change OR segment→segment animation change within the same transition
+        const stateChanged = newState !== prevSceneState
+        const segmentBoundary = newState === 'segment'
+          && prevSceneState === 'segment'
+          && newSegAnimId !== lastSegmentAnimId
+
+        if (stateChanged || segmentBoundary) {
+          // Choose crossfade duration: outgoing segment if we're leaving one,
+          // otherwise incoming segment, otherwise default 290ms.
+          let durationMs: number
+          if (prevSceneState === 'segment' && (newState === 'interaction' || newState === 'blend')) {
+            // Segment → rest point : priorité au fondu d'arrivée propre au rest point
+            const arrivalMs = scenePlayback.currentRestPoint?.arrivalCrossfadeMs
+            durationMs = arrivalMs ?? lastSegmentCrossfadeMs ?? 290
+          } else if (prevSceneState === 'segment' && lastSegmentCrossfadeMs != null) {
+            durationMs = lastSegmentCrossfadeMs
+          } else if (newState === 'segment') {
+            durationMs = segCrossfade
+          } else {
+            durationMs = 290
+          }
           setSceneState(newState)
-          switchAnimation(newState)
+          const easeInNew = prevSceneState === 'segment' && (newState === 'interaction' || newState === 'blend')
+          switchAnimation(newState, durationMs, easeInNew)
           prevSceneState = newState
         }
 
-        currentAdvance(delta)
+        // Track current segment metadata (for next-frame outgoing decision)
+        if (newState === 'segment') {
+          lastSegmentCrossfadeMs = segCrossfade
+          lastSegmentAnimId = newSegAnimId
+        } else {
+          lastSegmentAnimId = undefined
+        }
+
+        // Pendant un fondu segment→rest, on ramp la nouvelle playback (rest) avec smoothstep
+        // pour masquer le "démarrage à pleine vitesse" de la rest pendant que le segment est encore visible.
+        if (currentAdvanceEaseIn && crossfadeProgress < 1) {
+          const ramp = smoothstep(Math.min(crossfadeProgress, 1))
+          currentAdvance(delta * ramp)
+        } else {
+          currentAdvance(delta)
+        }
+        if (prevAdvance && crossfadeProgress < 1) {
+          prevAdvance(delta)
+        }
+
+        // Auto-revert from a zone-based oneshot once its body playback hits the last frame.
+        // Only revert if the scene is still in interaction (a scene-state switch already
+        // cancelled the oneshot via switchAnimation).
+        if (zoneOneshotBody && zoneOneshotBody.isFinished && scenePlayback.currentState === 'interaction') {
+          revertFromZoneOneshot()
+        }
       }
 
       let positions: Point2D[]
-      if (blendFrom && blendTo && blendProgress < 1) {
-        blendProgress += (delta / 60) / blendDuration
-        const t = smoothstep(Math.min(blendProgress, 1))
-        const from = blendFrom
-        const to = blendTo()
+      if (prevGetPositions && crossfadeProgress < 1) {
+        crossfadeProgress += deltaSeconds / crossfadeDuration
+        const t = smoothstep(Math.min(crossfadeProgress, 1))
+        const from = prevGetPositions()
+        const to = currentGetPositions()
         positions = new Array(numPoints)
         for (let i = 0; i < numPoints; i++) {
           positions[i] = {
@@ -616,9 +754,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             y: from[i].y * (1 - t) + to[i].y * t,
           }
         }
-        if (blendProgress >= 1) {
-          blendFrom = null
-          blendTo = null
+        if (crossfadeProgress >= 1) {
+          prevGetPositions = null
+          prevAdvance = null
+          prevZonePlaybacks = null
+          prevBodyPlayback = null
+          if (prevWalkZoneAnimId && prevWalkZoneAnimId !== activeWalkZoneAnimId) {
+            const oldSetup = walkZoneMeshMap.get(prevWalkZoneAnimId)
+            if (oldSetup) { oldSetup.container.visible = false; oldSetup.container.alpha = 1 }
+          }
+          prevWalkZoneAnimId = null
         }
       } else {
         positions = currentGetPositions()
@@ -628,19 +773,46 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       charOffsetX = computeCharOffsetX(scenePlayback)
       latestPositions = positions
 
+      // Vertex-position crossfade for zone-based meshes (topologie partagée).
+      // Hide the old container; we blend positions onto the NEW container at alpha=1.
+      const fadeActive = prevGetPositions != null && crossfadeProgress < 1
+      const fadeT = fadeActive ? smoothstep(Math.min(crossfadeProgress, 1)) : 1
+      if (activeWalkZoneAnimId) {
+        const setup = walkZoneMeshMap.get(activeWalkZoneAnimId)
+        if (setup) setup.container.alpha = 1
+      }
+      if (prevWalkZoneAnimId && prevWalkZoneAnimId !== activeWalkZoneAnimId) {
+        const oldSetup = walkZoneMeshMap.get(prevWalkZoneAnimId)
+        if (oldSetup) { oldSetup.container.visible = false; oldSetup.container.alpha = 1 }
+      }
+
+      const blendPts = (a: Point2D[], b: Point2D[], t: number): Point2D[] => {
+        const n = Math.min(a.length, b.length)
+        const out = new Array<Point2D>(n)
+        for (let i = 0; i < n; i++) out[i] = { x: a[i].x * (1 - t) + b[i].x * t, y: a[i].y * (1 - t) + b[i].y * t }
+        return out
+      }
+
       // Zone mesh rendering for walk animations
       if (activeWalkZoneAnimId && activeZonePlaybacks && activeBodyPlayback) {
         const setup = walkZoneMeshMap.get(activeWalkZoneAnimId)
         if (setup) {
-          // Update zone mesh positions
+          // Update zone mesh positions (blend with prev zone playback if fading)
           for (const zp of activeZonePlaybacks) {
             const zm = setup.zoneMeshes.find(z => z.zoneId === zp.zoneId)
-            if (zm) {
-              updateZoneMeshVertices(zm, zp.playback.getPositions(), charScale, charOffsetX, charOffsetY)
+            if (!zm) continue
+            let pts = zp.playback.getPositions()
+            if (fadeActive && prevZonePlaybacks) {
+              const prevZp = prevZonePlaybacks.find(z => z.zoneId === zp.zoneId)
+              if (prevZp) pts = blendPts(prevZp.playback.getPositions(), pts, fadeT)
             }
+            updateZoneMeshVertices(zm, pts, charScale, charOffsetX, charOffsetY)
           }
           // Update body mesh
-          const bodyPositions = activeBodyPlayback.getPositions()
+          let bodyPositions = activeBodyPlayback.getPositions()
+          if (fadeActive && prevBodyPlayback) {
+            bodyPositions = blendPts(prevBodyPlayback.getPositions(), bodyPositions, fadeT)
+          }
           updateZoneMeshVertices(setup.bodyMesh, bodyPositions, charScale, charOffsetX, charOffsetY)
           // Update hidden face meshes (same bodyPoints, same bodyFrames)
           if (setup.hiddenFaceMeshes) {
@@ -654,7 +826,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
               const zoneId = hflm.zoneId.replace('__hfl_', '')
               const zp = activeZonePlaybacks.find(z => z.zoneId === zoneId)
               if (zp) {
-                updateZoneMeshVertices(hflm, zp.playback.getPositions(), charScale, charOffsetX, charOffsetY)
+                let pts = zp.playback.getPositions()
+                if (fadeActive && prevZonePlaybacks) {
+                  const prevZp = prevZonePlaybacks.find(z => z.zoneId === zoneId)
+                  if (prevZp) pts = blendPts(prevZp.playback.getPositions(), pts, fadeT)
+                }
+                updateZoneMeshVertices(hflm, pts, charScale, charOffsetX, charOffsetY)
               }
             }
           }
@@ -689,6 +866,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     const getMultiPlayback = () => currentMultiPlaybackRef
     ;(scenePlaybackRef.current as unknown as { getMultiPlayback: typeof getMultiPlayback }).getMultiPlayback = getMultiPlayback
+    ;(scenePlaybackRef.current as unknown as { triggerZoneOneshot: typeof triggerZoneOneshot }).triggerZoneOneshot = triggerZoneOneshot
 
     return () => {
       scenePlaybackRef.current = null
@@ -722,8 +900,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     })
     if (ids.length === 0) return
     const randomId = ids[Math.floor(Math.random() * ids.length)]
-    const sp = scenePlaybackRef.current as unknown as { getMultiPlayback?: () => MultiAnimationPlayback | null }
-    sp?.getMultiPlayback?.()?.requestOneshot(randomId)
+    const sp = scenePlaybackRef.current as unknown as {
+      getMultiPlayback?: () => MultiAnimationPlayback | null
+      triggerZoneOneshot?: (animId: string) => boolean
+    }
+    const mp = sp?.getMultiPlayback?.()
+    if (mp) mp.requestOneshot(randomId)
+    else sp?.triggerZoneOneshot?.(randomId)
   }, [currentRestIdx, scene.restPoints, project.animations])
 
   const handleSpeak = useCallback(() => {
@@ -769,7 +952,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const currentRp = scene.restPoints[currentRestIdx]
   const hasRandomAnims = (currentRp?.randomAnimationIds ?? []).some(id => {
     const a = project.animations.find(a => a.id === id)
-    return a != null && a.mesh?.videoFramesMesh != null
+    return a != null && (a.mesh?.videoFramesMesh != null || (a.mesh?.walkZoneFrames != null && a.mesh?.walkBodyFrames != null))
   })
   const hasSpeakSounds = (currentRp?.speakSoundIds ?? []).length > 0
   const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0

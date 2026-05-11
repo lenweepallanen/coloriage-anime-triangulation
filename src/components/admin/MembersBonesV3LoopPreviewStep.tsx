@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation } from '../../types/project'
+import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
@@ -19,6 +19,7 @@ import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 interface Props {
   project: Project
   animation: Animation
+  onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
 }
 
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -42,7 +43,7 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
   }
 }
 
-export default function MembersBonesV3LoopPreviewStep({ project, animation }: Props) {
+export default function MembersBonesV3LoopPreviewStep({ project, animation, onSave }: Props) {
   const mesh = animation.mesh
   const tri = project.projectTriangulation
 
@@ -55,7 +56,9 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation }: Pr
     [mesh?.walkZoneFramesSmoothed, mesh?.walkZoneFrames],
   )
 
-  const [crossfade, setCrossfade] = useState(7)
+  const [crossfade, setCrossfade] = useState(mesh?.crossfadeFrames ?? 7)
+  const savedCrossfade = mesh?.crossfadeFrames ?? 7
+  const [saving, setSaving] = useState(false)
   const [speed, setSpeed] = useState(1.0)
   const [playing, setPlaying] = useState(true)
 
@@ -229,7 +232,24 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation }: Pr
           <span style={{ fontSize: '0.85rem', minWidth: 36, textAlign: 'right' }}>{speed.toFixed(2)}×</span>
         </label>
 
-        <span className="toolbar-info">Preview admin uniquement — aucune sauvegarde</span>
+        <button
+          onClick={async () => {
+            if (!mesh) return
+            setSaving(true)
+            try {
+              const updatedAnimations = project.animations.map(a =>
+                a.id === animation.id ? { ...a, mesh: { ...mesh, crossfadeFrames: crossfade } } : a,
+              )
+              await onSave({ ...project, animations: updatedAnimations })
+            } finally {
+              setSaving(false)
+            }
+          }}
+          disabled={saving || crossfade === savedCrossfade}
+          className="btn-primary"
+        >
+          {saving ? 'Sauvegarde…' : crossfade === savedCrossfade ? '✓ Sauvegardé' : 'Sauvegarder crossfade'}
+        </button>
       </div>
 
       <div className="triangulation-help">
