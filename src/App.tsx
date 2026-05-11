@@ -8,6 +8,7 @@ import AnimationsSection from './pages/admin/AnimationsSection'
 import SceneSection from './pages/admin/SceneSection'
 import BodyZonesSection from './pages/admin/BodyZonesSection'
 import TriangulationSection from './pages/admin/TriangulationSection'
+import EyesSection from './pages/admin/EyesSection'
 import ScanPage from './pages/ScanPage'
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
           <Route path="zones" element={<BodyZonesSection />} />
           <Route path="scene" element={<SceneSection />} />
           <Route path="triangulation" element={<TriangulationSection />} />
+          <Route path="eyes" element={<EyesSection />} />
         </Route>
         <Route path="/scan/:projectId" element={<ScanPage />} />
       </Route>

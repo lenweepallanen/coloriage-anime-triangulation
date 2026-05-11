@@ -264,6 +264,7 @@ interface ProjectDoc {
   markers: Project['markers']
   scene: SceneDoc | null
   projectTriangulation?: ProjectTriangulationDoc | null
+  projectEyes?: Project['projectEyes']
 }
 
 // Legacy project doc (v4 format — single mesh + video at root)
@@ -711,6 +712,7 @@ function toDoc(project: Project): ProjectDoc {
     markers: project.markers,
     scene: project.scene ? sceneToDoc(project.scene) : null,
     ...(project.projectTriangulation != null && { projectTriangulation: projectTriangulationToDoc(project.projectTriangulation) }),
+    ...(project.projectEyes != null && { projectEyes: project.projectEyes }),
   }
 }
 
@@ -1099,6 +1101,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     markers: projDoc.markers,
     scene,
     projectTriangulation,
+    projectEyes: projDoc.projectEyes ?? null,
   }
 }
 
@@ -1152,6 +1155,7 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     markers: data.markers,
     scene: null,
     projectTriangulation: null,
+    projectEyes: null,
   }
 }
 
@@ -1215,6 +1219,7 @@ export async function createProject(name: string): Promise<Project> {
     markers: null,
     scene: null,
     projectTriangulation: null,
+    projectEyes: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
   console.log('[Firebase] Project created:', project.id)
@@ -1263,6 +1268,7 @@ export async function getAllProjects(): Promise<Project[]> {
         markers: legacy.markers,
         scene: null,
         projectTriangulation: null,
+        projectEyes: null,
       }
     }
 
@@ -1297,6 +1303,7 @@ export async function getAllProjects(): Promise<Project[]> {
       markers: projDoc.markers,
       scene: null,
       projectTriangulation: null,
+      projectEyes: projDoc.projectEyes ?? null,
     }
   })
 }

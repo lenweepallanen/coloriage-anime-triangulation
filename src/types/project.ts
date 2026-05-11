@@ -634,6 +634,34 @@ export interface Scene {
   speakSoundBlobs: (Blob | null)[];
 }
 
+export interface EyeRegion {
+  id: string;
+  contourPoints: Point2D[];        // polygone fermé, coords IMAGE
+  barycentricRefs: BarycentricRef[]; // 1 par point, via trackedTriangles du mesh rest
+  /** Refs barycentriques contre le maillage body (projectTriangulation ou walkLimbSeparation).
+   *  Utilisé pour suivre la déformation des animations walk/members-bones. */
+  bodyBarycentricRefs?: BarycentricRef[];
+  seed: Point2D;                    // point cliqué (debug/redétection)
+}
+
+export interface ProjectEyes {
+  regions: EyeRegion[];
+  blinkEnabled: boolean;
+  blinkDurationMs: number;          // durée totale d'un clignement (fermeture + ouverture)
+  blinkIntervalMinMs: number;
+  blinkIntervalMaxMs: number;
+  doubleBlinkProbability: number;   // 0..1
+}
+
+export const DEFAULT_PROJECT_EYES: ProjectEyes = {
+  regions: [],
+  blinkEnabled: true,
+  blinkDurationMs: 180,
+  blinkIntervalMinMs: 2500,
+  blinkIntervalMaxMs: 7000,
+  doubleBlinkProbability: 0.15,
+};
+
 export interface Project {
   id: string;
   name: string;
@@ -647,6 +675,7 @@ export interface Project {
   markers: MarkerCorners | null;
   scene: Scene | null;
   projectTriangulation: ProjectTriangulation | null;
+  projectEyes: ProjectEyes | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

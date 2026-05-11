@@ -8,6 +8,7 @@ import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { DeviceParallax } from '../../utils/deviceParallax'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { EyeBlinkOverlay, getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
@@ -430,6 +431,25 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     const pixiMesh = new PIXI.Mesh(geometry, material)
     meshContainer.addChild(pixiMesh)
 
+    // --- Eye blink overlay (project-level, optional) ---
+    let eyeOverlay: EyeBlinkOverlay | null = null
+    app.stage.sortableChildren = true
+    if (project.projectEyes && project.projectEyes.regions.length > 0) {
+      const bodyMesh = getEyeBodyMeshData(project)
+      eyeOverlay = new EyeBlinkOverlay(
+        project.projectEyes,
+        app.stage,
+        mesh.trackedTriangles.length > 0 ? mesh.trackedTriangles : null,
+        {
+          nContourAnchors: mesh.contourAnchors.length,
+          nContourSubdivision: mesh.contourSubdivisionPoints.length,
+          nAnchorPoints: mesh.anchorPoints.length,
+        },
+        bodyMesh?.bodyTriangles ?? null,
+        bodyMesh?.bodyPoints ?? null,
+      )
+    }
+
     // --- Background video parallax base position (updated on loadedmetadata) ---
     const bgBase = { x: bgSprite ? bgSprite.x : 0, y: bgSprite ? bgSprite.y : 0 }
     if (bgVideoEl) {
@@ -587,6 +607,12 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
             (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
           }
           verts.update()
+        }
+
+        // Eye blink overlay
+        if (eyeOverlay) {
+          const bodyFrame = walkBodyFrames?.[walkFrameCounter] ?? walkBodyFrames?.[0] ?? null
+          eyeOverlay.update(positions, bodyFrame, scale, offsetX, offsetY, (delta / 60) * 1000)
         }
 
         // Parallax on background

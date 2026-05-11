@@ -13,6 +13,7 @@ import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUti
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
+import { EyeBlinkOverlay, getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -298,6 +299,26 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const pixiMesh = new PIXI.Mesh(geometry, material)
 
     characterContainer.addChild(pixiMesh)
+    // Allow eyeOverlay (zIndex=9999) to render above walk/MB zone meshes added later.
+    characterContainer.sortableChildren = true
+
+    // --- Eye blink overlay (project-level, optional) ---
+    let eyeOverlay: EyeBlinkOverlay | null = null
+    if (project.projectEyes && project.projectEyes.regions.length > 0) {
+      const bodyMesh = getEyeBodyMeshData(project)
+      eyeOverlay = new EyeBlinkOverlay(
+        project.projectEyes,
+        characterContainer,
+        mesh.trackedTriangles.length > 0 ? mesh.trackedTriangles : null,
+        {
+          nContourAnchors: mesh.contourAnchors.length,
+          nContourSubdivision: mesh.contourSubdivisionPoints.length,
+          nAnchorPoints: mesh.anchorPoints.length,
+        },
+        bodyMesh?.bodyTriangles ?? null,
+        bodyMesh?.bodyPoints ?? null,
+      )
+    }
 
     // --- Zone meshes for walk animations with limb separation or MB with project triangulation ---
     const walkAnims = project.animations.filter(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
@@ -846,6 +867,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * charScale + charOffsetY
         }
         verts.update()
+      }
+
+      // Eye blink overlay (positioned in character space)
+      if (eyeOverlay) {
+        const bodyPositions = activeBodyPlayback ? activeBodyPlayback.getPositions() : null
+        eyeOverlay.update(positions, bodyPositions, charScale, charOffsetX, charOffsetY, (delta / 60) * 1000)
       }
 
       // Parallax scrolling: each layer scrolls at depthFactor × front speed.

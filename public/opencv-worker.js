@@ -1275,6 +1275,105 @@ self.onmessage = async function(e) {
     return;
   }
 
+  if (type === 'eye-floodfill') {
+    // Eye detection by connected-component around the click :
+    //   1) Threshold Otsu inverse → ink = foreground 255.
+    //   2) Snap seed to nearest ink pixel within a radius.
+    //   3) floodFill that pixel with marker 128 → marks the whole connected ink component.
+    //   4) Extract mask of pixels == 128.
+    //   5) findContours RETR_EXTERNAL → outer silhouette polygon. This polygon encloses
+    //      the whole shape (eye outline ring + interior : sclera, pupil, highlight, …).
+    var src = null, gray = null, binv = null, marked = null, ffMask = null;
+    var compMask = null, contours = null, hierarchy = null, approx = null;
+    try {
+      var seedX = e.data.seedX | 0;
+      var seedY = e.data.seedY | 0;
+      var tol = e.data.tolerance != null ? e.data.tolerance : 30;
+      var snapRadius = Math.max(20, tol * 2);
+      src = cv.matFromImageData(imageData);
+      gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      var w = gray.cols, h = gray.rows;
+      binv = new cv.Mat();
+      cv.threshold(gray, binv, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+      // Snap seed to nearest ink pixel (binv == 255) within snapRadius.
+      var atSeed = binv.ucharPtr(Math.min(h - 1, Math.max(0, seedY)),
+                                 Math.min(w - 1, Math.max(0, seedX)))[0];
+      if (atSeed !== 255) {
+        var bestD = Infinity, bestX = -1, bestY = -1;
+        var x0 = Math.max(0, seedX - snapRadius), x1 = Math.min(w - 1, seedX + snapRadius);
+        var y0 = Math.max(0, seedY - snapRadius), y1 = Math.min(h - 1, seedY + snapRadius);
+        for (var yy = y0; yy <= y1; yy++) {
+          for (var xx = x0; xx <= x1; xx++) {
+            if (binv.ucharPtr(yy, xx)[0] === 255) {
+              var dx = xx - seedX, dy = yy - seedY;
+              var d2 = dx * dx + dy * dy;
+              if (d2 < bestD) { bestD = d2; bestX = xx; bestY = yy; }
+            }
+          }
+        }
+        if (bestX < 0) {
+          self.postMessage({ type: 'eye-floodfill-result', contourPoints: null, error: 'no ink near click' });
+          return;
+        }
+        seedX = bestX; seedY = bestY;
+      }
+
+      // floodFill from seed on binv : marks the component with value 128.
+      marked = binv.clone();
+      ffMask = new cv.Mat.zeros(h + 2, w + 2, cv.CV_8UC1);
+      cv.floodFill(marked, ffMask, new cv.Point(seedX, seedY), new cv.Scalar(128),
+                   new cv.Rect(0, 0, 0, 0), new cv.Scalar(0), new cv.Scalar(0), 8);
+
+      // Extract pixels == 128 → the connected ink component containing the seed.
+      compMask = new cv.Mat();
+      cv.inRange(marked, new cv.Scalar(128), new cv.Scalar(128), compMask);
+
+      // Outer silhouette of that component.
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      cv.findContours(compMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      // Pick the largest external contour (in case of micro-disconnections).
+      var bestIdx = -1, bestArea = 0;
+      for (var i = 0; i < contours.size(); i++) {
+        var a = cv.contourArea(contours.get(i), false);
+        if (a > bestArea) { bestArea = a; bestIdx = i; }
+      }
+
+      var points = [];
+      if (bestIdx >= 0 && bestArea > 30) {
+        var best = contours.get(bestIdx);
+        approx = new cv.Mat();
+        cv.approxPolyDP(best, approx, 1.0, true);
+        var data = approx.data32S;
+        for (var k = 0; k < data.length; k += 2) {
+          points.push({ x: data[k], y: data[k + 1] });
+        }
+      }
+      self.postMessage({
+        type: 'eye-floodfill-result',
+        contourPoints: points.length >= 3 ? points : null,
+        area: bestArea
+      });
+    } catch (err) {
+      console.error('Worker eye-floodfill error:', err);
+      self.postMessage({ type: 'eye-floodfill-result', contourPoints: null, error: err.message });
+    } finally {
+      if (src) src.delete();
+      if (gray) gray.delete();
+      if (binv) binv.delete();
+      if (marked) marked.delete();
+      if (ffMask) ffMask.delete();
+      if (compMask) compMask.delete();
+      if (contours) contours.delete();
+      if (hierarchy) hierarchy.delete();
+      if (approx) approx.delete();
+    }
+    return;
+  }
+
   if (type === 'canny-contour') {
     try {
       var low = e.data.lowThreshold || 50;

@@ -249,6 +249,24 @@ export async function templateMatchJump(
   return result.points || []
 }
 
+// --- Détection œil par flood-fill (admin Yeux) ---
+
+export async function detectEyeContour(
+  imageData: ImageData,
+  seed: { x: number; y: number },
+  tolerance = 30
+): Promise<{ x: number; y: number }[] | null> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'eye-floodfill',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+    seedX: Math.round(seed.x),
+    seedY: Math.round(seed.y),
+    tolerance,
+  }, 'eye-floodfill-result')
+  return result.contourPoints || null
+}
+
 // --- Détection bbox du dessin (pour l'alignement UV au scan) ---
 
 export interface DrawingBBox {
