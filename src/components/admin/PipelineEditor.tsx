@@ -362,7 +362,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'Preview Animation' && isCoTrackerBonesAnim && (
           <div className="step-content">
             <h2>Preview Animation</h2>
-            <TriangulationLoopPreview project={project} animation={animation} mode="textured" height={520} />
+            <TriangulationLoopPreview project={project} animation={animation} mode="textured" height={520} background="#fff" />
           </div>
         )}
         {activeStep === 'Triangulation' && !isBoneAnim && (

@@ -22,6 +22,8 @@ interface Props {
   preferSmoothed?: boolean
   /** 'textured' (défaut) = meshes texturés ; 'wireframe' = pas de texture, juste l'overlay. */
   mode?: 'textured' | 'wireframe'
+  /** Background color (hex string for CSS + number 0xRRGGBB for PIXI). Défaut sombre. */
+  background?: string
 }
 
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -46,8 +48,9 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
 }
 
 export default function TriangulationLoopPreview({
-  project, animation, height = 360, preferSmoothed = true, mode = 'textured',
+  project, animation, height = 360, preferSmoothed = true, mode = 'textured', background = '#111',
 }: Props) {
+  const bgNum = parseInt(background.replace('#', ''), 16)
   const mesh = animation.mesh
   const tri = project.projectTriangulation
 
@@ -111,7 +114,7 @@ export default function TriangulationLoopPreview({
       const viewH = Math.max(rect.height, 100)
 
       const app = new PIXI.Application({
-        width: viewW, height: viewH, backgroundColor: 0x111111, antialias: true,
+        width: viewW, height: viewH, backgroundColor: bgNum, antialias: true,
       })
       container.appendChild(app.view as HTMLCanvasElement)
       appRef.current = app
@@ -273,7 +276,7 @@ export default function TriangulationLoopPreview({
       if (imageUrl) URL.revokeObjectURL(imageUrl)
       while (container.firstChild) container.removeChild(container.firstChild)
     }
-  }, [project, animation, tri, bodyFrames, zoneFrames, crossfade, mode])
+  }, [project, animation, tri, bodyFrames, zoneFrames, crossfade, mode, bgNum])
 
   if (!tri?.step3Validated) {
     return <div style={{ padding: 8, opacity: 0.7, fontSize: 12 }}>Preview indisponible : Triangulation projet incomplète.</div>
@@ -310,7 +313,7 @@ export default function TriangulationLoopPreview({
           Bones
         </label>
       </div>
-      <div ref={containerRef} style={{ height, background: '#111' }} />
+      <div ref={containerRef} style={{ height, background }} />
     </div>
   )
 }

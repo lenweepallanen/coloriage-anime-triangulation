@@ -91,7 +91,7 @@ export default function CoTrackerBonesBoneSmoothingStep({ project, animation, on
       {mesh.cotrackerBoneSmoothingValidated && (
         <p style={{ color: '#22c55e' }}>✓ Lissage appliqué (cutoff {mesh.cotrackerBoneSmoothingCutoffHz} Hz)</p>
       )}
-      <TriangulationLoopPreview project={project} animation={animation} />
+      <TriangulationLoopPreview project={project} animation={animation} background="#fff" />
     </div>
   )
 }

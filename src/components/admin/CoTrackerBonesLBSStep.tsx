@@ -182,7 +182,7 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
       {hasComputed && (
         <TriangulationLoopPreview
           project={project} animation={animation}
-          mode="wireframe" height={460} preferSmoothed={false}
+          mode="wireframe" height={460} preferSmoothed={false} background="#fff"
         />
       )}
     </div>

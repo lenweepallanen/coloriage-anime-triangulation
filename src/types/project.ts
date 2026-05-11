@@ -414,6 +414,7 @@ export interface ProjectTriangulation {
   zoneSubdivisionPoints?: Record<string, Point2D[]>           // zoneId → points subdivision
   zoneSubdivisionParams?: Record<string, CurvilinearParam[]>  // zoneId → params curvilignes
   zoneSubdivisionValidated?: Record<string, boolean>          // zoneId → subdivision validée
+  zonePixelAdjusted?: Record<string, boolean>                 // zoneId → ajustement pixel actif (gèle le recalcul curviligne)
   // Phase 4 : Delaunay interne + layout
   zoneContourLength?: Record<string, number>                  // zoneId → nb points contour (contour = N premiers indices de zonePoints)
   // Legacy (conservés pour migration) : utilisés quand zoneAnchors absent

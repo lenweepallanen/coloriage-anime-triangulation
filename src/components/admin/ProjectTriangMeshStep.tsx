@@ -21,7 +21,7 @@ import { pointInPolygon } from '../../utils/geometry'
 import { detectCurvatureExtrema } from '../../utils/curvatureScaleSpace'
 import { reorderContourFromOrigin, subdivideContour, computeArcLengths } from '../../utils/curvilinearContour'
 
-type ZoneSubPhase = 'p0' | 'anchors' | 'subdivision' | 'triangulation'
+type ZoneSubPhase = 'p0' | 'anchors' | 'subdivision' | 'triangulation' | 'adjust'
 
 const POINT_RADIUS = 5
 const HIT_RADIUS = 10
@@ -61,6 +61,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const [zoneSubdivisionParams, setZoneSubdivisionParams] = useState<Record<string, CurvilinearParam[]>>(() => tri?.zoneSubdivisionParams ?? {})
   const [zoneSubdivisionPoints, setZoneSubdivisionPoints] = useState<Record<string, Point2D[]>>(() => tri?.zoneSubdivisionPoints ?? {})
   const [zoneSubdivisionValidated, setZoneSubdivisionValidated] = useState<Record<string, boolean>>(() => tri?.zoneSubdivisionValidated ?? {})
+  // Pixel-adjust freeze flag (persisted) — when true, useEffect ne recalcule plus les subdivisions
+  const [zonePixelAdjusted, setZonePixelAdjusted] = useState<Record<string, boolean>>(() => tri?.zonePixelAdjusted ?? {})
   // Per-zone, per-segment subdivision counts (segIdx → N)
   const [zoneSegmentCounts, setZoneSegmentCounts] = useState<Record<string, number[]>>(() => {
     const init: Record<string, number[]> = {}
@@ -101,7 +103,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const [activeSubPhase, setActiveSubPhase] = useState<Record<string, ZoneSubPhase>>({})
   const [activeSegment, setActiveSegment] = useState<number | null>(null) // for subdivision UI hover/select
   const [dragTarget, setDragTarget] = useState<{
-    zoneId: string; type: 'anchor' | 'p0' | 'internal' | 'bodyExtra'; idx: number
+    zoneId: string; type: 'anchor' | 'p0' | 'internal' | 'bodyExtra' | 'subdivision'; idx: number
   } | null>(null)
   const [saving, setSaving] = useState(false)
   const [imageLoaded, setImageLoaded] = useState(false)
@@ -267,6 +269,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
 
   useEffect(() => {
     for (const zoneId of Object.keys(zoneAnchors)) {
+      if (activeSubPhase[zoneId] === 'adjust' || zonePixelAdjusted[zoneId]) continue // freeze curvilinear recompute in pixel-adjust phase (session OR persisted)
       const anchors = zoneAnchors[zoneId]
       const refContour = getRefContour(zoneId)
       const p0 = zoneOrigins[zoneId]
@@ -431,7 +434,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       }
 
       // Sub-phase Anchors / Subdivision / Triangulation : draw current anchors + subdivision
-      if (phase === 'anchors' || phase === 'subdivision' || phase === 'triangulation') {
+      if (phase === 'anchors' || phase === 'subdivision' || phase === 'triangulation' || phase === 'adjust') {
         const closedContour = buildClosedContour(activeZoneId)
         const anchors = zoneAnchors[activeZoneId] ?? []
         const subPoints = zoneSubdivisionPoints[activeZoneId] ?? []
@@ -469,13 +472,14 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           }
         }
 
-        // Subdivision points (orange, well-visible in subdivision phase)
+        // Subdivision points (orange, well-visible in subdivision + adjust phases)
         const isSubPhase = phase === 'subdivision'
+        const isAdjustPhase = phase === 'adjust'
         for (let i = 0; i < subPoints.length; i++) {
           const p = subPoints[i]
           const segIdx = subParams[i]?.segmentIndex
           const isHighlighted = isSubPhase && activeSegment !== null && segIdx === activeSegment
-          if (isSubPhase) {
+          if (isSubPhase || isAdjustPhase) {
             ctx.fillStyle = isHighlighted ? '#22c55e' : '#fb923c'
             ctx.strokeStyle = '#fff'
             ctx.lineWidth = 1.2 / t.scale
@@ -498,8 +502,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           }
         }
 
-        // Triangulation phase : draw internal points (from zm.points) + manual points (cyan overlay)
-        if (phase === 'triangulation') {
+        // Triangulation / Adjust phase : draw internal points (from zm.points) + manual points (cyan overlay)
+        if (phase === 'triangulation' || phase === 'adjust') {
           const zm = zoneMeshes?.[activeZoneId]
           if (zm) {
             // Auto-internal (white)
@@ -605,11 +609,29 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         return
       }
 
-      // ── Triangulation sub-phase : click=add (re-Delaunay), drag=move, right-click=delete ──
-      if (phase === 'triangulation') {
+      // ── Triangulation / Adjust sub-phase : click=add (re-Delaunay), drag=move, right-click=delete ──
+      if (phase === 'triangulation' || phase === 'adjust') {
         const closedContour = buildClosedContour(activeZoneId)
         if (!closedContour) return
         const manual = manualPoints[activeZoneId] ?? []
+        // Try drag existing anchor (P0 inclus = idx 0)
+        const anchors = zoneAnchors[activeZoneId] ?? []
+        for (let i = 0; i < anchors.length; i++) {
+          if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+            setDragTarget({ zoneId: activeZoneId, type: 'anchor', idx: i })
+            return
+          }
+        }
+        // Try drag subdivision (only in adjust phase — otherwise they're auto-derived)
+        if (phase === 'adjust') {
+          const subs = zoneSubdivisionPoints[activeZoneId] ?? []
+          for (let i = 0; i < subs.length; i++) {
+            if (Math.hypot(subs[i].x - imgPt.x, subs[i].y - imgPt.y) < hitR) {
+              setDragTarget({ zoneId: activeZoneId, type: 'subdivision', idx: i })
+              return
+            }
+          }
+        }
         // Try drag existing manual point (hit-test on position directly)
         for (let i = manual.length - 1; i >= 0; i--) {
           if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
@@ -646,11 +668,24 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     if (!dragTarget) return
     const imgPt = screenToImage(e.clientX, e.clientY)
     if (dragTarget.type === 'anchor') {
-      const candidates = getTopExtrema(dragTarget.zoneId, 50)
-      const snapped = snapToExtremum(imgPt, candidates, 0) ?? imgPt
+      const isAdjust = activeSubPhase[dragTarget.zoneId] === 'adjust'
+      let pos: Point2D = imgPt
+      if (!isAdjust) {
+        const candidates = getTopExtrema(dragTarget.zoneId, 50)
+        pos = snapToExtremum(imgPt, candidates, 0) ?? imgPt
+      } else {
+        setZonePixelAdjusted(prev => ({ ...prev, [dragTarget.zoneId]: true }))
+      }
       setZoneAnchors(prev => {
         const arr = [...(prev[dragTarget.zoneId] ?? [])]
-        arr[dragTarget.idx] = snapped
+        arr[dragTarget.idx] = pos
+        return { ...prev, [dragTarget.zoneId]: arr }
+      })
+    } else if (dragTarget.type === 'subdivision') {
+      setZonePixelAdjusted(prev => ({ ...prev, [dragTarget.zoneId]: true }))
+      setZoneSubdivisionPoints(prev => {
+        const arr = [...(prev[dragTarget.zoneId] ?? [])]
+        arr[dragTarget.idx] = imgPt
         return { ...prev, [dragTarget.zoneId]: arr }
       })
     } else if (dragTarget.type === 'internal') {
@@ -663,8 +698,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   }
 
   function handleMouseUp() {
-    if (dragTarget?.type === 'anchor') {
-      // Re-sort anchors after drag
+    if (dragTarget?.type === 'anchor' && activeSubPhase[dragTarget.zoneId] !== 'adjust') {
+      // Re-sort anchors after drag (skipped in pixel-adjust mode to preserve indexing)
       const zoneId = dragTarget.zoneId
       const anchors = zoneAnchors[zoneId] ?? []
       const sorted = sortAnchorsByArcLength(anchors, zoneId)
@@ -766,6 +801,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   }
 
   function handleResetSubPhase(zoneId: string, phase: ZoneSubPhase) {
+    // Re-editing upstream phases drops the pixel-adjust freeze so curvilinear recompute resumes
+    if (phase !== 'adjust') setZonePixelAdjusted(prev => ({ ...prev, [zoneId]: false }))
     if (phase === 'p0' || phase === 'anchors') setZoneAnchorsValidated(prev => ({ ...prev, [zoneId]: false }))
     if (phase === 'p0' || phase === 'anchors' || phase === 'subdivision') {
       setZoneSubdivisionValidated(prev => ({ ...prev, [zoneId]: false }))
@@ -830,6 +867,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           zoneSubdivisionPoints: { ...zoneSubdivisionPoints },
           zoneSubdivisionParams: { ...zoneSubdivisionParams },
           zoneSubdivisionValidated: { ...zoneSubdivisionValidated },
+          zonePixelAdjusted: { ...zonePixelAdjusted },
           zoneContourLength: newZoneContourLength,
           // Triangulation
           zonePoints: newZonePoints,
@@ -939,7 +977,9 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                 ? 'Clic = ajouter anchor (snap courbure). Drag = déplacer (snap). Clic droit = supprimer (P0 protégé).'
                 : activePhase === 'subdivision'
                   ? 'Clic sur un segment pour le surligner. Utilisez les +/- pour ajouter/retirer des points.'
-                  : 'Clic = ajouter point. Drag = déplacer. Clic droit = supprimer.'}
+                  : activePhase === 'adjust'
+                    ? 'Ajustement pixel : drag anchor/subdivision = libre (pas de snap, pas de recalcul curviligne). Clic = ajouter point interne. Clic droit = supprimer.'
+                    : 'Drag anchor (P0/rouge inclus) = repositionner (snap courbure, subdivisions recalculées). Clic = ajouter point interne. Clic droit = supprimer.'}
         </div>
       </div>
 
@@ -1002,7 +1042,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               </div>
               {isActive && (
                 <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
-                  {(['p0', 'anchors', 'subdivision', 'triangulation'] as const).map((sp, i) => {
+                  {(['p0', 'anchors', 'subdivision', 'triangulation', 'adjust'] as const).map((sp, i) => {
                     const isCurrent = subPhase === sp
                     const isReached = stage > i
                     return (
@@ -1015,7 +1055,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                           opacity: isReached ? 1 : 0.6,
                         }}
                       >
-                        {{ p0: 'P0', anchors: 'Anc.', subdivision: 'Subd.', triangulation: 'Tri.' }[sp]}
+                        {{ p0: 'P0', anchors: 'Anc.', subdivision: 'Subd.', triangulation: 'Tri.', adjust: 'Ajust.' }[sp]}
                       </button>
                     )
                   })}
@@ -1173,6 +1213,33 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               style={{ width: '100%', fontSize: 12, marginBottom: 6 }}
             >
               ← Rééditer subdivision
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => setSubPhase(activeZoneId, 'adjust')}
+              style={{ width: '100%', fontSize: 12 }}
+            >
+              → Ajustement pixel
+            </button>
+          </div>
+        )}
+
+        {activeZoneId && activePhase === 'adjust' && (
+          <div style={{ padding: '10px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, marginBottom: 12, border: '1px solid rgba(34,197,94,0.4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e' }} />
+              <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>Ajustement pixel : {activeLabel}</span>
+            </div>
+            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 10, lineHeight: 1.4 }}>
+              Drag libre des anchors (P0 inclus) et des subdivisions pour matcher la texture au pixel près.
+              Aucun snap, aucun recalcul curviligne. Les positions sont figées.
+            </div>
+            <button
+              className="btn-ghost"
+              onClick={() => setSubPhase(activeZoneId, 'triangulation')}
+              style={{ width: '100%', fontSize: 12 }}
+            >
+              ← Retour Triangulation
             </button>
           </div>
         )}

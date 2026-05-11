@@ -239,7 +239,7 @@ export default function CoTrackerBonesComputeStep({ project, animation, onSave }
           ✓ Calculé : body {mesh.walkBodyFrames.length} frames, pattes {Object.keys(mesh.walkZoneFrames).length} zones
         </p>
       )}
-      <TriangulationLoopPreview project={project} animation={animation} />
+      <TriangulationLoopPreview project={project} animation={animation} background="#fff" />
     </div>
   )
 }

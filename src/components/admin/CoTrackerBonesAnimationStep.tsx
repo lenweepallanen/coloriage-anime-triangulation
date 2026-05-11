@@ -141,7 +141,7 @@ export default function CoTrackerBonesAnimationStep({ project, animation, onSave
     <div className="step-content">
       <h2>Calcul Animation</h2>
 
-      <TriangulationLoopPreview project={project} animation={animation} mode="wireframe" height={420} />
+      <TriangulationLoopPreview project={project} animation={animation} mode="wireframe" height={420} background="#fff" />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
         <div style={{ border: '1px solid #333', borderRadius: 4, padding: 12 }}>
