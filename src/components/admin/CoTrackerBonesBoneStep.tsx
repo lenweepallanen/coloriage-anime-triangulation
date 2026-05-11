@@ -1,0 +1,574 @@
+/**
+ * CoTracker + Bones — Step 3 : skeleton definition.
+ *
+ * Workflow canvas-driven :
+ *  1. "+ Joint" / "+ Patte X" → mode placement. Clic(s) libre(s) sur canvas pour
+ *     poser le joint (ou hip puis foot).
+ *  2. Clic sur un joint/endpoint existant (canvas ou panneau) → sélection.
+ *  3. Bouton "Ajouter points barycentres" → mode assign. Chaque clic sur un point
+ *     tracker du canvas l'ajoute/retire du barycentre du endpoint sélectionné.
+ *  4. "Valider barycentre" → retour mode idle. Le joint affiche désormais sa
+ *     position dérivée (barycentre uniforme).
+ */
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  Project, Animation, Point2D,
+  CoTrackerSkeleton, CoTrackerBodyJoint, CoTrackerLegBone, CoTrackerEndpointRef, ElbowMode,
+} from '../../types/project'
+import type { UploadHint } from '../../db/projectsStore'
+import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
+
+interface Props {
+  project: Project
+  animation: Animation
+  onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
+}
+
+const LEG_ZONES = ['leg-fl', 'leg-fr', 'leg-bl', 'leg-br'] as const
+const LEG_LABELS: Record<string, string> = {
+  'leg-fl': 'Patte AVG', 'leg-fr': 'Patte AVD', 'leg-bl': 'Patte ARG', 'leg-br': 'Patte ARD',
+}
+
+type PickTarget =
+  | { kind: 'body-joint'; index: number }
+  | { kind: 'leg'; zoneId: string; field: 'hip' | 'foot' }
+
+type Mode =
+  | { kind: 'idle' }
+  | { kind: 'place-chain' }
+  | { kind: 'place-leg'; zoneId: string; step: 'hip' | 'foot' }
+  | { kind: 'assign-bary' }
+
+const JOINT_HIT_R = 12       // video px
+const TRACKER_HIT_R = 14
+
+export default function CoTrackerBonesBoneStep({ project, animation, onSave }: Props) {
+  const mesh = animation.mesh
+  const cotrackerFrames = mesh?.cotrackerFrames ?? null
+  const points = mesh?.cotrackerPoints ?? []
+
+  const initial: CoTrackerSkeleton = mesh?.cotrackerSkeleton ?? { bodyChain: [], legs: [] }
+  const [skeleton, setSkeleton] = useState<CoTrackerSkeleton>(initial)
+  const [pick, setPick] = useState<PickTarget | null>(null)
+  const [mode, setMode] = useState<Mode>({ kind: 'idle' })
+  // Draft positions for joints/endpoints not yet bound to a barycentre.
+  // Local-only (lost on reload — validation requires pointIds.length > 0).
+  const [drafts, setDrafts] = useState<Record<string, Point2D>>({})
+  const [error, setError] = useState<string | null>(null)
+
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [videoDims, setVideoDims] = useState<{ w: number; h: number; duration: number } | null>(null)
+  const [frame, setFrame] = useState(0)
+  const fps = 24
+
+  useEffect(() => {
+    if (!animation.videoBlob) return
+    const url = URL.createObjectURL(animation.videoBlob)
+    setVideoUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [animation.videoBlob])
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const onMeta = () => setVideoDims({ w: v.videoWidth, h: v.videoHeight, duration: v.duration })
+    v.addEventListener('loadedmetadata', onMeta)
+    return () => v.removeEventListener('loadedmetadata', onMeta)
+  }, [videoUrl])
+
+  const totalFrames = useMemo(() => videoDims ? Math.floor(videoDims.duration * fps) : 0, [videoDims])
+
+  useEffect(() => {
+    if (!videoRef.current || !videoDims) return
+    videoRef.current.currentTime = Math.min(frame / fps, videoDims.duration - 0.001)
+  }, [frame, videoDims])
+
+  // ── Position resolution (uses barycentre if defined, else draft) ──
+  function jointKey(j: CoTrackerBodyJoint) { return `body:${j.id}` }
+  function legKey(l: CoTrackerLegBone, f: 'hip' | 'foot') { return `leg:${l.id}:${f}` }
+
+  function endpointPos(ref: CoTrackerEndpointRef, key: string): Point2D | null {
+    if (ref.pointIds.length > 0 && cotrackerFrames) {
+      return resolveEndpointFrame(ref, cotrackerFrames, frame)
+    }
+    return drafts[key] ?? null
+  }
+
+  // ── Drawing ──
+  useEffect(() => {
+    const c = canvasRef.current
+    const v = videoRef.current
+    if (!c || !v || !videoDims) return
+    c.width = videoDims.w
+    c.height = videoDims.h
+    const ctx = c.getContext('2d')
+    if (!ctx) return
+
+    const render = () => {
+      ctx.clearRect(0, 0, c.width, c.height)
+      ctx.drawImage(v, 0, 0, c.width, c.height)
+      if (!cotrackerFrames) return
+
+      // Tracker points
+      for (const pt of points) {
+        const traj = cotrackerFrames[pt.id]
+        const p = traj?.[frame]
+        if (!p) continue
+        const inEndpoint = pick ? isPointInCurrentEndpoint(pt.id, pick, skeleton) : false
+        ctx.fillStyle = pt.color
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, inEndpoint ? 7 : 4, 0, Math.PI * 2)
+        ctx.fill()
+        if (inEndpoint) {
+          ctx.strokeStyle = '#fff'
+          ctx.lineWidth = 2
+          ctx.stroke()
+        }
+      }
+
+      // Body chain segments
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      let started = false
+      for (const j of skeleton.bodyChain) {
+        const p = endpointPos(j.ref, jointKey(j))
+        if (!p) { started = false; continue }
+        if (!started) { ctx.moveTo(p.x, p.y); started = true }
+        else ctx.lineTo(p.x, p.y)
+      }
+      ctx.stroke()
+      skeleton.bodyChain.forEach((j, i) => {
+        const p = endpointPos(j.ref, jointKey(j))
+        if (!p) return
+        const isPicked = pick?.kind === 'body-joint' && pick.index === i
+        const isDraft = j.ref.pointIds.length === 0
+        ctx.fillStyle = isDraft ? '#94a3b8' : '#3b82f6'
+        ctx.beginPath(); ctx.arc(p.x, p.y, isPicked ? 8 : 6, 0, Math.PI * 2); ctx.fill()
+        if (isPicked) { ctx.strokeStyle = '#fde047'; ctx.lineWidth = 2; ctx.stroke() }
+      })
+
+      // Legs
+      for (const leg of skeleton.legs) {
+        const hip = endpointPos(leg.hip, legKey(leg, 'hip'))
+        const foot = endpointPos(leg.foot, legKey(leg, 'foot'))
+        if (hip && foot) {
+          ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 2
+          ctx.beginPath(); ctx.moveTo(hip.x, hip.y); ctx.lineTo(foot.x, foot.y); ctx.stroke()
+        }
+        for (const [pos, field] of [[hip, 'hip'], [foot, 'foot']] as const) {
+          if (!pos) continue
+          const ref = field === 'hip' ? leg.hip : leg.foot
+          const isPicked = pick?.kind === 'leg' && pick.zoneId === leg.zoneId && pick.field === field
+          const isDraft = ref.pointIds.length === 0
+          ctx.fillStyle = isDraft ? '#94a3b8' : '#fb923c'
+          ctx.beginPath(); ctx.arc(pos.x, pos.y, isPicked ? 7 : 5, 0, Math.PI * 2); ctx.fill()
+          if (isPicked) { ctx.strokeStyle = '#fde047'; ctx.lineWidth = 2; ctx.stroke() }
+        }
+      }
+    }
+    let raf = 0
+    const tick = () => { render(); raf = requestAnimationFrame(tick) }
+    tick()
+    return () => cancelAnimationFrame(raf)
+  }, [points, skeleton, cotrackerFrames, frame, videoDims, pick, drafts])
+
+  // ── Canvas click handler ──
+  function canvasToVideo(e: React.MouseEvent<HTMLCanvasElement>): Point2D {
+    const c = canvasRef.current!
+    const rect = c.getBoundingClientRect()
+    return {
+      x: (e.clientX - rect.left) * (c.width / rect.width),
+      y: (e.clientY - rect.top) * (c.height / rect.height),
+    }
+  }
+
+  /** Returns the tracker(s) closest to a click. Single if clearly on one tracker,
+   *  two if the click is roughly between two trackers (comparable distances). */
+  function nearestTrackerIds(p: Point2D): string[] {
+    if (!cotrackerFrames) return []
+    const dists: { id: string; d: number }[] = []
+    for (const pt of points) {
+      const tp = cotrackerFrames[pt.id]?.[frame]
+      if (!tp) continue
+      dists.push({ id: pt.id, d: Math.hypot(tp.x - p.x, tp.y - p.y) })
+    }
+    if (dists.length === 0) return []
+    dists.sort((a, b) => a.d - b.d)
+    const [a, b] = dists
+    // If second tracker is within 1.5× the distance of the first → click is "between" them.
+    if (b && b.d < a.d * 1.5) return [a.id, b.id]
+    return [a.id]
+  }
+
+  function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!cotrackerFrames) return
+    const p = canvasToVideo(e)
+
+    if (mode.kind === 'place-chain') {
+      const nearestIds = nearestTrackerIds(p)
+      const id = crypto.randomUUID()
+      const joint: CoTrackerBodyJoint = {
+        id, name: `joint${skeleton.bodyChain.length + 1}`,
+        ref: nearestIds.length > 0 ? makeEndpointRef(nearestIds) : { pointIds: [], weights: [] },
+      }
+      const newIdx = skeleton.bodyChain.length
+      setSkeleton(sk => ({ ...sk, bodyChain: [...sk.bodyChain, joint] }))
+      if (nearestIds.length === 0) setDrafts(d => ({ ...d, [`body:${id}`]: p }))
+      setPick({ kind: 'body-joint', index: newIdx })
+      // Stay in place-chain mode for successive clicks.
+      return
+    }
+
+    if (mode.kind === 'place-leg') {
+      const { zoneId, step } = mode
+      const nearestIds = nearestTrackerIds(p)
+      let leg = skeleton.legs.find(l => l.zoneId === zoneId)
+      const initialRef = nearestIds.length > 0 ? makeEndpointRef(nearestIds) : { pointIds: [], weights: [] }
+      if (!leg) {
+        leg = {
+          id: crypto.randomUUID(),
+          zoneId, name: LEG_LABELS[zoneId] ?? zoneId,
+          hip: step === 'hip' ? initialRef : { pointIds: [], weights: [] },
+          foot: step === 'foot' ? initialRef : { pointIds: [], weights: [] },
+          kneeRestPos: { x: 0, y: 0 },
+          kneeMode: 'rest' as ElbowMode,
+        }
+        setSkeleton(sk => ({ ...sk, legs: [...sk.legs, leg!] }))
+      } else {
+        setSkeleton(sk => {
+          const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+          if (idx < 0) return sk
+          const newLegs = sk.legs.slice()
+          newLegs[idx] = { ...newLegs[idx], [step]: initialRef } as CoTrackerLegBone
+          return { ...sk, legs: newLegs }
+        })
+      }
+      if (nearestIds.length === 0) setDrafts(d => ({ ...d, [`leg:${leg!.id}:${step}`]: p }))
+      setPick({ kind: 'leg', zoneId, field: step })
+      if (step === 'hip') setMode({ kind: 'place-leg', zoneId, step: 'foot' })
+      else setMode({ kind: 'idle' })
+      return
+    }
+
+    if (mode.kind === 'assign-bary' && pick) {
+      // Hit-test trackers
+      let bestId: string | null = null
+      let bestD2 = TRACKER_HIT_R * TRACKER_HIT_R
+      for (const pt of points) {
+        const tp = cotrackerFrames[pt.id]?.[frame]
+        if (!tp) continue
+        const d2 = (tp.x - p.x) ** 2 + (tp.y - p.y) ** 2
+        if (d2 < bestD2) { bestD2 = d2; bestId = pt.id }
+      }
+      if (bestId) togglePickPoint(bestId)
+      return
+    }
+
+    // idle : hit-test joints to select
+    let best: { d2: number; target: PickTarget } | null = null
+    skeleton.bodyChain.forEach((j, i) => {
+      const pos = endpointPos(j.ref, jointKey(j))
+      if (!pos) return
+      const d2 = (pos.x - p.x) ** 2 + (pos.y - p.y) ** 2
+      if (d2 < JOINT_HIT_R * JOINT_HIT_R && (!best || d2 < best.d2)) {
+        best = { d2, target: { kind: 'body-joint', index: i } }
+      }
+    })
+    for (const leg of skeleton.legs) {
+      for (const field of ['hip', 'foot'] as const) {
+        const ref = field === 'hip' ? leg.hip : leg.foot
+        const pos = endpointPos(ref, legKey(leg, field))
+        if (!pos) continue
+        const d2 = (pos.x - p.x) ** 2 + (pos.y - p.y) ** 2
+        if (d2 < JOINT_HIT_R * JOINT_HIT_R && (!best || d2 < best.d2)) {
+          best = { d2, target: { kind: 'leg', zoneId: leg.zoneId, field } }
+        }
+      }
+    }
+    if (best) setPick(best.target)
+    else setPick(null)
+  }
+
+  function makeEndpointRef(pointIds: string[]): CoTrackerEndpointRef {
+    const n = Math.max(1, pointIds.length)
+    return { pointIds, weights: new Array(pointIds.length).fill(1 / n) }
+  }
+
+  function togglePickPoint(pointId: string) {
+    if (!pick) return
+    setSkeleton(sk => {
+      if (pick.kind === 'body-joint') {
+        const j = sk.bodyChain[pick.index]
+        if (!j) return sk
+        const newIds = toggleId(j.ref.pointIds, pointId)
+        const newChain = sk.bodyChain.slice()
+        newChain[pick.index] = { ...j, ref: makeEndpointRef(newIds) }
+        return { ...sk, bodyChain: newChain }
+      }
+      const legIdx = sk.legs.findIndex(l => l.zoneId === pick.zoneId)
+      if (legIdx < 0) return sk
+      const leg = sk.legs[legIdx]
+      const cur = pick.field === 'hip' ? leg.hip : leg.foot
+      const newIds = toggleId(cur.pointIds, pointId)
+      const newLegs = sk.legs.slice()
+      newLegs[legIdx] = { ...leg, [pick.field]: makeEndpointRef(newIds) } as CoTrackerLegBone
+      return { ...sk, legs: newLegs }
+    })
+  }
+
+  function startPlaceChain() {
+    setMode({ kind: 'place-chain' })
+    setPick(null)
+  }
+  function startPlaceLeg(zoneId: string) {
+    setMode({ kind: 'place-leg', zoneId, step: 'hip' })
+    setPick(null)
+  }
+  function startAssignBary() {
+    if (!pick) return
+    setMode({ kind: 'assign-bary' })
+  }
+  function validateBary() {
+    setMode({ kind: 'idle' })
+  }
+  function cancelMode() {
+    setMode({ kind: 'idle' })
+  }
+
+  function deleteJoint(i: number) {
+    const j = skeleton.bodyChain[i]
+    setSkeleton(sk => ({ ...sk, bodyChain: sk.bodyChain.filter((_, k) => k !== i) }))
+    setDrafts(d => { const c = { ...d }; delete c[`body:${j.id}`]; return c })
+    if (pick?.kind === 'body-joint' && pick.index === i) setPick(null)
+  }
+  function deleteLeg(zoneId: string) {
+    const leg = skeleton.legs.find(l => l.zoneId === zoneId)
+    setSkeleton(sk => ({ ...sk, legs: sk.legs.filter(l => l.zoneId !== zoneId) }))
+    if (leg) setDrafts(d => {
+      const c = { ...d }; delete c[`leg:${leg.id}:hip`]; delete c[`leg:${leg.id}:foot`]; return c
+    })
+    if (pick?.kind === 'leg' && pick.zoneId === zoneId) setPick(null)
+  }
+
+  async function handleValidate() {
+    setError(null)
+    if (skeleton.bodyChain.length < 2) { setError('Body chain : au moins 2 joints'); return }
+    for (const j of skeleton.bodyChain) {
+      if (j.ref.pointIds.length === 0) { setError(`Joint "${j.name}" sans barycentre`); return }
+    }
+    for (const leg of skeleton.legs) {
+      if (leg.hip.pointIds.length === 0 || leg.foot.pointIds.length === 0) {
+        setError(`Patte ${leg.name} : hip et foot doivent référencer ≥ 1 point`); return
+      }
+    }
+    const updatedAnim: Animation = {
+      ...animation,
+      mesh: {
+        ...(mesh ?? {} as any),
+        cotrackerSkeleton: skeleton,
+        cotrackerBonesValidated: true,
+        cotrackerBoneSmoothingValidated: false,
+        walkBodyFrames: null,
+        walkBodyFramesSmoothed: null,
+        walkZoneFrames: null,
+        walkZoneFramesSmoothed: null,
+      },
+    }
+    await onSave({ ...project, animations: project.animations.map(a => a.id === animation.id ? updatedAnim : a) })
+  }
+
+  if (!cotrackerFrames) {
+    return <div className="step-content"><p>Lancez d'abord CoTracker3 à l'étape 2.</p></div>
+  }
+
+  const pickLabel = pick
+    ? pick.kind === 'body-joint'
+      ? `Joint "${skeleton.bodyChain[pick.index]?.name ?? '?'}"`
+      : `${LEG_LABELS[pick.zoneId] ?? pick.zoneId} — ${pick.field}`
+    : null
+
+  const modeBanner = (() => {
+    if (mode.kind === 'place-chain') return 'Cliquez successivement sur le canvas pour poser les joints de la body chain (barycentre = tracker le plus proche). Terminez quand vous avez fini.'
+    if (mode.kind === 'place-leg') return `Cliquez pour poser ${mode.step === 'hip' ? 'le hip' : 'le foot'} de ${LEG_LABELS[mode.zoneId]} (barycentre = tracker le plus proche)`
+    if (mode.kind === 'assign-bary') return `Cliquez les points trackers pour les ajouter/retirer du barycentre — ${pickLabel}`
+    return null
+  })()
+
+  return (
+    <div className="step-content">
+      <h2>Définition du squelette</h2>
+      <p className="text-muted">
+        "+ Body chain" : cliquez successivement sur le canvas pour poser chaque joint
+        (barycentre auto = tracker le plus proche). Sélectionnez un joint et "Ajouter
+        points barycentres" pour enrichir le barycentre.
+      </p>
+      <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <video ref={videoRef} src={videoUrl ?? undefined} style={{ display: 'none' }} muted />
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            style={{
+              width: '100%', height: 'auto', background: '#000',
+              cursor: mode.kind === 'idle' ? 'default' : 'crosshair',
+            }}
+          />
+          {modeBanner && (
+            <div style={{
+              marginTop: 6, padding: '6px 10px', background: '#1e3a5f',
+              border: '1px solid #3b82f6', color: '#fff', fontSize: 12,
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span>{modeBanner}</span>
+              {mode.kind === 'assign-bary'
+                ? <button className="btn-primary btn-sm" onClick={validateBary}>Valider barycentre</button>
+                : mode.kind === 'place-chain'
+                ? <button className="btn-primary btn-sm" onClick={cancelMode}>Terminer chaîne</button>
+                : <button className="btn-ghost btn-sm" onClick={cancelMode}>Annuler</button>}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <input type="range" min={0} max={Math.max(0, totalFrames - 1)} value={frame}
+              onChange={e => setFrame(Number(e.target.value))} style={{ flex: 1 }} />
+            <span>{frame} / {Math.max(0, totalFrames - 1)}</span>
+          </div>
+        </div>
+        <aside style={{ width: 300 }}>
+          <section>
+            <h3>Body chain</h3>
+            <ol style={{ paddingLeft: 16 }}>
+              {skeleton.bodyChain.map((j, i) => {
+                const isPicked = pick?.kind === 'body-joint' && pick.index === i
+                const isDraft = j.ref.pointIds.length === 0
+                return (
+                  <li key={j.id}>
+                    <button
+                      onClick={() => setPick({ kind: 'body-joint', index: i })}
+                      style={{
+                        background: isPicked ? '#1e3a5f' : 'transparent',
+                        border: '1px solid #444',
+                        color: isDraft ? '#94a3b8' : '#fff',
+                        padding: '2px 6px', fontSize: 12,
+                      }}
+                    >
+                      {j.name} ({j.ref.pointIds.length} pts){isDraft ? ' ⚠' : ''}
+                    </button>
+                    <button className="btn-icon btn-sm" onClick={() => deleteJoint(i)}>×</button>
+                  </li>
+                )
+              })}
+            </ol>
+            <button className="btn-secondary btn-sm" onClick={startPlaceChain} disabled={mode.kind !== 'idle'}>
+              + Body chain
+            </button>
+          </section>
+          <section style={{ marginTop: 12 }}>
+            <h3>Pattes</h3>
+            {LEG_ZONES.map(z => {
+              const leg = skeleton.legs.find(l => l.zoneId === z)
+              if (!leg) {
+                return (
+                  <div key={z}>
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => startPlaceLeg(z)}
+                      disabled={mode.kind !== 'idle'}
+                    >+ {LEG_LABELS[z]}</button>
+                  </div>
+                )
+              }
+              return (
+                <div key={z} style={{ border: '1px solid #444', padding: 6, marginBottom: 4 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{LEG_LABELS[z]}</span>
+                    <button className="btn-icon btn-sm" onClick={() => deleteLeg(z)}>×</button>
+                  </div>
+                  {(['hip', 'foot'] as const).map(field => {
+                    const ref = field === 'hip' ? leg.hip : leg.foot
+                    const isPicked = pick?.kind === 'leg' && pick.zoneId === z && pick.field === field
+                    const isDraft = ref.pointIds.length === 0
+                    return (
+                      <button
+                        key={field}
+                        onClick={() => setPick({ kind: 'leg', zoneId: z, field })}
+                        style={{
+                          background: isPicked ? '#1e3a5f' : 'transparent',
+                          border: '1px solid #444',
+                          color: isDraft ? '#94a3b8' : '#fff',
+                          padding: '2px 6px', fontSize: 11, margin: 2,
+                        }}
+                      >{field} ({ref.pointIds.length}){isDraft ? ' ⚠' : ''}</button>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </section>
+          <section style={{ marginTop: 12 }}>
+            <h3>Barycentre</h3>
+            {pick ? (
+              <>
+                <p style={{ fontSize: 11, opacity: 0.8 }}>Sélection : {pickLabel}</p>
+                <button
+                  className="btn-primary btn-sm"
+                  onClick={startAssignBary}
+                  disabled={mode.kind === 'assign-bary'}
+                >
+                  Ajouter points barycentres
+                </button>
+                {(() => {
+                  const ref = pick.kind === 'body-joint'
+                    ? skeleton.bodyChain[pick.index]?.ref
+                    : skeleton.legs.find(l => l.zoneId === pick.zoneId)?.[pick.field]
+                  if (!ref || ref.pointIds.length === 0) {
+                    return <p style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>Aucun point.</p>
+                  }
+                  return (
+                    <ul style={{ listStyle: 'none', padding: 0, marginTop: 6, maxHeight: 160, overflowY: 'auto' }}>
+                      {ref.pointIds.map(pid => {
+                        const pt = points.find(p => p.id === pid)
+                        return (
+                          <li key={pid} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
+                            <span style={{
+                              width: 10, height: 10, borderRadius: '50%',
+                              background: pt?.color ?? '#888', display: 'inline-block',
+                            }} />
+                            <span style={{ flex: 1, fontSize: 11 }}>{pt?.name ?? pid.slice(0, 6)}</span>
+                            <button className="btn-icon btn-sm" onClick={() => togglePickPoint(pid)}>×</button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )
+                })()}
+              </>
+            ) : (
+              <p style={{ fontSize: 11, opacity: 0.7 }}>Cliquez un joint ou un endpoint pour le sélectionner.</p>
+            )}
+          </section>
+          <div style={{ marginTop: 12 }}>
+            <button className="btn-primary" onClick={handleValidate}>Valider le squelette</button>
+            {mesh?.cotrackerBonesValidated && <p style={{ color: '#22c55e', fontSize: 12 }}>✓ Squelette validé</p>}
+            {error && <p style={{ color: '#f87171', fontSize: 12 }}>{error}</p>}
+          </div>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function toggleId(list: string[], id: string): string[] {
+  return list.includes(id) ? list.filter(x => x !== id) : [...list, id]
+}
+
+function isPointInCurrentEndpoint(pointId: string, pick: PickTarget | null, sk: CoTrackerSkeleton): boolean {
+  if (!pick) return false
+  if (pick.kind === 'body-joint') return sk.bodyChain[pick.index]?.ref.pointIds.includes(pointId) ?? false
+  const leg = sk.legs.find(l => l.zoneId === pick.zoneId)
+  if (!leg) return false
+  return (pick.field === 'hip' ? leg.hip : leg.foot).pointIds.includes(pointId)
+}

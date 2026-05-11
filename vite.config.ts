@@ -22,6 +22,16 @@ export default defineConfig({
         timeout: 10 * 60 * 1000,
         proxyTimeout: 10 * 60 * 1000,
       },
+      // Proxy `/api/cotracker/*` to local Python server (cotracker-local/ on Mac MPS).
+      // Activated when .env.local sets VITE_COTRACKER_FUNCTION_URL=/api/cotracker/.
+      '/api/cotracker': {
+        target: 'http://127.0.0.1:8766',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/cotracker\/?/, '/'),
+        timeout: 10 * 60 * 1000,
+        proxyTimeout: 10 * 60 * 1000,
+      },
     },
   },
 })

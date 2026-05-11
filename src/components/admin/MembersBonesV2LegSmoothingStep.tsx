@@ -12,6 +12,7 @@ import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { applyTemporalSmoothing } from '../../utils/trackingConstraints'
 import FrameNavigator from '../keyframes/FrameNavigator'
+import TriangulationLoopPreview from './TriangulationLoopPreview'
 
 interface Props {
   project: Project
@@ -304,6 +305,7 @@ export default function MembersBonesV2LegSmoothingStep({ project, animation, onS
           <span style={{ color: '#888', fontSize: 11 }}>Frame {currentFrame}/{totalFrames}</span>
         </div>
       )}
+      <TriangulationLoopPreview project={project} animation={animation} />
     </div>
   )
 }

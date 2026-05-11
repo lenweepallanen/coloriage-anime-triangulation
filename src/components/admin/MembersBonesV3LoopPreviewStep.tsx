@@ -165,7 +165,8 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation }: Pr
           if (bodyPb) updateZoneMeshVertices(hf, bodyPb.pb.getPositions(), scale, offsetX, offsetY)
         }
         for (const hfl of setup.hiddenFaceLimbMeshes) {
-          const p = playbacks.find(pb => pb.region === hfl.zoneId)
+          const baseZoneId = hfl.zoneId.replace(/^__hfl_/, '')
+          const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
         }
       }

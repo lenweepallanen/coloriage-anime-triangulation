@@ -96,6 +96,18 @@ interface MeshDoc {
   // V3 "Calcul Corps" (Delaunay du contour body, pas d'internes)
   v3BodyTriangles?: TriangleDoc[]
   v3BodyTriangulationValidated?: boolean
+  // CoTracker + Bones (animation type cotracker-bones)
+  cotrackerPoints?: import('../types/project').CoTrackerPoint[]
+  cotrackerVideoWidth?: number
+  cotrackerVideoHeight?: number
+  cotrackerTrackingValidated?: boolean
+  hasCotrackerFrames?: boolean
+  cotrackerSkeleton?: import('../types/project').CoTrackerSkeleton
+  cotrackerBonesValidated?: boolean
+  cotrackerBoneSmoothingCutoffHz?: number
+  cotrackerBoneSmoothingValidated?: boolean
+  cotrackerLBSParams?: import('../types/project').CoTrackerLBSParams
+  cotrackerLBSValidated?: boolean
 }
 
 // Legacy formats (v1-v3)
@@ -612,6 +624,18 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     // V3 "Calcul Corps" — petits champs en Firestore
     ...(mesh.v3BodyTriangles != null && { v3BodyTriangles: triToDoc(mesh.v3BodyTriangles) }),
     ...(mesh.v3BodyTriangulationValidated != null && { v3BodyTriangulationValidated: mesh.v3BodyTriangulationValidated }),
+    // CoTracker + Bones (animation type cotracker-bones)
+    ...(mesh.cotrackerPoints != null && { cotrackerPoints: mesh.cotrackerPoints }),
+    ...(mesh.cotrackerVideoWidth != null && { cotrackerVideoWidth: mesh.cotrackerVideoWidth }),
+    ...(mesh.cotrackerVideoHeight != null && { cotrackerVideoHeight: mesh.cotrackerVideoHeight }),
+    ...(mesh.cotrackerTrackingValidated != null && { cotrackerTrackingValidated: mesh.cotrackerTrackingValidated }),
+    hasCotrackerFrames: mesh.cotrackerFrames != null,
+    ...(mesh.cotrackerSkeleton != null && { cotrackerSkeleton: mesh.cotrackerSkeleton }),
+    ...(mesh.cotrackerBonesValidated != null && { cotrackerBonesValidated: mesh.cotrackerBonesValidated }),
+    ...(mesh.cotrackerBoneSmoothingCutoffHz != null && { cotrackerBoneSmoothingCutoffHz: mesh.cotrackerBoneSmoothingCutoffHz }),
+    ...(mesh.cotrackerBoneSmoothingValidated != null && { cotrackerBoneSmoothingValidated: mesh.cotrackerBoneSmoothingValidated }),
+    ...(mesh.cotrackerLBSParams != null && { cotrackerLBSParams: mesh.cotrackerLBSParams }),
+    ...(mesh.cotrackerLBSValidated != null && { cotrackerLBSValidated: mesh.cotrackerLBSValidated }),
   }
 }
 
@@ -696,7 +720,8 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'walkBodyFramesSmoothed' | 'walkZoneFramesSmoothed' |
   'sam2MasksRLE' |
   'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames' |
-  'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames'>
+  'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames' |
+  'cotrackerFrames'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -813,6 +838,17 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     // V3 "Calcul Corps"
     v3BodyTriangles: d.v3BodyTriangles ? docToTri(d.v3BodyTriangles) : undefined,
     v3BodyTriangulationValidated: d.v3BodyTriangulationValidated,
+    // CoTracker + Bones
+    cotrackerPoints: d.cotrackerPoints,
+    cotrackerVideoWidth: d.cotrackerVideoWidth,
+    cotrackerVideoHeight: d.cotrackerVideoHeight,
+    cotrackerTrackingValidated: d.cotrackerTrackingValidated,
+    cotrackerSkeleton: d.cotrackerSkeleton,
+    cotrackerBonesValidated: d.cotrackerBonesValidated,
+    cotrackerBoneSmoothingCutoffHz: d.cotrackerBoneSmoothingCutoffHz,
+    cotrackerBoneSmoothingValidated: d.cotrackerBoneSmoothingValidated,
+    cotrackerLBSParams: d.cotrackerLBSParams,
+    cotrackerLBSValidated: d.cotrackerLBSValidated,
   }
 }
 
@@ -845,6 +881,7 @@ async function loadAnimationJSON(
   sam2SmoothedContourOriginFrames: Record<string, Point2D[]> | null
   walkBodyFramesSmoothed: Point2D[][] | null
   walkZoneFramesSmoothed: Record<string, Point2D[][]> | null
+  cotrackerFrames: Record<string, Point2D[]> | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
   const path = (file: string) =>
@@ -873,6 +910,7 @@ async function loadAnimationJSON(
     meshDoc.hasSam2SmoothedContourOriginFrames ? downloadJSON<Record<string, Point2D[]>>(path('sam2SmoothedContourOriginFrames.json')) : null,
     meshDoc.hasWalkBodyFramesSmoothed ? downloadJSON<Point2D[][]>(path('walkBodyFramesSmoothed.json')) : null,
     meshDoc.hasWalkZoneFramesSmoothed ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFramesSmoothed.json')) : null,
+    meshDoc.hasCotrackerFrames ? downloadJSON<Record<string, Point2D[]>>(path('cotrackerFrames.json')) : null,
   ])
 
   return {
@@ -898,6 +936,7 @@ async function loadAnimationJSON(
     sam2SmoothedContourOriginFrames: downloads[19] as Record<string, Point2D[]> | null,
     walkBodyFramesSmoothed: downloads[20] as Point2D[][] | null,
     walkZoneFramesSmoothed: downloads[21] as Record<string, Point2D[][]> | null,
+    cotrackerFrames: downloads[22] as Record<string, Point2D[]> | null,
   }
 }
 
@@ -1266,6 +1305,7 @@ export type AnimationUploadField =
   | 'sam2MasksRLE'
   | 'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames'
   | 'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames'
+  | 'cotrackerFrames'
 
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound'
@@ -1416,6 +1456,7 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           sam2SmoothedContourOriginFrames: anim.mesh.sam2SmoothedContourOriginFrames,
           walkBodyFramesSmoothed: anim.mesh.walkBodyFramesSmoothed,
           walkZoneFramesSmoothed: anim.mesh.walkZoneFramesSmoothed,
+          cotrackerFrames: anim.mesh.cotrackerFrames,
         }
         const data = jsonFieldMap[field]
         const isNonEmpty = data != null && (Array.isArray(data) ? data.length > 0 : (typeof data === 'object' ? Object.keys(data).length > 0 : true))
@@ -1460,6 +1501,7 @@ const ANIM_JSON_FILES = [
   'sam2SmoothedContourOriginFrames.json',
   'walkBodyFramesSmoothed.json',
   'walkZoneFramesSmoothed.json',
+  'cotrackerFrames.json',
 ]
 
 export async function deleteProject(id: string): Promise<void> {

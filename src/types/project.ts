@@ -220,6 +220,29 @@ export interface MeshData {
   sam2LegBoneSmoothingCutoffHz?: number;
   sam2LegBoneSmoothingValidated?: boolean;
 
+  // ─── CoTracker + Bones (animation type 'cotracker-bones') ──────────────
+  // Étape 2 : Points trackables + prompts (multi-frame queries)
+  cotrackerPoints?: CoTrackerPoint[];
+  // Dimensions vidéo au moment du tracking (invalidation si re-upload)
+  cotrackerVideoWidth?: number;
+  cotrackerVideoHeight?: number;
+  // Résultats CoTracker3 : pointId → positions par frame (coords vidéo)
+  cotrackerFrames?: Record<string, Point2D[]> | null;
+  cotrackerTrackingValidated?: boolean;
+  // Étape 3 : squelette N-aire référencé sur les points CoTracker
+  cotrackerSkeleton?: CoTrackerSkeleton;
+  cotrackerBonesValidated?: boolean;
+  // Étape 5 : lissage Butterworth des positions joints (pré-résolution IK)
+  cotrackerLegBoneFrames?: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> | null;
+  cotrackerLegBoneFramesSmoothed?: Record<string, { hip: Point2D[]; knee: Point2D[]; foot: Point2D[] }> | null;
+  cotrackerBodyJointFrames?: Point2D[][] | null;          // [jointIdx][frameIdx]
+  cotrackerBodyJointFramesSmoothed?: Point2D[][] | null;
+  cotrackerBoneSmoothingCutoffHz?: number;
+  cotrackerBoneSmoothingValidated?: boolean;
+  // Étape "LBS" : paramètres du solver de skinning
+  cotrackerLBSParams?: CoTrackerLBSParams;
+  cotrackerLBSValidated?: boolean;
+
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;
   walkLimbSeparationValidated?: boolean;
@@ -410,7 +433,77 @@ export interface ProjectTriangulation {
   step3Validated: boolean
 }
 
-export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3';
+export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones';
+
+// ─── CoTracker3 + Bones (animation type 'cotracker-bones') ────────────────
+
+/** Prompt CoTracker pour un point trackable : position à une frame donnée.
+ *  CoTracker3 accepte plusieurs prompts par point (queries multi-frame). */
+export interface CoTrackerPrompt {
+  frameIdx: number;
+  x: number;            // coords vidéo
+  y: number;
+}
+
+/** Un point trackable défini par l'admin + prompts (1+ frames). */
+export interface CoTrackerPoint {
+  id: string;           // crypto.randomUUID()
+  name?: string;
+  color: string;        // hex
+  prompts: CoTrackerPrompt[];
+}
+
+/** Référence d'endpoint N-aire : combinaison linéaire de N points trackés.
+ *  position = sum(weights[i] * pointFrames[pointIds[i]]) — weights normalisés. */
+export interface CoTrackerEndpointRef {
+  pointIds: string[];   // référence CoTrackerPoint.id
+  weights: number[];    // même longueur que pointIds, somme = 1
+}
+
+export interface CoTrackerBodyJoint {
+  id: string;
+  name: string;
+  ref: CoTrackerEndpointRef;
+}
+
+export interface CoTrackerLegBone {
+  id: string;
+  zoneId: string;       // 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  name: string;
+  hip: CoTrackerEndpointRef;
+  foot: CoTrackerEndpointRef;
+  kneeRestPos: Point2D;
+  kneeMode: ElbowMode;
+  // Optionnel : hip attaché à un body vertex (override) — comme V2/V3
+  hipBodyVertexIndices?: number[] | null;
+  hipBodyVertexWeights?: number[] | null;
+}
+
+export interface CoTrackerSkeleton {
+  bodyChain: CoTrackerBodyJoint[];
+  legs: CoTrackerLegBone[];
+}
+
+export type CoTrackerLBSMode = 'lbs' | 'lbs-arap' | 'lbs-area';
+
+export interface CoTrackerLBSParams {
+  mode: CoTrackerLBSMode;
+  /** Exposant de chute des weights : w = 1/(d+ε)^p. Plus haut = plus local. */
+  weightPower: number;
+  weightEpsilon: number;
+  /** lbs-arap : itérations ARAP par frame (2-6 raisonnable). */
+  arapIterations?: number;
+  /** lbs-area : intensité de la correction d'aire par triangle (0-1). */
+  areaStrength?: number;
+}
+
+export const DEFAULT_COTRACKER_LBS_PARAMS: CoTrackerLBSParams = {
+  mode: 'lbs',
+  weightPower: 2,
+  weightEpsilon: 1,
+  arapIterations: 3,
+  areaStrength: 0.5,
+};
 
 export interface Animation {
   id: string;

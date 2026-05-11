@@ -90,13 +90,14 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
   const [saving, setSaving] = useState(false)
   const restAnim = project.animations.find(a => a.type === 'rest')
 
-  async function handleAdd(type: 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3') {
+  async function handleAdd(type: 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones') {
     const isPhysics = type === 'physics'
     const isBone = type === 'bone'
     const isWalk = type === 'walk'
     const isMembersBones = type === 'members-bones'
     const isMembersBonesV2 = type === 'members-bones-v2'
     const isMembersBonesV3 = type === 'members-bones-v3'
+    const isCoTrackerBones = type === 'cotracker-bones'
     const name = isPhysics
       ? `Physics ${project.animations.filter(a => a.type === 'physics').length + 1}`
       : isBone
@@ -109,9 +110,11 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
               ? `MB-V2 ${project.animations.filter(a => a.type === 'members-bones-v2').length + 1}`
               : isMembersBonesV3
                 ? `MB-V3 ${project.animations.filter(a => a.type === 'members-bones-v3').length + 1}`
-                : `Animation ${project.animations.length + 1}`
-    // Members-bones (v1, v2, v3) sont autonomes : ne dépendent pas de la rest, n'héritent pas la géométrie
-    const inheritedMesh = (isMembersBones || isMembersBonesV2 || isMembersBonesV3)
+                : isCoTrackerBones
+                  ? `CoTracker ${project.animations.filter(a => a.type === 'cotracker-bones').length + 1}`
+                  : `Animation ${project.animations.length + 1}`
+    // Members-bones (v1, v2, v3) et cotracker-bones sont autonomes : pas d'héritage rest
+    const inheritedMesh = (isMembersBones || isMembersBonesV2 || isMembersBonesV3 || isCoTrackerBones)
       ? createEmptyMesh()
       : (restAnim?.mesh ? { ...createEmptyMesh(), ...copySharedGeometry(restAnim.mesh) } : null)
     const newAnim: Animation = {
@@ -223,6 +226,18 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
           }
         >
           + MB V3
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={() => handleAdd('cotracker-bones')}
+          disabled={saving || !project.projectTriangulation?.step3Validated}
+          title={
+            project.projectTriangulation?.step3Validated
+              ? 'Créer une animation CoTracker + Bones (topologie héritée de la Triangulation projet)'
+              : 'Validez d\'abord la Triangulation projet jusqu\'à l\'étape Faces cachées (onglet Triangulation)'
+          }
+        >
+          + CoTracker + Bones
         </button>
       </div>
     </div>

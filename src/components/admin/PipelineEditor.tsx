@@ -41,6 +41,11 @@ import MembersBonesV3TrackingP0Step from './MembersBonesV3TrackingP0Step'
 import MembersBonesV3TrackingAnchorsStep from './MembersBonesV3TrackingAnchorsStep'
 import MembersBonesV3LegBoneSmoothingStep from './MembersBonesV3LegBoneSmoothingStep'
 import MembersBonesV3LoopPreviewStep from './MembersBonesV3LoopPreviewStep'
+import CoTrackerBonesTrackingStep from './CoTrackerBonesTrackingStep'
+import CoTrackerBonesBoneStep from './CoTrackerBonesBoneStep'
+import CoTrackerBonesAnimationStep from './CoTrackerBonesAnimationStep'
+import CoTrackerBonesLBSStep from './CoTrackerBonesLBSStep'
+import TriangulationLoopPreview from './TriangulationLoopPreview'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -94,6 +99,15 @@ const MEMBERS_BONES_V2_STEPS = [
   'Lissage Maillage Pattes',
 ] as const
 
+const COTRACKER_BONES_STEPS = [
+  'Vidéo',
+  'CoTracker3',
+  'Bones',
+  'LBS',
+  'Calcul Animation',
+  'Preview Animation',
+] as const
+
 const MEMBERS_BONES_V3_STEPS = [
   'Vidéo',
   'Définir Zones',
@@ -110,7 +124,7 @@ const MEMBERS_BONES_V3_STEPS = [
   'Preview Boucle',
 ] as const
 
-type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number] | (typeof MEMBERS_BONES_V2_STEPS)[number] | (typeof MEMBERS_BONES_V3_STEPS)[number]
+type Step = (typeof REST_STEPS)[number] | (typeof PHYSICS_STEPS)[number] | (typeof BONE_STEPS)[number] | (typeof WALK_STEPS)[number] | (typeof MEMBERS_BONES_STEPS)[number] | (typeof MEMBERS_BONES_V2_STEPS)[number] | (typeof MEMBERS_BONES_V3_STEPS)[number] | (typeof COTRACKER_BONES_STEPS)[number]
 
 const STEP_SHORT_LABELS: Record<string, string> = {
   'Vidéo': 'Vidéo',
@@ -151,6 +165,11 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Calcul Corps V3': 'Calc. Corps V3',
   'Lissage Bones Pattes': 'Liss. Bones Pat.',
   'Preview Boucle': 'Preview Loop',
+  'CoTracker3': 'CoTracker3',
+  'Lissage Bones CT': 'Liss. Bones',
+  'Calcul Animation': 'Calcul',
+  'Preview Animation': 'Preview',
+  'LBS': 'LBS',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -168,7 +187,7 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Ancres Internes': return (mesh?.anchorPoints?.length ?? 0) > 0 ? 'done' : 'pending'
     case 'Tracking Ancres': return mesh?.anchorTrackingValidated ? 'done' : 'pending'
     case 'Triangulation': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
-    case 'Bones': return mesh?.bonesValidated ? 'done' : 'pending'
+    case 'Bones': return (mesh?.bonesValidated || mesh?.cotrackerBonesValidated) ? 'done' : 'pending'
     case 'Code Editeur': return mesh?.videoFramesMesh != null ? 'done' : 'pending'
     case 'Zones membres': return mesh?.walkLimbSeparationValidated ? 'done' : 'pending'
     case 'Maillage zones': return mesh?.walkLimbSeparationValidated ? 'done' : 'pending'
@@ -196,6 +215,12 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Calcul Corps V3': return (mesh?.v3BodyTriangulationValidated && mesh?.walkBodyFrames != null) ? 'done' : 'pending'
     case 'Lissage Bones Pattes': return mesh?.sam2LegBoneSmoothingValidated ? 'done' : 'pending'
     case 'Preview Boucle': return 'pending' // preview-only, never marked done
+    case 'CoTracker3': return mesh?.cotrackerTrackingValidated ? 'done' : 'pending'
+    case 'Lissage Bones CT': return mesh?.cotrackerBoneSmoothingValidated ? 'done' : 'pending'
+    case 'LBS': return mesh?.cotrackerLBSValidated ? 'done' : 'pending'
+    case 'Calcul Animation':
+      return (mesh?.cotrackerBoneSmoothingValidated && mesh?.walkBodyFramesSmoothingValidated && mesh?.walkZoneFramesSmoothingValidated) ? 'done' : 'pending'
+    case 'Preview Animation': return 'pending'
     default: return 'pending'
   }
 }
@@ -216,6 +241,7 @@ export function getAnimationCompletionStatus(animation: Animation): { done: numb
     : animation.type === 'members-bones' ? MEMBERS_BONES_STEPS
     : animation.type === 'members-bones-v2' ? MEMBERS_BONES_V2_STEPS
     : animation.type === 'members-bones-v3' ? MEMBERS_BONES_V3_STEPS
+    : animation.type === 'cotracker-bones' ? COTRACKER_BONES_STEPS
     : ONESHOT_STEPS
   const mesh = animation.mesh
   const hasVideo = animation.videoBlob != null
@@ -242,6 +268,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
   const isMembersBonesAnim = animation.type === 'members-bones'
   const isMembersBonesV2Anim = animation.type === 'members-bones-v2'
   const isMembersBonesV3Anim = animation.type === 'members-bones-v3'
+  const isCoTrackerBonesAnim = animation.type === 'cotracker-bones'
   const availableSteps = isRestAnim ? REST_STEPS
     : isPhysicsAnim ? PHYSICS_STEPS
     : isBoneAnim ? BONE_STEPS
@@ -249,6 +276,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
     : isMembersBonesAnim ? MEMBERS_BONES_STEPS
     : isMembersBonesV2Anim ? MEMBERS_BONES_V2_STEPS
     : isMembersBonesV3Anim ? MEMBERS_BONES_V3_STEPS
+    : isCoTrackerBonesAnim ? COTRACKER_BONES_STEPS
     : ONESHOT_STEPS
   const [activeStep, setActiveStep] = useState<Step>(availableSteps[0] as Step)
 
@@ -312,12 +340,30 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'Tracking Ancres' && (
           <AnchorTrackingStep project={stepView} onSave={stepSave} />
         )}
-        {activeStep === 'Bones' && (
+        {activeStep === 'Bones' && !isCoTrackerBonesAnim && (
           <BoneEditorStep
             project={project}
             animation={animation}
             onSave={projectSave}
           />
+        )}
+        {activeStep === 'Bones' && isCoTrackerBonesAnim && (
+          <CoTrackerBonesBoneStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'CoTracker3' && (
+          <CoTrackerBonesTrackingStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'LBS' && isCoTrackerBonesAnim && (
+          <CoTrackerBonesLBSStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Calcul Animation' && isCoTrackerBonesAnim && (
+          <CoTrackerBonesAnimationStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Preview Animation' && isCoTrackerBonesAnim && (
+          <div className="step-content">
+            <h2>Preview Animation</h2>
+            <TriangulationLoopPreview project={project} animation={animation} mode="textured" height={520} />
+          </div>
         )}
         {activeStep === 'Triangulation' && !isBoneAnim && (
           <TriangulationStep project={stepView} onSave={stepSave} isRestAnimation={isRestAnim} />
@@ -371,7 +417,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
             onSave={projectSave}
           />
         )}
-        {activeStep === 'Calcul' && (
+        {activeStep === 'Calcul' && isWalkAnim && (
           <WalkComputeStep
             project={project}
             animation={animation}

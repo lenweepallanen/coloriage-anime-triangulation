@@ -1,0 +1,317 @@
+/**
+ * CoTracker + Bones — Step 2 : placement & tracking of arbitrary points via CoTracker3.
+ *
+ * Workflow:
+ *  - Upload was done in Step 1 (Vidéo).
+ *  - User scrubs the video, clicks on canvas to add tracker points at the current frame.
+ *  - Selecting an existing point in the sidebar + clicking on canvas adds a *new prompt*
+ *    for that point at the current frame (multi-frame queries — CoTracker3 propagates
+ *    forward and backward).
+ *  - Right-click on a point deletes it. Drag a prompt to move it.
+ *  - "Lancer CoTracker3" sends video + queries → receives per-point trajectories.
+ */
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Project, Animation, CoTrackerPoint } from '../../types/project'
+import type { UploadHint } from '../../db/projectsStore'
+import { requestCoTracker } from '../../utils/cotrackerTracking'
+
+interface Props {
+  project: Project
+  animation: Animation
+  onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
+}
+
+const PALETTE = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#ec4899']
+
+export default function CoTrackerBonesTrackingStep({ project, animation, onSave }: Props) {
+  const mesh = animation.mesh
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [videoDims, setVideoDims] = useState<{ w: number; h: number; duration: number } | null>(null)
+  const [frame, setFrame] = useState(0)
+  const fps = 24
+
+  const [points, setPoints] = useState<CoTrackerPoint[]>(mesh?.cotrackerPoints ?? [])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [tracking, setTracking] = useState<{ phase: string } | null>(null)
+  const [trackedFrames, setTrackedFrames] = useState<Record<string, { x: number; y: number }[]> | null>(
+    mesh?.cotrackerFrames ?? null
+  )
+  const [error, setError] = useState<string | null>(null)
+
+  // Load video blob
+  useEffect(() => {
+    if (!animation.videoBlob) return
+    const url = URL.createObjectURL(animation.videoBlob)
+    setVideoUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [animation.videoBlob])
+
+  // Capture dimensions
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const onMeta = () => setVideoDims({ w: v.videoWidth, h: v.videoHeight, duration: v.duration })
+    v.addEventListener('loadedmetadata', onMeta)
+    return () => v.removeEventListener('loadedmetadata', onMeta)
+  }, [videoUrl])
+
+  const totalFrames = useMemo(() => videoDims ? Math.floor(videoDims.duration * fps) : 0, [videoDims])
+
+  // Seek video on frame change
+  useEffect(() => {
+    if (!videoRef.current || !videoDims) return
+    videoRef.current.currentTime = Math.min(frame / fps, videoDims.duration - 0.001)
+  }, [frame, videoDims])
+
+  // Draw overlay
+  useEffect(() => {
+    const c = canvasRef.current
+    const v = videoRef.current
+    if (!c || !v || !videoDims) return
+    c.width = videoDims.w
+    c.height = videoDims.h
+    const ctx = c.getContext('2d')
+    if (!ctx) return
+    const render = () => {
+      ctx.clearRect(0, 0, c.width, c.height)
+      ctx.drawImage(v, 0, 0, c.width, c.height)
+      const drawLabel = (x: number, y: number, label: string) => {
+        ctx.font = 'bold 14px system-ui, sans-serif'
+        ctx.textBaseline = 'middle'
+        const tx = x + 10
+        const ty = y - 10
+        const metrics = ctx.measureText(label)
+        const padX = 4, padY = 2
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'
+        ctx.fillRect(tx - padX, ty - 8 - padY, metrics.width + padX * 2, 16 + padY * 2)
+        ctx.fillStyle = '#fff'
+        ctx.fillText(label, tx, ty)
+      }
+
+      // Tracked trajectories
+      if (trackedFrames) {
+        points.forEach((pt, idx) => {
+          const traj = trackedFrames[pt.id]
+          if (!traj) return
+          const f = traj[frame]
+          if (!f) return
+          ctx.fillStyle = pt.color
+          ctx.beginPath()
+          ctx.arc(f.x, f.y, 6, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.strokeStyle = '#000'
+          ctx.lineWidth = 1
+          ctx.stroke()
+          drawLabel(f.x, f.y, String(idx + 1))
+        })
+      } else {
+        // Show prompts as halos at current frame
+        points.forEach((pt, idx) => {
+          for (const q of pt.prompts) {
+            if (q.frameIdx !== frame) continue
+            ctx.fillStyle = pt.color
+            ctx.beginPath()
+            ctx.arc(q.x, q.y, 7, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.strokeStyle = pt.id === selectedId ? '#fff' : '#000'
+            ctx.lineWidth = pt.id === selectedId ? 3 : 1
+            ctx.stroke()
+            drawLabel(q.x, q.y, String(idx + 1))
+          }
+        })
+      }
+    }
+    let raf = 0
+    const tick = () => { render(); raf = requestAnimationFrame(tick) }
+    tick()
+    return () => cancelAnimationFrame(raf)
+  }, [points, frame, videoDims, selectedId, trackedFrames])
+
+  function canvasToVideo(e: React.MouseEvent<HTMLCanvasElement>) {
+    const c = canvasRef.current
+    if (!c || !videoDims) return null
+    const rect = c.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * videoDims.w
+    const y = ((e.clientY - rect.top) / rect.height) * videoDims.h
+    return { x, y }
+  }
+
+  function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (e.button !== 0) return
+    const pos = canvasToVideo(e)
+    if (!pos) return
+    if (selectedId) {
+      // Add a prompt to the selected point at the current frame
+      setPoints(ps => ps.map(p => {
+        if (p.id !== selectedId) return p
+        const others = p.prompts.filter(q => q.frameIdx !== frame)
+        return { ...p, prompts: [...others, { frameIdx: frame, x: pos.x, y: pos.y }].sort((a, b) => a.frameIdx - b.frameIdx) }
+      }))
+    } else {
+      // New point at current frame — pas d'auto-sélection : clic clic clic ajoute plein de points
+      const id = crypto.randomUUID()
+      const color = PALETTE[points.length % PALETTE.length]
+      setPoints(ps => [...ps, {
+        id, color,
+        name: `pt${ps.length + 1}`,
+        prompts: [{ frameIdx: frame, x: pos.x, y: pos.y }],
+      }])
+      setTrackedFrames(null) // invalidate previous tracking
+    }
+  }
+
+  function handleCanvasContextMenu(e: React.MouseEvent<HTMLCanvasElement>) {
+    e.preventDefault()
+    const pos = canvasToVideo(e)
+    if (!pos) return
+    // Find nearest prompt at current frame to delete its point
+    let bestId: string | null = null
+    let bestD = 400
+    for (const pt of points) {
+      const q = pt.prompts.find(qq => qq.frameIdx === frame)
+      if (!q) continue
+      const d = (q.x - pos.x) ** 2 + (q.y - pos.y) ** 2
+      if (d < bestD) { bestD = d; bestId = pt.id }
+    }
+    if (bestId) {
+      setPoints(ps => ps.filter(p => p.id !== bestId))
+      if (selectedId === bestId) setSelectedId(null)
+      setTrackedFrames(null)
+    }
+  }
+
+  async function handleRun() {
+    if (!animation.videoBlob) { setError('Aucune vidéo'); return }
+    if (points.length === 0) { setError('Aucun point à tracker'); return }
+    setError(null)
+    setTracking({ phase: 'init' })
+    try {
+      const res = await requestCoTracker(animation.videoBlob, points, {
+        onPhase: phase => setTracking({ phase }),
+      })
+      setTrackedFrames(res.points)
+      const updatedAnim: Animation = {
+        ...animation,
+        mesh: {
+          ...(mesh ?? {} as any),
+          cotrackerPoints: points,
+          cotrackerFrames: res.points,
+          cotrackerVideoWidth: res.videoWidth,
+          cotrackerVideoHeight: res.videoHeight,
+          cotrackerTrackingValidated: true,
+          // invalidate downstream
+          cotrackerBonesValidated: false,
+          cotrackerBoneSmoothingValidated: false,
+          walkBodyFrames: null,
+          walkBodyFramesSmoothed: null,
+          walkZoneFrames: null,
+          walkZoneFramesSmoothed: null,
+        },
+      }
+      await onSave(
+        { ...project, animations: project.animations.map(a => a.id === animation.id ? updatedAnim : a) },
+        [{ animationId: animation.id, field: 'cotrackerFrames' }],
+      )
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTracking(null)
+    }
+  }
+
+  async function handleSavePromptsOnly() {
+    const updatedAnim: Animation = {
+      ...animation,
+      mesh: {
+        ...(mesh ?? {} as any),
+        cotrackerPoints: points,
+      },
+    }
+    await onSave({ ...project, animations: project.animations.map(a => a.id === animation.id ? updatedAnim : a) })
+  }
+
+  if (!animation.videoBlob) {
+    return <div className="step-content"><p>Importez d'abord une vidéo à l'étape 1.</p></div>
+  }
+
+  return (
+    <div className="step-content">
+      <h2>CoTracker3 — tracking de points</h2>
+      <p className="text-muted">
+        Clic gauche : ajouter un point (ou un prompt multi-frame si un point est sélectionné).
+        Clic droit : supprimer. Sélectionnez un point dans le panneau pour ajouter des prompts à d'autres frames.
+      </p>
+      <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <video ref={videoRef} src={videoUrl ?? undefined} style={{ display: 'none' }} muted />
+          <canvas
+            ref={canvasRef}
+            style={{ width: '100%', height: 'auto', background: '#000', cursor: 'crosshair' }}
+            onMouseDown={handleCanvasClick}
+            onContextMenu={handleCanvasContextMenu}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <button className="btn-secondary" onClick={() => setFrame(0)}>⏮</button>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, totalFrames - 1)}
+              value={frame}
+              onChange={e => setFrame(Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+            <span>{frame} / {totalFrames - 1}</span>
+          </div>
+        </div>
+        <aside style={{ width: 280 }}>
+          <h3>Points ({points.length})</h3>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 340, overflowY: 'auto' }}>
+            {points.map(p => (
+              <li
+                key={p.id}
+                onClick={() => setSelectedId(p.id === selectedId ? null : p.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
+                  borderRadius: 6, marginBottom: 4, cursor: 'pointer',
+                  background: p.id === selectedId ? '#1e3a5f' : '#222',
+                }}
+              >
+                <span style={{ width: 14, height: 14, borderRadius: '50%', background: p.color, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 12 }}>
+                  {p.name ?? p.id.slice(0, 6)} — {p.prompts.length} prompt(s)
+                </span>
+                <button
+                  className="btn-icon btn-sm"
+                  onClick={(e) => { e.stopPropagation(); setPoints(ps => ps.filter(pp => pp.id !== p.id)); setTrackedFrames(null) }}
+                  title="Supprimer"
+                >×</button>
+              </li>
+            ))}
+          </ul>
+          {selectedId && (
+            <p style={{ fontSize: 11, opacity: 0.8 }}>
+              Point sélectionné : cliquez sur le canvas à n'importe quelle frame pour ajouter/modifier le prompt à cette frame.
+            </p>
+          )}
+          <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button className="btn-primary" onClick={handleRun} disabled={tracking != null || points.length === 0}>
+              {tracking ? `CoTracker3… (${tracking.phase})` : 'Lancer CoTracker3'}
+            </button>
+            <button className="btn-secondary" onClick={handleSavePromptsOnly} disabled={tracking != null}>
+              Sauvegarder les prompts (sans tracking)
+            </button>
+            {error && <p style={{ color: '#f87171', fontSize: 12 }}>{error}</p>}
+            {trackedFrames && (
+              <p style={{ fontSize: 12, color: '#22c55e' }}>
+                ✓ Tracking validé ({Object.keys(trackedFrames).length} trajectoires)
+              </p>
+            )}
+          </div>
+        </aside>
+      </div>
+    </div>
+  )
+}
