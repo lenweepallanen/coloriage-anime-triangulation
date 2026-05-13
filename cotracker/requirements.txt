@@ -1,0 +1,9 @@
+functions-framework==3.*
+flask
+opencv-python-headless
+numpy
+torch
+torchvision
+einops
+imageio[ffmpeg]
+# CoTracker3 is loaded via torch.hub from facebookresearch/co-tracker

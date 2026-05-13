@@ -27,30 +27,45 @@ const COTRACKER_FUNCTION_URL = import.meta.env.VITE_COTRACKER_FUNCTION_URL
   || 'https://cotracker-track-6gzhik6pka-ew.a.run.app'
 
 export type CoTrackerPhase = 'warmup' | 'uploading' | 'tracking'
+export type CoTrackerResolution = 'native' | '512'
 
 export interface CoTrackerResult {
   videoWidth: number
   videoHeight: number
   numFrames: number
   points: Record<string, Point2D[]>  // pointId → positions per frame (video coords)
+  elapsedMs: number                  // total wall-clock time côté client (warmup → fin tracking)
+  serverInferenceMs?: number         // temps inférence côté serveur (somme des appels)
+  resolutionUsed: CoTrackerResolution
+  inferenceWidth?: number
+  inferenceHeight?: number
 }
 
 interface ServerResponse {
-  startFrame: number
-  endFrame: number
   videoWidth: number
   videoHeight: number
-  tracks: { x: number; y: number }[][]  // tracks[frame][pointIdx]
+  numFrames: number
+  points: Record<string, [number, number][]>  // pointId → [[x,y], ...] per frame
+  executionTimeMs?: number
+  inferenceWidth?: number
+  inferenceHeight?: number
+  resolutionUsed?: string
   error?: string
 }
 
 export async function requestCoTracker(
   videoBlob: Blob,
   points: CoTrackerPoint[],
-  options?: { timeoutMs?: number; onPhase?: (phase: CoTrackerPhase) => void },
+  options?: {
+    timeoutMs?: number
+    onPhase?: (phase: CoTrackerPhase) => void
+    resolution?: CoTrackerResolution
+  },
 ): Promise<CoTrackerResult> {
   const timeoutMs = options?.timeoutMs ?? 600_000
   const onPhase = options?.onPhase
+  const resolution: CoTrackerResolution = options?.resolution ?? 'native'
+  const t0Wall = performance.now()
 
   if (points.length === 0) throw new Error('Aucun point à tracker')
   if (videoBlob.size > 50 * 1024 * 1024) {
@@ -71,18 +86,28 @@ export async function requestCoTracker(
 
     onPhase?.('uploading')
     const videoDims = await readVideoDimensions(videoBlob)
-    const totalFrames = await readVideoFrameCount(videoBlob)
-    const videoB64 = await blobToBase64(videoBlob)
-    console.log(`[CoTracker] Video ${videoDims.width}x${videoDims.height}, ~${totalFrames} frames, payload ~${(videoB64.length / 1024 / 1024).toFixed(2)} MB`)
-
-    // Group points by their FIRST prompt's frameIdx (1 API call per group)
-    const groups = new Map<number, CoTrackerPoint[]>()
-    for (const pt of points) {
-      const fr = pt.prompts[0].frameIdx
-      if (!groups.has(fr)) groups.set(fr, [])
-      groups.get(fr)!.push(pt)
+    const rawFrames = await readVideoFrameCount(videoBlob)
+    // Cloud Function caps at MAX_FRAMES = 300 (cotracker/_common.py) but OOMs on
+    // 960×960 video around that limit. Clamp to 150 to stay under the 16 GB RAM budget
+    // (video tensor float32 = W×H×T×3×4 bytes + model + buffers).
+    const SERVER_MAX_FRAMES = 150
+    const totalFrames = Math.min(rawFrames, SERVER_MAX_FRAMES)
+    if (rawFrames > SERVER_MAX_FRAMES) {
+      console.warn(`[CoTracker] Vidéo ${rawFrames} frames > limite serveur ${SERVER_MAX_FRAMES}, tracking limité aux ${SERVER_MAX_FRAMES} premières frames (${(SERVER_MAX_FRAMES / 24).toFixed(1)}s)`)
     }
-    console.log(`[CoTracker] ${groups.size} groupe(s) de queryFrame → ${points.length} points`)
+    const videoB64 = await blobToBase64(videoBlob)
+    console.log(`[CoTracker] Video ${videoDims.width}x${videoDims.height}, ~${totalFrames} frames (raw ${rawFrames}), payload ~${(videoB64.length / 1024 / 1024).toFixed(2)} MB`)
+
+    // Flatten all prompts (multi-frame supported natively by CoTracker3) into a single
+    // `queries` array. Each query is (pointId, frameIdx, x, y) — the server averages
+    // trajectories per pointId across queries.
+    const queries: { pointId: string; frameIdx: number; x: number; y: number }[] = []
+    for (const pt of points) {
+      for (const pr of pt.prompts) {
+        queries.push({ pointId: pt.id, frameIdx: pr.frameIdx, x: pr.x, y: pr.y })
+      }
+    }
+    console.log(`[CoTracker] ${points.length} points, ${queries.length} queries (multi-frame supported)`)
 
     onPhase?.('tracking')
 
@@ -90,49 +115,59 @@ export async function requestCoTracker(
     let outWidth = videoDims.width
     let outHeight = videoDims.height
     let outFrames = totalFrames
+    let serverInferenceMs = 0
+    let inferenceWidth: number | undefined
+    let inferenceHeight: number | undefined
 
-    for (const [queryFrame, group] of groups) {
-      const queryPoints = group.map(pt => {
-        const q = pt.prompts.find(qq => qq.frameIdx === queryFrame) ?? pt.prompts[0]
-        return { x: q.x, y: q.y }
-      })
-      const t0 = performance.now()
-      const response = await fetch(COTRACKER_FUNCTION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video: videoB64,
-          queryFrame,
-          queryPoints,
-          startFrame: 0,
-          endFrame: Math.max(0, totalFrames - 1),
-        }),
-        signal: controller.signal,
-      })
-      console.log(`[CoTracker] queryFrame=${queryFrame}, ${group.length} pts → HTTP ${response.status} in ${((performance.now() - t0) / 1000).toFixed(1)}s`)
+    const t0 = performance.now()
+    const response = await fetch(COTRACKER_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video: videoB64, queries, resolution }),
+      signal: controller.signal,
+    })
+    const callMs = performance.now() - t0
+    console.log(`[CoTracker] resolution=${resolution} ${queries.length} queries → HTTP ${response.status} in ${(callMs / 1000).toFixed(1)}s`)
 
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || `HTTP ${response.status}`)
-      }
-      const data = (await response.json()) as ServerResponse
-      if (!data.tracks) throw new Error('Réponse sans champ tracks')
-
-      outWidth = data.videoWidth ?? outWidth
-      outHeight = data.videoHeight ?? outHeight
-      outFrames = data.tracks.length
-
-      // tracks[frame][pointIdx] → per-point trajectory
-      group.forEach((pt, idx) => {
-        allTrajectories[pt.id] = data.tracks.map(f => ({ x: f[idx].x, y: f[idx].y }))
-      })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}))
+      throw new Error(body.error || `HTTP ${response.status}`)
     }
+    const data = (await response.json()) as ServerResponse
+    if (!data.points) throw new Error('Réponse sans champ points')
+
+    outWidth = data.videoWidth ?? outWidth
+    outHeight = data.videoHeight ?? outHeight
+    outFrames = data.numFrames ?? totalFrames
+    if (typeof data.executionTimeMs === 'number') serverInferenceMs = data.executionTimeMs
+    if (typeof data.inferenceWidth === 'number') inferenceWidth = data.inferenceWidth
+    if (typeof data.inferenceHeight === 'number') inferenceHeight = data.inferenceHeight
+
+    for (const pt of points) {
+      const traj = data.points[pt.id]
+      if (!traj) {
+        console.warn(`[CoTracker] Trajectoire manquante pour point ${pt.id}`)
+        continue
+      }
+      allTrajectories[pt.id] = traj.map(([x, y]) => ({ x, y }))
+    }
+
+    const elapsedMs = performance.now() - t0Wall
+    console.log(
+      `[CoTracker] ✓ ${resolution} terminé en ${(elapsedMs / 1000).toFixed(2)}s (wall) · inférence serveur ${(serverInferenceMs / 1000).toFixed(2)}s` +
+      (inferenceWidth && inferenceHeight ? ` · inférence ${inferenceWidth}×${inferenceHeight}` : ''),
+    )
 
     return {
       videoWidth: outWidth,
       videoHeight: outHeight,
       numFrames: outFrames,
       points: allTrajectories,
+      elapsedMs,
+      serverInferenceMs: serverInferenceMs > 0 ? serverInferenceMs : undefined,
+      resolutionUsed: resolution,
+      inferenceWidth,
+      inferenceHeight,
     }
   } finally {
     clearTimeout(timer)

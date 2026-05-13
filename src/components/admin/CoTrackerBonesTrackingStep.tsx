@@ -14,7 +14,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Project, Animation, CoTrackerPoint } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
-import { requestCoTracker } from '../../utils/cotrackerTracking'
+import { requestCoTracker, type CoTrackerResolution } from '../../utils/cotrackerTracking'
+
+interface TimingInfo {
+  resolution: CoTrackerResolution
+  elapsedMs: number
+  serverInferenceMs?: number
+  inferenceWidth?: number
+  inferenceHeight?: number
+}
 
 interface Props {
   project: Project
@@ -40,6 +48,8 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
     mesh?.cotrackerFrames ?? null
   )
   const [error, setError] = useState<string | null>(null)
+  const [resolution, setResolution] = useState<CoTrackerResolution>('native')
+  const [lastTiming, setLastTiming] = useState<TimingInfo | null>(null)
 
   // Load video blob
   useEffect(() => {
@@ -191,8 +201,16 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
     try {
       const res = await requestCoTracker(animation.videoBlob, points, {
         onPhase: phase => setTracking({ phase }),
+        resolution,
       })
       setTrackedFrames(res.points)
+      setLastTiming({
+        resolution: res.resolutionUsed,
+        elapsedMs: res.elapsedMs,
+        serverInferenceMs: res.serverInferenceMs,
+        inferenceWidth: res.inferenceWidth,
+        inferenceHeight: res.inferenceHeight,
+      })
       const updatedAnim: Animation = {
         ...animation,
         mesh: {
@@ -297,6 +315,31 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
             </p>
           )}
           <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 8, background: '#1a1a1a', borderRadius: 6 }}>
+              <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase', letterSpacing: 0.5 }}>Résolution inférence</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="cotracker-resolution"
+                  value="native"
+                  checked={resolution === 'native'}
+                  onChange={() => setResolution('native')}
+                  disabled={tracking != null}
+                />
+                <span>CoTracker natif <span style={{ opacity: 0.6 }}>(résolution vidéo)</span></span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="cotracker-resolution"
+                  value="512"
+                  checked={resolution === '512'}
+                  onChange={() => setResolution('512')}
+                  disabled={tracking != null}
+                />
+                <span>CoTracker 512 <span style={{ opacity: 0.6 }}>(downscale côté long ≤ 512 px)</span></span>
+              </label>
+            </div>
             <button className="btn-primary" onClick={handleRun} disabled={tracking != null || points.length === 0}>
               {tracking ? `CoTracker3… (${tracking.phase})` : 'Lancer CoTracker3'}
             </button>
@@ -308,6 +351,22 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
               <p style={{ fontSize: 12, color: '#22c55e' }}>
                 ✓ Tracking validé ({Object.keys(trackedFrames).length} trajectoires)
               </p>
+            )}
+            {lastTiming && (
+              <div style={{ fontSize: 12, padding: 8, background: '#0f1d2e', borderRadius: 6, lineHeight: 1.5 }}>
+                <div style={{ fontWeight: 600, color: '#93c5fd' }}>
+                  ⏱ {lastTiming.resolution === 'native' ? 'CoTracker natif' : 'CoTracker 512'}
+                </div>
+                <div>Temps total : <b>{(lastTiming.elapsedMs / 1000).toFixed(2)} s</b></div>
+                {lastTiming.serverInferenceMs != null && (
+                  <div>Inférence serveur : <b>{(lastTiming.serverInferenceMs / 1000).toFixed(2)} s</b></div>
+                )}
+                {lastTiming.inferenceWidth && lastTiming.inferenceHeight && (
+                  <div style={{ opacity: 0.7 }}>
+                    Résolution traitée : {lastTiming.inferenceWidth}×{lastTiming.inferenceHeight} px
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </aside>
