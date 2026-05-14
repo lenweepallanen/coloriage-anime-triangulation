@@ -20,20 +20,24 @@ import torch
 
 from _common import (
     build_response, decode_video, run_inference, validate_payload, load_cotracker,
-    resolve_max_long_side,
+    resolve_interp_shape,
 )
 
-_MODEL: Any | None = None
 _DEVICE: torch.device | None = None
 
 
-def _get_model() -> tuple[Any, torch.device]:
-    global _MODEL, _DEVICE
-    if _MODEL is None or _DEVICE is None:
+def _get_device() -> torch.device:
+    global _DEVICE
+    if _DEVICE is None:
         _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logging.info("[cotracker] Loading model on %s", _DEVICE)
-        _MODEL = load_cotracker(_DEVICE)
-    return _MODEL, _DEVICE
+        logging.info("[cotracker] Device = %s", _DEVICE)
+    return _DEVICE
+
+
+def _get_model(engine: str = "offline") -> tuple[Any, torch.device]:
+    device = _get_device()
+    model = load_cotracker(device, engine=engine)
+    return model, device
 
 
 @functions_framework.http
@@ -50,9 +54,9 @@ def cotracker_track(request):  # type: ignore[no-untyped-def]
     headers = {"Access-Control-Allow-Origin": "*"}
 
     if request.method == "GET":
-        # Warmup: pre-load model so the next POST hits a warm instance.
+        # Warmup: pre-load offline (default). Online sera chargé à la demande.
         try:
-            _get_model()
+            _get_model("offline")
             return (json.dumps({"status": "warm"}), 200, {**headers, "Content-Type": "application/json"})
         except Exception as e:  # noqa: BLE001
             return (json.dumps({"status": "warmup_failed", "error": str(e)}), 200, {**headers, "Content-Type": "application/json"})
@@ -64,24 +68,35 @@ def cotracker_track(request):  # type: ignore[no-untyped-def]
         payload = request.get_json(silent=True) or {}
         validate_payload(payload)
         resolution = payload.get("resolution", "native")
-        max_long_side = resolve_max_long_side(resolution)
-        model, device = _get_model()
+        interp_shape = resolve_interp_shape(payload)
+        subsample = max(1, int(payload.get("subsample", 1)))
+        engine = payload.get("engine", "offline")
+        if engine not in ("offline", "online"):
+            raise ValueError(f"Unknown engine: {engine!r} (expected 'offline' or 'online')")
+        model, device = _get_model(engine)
         t0 = time.perf_counter()
-        frames, h_proc, w_proc, n, h_orig, w_orig = decode_video(payload["video"], max_long_side)
-        query_scale = w_proc / w_orig if w_orig > 0 else 1.0
+        frames, h, w, n_orig, subsample_applied = decode_video(payload["video"], subsample=subsample)
         logging.info(
-            "[cotracker] resolution=%s original=%dx%d proc=%dx%d frames=%d",
-            resolution, w_orig, h_orig, w_proc, h_proc, n,
+            "[cotracker] engine=%s resolution=%s interp_shape=%s subsample=%d video=%dx%d frames_orig=%d frames_kept=%d",
+            engine, resolution, interp_shape, subsample_applied, w, h, n_orig, frames.shape[0],
         )
-        out = run_inference(frames, payload["queries"], device, model, query_scale=query_scale)
+        out, interp_used = run_inference(
+            frames, payload["queries"], device, model,
+            interp_shape=interp_shape, subsample=subsample_applied, n_orig=n_orig,
+            engine=engine,
+        )
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        logging.info("[cotracker] inference done in %.1f ms", elapsed_ms)
+        logging.info(
+            "[cotracker] inference done in %.1f ms (interp_shape=%s, subsample=%d)",
+            elapsed_ms, interp_used, subsample_applied,
+        )
         resp = build_response(
-            out, w_orig, h_orig, n,
+            out, w, h, n_orig,
             execution_time_ms=elapsed_ms,
             resolution_used=str(resolution),
-            inference_width=w_proc,
-            inference_height=h_proc,
+            interp_shape_used=interp_used,
+            subsample_used=subsample_applied,
+            engine_used=engine,
         )
         return (json.dumps(resp), 200, {**headers, "Content-Type": "application/json"})
     except ValueError as e:

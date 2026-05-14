@@ -14,14 +14,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Project, Animation, CoTrackerPoint } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
-import { requestCoTracker, type CoTrackerResolution } from '../../utils/cotrackerTracking'
+import { requestCoTracker, type CoTrackerResolution, type CoTrackerEngine } from '../../utils/cotrackerTracking'
 
 interface TimingInfo {
+  label: string
   resolution: CoTrackerResolution
   elapsedMs: number
   serverInferenceMs?: number
-  inferenceWidth?: number
-  inferenceHeight?: number
+  interpShapeUsed?: [number, number]
+  subsampleUsed?: number
+  engineUsed?: CoTrackerEngine
 }
 
 interface Props {
@@ -193,23 +195,30 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
     }
   }
 
-  async function handleRun() {
+  async function handleRun(mode: 'standard' | 'optimized' = 'standard') {
     if (!animation.videoBlob) { setError('Aucune vidéo'); return }
     if (points.length === 0) { setError('Aucun point à tracker'); return }
     setError(null)
     setTracking({ phase: 'init' })
     try {
+      const requestResolution: CoTrackerResolution = mode === 'optimized' ? 'native' : resolution
+      const subsample = mode === 'optimized' ? 2 : 1
+      const engine: CoTrackerEngine = 'offline'
       const res = await requestCoTracker(animation.videoBlob, points, {
         onPhase: phase => setTracking({ phase }),
-        resolution,
+        resolution: requestResolution,
+        subsample,
+        engine,
       })
       setTrackedFrames(res.points)
       setLastTiming({
+        label: mode === 'optimized' ? 'CoTracker Optimisé (12 fps + 8 vCPU)' : `CoTracker ${requestResolution}`,
         resolution: res.resolutionUsed,
         elapsedMs: res.elapsedMs,
         serverInferenceMs: res.serverInferenceMs,
-        inferenceWidth: res.inferenceWidth,
-        inferenceHeight: res.inferenceHeight,
+        interpShapeUsed: res.interpShapeUsed,
+        subsampleUsed: res.subsampleUsed,
+        engineUsed: res.engineUsed,
       })
       const updatedAnim: Animation = {
         ...animation,
@@ -340,8 +349,17 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
                 <span>CoTracker 512 <span style={{ opacity: 0.6 }}>(downscale côté long ≤ 512 px)</span></span>
               </label>
             </div>
-            <button className="btn-primary" onClick={handleRun} disabled={tracking != null || points.length === 0}>
+            <button className="btn-primary" onClick={() => handleRun('standard')} disabled={tracking != null || points.length === 0}>
               {tracking ? `CoTracker3… (${tracking.phase})` : 'Lancer CoTracker3'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => handleRun('optimized')}
+              disabled={tracking != null || points.length === 0}
+              title="12 fps (subsample 2× + interpolation linéaire) sur Cloud Function 8 vCPU"
+              style={{ borderColor: '#22c55e', color: '#22c55e' }}
+            >
+              ⚡ CoTracker Optimisé
             </button>
             <button className="btn-secondary" onClick={handleSavePromptsOnly} disabled={tracking != null}>
               Sauvegarder les prompts (sans tracking)
@@ -355,16 +373,24 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
             {lastTiming && (
               <div style={{ fontSize: 12, padding: 8, background: '#0f1d2e', borderRadius: 6, lineHeight: 1.5 }}>
                 <div style={{ fontWeight: 600, color: '#93c5fd' }}>
-                  ⏱ {lastTiming.resolution === 'native' ? 'CoTracker natif' : 'CoTracker 512'}
+                  ⏱ {lastTiming.label}
                 </div>
                 <div>Temps total : <b>{(lastTiming.elapsedMs / 1000).toFixed(2)} s</b></div>
                 {lastTiming.serverInferenceMs != null && (
                   <div>Inférence serveur : <b>{(lastTiming.serverInferenceMs / 1000).toFixed(2)} s</b></div>
                 )}
-                {lastTiming.inferenceWidth && lastTiming.inferenceHeight && (
+                {lastTiming.interpShapeUsed && (
                   <div style={{ opacity: 0.7 }}>
-                    Résolution traitée : {lastTiming.inferenceWidth}×{lastTiming.inferenceHeight} px
+                    interp_shape modèle : {lastTiming.interpShapeUsed[0]}×{lastTiming.interpShapeUsed[1]} px
                   </div>
+                )}
+                {lastTiming.subsampleUsed && lastTiming.subsampleUsed > 1 && (
+                  <div style={{ opacity: 0.7 }}>
+                    subsample : 1 frame sur {lastTiming.subsampleUsed} (interpolation linéaire des frames manquantes)
+                  </div>
+                )}
+                {lastTiming.engineUsed && (
+                  <div style={{ opacity: 0.7 }}>moteur : {lastTiming.engineUsed}</div>
                 )}
               </div>
             )}

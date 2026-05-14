@@ -28,6 +28,7 @@ const COTRACKER_FUNCTION_URL = import.meta.env.VITE_COTRACKER_FUNCTION_URL
 
 export type CoTrackerPhase = 'warmup' | 'uploading' | 'tracking'
 export type CoTrackerResolution = 'native' | '512'
+export type CoTrackerEngine = 'offline' | 'online'
 
 export interface CoTrackerResult {
   videoWidth: number
@@ -37,8 +38,9 @@ export interface CoTrackerResult {
   elapsedMs: number                  // total wall-clock time côté client (warmup → fin tracking)
   serverInferenceMs?: number         // temps inférence côté serveur (somme des appels)
   resolutionUsed: CoTrackerResolution
-  inferenceWidth?: number
-  inferenceHeight?: number
+  interpShapeUsed?: [number, number] // résolution interne réellement utilisée par le modèle (h, w)
+  subsampleUsed?: number             // frame subsample appliqué côté serveur (1 = aucun)
+  engineUsed?: CoTrackerEngine       // moteur CoTracker utilisé ('offline' = full-video, 'online' = sliding window)
 }
 
 interface ServerResponse {
@@ -47,9 +49,10 @@ interface ServerResponse {
   numFrames: number
   points: Record<string, [number, number][]>  // pointId → [[x,y], ...] per frame
   executionTimeMs?: number
-  inferenceWidth?: number
-  inferenceHeight?: number
+  interpShapeUsed?: [number, number]
   resolutionUsed?: string
+  subsampleUsed?: number
+  engineUsed?: CoTrackerEngine
   error?: string
 }
 
@@ -60,11 +63,15 @@ export async function requestCoTracker(
     timeoutMs?: number
     onPhase?: (phase: CoTrackerPhase) => void
     resolution?: CoTrackerResolution
+    subsample?: number  // 1 = toutes les frames (défaut), 2 = 1 sur 2 (12fps depuis 24fps)
+    engine?: CoTrackerEngine  // 'offline' (défaut, full-video) ou 'online' (sliding window, ~×2 plus rapide)
   },
 ): Promise<CoTrackerResult> {
   const timeoutMs = options?.timeoutMs ?? 600_000
   const onPhase = options?.onPhase
   const resolution: CoTrackerResolution = options?.resolution ?? 'native'
+  const subsample = Math.max(1, Math.floor(options?.subsample ?? 1))
+  const engine: CoTrackerEngine = options?.engine ?? 'offline'
   const t0Wall = performance.now()
 
   if (points.length === 0) throw new Error('Aucun point à tracker')
@@ -116,14 +123,15 @@ export async function requestCoTracker(
     let outHeight = videoDims.height
     let outFrames = totalFrames
     let serverInferenceMs = 0
-    let inferenceWidth: number | undefined
-    let inferenceHeight: number | undefined
+    let interpShapeUsed: [number, number] | undefined
+    let subsampleUsed: number | undefined
+    let engineUsed: CoTrackerEngine | undefined
 
     const t0 = performance.now()
     const response = await fetch(COTRACKER_FUNCTION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ video: videoB64, queries, resolution }),
+      body: JSON.stringify({ video: videoB64, queries, resolution, subsample, engine }),
       signal: controller.signal,
     })
     const callMs = performance.now() - t0
@@ -140,8 +148,11 @@ export async function requestCoTracker(
     outHeight = data.videoHeight ?? outHeight
     outFrames = data.numFrames ?? totalFrames
     if (typeof data.executionTimeMs === 'number') serverInferenceMs = data.executionTimeMs
-    if (typeof data.inferenceWidth === 'number') inferenceWidth = data.inferenceWidth
-    if (typeof data.inferenceHeight === 'number') inferenceHeight = data.inferenceHeight
+    if (Array.isArray(data.interpShapeUsed) && data.interpShapeUsed.length === 2) {
+      interpShapeUsed = [data.interpShapeUsed[0], data.interpShapeUsed[1]]
+    }
+    if (typeof data.subsampleUsed === 'number') subsampleUsed = data.subsampleUsed
+    if (data.engineUsed === 'offline' || data.engineUsed === 'online') engineUsed = data.engineUsed
 
     for (const pt of points) {
       const traj = data.points[pt.id]
@@ -155,7 +166,7 @@ export async function requestCoTracker(
     const elapsedMs = performance.now() - t0Wall
     console.log(
       `[CoTracker] ✓ ${resolution} terminé en ${(elapsedMs / 1000).toFixed(2)}s (wall) · inférence serveur ${(serverInferenceMs / 1000).toFixed(2)}s` +
-      (inferenceWidth && inferenceHeight ? ` · inférence ${inferenceWidth}×${inferenceHeight}` : ''),
+      (interpShapeUsed ? ` · interp_shape ${interpShapeUsed[0]}×${interpShapeUsed[1]}` : ''),
     )
 
     return {
@@ -166,8 +177,9 @@ export async function requestCoTracker(
       elapsedMs,
       serverInferenceMs: serverInferenceMs > 0 ? serverInferenceMs : undefined,
       resolutionUsed: resolution,
-      inferenceWidth,
-      inferenceHeight,
+      interpShapeUsed,
+      subsampleUsed,
+      engineUsed,
     }
   } finally {
     clearTimeout(timer)

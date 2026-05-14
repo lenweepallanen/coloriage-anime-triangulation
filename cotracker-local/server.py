@@ -26,13 +26,12 @@ from flask import Flask, jsonify, request
 
 from _common import (  # type: ignore[import-not-found]
     build_response, decode_video, run_inference, validate_payload, load_cotracker,
-    resolve_max_long_side,
+    resolve_interp_shape,
 )
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-_MODEL = None
 _DEVICE: torch.device | None = None
 
 
@@ -46,13 +45,13 @@ def _pick_device(forced: str | None) -> torch.device:
     return torch.device("cpu")
 
 
-def _get_model():
-    global _MODEL, _DEVICE
-    if _MODEL is None or _DEVICE is None:
+def _get_model(engine: str = "offline"):
+    global _DEVICE
+    if _DEVICE is None:
         _DEVICE = _pick_device(app.config.get("FORCED_DEVICE"))
-        logging.info("Loading CoTracker3 on %s", _DEVICE)
-        _MODEL = load_cotracker(_DEVICE)
-    return _MODEL, _DEVICE
+        logging.info("Device = %s", _DEVICE)
+    model = load_cotracker(_DEVICE, engine=engine)
+    return model, _DEVICE
 
 
 @app.route("/", methods=["GET", "POST", "OPTIONS"])
@@ -74,24 +73,35 @@ def root():
         payload = request.get_json(force=True, silent=True) or {}
         validate_payload(payload)
         resolution = payload.get("resolution", "native")
-        max_long_side = resolve_max_long_side(resolution)
-        model, device = _get_model()
+        interp_shape = resolve_interp_shape(payload)
+        subsample = max(1, int(payload.get("subsample", 1)))
+        engine = payload.get("engine", "offline")
+        if engine not in ("offline", "online"):
+            raise ValueError(f"Unknown engine: {engine!r}")
+        model, device = _get_model(engine)
         t0 = time.perf_counter()
-        frames, h_proc, w_proc, n, h_orig, w_orig = decode_video(payload["video"], max_long_side)
-        query_scale = w_proc / w_orig if w_orig > 0 else 1.0
+        frames, h, w, n_orig, subsample_applied = decode_video(payload["video"], subsample=subsample)
         logging.info(
-            "resolution=%s original=%dx%d proc=%dx%d frames=%d",
-            resolution, w_orig, h_orig, w_proc, h_proc, n,
+            "engine=%s resolution=%s interp_shape=%s subsample=%d video=%dx%d frames_orig=%d frames_kept=%d",
+            engine, resolution, interp_shape, subsample_applied, w, h, n_orig, frames.shape[0],
         )
-        out = run_inference(frames, payload["queries"], device, model, query_scale=query_scale)
+        out, interp_used = run_inference(
+            frames, payload["queries"], device, model,
+            interp_shape=interp_shape, subsample=subsample_applied, n_orig=n_orig,
+            engine=engine,
+        )
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        logging.info("inference done in %.1f ms", elapsed_ms)
+        logging.info(
+            "inference done in %.1f ms (interp=%s subsample=%d)",
+            elapsed_ms, interp_used, subsample_applied,
+        )
         resp = build_response(
-            out, w_orig, h_orig, n,
+            out, w, h, n_orig,
             execution_time_ms=elapsed_ms,
             resolution_used=str(resolution),
-            inference_width=w_proc,
-            inference_height=h_proc,
+            interp_shape_used=interp_used,
+            subsample_used=subsample_applied,
+            engine_used=engine,
         )
         return app.response_class(json.dumps(resp), mimetype="application/json")
     except ValueError as e:
