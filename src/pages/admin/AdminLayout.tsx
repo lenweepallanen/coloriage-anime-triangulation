@@ -64,6 +64,9 @@ export default function AdminLayout() {
         <NavLink to="eyes" className={({ isActive }) => `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''}`}>
           Yeux
         </NavLink>
+        <NavLink to="mouth" className={({ isActive }) => `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''}`}>
+          Bouche
+        </NavLink>
         <NavLink to="scene" className={({ isActive }) => `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''}`}>
           Scène
         </NavLink>

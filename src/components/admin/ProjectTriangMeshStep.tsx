@@ -16,7 +16,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { Project, Point2D, SAM2Zone, CurvilinearParam } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
-import { triangulateZone, generateInternalPoints } from '../../utils/limbSeparation'
+import { triangulateZone, generateInternalPoints, triangulateHiddenFace, triangulateHiddenFaceLimb } from '../../utils/limbSeparation'
+import type { HiddenFaceZone, HiddenFaceLimbZone } from '../../types/project'
 import { pointInPolygon } from '../../utils/geometry'
 import { detectCurvatureExtrema } from '../../utils/curvatureScaleSpace'
 import { reorderContourFromOrigin, subdivideContour, computeArcLengths } from '../../utils/curvilinearContour'
@@ -87,7 +88,12 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     for (const z of allZones) init[z.id] = tri?.zoneDensity?.[z.id] ?? DEFAULT_DENSITY
     return init
   })
-  const [manualPoints, setManualPoints] = useState<Record<string, Point2D[]>>({})
+  const [manualPoints, setManualPoints] = useState<Record<string, Point2D[]>>(() => tri?.zoneManualPoints ?? {})
+
+  // Manual triangles (mode "Relier") — indices into [...cPts, ...autoInternal, ...manualPoints]
+  const [manualTriangles, setManualTriangles] = useState<Record<string, [number, number, number][]>>(() => tri?.zoneManualTriangles ?? {})
+  const [bodyEditMode, setBodyEditMode] = useState<'add' | 'connect' | 'move'>('add')
+  const [connectBuffer, setConnectBuffer] = useState<number[]>([]) // collected indices for current manual triangle
 
   // ─── Z-order ──────────────────────────────────────────────────────
   const [zoneZOrder, setZoneZOrder] = useState<Record<string, number>>(() => {
@@ -187,6 +193,41 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     return out
   }
 
+  /**
+   * Build the unified pre-compact point list for a zone in the triangulation phase,
+   * matching triangulateZone's internal ordering : [...cPts, ...autoInternal, ...manualPoints].
+   * Manual-triangle indices are stored against this list.
+   */
+  function buildUnifiedPoints(zoneId: string): {
+    points: Point2D[]; cPts: Point2D[]; autoCount: number
+  } | null {
+    const cPts = buildClosedContour(zoneId)
+    if (!cPts || cPts.length < 3) return null
+    const density = zoneDensity[zoneId] ?? DEFAULT_DENSITY
+    const spacing = spacingForDensity(density)
+    const autoInternal = generateInternalPoints(cPts, spacing)
+    const manual = manualPoints[zoneId] ?? []
+    return {
+      points: [...cPts, ...autoInternal, ...manual],
+      cPts,
+      autoCount: autoInternal.length,
+    }
+  }
+
+  /** Hit-test against all unified points for a zone. Returns pre-compact index or -1. */
+  function hitTestUnified(imgPt: Point2D, zoneId: string, hitR: number): number {
+    const u = buildUnifiedPoints(zoneId)
+    if (!u) return -1
+    let bestIdx = -1
+    let bestDist = hitR
+    for (let i = 0; i < u.points.length; i++) {
+      const p = u.points[i]
+      const d = Math.hypot(p.x - imgPt.x, p.y - imgPt.y)
+      if (d < bestDist) { bestDist = d; bestIdx = i }
+    }
+    return bestIdx
+  }
+
   function spacingForDensity(density: number): number {
     const img = imageRef.current
     const maxDim = img ? Math.max(img.naturalWidth, img.naturalHeight) : 800
@@ -208,10 +249,16 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     img.src = url
     const canvas = canvasRef.current
     let ro: ResizeObserver | null = null
+    let didInitialFit = false
     if (canvas) {
       ro = new ResizeObserver(() => {
-        if (imageRef.current && canvas.clientWidth > 0)
+        // Only auto-fit the very first time the canvas gets a real size.
+        // Subsequent resizes (UI panel content changes etc.) must not reset the user's zoom/pan.
+        if (didInitialFit) return
+        if (imageRef.current && canvas.clientWidth > 0) {
           fitToCanvas(imageRef.current.naturalWidth, imageRef.current.naturalHeight)
+          didInitialFit = true
+        }
       })
       ro.observe(canvas)
     }
@@ -307,34 +354,43 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       let triResult = triangulateZone(cPts, allInternal, cPts)
 
       if (z.id === 'body') {
-        // Filter triangles touching leg zones
+        // Filter auto triangles touching leg zones (manual triangles are admin-defined and never filtered)
         const legContours = allZones
           .filter(lz => lz.id !== 'body' && zoneStage(lz.id) >= 4)
           .map(lz => buildClosedContour(lz.id))
           .filter((c): c is Point2D[] => !!c && c.length >= 3)
-        if (legContours.length > 0) {
-          const filteredTris = triResult.triangles.filter(([a, b, c]) => {
-            const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
-            return !legContours.some(legC =>
-              pointInPolygon(pa, legC) || pointInPolygon(pb, legC) || pointInPolygon(pc, legC)
-            )
-          })
-          // Compact: keep contour points always, plus vertices used by surviving triangles
-          const usedSet = new Set<number>()
-          for (const [a, b, c] of filteredTris) { usedSet.add(a); usedSet.add(b); usedSet.add(c) }
-          for (let i = 0; i < cPts.length; i++) usedSet.add(i)
-          const usedArr = [...usedSet].sort((a, b) => a - b)
-          const oldToNew = new Map<number, number>()
-          const newPts: Point2D[] = []
-          for (const oldIdx of usedArr) {
-            oldToNew.set(oldIdx, newPts.length)
-            newPts.push(triResult.points[oldIdx])
-          }
-          const newTris = filteredTris.map(([a, b, c]) =>
-            [oldToNew.get(a)!, oldToNew.get(b)!, oldToNew.get(c)!] as [number, number, number]
-          )
-          triResult = { points: newPts, triangles: newTris }
+        const filteredTris = legContours.length > 0
+          ? triResult.triangles.filter(([a, b, c]) => {
+              const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
+              return !legContours.some(legC =>
+                pointInPolygon(pa, legC) || pointInPolygon(pb, legC) || pointInPolygon(pc, legC)
+              )
+            })
+          : triResult.triangles
+        // Validate manual triangles : drop any referencing out-of-range indices (stale after density change)
+        const manualTrisRaw = manualTriangles[z.id] ?? []
+        const totalPts = triResult.points.length
+        const manualTris = manualTrisRaw.filter(([a, b, c]) =>
+          a >= 0 && a < totalPts && b >= 0 && b < totalPts && c >= 0 && c < totalPts
+        )
+        // Compact: keep contour, all manual points (admin intent), plus vertices used by surviving auto + manual triangles
+        const usedSet = new Set<number>()
+        for (const [a, b, c] of filteredTris) { usedSet.add(a); usedSet.add(b); usedSet.add(c) }
+        for (const [a, b, c] of manualTris) { usedSet.add(a); usedSet.add(b); usedSet.add(c) }
+        for (let i = 0; i < cPts.length; i++) usedSet.add(i)
+        const manualOffset = cPts.length + (triResult.points.length - cPts.length - manual.length)
+        for (let i = 0; i < manual.length; i++) usedSet.add(manualOffset + i)
+        const usedArr = [...usedSet].sort((a, b) => a - b)
+        const oldToNew = new Map<number, number>()
+        const newPts: Point2D[] = []
+        for (const oldIdx of usedArr) {
+          oldToNew.set(oldIdx, newPts.length)
+          newPts.push(triResult.points[oldIdx])
         }
+        const remap = ([a, b, c]: [number, number, number]) =>
+          [oldToNew.get(a)!, oldToNew.get(b)!, oldToNew.get(c)!] as [number, number, number]
+        const newTris = [...filteredTris.map(remap), ...manualTris.map(remap)]
+        triResult = { points: newPts, triangles: newTris }
       }
 
       result[z.id] = {
@@ -347,7 +403,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allZones, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionValidated,
-    zoneDensity, manualPoints, imageLoaded,
+    zoneDensity, manualPoints, manualTriangles, imageLoaded,
   ])
 
   // ─── Draw ─────────────────────────────────────────────────────────
@@ -520,6 +576,43 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             }
           }
         }
+
+        // ─── Body + triangulation : manual triangle overlay (mode Relier) ───
+        if (activeZoneId === 'body' && phase === 'triangulation') {
+          const u = buildUnifiedPoints(activeZoneId)
+          const mtris = manualTriangles[activeZoneId] ?? []
+          if (u) {
+            // Filled manual triangles
+            ctx.fillStyle = 'rgba(6, 182, 212, 0.18)'
+            ctx.strokeStyle = '#06b6d4'
+            ctx.lineWidth = 1.6 / t.scale
+            for (const [a, b, c] of mtris) {
+              const pa = u.points[a], pb = u.points[b], pc = u.points[c]
+              if (!pa || !pb || !pc) continue
+              ctx.beginPath()
+              ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.lineTo(pc.x, pc.y); ctx.closePath()
+              ctx.fill(); ctx.stroke()
+            }
+            // Connect buffer : highlight collected vertices + preview line
+            if (bodyEditMode === 'connect' && connectBuffer.length > 0) {
+              ctx.fillStyle = '#fb923c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
+              for (const idx of connectBuffer) {
+                const p = u.points[idx]
+                if (!p) continue
+                ctx.beginPath(); ctx.arc(p.x, p.y, pr * 1.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+              }
+              if (connectBuffer.length === 2) {
+                const p1 = u.points[connectBuffer[0]], p2 = u.points[connectBuffer[1]]
+                if (p1 && p2) {
+                  ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 1.8 / t.scale
+                  ctx.setLineDash([4 / t.scale, 4 / t.scale])
+                  ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke()
+                  ctx.setLineDash([])
+                }
+              }
+            }
+          }
+        }
       }
     }
 
@@ -535,7 +628,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   }, [
     tri?.contours, zoneMeshes, allZones, activeZoneId, activeSubPhase, activeSegment,
     zoneOrigins, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionParams,
-    manualPoints, transformRef, imageLoaded,
+    manualPoints, manualTriangles, bodyEditMode, connectBuffer, transformRef, imageLoaded,
   ])
 
   useEffect(() => {
@@ -614,6 +707,40 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         const closedContour = buildClosedContour(activeZoneId)
         if (!closedContour) return
         const manual = manualPoints[activeZoneId] ?? []
+
+        // ─── Body + triangulation : Relier mode = pick 3 points → manual triangle ───
+        if (activeZoneId === 'body' && phase === 'triangulation' && bodyEditMode === 'connect') {
+          const idx = hitTestUnified(imgPt, activeZoneId, hitR)
+          if (idx < 0) return
+          const next = [...connectBuffer, idx]
+          if (next.length < 3) {
+            setConnectBuffer(next)
+          } else {
+            // Avoid degenerate / duplicate triangles
+            const [a, b, c] = next
+            const unique = a !== b && b !== c && a !== c
+            if (unique) {
+              setManualTriangles(prev => ({
+                ...prev,
+                [activeZoneId]: [...(prev[activeZoneId] ?? []), [a, b, c]],
+              }))
+            }
+            setConnectBuffer([])
+          }
+          return
+        }
+
+        // ─── Body + triangulation : Move mode = drag manual points only ───
+        if (activeZoneId === 'body' && phase === 'triangulation' && bodyEditMode === 'move') {
+          for (let i = manual.length - 1; i >= 0; i--) {
+            if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
+              setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
+              return
+            }
+          }
+          return
+        }
+
         // Try drag existing anchor (P0 inclus = idx 0)
         const anchors = zoneAnchors[activeZoneId] ?? []
         for (let i = 0; i < anchors.length; i++) {
@@ -729,6 +856,32 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       return
     }
 
+    // ── Triangulation : in body+connect mode, right-click deletes a manual triangle ──
+    if (phase === 'triangulation' && activeZoneId === 'body' && bodyEditMode === 'connect') {
+      const u = buildUnifiedPoints(activeZoneId)
+      const mtris = manualTriangles[activeZoneId] ?? []
+      if (u) {
+        for (let i = mtris.length - 1; i >= 0; i--) {
+          const [a, b, c] = mtris[i]
+          const pa = u.points[a], pb = u.points[b], pc = u.points[c]
+          if (!pa || !pb || !pc) continue
+          const cx = (pa.x + pb.x + pc.x) / 3
+          const cy = (pa.y + pb.y + pc.y) / 3
+          if (Math.hypot(cx - imgPt.x, cy - imgPt.y) < hitR * 2) {
+            setManualTriangles(prev => {
+              const arr = [...(prev[activeZoneId] ?? [])]
+              arr.splice(i, 1)
+              return { ...prev, [activeZoneId]: arr }
+            })
+            return
+          }
+        }
+      }
+      // No triangle hit → cancel the in-progress chain
+      if (connectBuffer.length > 0) setConnectBuffer([])
+      return
+    }
+
     // ── Triangulation : delete manual internal (body + legs, unified) ──
     if (phase === 'triangulation') {
       const manual = manualPoints[activeZoneId] ?? []
@@ -740,6 +893,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             arr.splice(i, 1)
             return { ...prev, [activeZoneId]: arr }
           })
+          // Also clear manual triangles referencing this point (indices shift)
+          setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
           return
         }
       }
@@ -830,6 +985,9 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   function handleDensityChange(zoneId: string, value: number) {
     setZoneDensity(prev => ({ ...prev, [zoneId]: value }))
     setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
+    // Auto-internal indices shift with density → manual triangles become stale
+    setManualTriangles(prev => ({ ...prev, [zoneId]: [] }))
+    setConnectBuffer([])
   }
 
   // ─── Save ─────────────────────────────────────────────────────────
@@ -854,6 +1012,93 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
 
       const updatedZones = allZones.map(z => ({ ...z, zOrder: zoneZOrder[z.id] ?? 0 }))
 
+      // ─── Replay hidden-face triangulations on the new mesh (step3) ─────
+      // bodyPoints/bodyTriangles + zonePoints[limb]/zoneTriangles[limb] are overwritten by the new mesh
+      // at this point. Any prior hidden-face additions (bridge points + Delaunay triangles) are lost.
+      // We re-run triangulateHiddenFace[Limb] using the persisted bridgePoints + vertexA/B remapped
+      // by nearest position, so step4 keeps working without manual re-edit.
+      const updatedHiddenFaceZones: HiddenFaceZone[] = []
+      const updatedHiddenFaceLimbZones: HiddenFaceLimbZone[] = []
+      const nearestIndex = (target: Point2D, points: Point2D[]): number => {
+        let best = -1, bestD = Infinity
+        for (let i = 0; i < points.length; i++) {
+          const d = (points[i].x - target.x) ** 2 + (points[i].y - target.y) ** 2
+          if (d < bestD) { bestD = d; best = i }
+        }
+        return best
+      }
+      if (tri.step3Validated) {
+        // Body hidden faces — mutate newZonePoints['body'] / newZoneTriangles['body']
+        let bodyPts = [...(newZonePoints['body'] ?? [])]
+        let bodyTris = [...(newZoneTriangles['body'] ?? [])]
+        const oldBodyPts = tri.bodyPoints ?? []
+        for (const hfz of tri.hiddenFaceZones ?? []) {
+          const oldA = oldBodyPts[hfz.bodyVertexA]
+          const oldB = oldBodyPts[hfz.bodyVertexB]
+          if (!oldA || !oldB) continue
+          const newA = nearestIndex(oldA, bodyPts)
+          const newB = nearestIndex(oldB, bodyPts)
+          if (newA < 0 || newB < 0) continue
+          const r = triangulateHiddenFace(bodyPts, bodyTris, newA, newB, hfz.bridgePoints)
+          bodyPts = r.updatedBodyPoints
+          bodyTris = r.updatedBodyTriangles
+          updatedHiddenFaceZones.push({
+            ...hfz,
+            bodyVertexA: newA,
+            bodyVertexB: newB,
+            bodyTriangleIndices: r.hiddenFaceTriangleIndices,
+          })
+        }
+        newZonePoints['body'] = bodyPts
+        newZoneTriangles['body'] = bodyTris
+
+        // Limb hidden faces — mutate per-zone
+        for (const hfl of tri.hiddenFaceLimbZones ?? []) {
+          const zid = hfl.limbZoneId
+          const oldZonePts = tri.zonePoints?.[zid]
+          if (!oldZonePts) { updatedHiddenFaceLimbZones.push(hfl); continue }
+          let zPts = [...(newZonePoints[zid] ?? [])]
+          let zTris = [...(newZoneTriangles[zid] ?? [])]
+          const oldA = oldZonePts[hfl.zoneVertexA]
+          const oldB = oldZonePts[hfl.zoneVertexB]
+          if (!oldA || !oldB) { updatedHiddenFaceLimbZones.push(hfl); continue }
+          const newA = nearestIndex(oldA, zPts)
+          const newB = nearestIndex(oldB, zPts)
+          if (newA < 0 || newB < 0) { updatedHiddenFaceLimbZones.push(hfl); continue }
+          const r = triangulateHiddenFaceLimb(zPts, zTris, newA, newB, hfl.bridgePoints)
+          zPts = r.updatedZonePoints
+          zTris = r.updatedZoneTriangles
+          newZonePoints[zid] = zPts
+          newZoneTriangles[zid] = zTris
+          updatedHiddenFaceLimbZones.push({
+            ...hfl,
+            zoneVertexA: newA,
+            zoneVertexB: newB,
+            zoneTriangleIndices: r.hiddenFaceLimbTriangleIndices,
+          })
+        }
+      }
+
+      // Topology unchanged → preserve hidden faces (step3) validation.
+      // zOrder is purely cosmetic and must not invalidate downstream steps.
+      const topologyUnchanged =
+        tri.zonePoints && tri.zoneTriangles &&
+        allZones.every(z => {
+          const oldP = tri.zonePoints![z.id]
+          const newP = newZonePoints[z.id]
+          const oldT = tri.zoneTriangles![z.id]
+          const newT = newZoneTriangles[z.id]
+          if (!oldP || !newP || oldP.length !== newP.length) return false
+          if (!oldT || !newT || oldT.length !== newT.length) return false
+          for (let i = 0; i < oldP.length; i++) {
+            if (oldP[i].x !== newP[i].x || oldP[i].y !== newP[i].y) return false
+          }
+          for (let i = 0; i < oldT.length; i++) {
+            if (oldT[i][0] !== newT[i][0] || oldT[i][1] !== newT[i][1] || oldT[i][2] !== newT[i][2]) return false
+          }
+          return true
+        })
+
       await onSave({
         ...project,
         projectTriangulation: {
@@ -872,12 +1117,20 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           // Triangulation
           zonePoints: newZonePoints,
           zoneTriangles: newZoneTriangles,
+          zoneManualPoints: { ...manualPoints },
+          zoneManualTriangles: { ...manualTriangles },
           zoneDensity: { ...zoneDensity },
           bodyPoints: newZonePoints['body'] ?? [],
           bodyTriangles: newZoneTriangles['body'] ?? [],
           step2Validated: true,
-          // Invalidate downstream (hidden faces refer to body indices)
-          step3Validated: false,
+          // Hidden faces replayed in place on the new mesh : preserve step3 validation.
+          ...(tri.step3Validated
+            ? {
+                hiddenFaceZones: updatedHiddenFaceZones,
+                hiddenFaceLimbZones: updatedHiddenFaceLimbZones,
+                step3Validated: true,
+              }
+            : { step3Validated: topologyUnchanged ? (tri.step3Validated ?? false) : false }),
         },
       })
     } catch (err) {
@@ -903,12 +1156,12 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const activeSegmentCounts = activeZoneId ? zoneSegmentCounts[activeZoneId] ?? [] : []
 
   return (
-    <div style={{ display: 'flex', gap: 16, height: '100%' }}>
+    <div style={{ display: 'flex', gap: 16, height: '100%', minHeight: 0 }}>
       {/* Canvas */}
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <canvas
           ref={canvasRef}
-          style={{ width: '100%', height: 500, display: 'block', borderRadius: 8 }}
+          style={{ width: '100%', flex: 1, minHeight: 0, display: 'block', borderRadius: 8 }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -916,7 +1169,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         />
         {/* Floating per-segment +/- buttons (subdivision phase only) */}
         {activeZoneId && activePhase === 'subdivision' && activeAnchors.length >= 2 && (
-          <div style={{ position: 'absolute', inset: 0, top: 0, height: 500, pointerEvents: 'none', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
             {activeAnchors.map((_, i) => {
               const a = activeAnchors[i]
               const b = activeAnchors[(i + 1) % activeAnchors.length]
@@ -1193,6 +1446,42 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               onChange={e => handleDensityChange(activeZoneId, parseInt(e.target.value))}
               style={{ width: '100%', marginBottom: 10 }}
             />
+
+            {activeZoneId === 'body' && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>Mode édition</div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(['add', 'connect', 'move'] as const).map(m => (
+                    <button
+                      key={m}
+                      className={bodyEditMode === m ? 'btn-sm btn-primary' : 'btn-sm btn-ghost'}
+                      onClick={() => { setBodyEditMode(m); setConnectBuffer([]) }}
+                      style={{ flex: 1, fontSize: 11 }}
+                    >
+                      {{ add: 'Ajouter', connect: 'Relier', move: 'Déplacer' }[m]}
+                    </button>
+                  ))}
+                </div>
+                {bodyEditMode === 'connect' && (
+                  <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 6, lineHeight: 1.4 }}>
+                    Cliquez 3 points (contour, auto ou manuels) pour créer un triangle. Clic droit sur un triangle cyan pour le supprimer.
+                    {connectBuffer.length > 0 && <span style={{ color: '#fb923c' }}> ({connectBuffer.length}/3)</span>}
+                  </div>
+                )}
+                {(manualTriangles[activeZoneId]?.length ?? 0) > 0 && (
+                  <button
+                    className="btn-sm btn-danger"
+                    onClick={() => {
+                      setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
+                      setConnectBuffer([])
+                    }}
+                    style={{ width: '100%', fontSize: 11, marginTop: 6 }}
+                  >
+                    Effacer les triangles manuels ({manualTriangles[activeZoneId]?.length})
+                  </button>
+                )}
+              </div>
+            )}
 
             {(manualPoints[activeZoneId]?.length ?? 0) > 0 && (
               <button

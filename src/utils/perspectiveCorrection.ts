@@ -186,6 +186,73 @@ export async function flowCannyContour(
   return result.contourPoints || null
 }
 
+/**
+ * Detect the global silhouette + all closed interior regions of a coloring-book
+ * image in a single Canny+findContours pass.
+ *
+ * - silhouette : largest external contour (full body+legs outline)
+ * - regions    : every white region enclosed by black trace, with border-touching
+ *                regions filtered out (e.g. one polygon per drawn paw)
+ *
+ * Mask coords (pixels of the input ImageData). Caller is responsible for any
+ * subsequent scaling to image/video coords.
+ */
+export async function flowCannyAllContours(
+  imageData: ImageData,
+  lowThreshold = 50,
+  highThreshold = 150,
+  blurSize = 5
+): Promise<{ silhouette: { x: number; y: number }[] | null; regions: { x: number; y: number }[][] }> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'canny-all-contours',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+    lowThreshold,
+    highThreshold,
+    blurSize
+  }, 'canny-all-contours-result')
+  return {
+    silhouette: result.silhouette ?? null,
+    regions: result.regions ?? [],
+  }
+}
+
+/**
+ * Per-zone segmentation of a coloring-book image via Canny + barrier-bounded
+ * flood-fill from user-provided seeds. The trace itself is included in each
+ * zone polygon (post-fill dilation).
+ *
+ *  - silhouette  : largest external contour (full figure outline)
+ *  - zoneContours: { [zoneId]: Point2D[] } — one polygon per provided seed
+ *                  (only zones whose flood-fill succeeded)
+ */
+export async function flowCannySegmentZones(
+  imageData: ImageData,
+  seeds: { id: string; waypoints: { x: number; y: number }[] }[],
+  lowThreshold = 50,
+  highThreshold = 150,
+  blurSize = 5,
+  inflate = 12,
+): Promise<{
+  silhouette: { x: number; y: number }[] | null
+  zoneContours: Record<string, { x: number; y: number }[]>
+}> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'canny-segment-zones',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+    seeds,
+    lowThreshold,
+    highThreshold,
+    blurSize,
+    inflate,
+  }, 'canny-segment-zones-result')
+  return {
+    silhouette: result.silhouette ?? null,
+    zoneContours: result.zoneContours ?? {},
+  }
+}
+
 export async function flowCleanup(): Promise<void> {
   if (!workerReady || !worker) return
   await workerRpc({ type: 'flow-cleanup' }, 'flow-cleanup-done')

@@ -18,6 +18,7 @@ import type {
 } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
+import { solveElbowIK, getElbowParams } from '../../utils/boneSolver'
 
 interface Props {
   project: Project
@@ -59,6 +60,8 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const dragKneeRef = useRef<{ zoneId: string } | null>(null)
+  const didDragRef = useRef(false)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [videoDims, setVideoDims] = useState<{ w: number; h: number; duration: number } | null>(null)
   const [frame, setFrame] = useState(0)
@@ -106,6 +109,32 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       return resolveEndpointFrame(ref, cotrackerFrames, frame)
     }
     return drafts[key] ?? null
+  }
+
+  // Position d'un endpoint au rest pose (frame 0). Utilisé par le solver IK.
+  function endpointPos0(ref: CoTrackerEndpointRef, key: string): Point2D | null {
+    if (ref.pointIds.length > 0 && cotrackerFrames) {
+      return resolveEndpointFrame(ref, cotrackerFrames, 0)
+    }
+    return drafts[key] ?? null
+  }
+
+  // Position affichée d'un joint de patte, gère le mode 'solver' (knee = IK).
+  function legJointDisplayPos(leg: CoTrackerLegBone, jointIndex: number): Point2D | null {
+    const refs = legChainRefs(leg)
+    const isKnee = leg.legSolverMode === 'solver' && jointIndex === 1 && refs.length === 3
+    if (!isKnee) {
+      return endpointPos(refs[jointIndex], legJointKey(leg, jointIndex))
+    }
+    const hip = endpointPos(leg.hip, legJointKey(leg, 0))
+    const foot = endpointPos(leg.foot, legJointKey(leg, 2))
+    const hip0 = endpointPos0(leg.hip, legJointKey(leg, 0))
+    const foot0 = endpointPos0(leg.foot, legJointKey(leg, 2))
+    if (!hip || !foot || !hip0 || !foot0 || !leg.kneeRestPos) {
+      return leg.kneeRestPos ?? drafts[legJointKey(leg, 1)] ?? null
+    }
+    const { len1, len2, bendSide } = getElbowParams(hip0, foot0, leg.kneeRestPos)
+    return solveElbowIK(hip, foot, len1, len2, bendSide)
   }
 
   // ── Drawing ──
@@ -165,7 +194,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       // Legs
       for (const leg of skeleton.legs) {
         const refs = legChainRefs(leg)
-        const positions = refs.map((ref, ji) => endpointPos(ref, legJointKey(leg, ji)))
+        const positions = refs.map((_ref, ji) => legJointDisplayPos(leg, ji))
         // Chain segments
         ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 2
         ctx.beginPath()
@@ -181,8 +210,9 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
           if (!pos) return
           const ref = refs[ji]
           const isPicked = pick?.kind === 'leg-joint' && pick.zoneId === leg.zoneId && pick.jointIndex === ji
-          const isDraft = ref.pointIds.length === 0
-          ctx.fillStyle = isDraft ? '#94a3b8' : '#fb923c'
+          const isSolverKnee = leg.legSolverMode === 'solver' && ji === 1 && refs.length === 3
+          const isDraft = !isSolverKnee && ref.pointIds.length === 0
+          ctx.fillStyle = isSolverKnee ? '#22d3ee' : (isDraft ? '#94a3b8' : '#fb923c')
           ctx.beginPath(); ctx.arc(pos.x, pos.y, isPicked ? 7 : 5, 0, Math.PI * 2); ctx.fill()
           if (isPicked) { ctx.strokeStyle = '#fde047'; ctx.lineWidth = 2; ctx.stroke() }
         })
@@ -222,7 +252,43 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     return [a.id]
   }
 
+  function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (mode.kind !== 'idle' || frame !== 0) return
+    const p = canvasToVideo(e)
+    for (const leg of skeleton.legs) {
+      if (leg.legSolverMode !== 'solver') continue
+      const knee = legJointDisplayPos(leg, 1)
+      if (!knee) continue
+      const d2 = (knee.x - p.x) ** 2 + (knee.y - p.y) ** 2
+      if (d2 < JOINT_HIT_R * JOINT_HIT_R) {
+        dragKneeRef.current = { zoneId: leg.zoneId }
+        didDragRef.current = false
+        e.preventDefault()
+        return
+      }
+    }
+  }
+
+  function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!dragKneeRef.current) return
+    didDragRef.current = true
+    const p = canvasToVideo(e)
+    const zoneId = dragKneeRef.current.zoneId
+    setSkeleton(sk => {
+      const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+      if (idx < 0) return sk
+      const newLegs = sk.legs.slice()
+      newLegs[idx] = { ...newLegs[idx], kneeRestPos: p }
+      return { ...sk, legs: newLegs }
+    })
+  }
+
+  function handleMouseUp() {
+    if (dragKneeRef.current) dragKneeRef.current = null
+  }
+
   function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (didDragRef.current) { didDragRef.current = false; return }
     if (!cotrackerFrames) return
     const p = canvasToVideo(e)
 
@@ -320,8 +386,8 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     })
     for (const leg of skeleton.legs) {
       const refs = legChainRefs(leg)
-      refs.forEach((ref, ji) => {
-        const pos = endpointPos(ref, legJointKey(leg, ji))
+      refs.forEach((_ref, ji) => {
+        const pos = legJointDisplayPos(leg, ji)
         if (!pos) return
         const d2 = (pos.x - p.x) ** 2 + (pos.y - p.y) ** 2
         if (d2 < JOINT_HIT_R * JOINT_HIT_R && (!best || d2 < best.d2)) {
@@ -404,6 +470,45 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     setDrafts(d => { const c = { ...d }; delete c[`body:${j.id}`]; return c })
     if (pick?.kind === 'body-joint' && pick.index === i) setPick(null)
   }
+  function setLegSolverMode(zoneId: string, newMode: 'barycentre' | 'solver') {
+    setSkeleton(sk => {
+      const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+      if (idx < 0) return sk
+      const leg = sk.legs[idx]
+      const newLegs = sk.legs.slice()
+      if (newMode === 'solver') {
+        // Solver mode = exactement 1 joint intermédiaire (knee).
+        let joints = leg.joints ?? []
+        if (joints.length > 1) joints = joints.slice(0, 1)
+        if (joints.length === 0) joints = [{ pointIds: [], weights: [] }]
+        let kneeRestPos = leg.kneeRestPos ?? null
+        if (!kneeRestPos) {
+          // Init depuis la position courante du knee à frame 0.
+          const ref = joints[0]
+          if (ref.pointIds.length > 0 && cotrackerFrames) {
+            kneeRestPos = resolveEndpointFrame(ref, cotrackerFrames, 0)
+          } else {
+            kneeRestPos = drafts[`leg:${leg.id}:1`] ?? null
+          }
+          if (!kneeRestPos) {
+            const hip0 = leg.hip.pointIds.length > 0 && cotrackerFrames
+              ? resolveEndpointFrame(leg.hip, cotrackerFrames, 0)
+              : drafts[`leg:${leg.id}:0`]
+            const foot0 = leg.foot.pointIds.length > 0 && cotrackerFrames
+              ? resolveEndpointFrame(leg.foot, cotrackerFrames, 0)
+              : drafts[`leg:${leg.id}:${1 + joints.length}`]
+            if (hip0 && foot0) kneeRestPos = { x: (hip0.x + foot0.x) / 2, y: (hip0.y + foot0.y) / 2 }
+          }
+        }
+        newLegs[idx] = { ...leg, legSolverMode: 'solver', joints, kneeRestPos, kneeMode: leg.kneeMode ?? 'rest' }
+      } else {
+        newLegs[idx] = { ...leg, legSolverMode: 'barycentre' }
+      }
+      return { ...sk, legs: newLegs }
+    })
+    if (pick?.kind === 'leg-joint' && pick.zoneId === zoneId) setPick(null)
+  }
+
   function deleteLeg(zoneId: string) {
     const leg = skeleton.legs.find(l => l.zoneId === zoneId)
     setSkeleton(sk => ({ ...sk, legs: sk.legs.filter(l => l.zoneId !== zoneId) }))
@@ -425,9 +530,15 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       if (leg.hip.pointIds.length === 0 || leg.foot.pointIds.length === 0) {
         setError(`Patte ${leg.name} : hip et foot doivent référencer ≥ 1 point`); return
       }
-      for (let i = 0; i < (leg.joints?.length ?? 0); i++) {
-        if (leg.joints[i].pointIds.length === 0) {
-          setError(`Patte ${leg.name} : joint intermédiaire #${i + 1} sans barycentre`); return
+      if (leg.legSolverMode === 'solver') {
+        if (!leg.kneeRestPos) {
+          setError(`Patte ${leg.name} : position du genou non définie (drag-le sur le canvas en frame 0)`); return
+        }
+      } else {
+        for (let i = 0; i < (leg.joints?.length ?? 0); i++) {
+          if (leg.joints[i].pointIds.length === 0) {
+            setError(`Patte ${leg.name} : joint intermédiaire #${i + 1} sans barycentre`); return
+          }
         }
       }
     }
@@ -488,6 +599,10 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
             style={{
               width: '100%', height: 'auto', background: '#000',
               cursor: mode.kind === 'idle' ? 'default' : 'crosshair',
@@ -558,18 +673,37 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
                 )
               }
               const refs = legChainRefs(leg)
+              const legMode = leg.legSolverMode ?? 'barycentre'
               return (
                 <div key={z} style={{ border: '1px solid #444', padding: 6, marginBottom: 4 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>{LEG_LABELS[z]} ({refs.length} joints)</span>
                     <button className="btn-icon btn-sm" onClick={() => deleteLeg(z)}>×</button>
                   </div>
+                  <div style={{ fontSize: 11, marginTop: 2, display: 'flex', gap: 8 }}>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                      <input type="radio" name={`mode-${z}`} checked={legMode === 'barycentre'}
+                        onChange={() => setLegSolverMode(z, 'barycentre')} />
+                      barycentre
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                      <input type="radio" name={`mode-${z}`} checked={legMode === 'solver'}
+                        onChange={() => setLegSolverMode(z, 'solver')} />
+                      solver IK
+                    </label>
+                  </div>
+                  {legMode === 'solver' && (
+                    <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>
+                      Drag du genou sur le canvas (frame 0) pour ajuster le rest pose.
+                    </div>
+                  )}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
                     {refs.map((ref, ji) => {
                       const isPicked = pick?.kind === 'leg-joint' && pick.zoneId === z && pick.jointIndex === ji
-                      const isDraft = ref.pointIds.length === 0
-                      const label = legJointLabel(leg, ji)
-                      const isMid = ji > 0 && ji < refs.length - 1
+                      const isSolverKnee = legMode === 'solver' && ji === 1 && refs.length === 3
+                      const isDraft = !isSolverKnee && ref.pointIds.length === 0
+                      const label = isSolverKnee ? 'knee (IK)' : legJointLabel(leg, ji)
+                      const isMid = ji > 0 && ji < refs.length - 1 && !isSolverKnee
                       return (
                         <span key={ji} style={{ display: 'inline-flex', alignItems: 'center' }}>
                           <button
@@ -607,13 +741,24 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
             {pick ? (
               <>
                 <p style={{ fontSize: 11, opacity: 0.8 }}>Sélection : {pickLabel}</p>
-                <button
-                  className="btn-primary btn-sm"
-                  onClick={startAssignBary}
-                  disabled={mode.kind === 'assign-bary'}
-                >
-                  Ajouter points barycentres
-                </button>
+                {(() => {
+                  const pickedLeg = pick.kind === 'leg-joint' ? skeleton.legs.find(l => l.zoneId === pick.zoneId) : null
+                  const isSolverKnee = pickedLeg?.legSolverMode === 'solver'
+                    && pick.kind === 'leg-joint' && pick.jointIndex === 1
+                    && legChainLen(pickedLeg) === 3
+                  if (isSolverKnee) {
+                    return <p style={{ fontSize: 11, opacity: 0.7 }}>Knee résolu par IK — drag sur le canvas (frame 0) pour ajuster.</p>
+                  }
+                  return (
+                    <button
+                      className="btn-primary btn-sm"
+                      onClick={startAssignBary}
+                      disabled={mode.kind === 'assign-bary'}
+                    >
+                      Ajouter points barycentres
+                    </button>
+                  )
+                })()}
                 {(() => {
                   let ref: CoTrackerEndpointRef | undefined
                   if (pick.kind === 'body-joint') {

@@ -788,11 +788,11 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     : Object.values(limbHiddenFaces).filter(hfl => hfl.generated).length
 
   return (
-    <div style={{ display: 'flex', gap: 16, height: '100%' }}>
-      <div style={{ flex: 1, position: 'relative' }}>
+    <div style={{ display: 'flex', gap: 16, height: '100%', minHeight: 0 }}>
+      <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <canvas
           ref={canvasRef}
-          style={{ width: '100%', height: 500, display: 'block', borderRadius: 8 }}
+          style={{ width: '100%', flex: 1, minHeight: 0, display: 'block', borderRadius: 8 }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}

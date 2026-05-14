@@ -13,6 +13,7 @@ import type {
   CoTrackerLegBone,
   CoTrackerEndpointRef,
 } from '../types/project'
+import { solveElbowIK, getElbowParams } from './boneSolver'
 
 /** Normalise weights → sum to 1. Returns uniform if degenerate. */
 export function normalizeWeights(weights: number[]): number[] {
@@ -120,8 +121,20 @@ export function resolveCoTrackerLegChain(
 ): Point2D[] {
   const bodyHip = bodyBarycentricHip(leg.hipBodyVertexIndices, leg.hipBodyVertexWeights, bodyVertexPositions ?? [])
   const hip = (bodyHip && bodyVertexPositions) ? bodyHip : resolveEndpointFrame(leg.hip, cotrackerFrames, frameIdx)
-  const mids = (leg.joints ?? []).map(j => resolveEndpointFrame(j, cotrackerFrames, frameIdx))
   const foot = resolveEndpointFrame(leg.foot, cotrackerFrames, frameIdx)
+
+  // Solver mode : 2 segments / 3 joints. Knee résolu par IK à partir de hip/foot
+  // + longueurs et bendSide capturés au rest pose (frame 0).
+  if (leg.legSolverMode === 'solver' && leg.kneeRestPos) {
+    const bodyHip0 = bodyBarycentricHip(leg.hipBodyVertexIndices, leg.hipBodyVertexWeights, bodyVertexPositions ?? [])
+    const hip0 = (bodyHip0 && bodyVertexPositions) ? bodyHip0 : resolveEndpointFrame(leg.hip, cotrackerFrames, 0)
+    const foot0 = resolveEndpointFrame(leg.foot, cotrackerFrames, 0)
+    const { len1, len2, bendSide } = getElbowParams(hip0, foot0, leg.kneeRestPos)
+    const knee = solveElbowIK(hip, foot, len1, len2, bendSide)
+    return [hip, knee, foot]
+  }
+
+  const mids = (leg.joints ?? []).map(j => resolveEndpointFrame(j, cotrackerFrames, frameIdx))
   return [hip, ...mids, foot]
 }
 

@@ -861,6 +861,20 @@ code {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.pipeline-step-content-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-step-content-area > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Preview modal */

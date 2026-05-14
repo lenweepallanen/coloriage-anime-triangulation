@@ -234,6 +234,7 @@ interface ProjectTriangulationDoc {
   zoneSubdivisionPoints?: Record<string, Point2D[]>
   zoneSubdivisionParams?: Record<string, CurvilinearParam[]>
   zoneSubdivisionValidated?: Record<string, boolean>
+  zonePixelAdjusted?: Record<string, boolean>
   zoneContourLength?: Record<string, number>
   // Step 2 — legacy (slider)
   zoneContourCount?: Record<string, number>
@@ -241,6 +242,8 @@ interface ProjectTriangulationDoc {
   zoneContourValidated?: Record<string, boolean>
   zonePoints: Record<string, Point2D[]>
   zoneTriangles: Record<string, TriangleDoc[]>
+  zoneManualPoints?: Record<string, Point2D[]>
+  zoneManualTriangles?: Record<string, TriangleDoc[]>
   zoneDensity: Record<string, number>
   bodyPoints: Point2D[]
   bodyTriangles: TriangleDoc[]
@@ -265,6 +268,7 @@ interface ProjectDoc {
   scene: SceneDoc | null
   projectTriangulation?: ProjectTriangulationDoc | null
   projectEyes?: Project['projectEyes']
+  projectMouth?: Project['projectMouth']
 }
 
 // Legacy project doc (v4 format — single mesh + video at root)
@@ -476,6 +480,7 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     ...(tri.zoneSubdivisionPoints != null && { zoneSubdivisionPoints: tri.zoneSubdivisionPoints }),
     ...(tri.zoneSubdivisionParams != null && { zoneSubdivisionParams: tri.zoneSubdivisionParams }),
     ...(tri.zoneSubdivisionValidated != null && { zoneSubdivisionValidated: tri.zoneSubdivisionValidated }),
+    ...(tri.zonePixelAdjusted != null && { zonePixelAdjusted: tri.zonePixelAdjusted }),
     ...(tri.zoneContourLength != null && { zoneContourLength: tri.zoneContourLength }),
     // Legacy
     zoneContourCount: tri.zoneContourCount ?? {},
@@ -483,6 +488,12 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     zoneContourValidated: tri.zoneContourValidated ?? {},
     zonePoints: tri.zonePoints ?? {},
     zoneTriangles: zoneTrianglesDoc,
+    ...(tri.zoneManualPoints != null && { zoneManualPoints: tri.zoneManualPoints }),
+    ...(tri.zoneManualTriangles != null && {
+      zoneManualTriangles: Object.fromEntries(
+        Object.entries(tri.zoneManualTriangles).map(([zid, tris]) => [zid, triToDoc(tris)])
+      ),
+    }),
     zoneDensity: tri.zoneDensity ?? {},
     bodyPoints: tri.bodyPoints ?? [],
     bodyTriangles: triToDoc(tri.bodyTriangles ?? []),
@@ -513,12 +524,19 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     zoneSubdivisionPoints: doc.zoneSubdivisionPoints,
     zoneSubdivisionParams: doc.zoneSubdivisionParams,
     zoneSubdivisionValidated: doc.zoneSubdivisionValidated,
+    zonePixelAdjusted: doc.zonePixelAdjusted,
     zoneContourLength: doc.zoneContourLength,
     zoneContourCount: doc.zoneContourCount ?? {},
     zoneContourPoints: doc.zoneContourPoints ?? {},
     zoneContourValidated: doc.zoneContourValidated ?? {},
     zonePoints: doc.zonePoints ?? {},
     zoneTriangles,
+    zoneManualPoints: doc.zoneManualPoints,
+    zoneManualTriangles: doc.zoneManualTriangles
+      ? Object.fromEntries(
+          Object.entries(doc.zoneManualTriangles).map(([zid, tris]) => [zid, docToTri(tris as TriangleDoc[])])
+        )
+      : undefined,
     zoneDensity: doc.zoneDensity ?? {},
     bodyPoints: doc.bodyPoints ?? [],
     bodyTriangles: docToTri(doc.bodyTriangles ?? []),
@@ -713,6 +731,7 @@ function toDoc(project: Project): ProjectDoc {
     scene: project.scene ? sceneToDoc(project.scene) : null,
     ...(project.projectTriangulation != null && { projectTriangulation: projectTriangulationToDoc(project.projectTriangulation) }),
     ...(project.projectEyes != null && { projectEyes: project.projectEyes }),
+    ...(project.projectMouth != null && { projectMouth: project.projectMouth }),
   }
 }
 
@@ -1102,6 +1121,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     scene,
     projectTriangulation,
     projectEyes: projDoc.projectEyes ?? null,
+    projectMouth: projDoc.projectMouth ?? null,
   }
 }
 
@@ -1156,6 +1176,7 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     scene: null,
     projectTriangulation: null,
     projectEyes: null,
+    projectMouth: null,
   }
 }
 
@@ -1220,6 +1241,7 @@ export async function createProject(name: string): Promise<Project> {
     scene: null,
     projectTriangulation: null,
     projectEyes: null,
+    projectMouth: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
   console.log('[Firebase] Project created:', project.id)
@@ -1269,6 +1291,7 @@ export async function getAllProjects(): Promise<Project[]> {
         scene: null,
         projectTriangulation: null,
         projectEyes: null,
+        projectMouth: null,
       }
     }
 
@@ -1304,6 +1327,7 @@ export async function getAllProjects(): Promise<Project[]> {
       scene: null,
       projectTriangulation: null,
       projectEyes: projDoc.projectEyes ?? null,
+      projectMouth: projDoc.projectMouth ?? null,
     }
   })
 }

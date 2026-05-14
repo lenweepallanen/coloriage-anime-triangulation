@@ -99,31 +99,17 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
     && a.mesh.cotrackerPoints.length > 0
   )
 
-  async function handleAdd(type: 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones') {
+  async function handleAdd(type: 'oneshot' | 'physics' | 'cotracker-bones') {
     const isPhysics = type === 'physics'
-    const isBone = type === 'bone'
-    const isWalk = type === 'walk'
-    const isMembersBones = type === 'members-bones'
-    const isMembersBonesV2 = type === 'members-bones-v2'
-    const isMembersBonesV3 = type === 'members-bones-v3'
     const isCoTrackerBones = type === 'cotracker-bones'
-    const name = isPhysics
-      ? `Physics ${project.animations.filter(a => a.type === 'physics').length + 1}`
-      : isBone
-        ? `Bone ${project.animations.filter(a => a.type === 'bone').length + 1}`
-        : isWalk
-          ? `Walk ${project.animations.filter(a => a.type === 'walk').length + 1}`
-          : isMembersBones
-            ? `Members-Bones ${project.animations.filter(a => a.type === 'members-bones').length + 1}`
-            : isMembersBonesV2
-              ? `MB-V2 ${project.animations.filter(a => a.type === 'members-bones-v2').length + 1}`
-              : isMembersBonesV3
-                ? `MB-V3 ${project.animations.filter(a => a.type === 'members-bones-v3').length + 1}`
-                : isCoTrackerBones
-                  ? `CoTracker ${project.animations.filter(a => a.type === 'cotracker-bones').length + 1}`
-                  : `Animation ${project.animations.length + 1}`
-    // Members-bones (v1, v2, v3) et cotracker-bones sont autonomes : pas d'héritage rest
-    let inheritedMesh: MeshData | null = (isMembersBones || isMembersBonesV2 || isMembersBonesV3 || isCoTrackerBones)
+    const defaultName = isPhysics
+      ? `Animation Physique ${project.animations.filter(a => a.type === 'physics').length + 1}`
+      : isCoTrackerBones
+        ? `Animation par Vidéo ${project.animations.filter(a => a.type === 'cotracker-bones').length + 1}`
+        : `Animation par contour ${project.animations.filter(a => a.type === 'oneshot').length + 1}`
+    const name = window.prompt('Nom de l\'animation :', defaultName)?.trim()
+    if (!name) return
+    let inheritedMesh: MeshData | null = isCoTrackerBones
       ? createEmptyMesh()
       : (restAnim?.mesh ? { ...createEmptyMesh(), ...copySharedGeometry(restAnim.mesh) } : null)
 
@@ -227,34 +213,10 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
 
       <div className="anim-card-add-row">
         <button className="btn-secondary" onClick={() => handleAdd('oneshot')} disabled={saving}>
-          + Vidéo (6 étapes)
+          + Animation par contour
         </button>
         <button className="btn-secondary" onClick={() => handleAdd('physics')} disabled={saving}>
-          + Physics
-        </button>
-        <button className="btn-secondary" onClick={() => handleAdd('bone')} disabled={saving}>
-          + Bone
-        </button>
-        <button className="btn-secondary" onClick={() => handleAdd('walk')} disabled={saving}>
-          + Walk
-        </button>
-        <button className="btn-secondary" onClick={() => handleAdd('members-bones')} disabled={saving}>
-          + Members-Bones
-        </button>
-        <button className="btn-secondary" onClick={() => handleAdd('members-bones-v2')} disabled={saving}>
-          + MB V2
-        </button>
-        <button
-          className="btn-secondary"
-          onClick={() => handleAdd('members-bones-v3')}
-          disabled={saving || !project.projectTriangulation?.step3Validated}
-          title={
-            project.projectTriangulation?.step3Validated
-              ? 'Créer une animation Members-Bones V3 (topologie héritée de la Triangulation projet)'
-              : 'Validez d\'abord la Triangulation projet jusqu\'à l\'étape Faces cachées (onglet Triangulation)'
-          }
-        >
-          + MB V3
+          + Animation Physique
         </button>
         <button
           className="btn-secondary"
@@ -268,7 +230,7 @@ export default function AnimationCardList({ project, onSave, onEditAnimation }: 
               : 'Validez d\'abord la Triangulation projet jusqu\'à l\'étape Faces cachées (onglet Triangulation)'
           }
         >
-          + CoTracker + Bones
+          + Animation par Vidéo
         </button>
         <select
           value={cotrackerInheritFrom}

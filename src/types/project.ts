@@ -404,6 +404,11 @@ export interface ProjectTriangulation {
   contourSmoothSigma: number
   bridgeThreshold: number
   step1Validated: boolean
+  // Segmentation method used to produce masksRLE/contours at step 1.
+  // 'sam2' (default) = Cloud Function / local SAM 2 server.
+  // 'canny' = Canny + findContours on the reference image (coloring book trace).
+  segmentationMode?: 'sam2' | 'canny'
+  cannyParams?: CannyParams | null   // only used when segmentationMode === 'canny'
 
   // Étape 2 : Maillage par zone — placement curviligne (V3) + Delaunay interne
   // Phase 1 : P0 par zone (coords image, snap courbure)
@@ -425,6 +430,8 @@ export interface ProjectTriangulation {
   zoneContourValidated: Record<string, boolean>              // zoneId → contour verrouillé (legacy)
   zonePoints: Record<string, Point2D[]>                      // zoneId → vertices (contour + internes)
   zoneTriangles: Record<string, [number, number, number][]>  // zoneId → triangles Delaunay
+  zoneManualPoints?: Record<string, Point2D[]>                      // zoneId → points internes manuels (mode "Ajouter")
+  zoneManualTriangles?: Record<string, [number, number, number][]>  // zoneId → triangles manuels (mode "Relier") indexés sur [...cPts, ...autoInternal, ...manualPoints]
   zoneDensity: Record<string, number>                        // zoneId → slider densité intérieure
   bodyPoints: Point2D[]
   bodyTriangles: [number, number, number][]
@@ -481,6 +488,16 @@ export interface CoTrackerLegBone {
   // Optionnel : hip attaché à un body vertex (override) — comme V2/V3
   hipBodyVertexIndices?: number[] | null;
   hipBodyVertexWeights?: number[] | null;
+  // Mode de résolution des joints intermédiaires :
+  //  - 'barycentre' (défaut) : chaque joint = barycentre N-aire des points CoTracker
+  //  - 'solver' : 2 segments / 3 joints (hip→knee→foot). Hip & foot par barycentre,
+  //    knee résolu par IK 2-bones (longueurs fixes du rest pose). `joints[0].pointIds`
+  //    est ignoré dans ce mode.
+  legSolverMode?: 'barycentre' | 'solver';
+  // Utilisé uniquement en mode 'solver' : position de repos du genou (coords vidéo).
+  // Détermine L1, L2 et bendSide via solveElbowIK / getElbowParams.
+  kneeRestPos?: Point2D | null;
+  kneeMode?: ElbowMode;  // défaut 'rest'
 }
 
 export interface CoTrackerSkeleton {
@@ -596,6 +613,8 @@ export interface SceneRestPoint {
 export interface SpeakSound {
   id: string;
   name: string;
+  /** Si true, déclenche l'animation de la bouche (lip-sync amplitude) pendant la lecture. */
+  isVoice?: boolean;
 }
 
 export type SegmentEasing = 'smoothstep' | 'linear' | 'ease-out' | 'ease-in';
@@ -662,6 +681,33 @@ export const DEFAULT_PROJECT_EYES: ProjectEyes = {
   doubleBlinkProbability: 0.15,
 };
 
+/**
+ * Bouche animée (lip-sync). Définie au niveau projet, ancrée barycentriquement
+ * au maillage body (projectTriangulation). Le contour Bézier fermé représente la
+ * mâchoire basse mobile ; elle pivote en bloc autour de `hingeAnchor` quand un
+ * SpeakSound `isVoice` joue. L'amplitude RMS pilote `openness ∈ [0,1]` puis
+ * l'angle = `openness × maxOpenAngleDeg × rotationSign`. Le haut de la bouche
+ * est considéré comme solidaire du reste de la tête (pas de définition séparée).
+ */
+export interface MouthDefinition {
+  /** Contour fermé de la mâchoire basse (nœuds Bézier en coordonnées image). */
+  bezierNodes: BezierNode[];
+  /** 1 ref par nœud Bézier — ancrage barycentrique au body mesh. */
+  contourAnchors: BarycentricRef[];
+  /** Alias body — conservé pour cohérence avec EyeRegion. */
+  contourBodyAnchors?: BarycentricRef[];
+  /** Charnière (pivot de rotation de la mâchoire). */
+  hingeAnchor: BarycentricRef;
+  /** Alias body — idem. */
+  hingeBodyAnchor?: BarycentricRef;
+  /** Angle max d'ouverture en degrés. */
+  maxOpenAngleDeg: number;
+  /** Sens de rotation : 1 ou -1 selon l'orientation visuelle souhaitée. */
+  rotationSign: 1 | -1;
+}
+
+export const DEFAULT_MOUTH_MAX_OPEN_DEG = 18;
+
 export interface Project {
   id: string;
   name: string;
@@ -676,6 +722,7 @@ export interface Project {
   scene: Scene | null;
   projectTriangulation: ProjectTriangulation | null;
   projectEyes: ProjectEyes | null;
+  projectMouth: MouthDefinition | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

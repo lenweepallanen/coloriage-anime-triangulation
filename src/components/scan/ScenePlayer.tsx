@@ -14,6 +14,8 @@ import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRen
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import { EyeBlinkOverlay, getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
+import { MouthOverlay } from '../../utils/mouthOverlay'
+import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -119,6 +121,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [showHelpBubble, setShowHelpBubble] = useState(false)
   const [currentHelpText, setCurrentHelpText] = useState('')
   const speakAudioRef = useRef<HTMLAudioElement | null>(null)
+  // Lecteur WebAudio pour la bouche animée (RMS lip-sync).
+  const mouthAudioRef = useRef<MouthAudioPlayer | null>(null)
+  // RMS courant lu par le ticker PIXI (0 si aucun speak en cours).
+  const mouthOpennessRef = useRef(0)
   const scenePlaybackRef = useRef<ScenePlayback | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -301,6 +307,29 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     characterContainer.addChild(pixiMesh)
     // Allow eyeOverlay (zIndex=9999) to render above walk/MB zone meshes added later.
     characterContainer.sortableChildren = true
+
+    // --- Mouth overlay (project-level, optional) ---
+    // Le body mesh sert d'ancrage barycentrique. On l'instancie après pixiMesh
+    // pour qu'il rende au-dessus, et on l'update dans le ticker en utilisant
+    // les positions body courantes (walk/MB) ou les positions du mesh legacy.
+    let mouthOverlay: MouthOverlay | null = null
+    let mouthOverlayBodyFrame0: Point2D[] | null = null
+    if (project.projectMouth) {
+      const mouthBodyMesh = getEyeBodyMeshData(project)
+      if (mouthBodyMesh && mouthBodyMesh.bodyTriangles.length > 0) {
+        mouthOverlayBodyFrame0 = mouthBodyMesh.bodyPoints
+        mouthOverlay = new MouthOverlay(
+          project.projectMouth,
+          characterContainer,
+          mouthBodyMesh.bodyPoints,
+          mouthBodyMesh.bodyTriangles,
+          texture,
+          scanCanvas.width,
+          scanCanvas.height,
+          contentAlignment ?? undefined,
+        )
+      }
+    }
 
     // --- Eye blink overlay (project-level, optional) ---
     let eyeOverlay: EyeBlinkOverlay | null = null
@@ -870,9 +899,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
 
       // Eye blink overlay (positioned in character space)
+      const bodyPositionsForOverlays = activeBodyPlayback ? activeBodyPlayback.getPositions() : null
       if (eyeOverlay) {
-        const bodyPositions = activeBodyPlayback ? activeBodyPlayback.getPositions() : null
-        eyeOverlay.update(positions, bodyPositions, charScale, charOffsetX, charOffsetY, (delta / 60) * 1000)
+        eyeOverlay.update(positions, bodyPositionsForOverlays, charScale, charOffsetX, charOffsetY, (delta / 60) * 1000)
+      }
+
+      // Mouth overlay : pilote l'ouverture par RMS du speak audio.
+      // Si pas d'animation walk/MB active, on déforme la bouche dans le repère
+      // body frame 0 (statique) — la mâchoire reste centrée sur le perso au repos.
+      if (mouthOverlay) {
+        const bodyForMouth = bodyPositionsForOverlays ?? mouthOverlayBodyFrame0
+        const rms = mouthAudioRef.current ? mouthAudioRef.current.getRMS() : 0
+        mouthOpennessRef.current = rms
+        mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, rms)
       }
 
       // Parallax scrolling: each layer scrolls at depthFactor × front speed.
@@ -902,6 +941,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const url of bgImageUrls) URL.revokeObjectURL(url)
       for (const audio of animAudioElements.values()) { audio.pause() }
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
+      if (mouthOverlay) mouthOverlay.destroy()
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
@@ -936,7 +976,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     else sp?.triggerZoneOneshot?.(randomId)
   }, [currentRestIdx, scene.restPoints, project.animations])
 
-  const handleSpeak = useCallback(() => {
+  const handleSpeak = useCallback(async () => {
     const rp = scene.restPoints[currentRestIdx]
     const activeIds = rp?.speakSoundIds ?? []
     if (activeIds.length === 0) return
@@ -944,6 +984,27 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const idx = scene.speakSounds.findIndex(s => s.id === randomId)
     const blob = idx >= 0 ? scene.speakSoundBlobs[idx] : null
     if (!blob) return
+
+    // Si une bouche est définie, on utilise MouthAudioPlayer (AudioBufferSource +
+    // AnalyserNode) pour piloter le lip-sync via RMS. Sinon, fallback HTMLAudio.
+    if (project.projectMouth) {
+      mouthAudioRef.current?.cleanup()
+      mouthAudioRef.current = null
+      try {
+        const player = await loadMouthAudio(blob, {
+          onEnded: () => {
+            mouthOpennessRef.current = 0
+            mouthAudioRef.current?.cleanup()
+            mouthAudioRef.current = null
+          },
+        })
+        mouthAudioRef.current = player
+        await player.play()
+      } catch (err) {
+        console.error('[ScenePlayer] speak audio failed', err)
+      }
+      return
+    }
 
     if (speakAudioRef.current) {
       speakAudioRef.current.pause()
@@ -954,7 +1015,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     speakAudioRef.current = audio
     audio.play().catch(() => {})
     audio.onended = () => { URL.revokeObjectURL(url); speakAudioRef.current = null }
-  }, [currentRestIdx, scene])
+  }, [currentRestIdx, scene, project.projectMouth])
 
   const handleHelp = useCallback(() => {
     const rp = scene.restPoints[currentRestIdx]
@@ -974,6 +1035,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       URL.revokeObjectURL(speakAudioRef.current.src)
       speakAudioRef.current = null
     }
+    mouthAudioRef.current?.cleanup()
+    mouthAudioRef.current = null
   }, [])
 
   const currentRp = scene.restPoints[currentRestIdx]
