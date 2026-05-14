@@ -20,25 +20,15 @@ interface Props {
 }
 
 const MODE_LABELS: Record<CoTrackerLBSMode, string> = {
-  'lbs': 'LBS pur',
   'lbs-arap': 'LBS + ARAP intérieur',
-  'lbs-area': 'LBS + préservation aire',
   'lbs-contour-arap': 'LBS + ARAP contour + ARAP intérieur',
 }
 
 const MODE_HELP: Record<CoTrackerLBSMode, string> = {
-  'lbs':
-    'Skinning standard : chaque vertex bouge avec une moyenne pondérée des sub-bones. ' +
-    'Le contour subit l\'effet candy-wrapper (averaging linéaire de rotations). Augmenter ' +
-    'l\'exposant des weights rend chaque vertex plus mono-bone et atténue l\'aplatissement.',
   'lbs-arap':
     'Après LBS, on pinne le contour de chaque zone aux positions LBS et on laisse l\'intérieur ' +
     'se relaxer par ARAP (préservation de la rigidité locale). Élimine fortement le flattening ' +
     'intérieur. Coût : ~10-30 ms/frame.',
-  'lbs-area':
-    'Post-pass triangle par triangle : on scale les vertices autour du centroïde pour ramener ' +
-    'l\'aire courante vers l\'aire de repos. Atténue le rétrécissement sans changer la nature ' +
-    'du LBS. Plus rapide qu\'ARAP, qualité inférieure.',
   'lbs-contour-arap':
     'Après LBS : (1) le contour est relaxé par ARAP 1D fermé avec les positions LBS comme ' +
     'cibles douces (λ) — préserve longueurs et angles d\'arêtes du contour, supprime le shear ' +
@@ -164,14 +154,6 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
             <span style={{ minWidth: 28, textAlign: 'right' }}>{params.arapIterations ?? 3}</span>
           </label>
         )}
-        {params.mode === 'lbs-area' && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-            <span style={{ minWidth: 100 }}>Force area</span>
-            <input type="range" min={0} max={1} step={0.05} value={params.areaStrength ?? 0.5}
-              onChange={e => updateParam('areaStrength', Number(e.target.value))} style={{ flex: 1 }} />
-            <span style={{ minWidth: 28, textAlign: 'right' }}>{(params.areaStrength ?? 0.5).toFixed(2)}</span>
-          </label>
-        )}
         {params.mode === 'lbs-contour-arap' && (
           <>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
@@ -207,7 +189,7 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
         <button className="btn-primary" onClick={() => handleCompute(true)} disabled={progress != null}>
           Valider
         </button>
-        {validated && <span style={{ color: '#22c55e', fontSize: 12 }}>✓ Validé ({MODE_LABELS[mesh?.cotrackerLBSParams?.mode ?? 'lbs']})</span>}
+        {validated && <span style={{ color: '#22c55e', fontSize: 12 }}>✓ Validé ({MODE_LABELS[mesh?.cotrackerLBSParams?.mode ?? 'lbs-arap']})</span>}
       </div>
 
       <div style={{

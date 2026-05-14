@@ -2,9 +2,8 @@
  * CoTracker bones — LBS compute with multiple modes.
  *
  * Modes :
- *  - 'lbs'      : skinning classique, weights = 1/(d+ε)^p
- *  - 'lbs-arap' : contour pinné aux positions LBS, ARAP-solve pour l'intérieur
- *  - 'lbs-area' : LBS classique + post-pass de préservation d'aire par triangle
+ *  - 'lbs-arap'         : contour pinné aux positions LBS, ARAP-solve pour l'intérieur
+ *  - 'lbs-contour-arap' : ARAP 1D sur contour (cibles douces LBS) puis ARAP body
  *
  * Toujours produit :
  *  - walkBodyFrames / walkZoneFrames
@@ -207,49 +206,6 @@ function applyAreaPreservationPass(
   }
 }
 
-/** Post-pass : pour chaque triangle, ramène l'aire vers l'aire de repos en
- *  scalant les positions autour du centroïde. Strength ∈ [0,1]. Moyenne les
- *  corrections par vertex (un vertex appartient à plusieurs triangles). */
-function preserveAreaInPlace(
-  positions: Point2D[],
-  restPositions: Point2D[],
-  triangles: [number, number, number][],
-  strength: number,
-) {
-  if (strength <= 0) return
-  // Aire signée
-  const area = (a: Point2D, b: Point2D, c: Point2D) =>
-    Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) * 0.5
-
-  const sumX = new Float64Array(positions.length)
-  const sumY = new Float64Array(positions.length)
-  const count = new Uint32Array(positions.length)
-
-  for (const [ia, ib, ic] of triangles) {
-    const a = positions[ia], b = positions[ib], c = positions[ic]
-    if (!a || !b || !c) continue
-    const ra = restPositions[ia], rb = restPositions[ib], rc = restPositions[ic]
-    const Acur = area(a, b, c)
-    const Arest = area(ra, rb, rc)
-    if (Acur < 1e-6 || Arest < 1e-6) continue
-    const s = Math.sqrt(Arest / Acur)
-    const scaleClamped = 1 + (s - 1) * strength
-    const cx = (a.x + b.x + c.x) / 3
-    const cy = (a.y + b.y + c.y) / 3
-    for (const idx of [ia, ib, ic]) {
-      const p = positions[idx]
-      const nx = cx + (p.x - cx) * scaleClamped
-      const ny = cy + (p.y - cy) * scaleClamped
-      sumX[idx] += nx; sumY[idx] += ny; count[idx]++
-    }
-  }
-  for (let i = 0; i < positions.length; i++) {
-    if (count[i] > 0) {
-      positions[i] = { x: sumX[i] / count[i], y: sumY[i] / count[i] }
-    }
-  }
-}
-
 export interface LBSComputeResult {
   walkBodyFrames: Point2D[][]
   walkZoneFrames: Record<string, Point2D[][]>
@@ -402,18 +358,6 @@ export async function runCoTrackerLBSCompute(
       const zoneW = legWeights[leg.zoneId]
       if (zonePts && zoneW && matrices.length > 0) {
         walkZoneFrames[leg.zoneId][f] = skinVerticesSubBones(zonePts, zoneW, matrices)
-      }
-    }
-
-    // ── lbs-area : correction d'aire par triangle ──
-    if (params.mode === 'lbs-area') {
-      const s = params.areaStrength ?? 0.5
-      preserveAreaInPlace(walkBodyFrames[f], tri.bodyPoints, tri.bodyTriangles, s)
-      for (const leg of skeleton.legs) {
-        const fr = walkZoneFrames[leg.zoneId][f]
-        const zonePts = tri.zonePoints[leg.zoneId]
-        const zoneTris = tri.zoneTriangles[leg.zoneId]
-        if (fr && zonePts && zoneTris) preserveAreaInPlace(fr, zonePts, zoneTris, s)
       }
     }
 
