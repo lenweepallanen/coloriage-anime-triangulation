@@ -76,12 +76,31 @@ export default function TriangulationLoopPreview({
   const [playing, setPlaying] = useState(true)
   const [showMesh, setShowMesh] = useState(mode === 'wireframe')
   const [showBones, setShowBones] = useState(mode === 'wireframe')
+  const zoneIds = useMemo(() => (tri ? tri.zones.map(z => z.id) : []), [tri])
+  const [regionVisibility, setRegionVisibility] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {}
+    for (const id of zoneIds) m[id] = true
+    return m
+  })
+  useEffect(() => {
+    setRegionVisibility(prev => {
+      const next: Record<string, boolean> = {}
+      let changed = false
+      for (const id of zoneIds) {
+        next[id] = prev[id] ?? true
+        if (!(id in prev)) changed = true
+      }
+      if (!changed && Object.keys(prev).length === zoneIds.length) return prev
+      return next
+    })
+  }, [zoneIds])
 
   const crossfadeRef = useRef(crossfade); crossfadeRef.current = crossfade
   const speedRef = useRef(speed); speedRef.current = speed
   const playingRef = useRef(playing); playingRef.current = playing
   const showMeshRef = useRef(showMesh); showMeshRef.current = showMesh
   const showBonesRef = useRef(showBones); showBonesRef.current = showBones
+  const regionVisibilityRef = useRef(regionVisibility); regionVisibilityRef.current = regionVisibility
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -162,17 +181,23 @@ export default function TriangulationLoopPreview({
       const tickerFn = (delta: number) => {
         if (!playingRef.current) return
         for (const { pb } of playbacks) { pb.speed = speedRef.current; pb.advance(delta) }
+        const vis = regionVisibilityRef.current
+        const bodyVisible = vis['body'] !== false
         const bodyPb = playbacks.find(p => p.region === 'body')
+        setup.bodyMesh.pixiMesh.visible = bodyVisible
         if (bodyPb) updateZoneMeshVertices(setup.bodyMesh, bodyPb.pb.getPositions(), scale, offsetX, offsetY)
         for (const zm of setup.zoneMeshes) {
+          zm.pixiMesh.visible = vis[zm.zoneId] !== false
           const p = playbacks.find(pb => pb.region === zm.zoneId)
           if (p) updateZoneMeshVertices(zm, p.pb.getPositions(), scale, offsetX, offsetY)
         }
         for (const hf of setup.hiddenFaceMeshes) {
+          hf.pixiMesh.visible = bodyVisible
           if (bodyPb) updateZoneMeshVertices(hf, bodyPb.pb.getPositions(), scale, offsetX, offsetY)
         }
         for (const hfl of setup.hiddenFaceLimbMeshes) {
           const baseZoneId = hfl.zoneId.replace(/^__hfl_/, '')
+          hfl.pixiMesh.visible = vis[baseZoneId] !== false
           const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
         }
@@ -184,7 +209,7 @@ export default function TriangulationLoopPreview({
         if (drawMesh) {
           overlay.lineStyle(1, 0x00ff88, 0.6)
           // Body
-          if (bodyPb) {
+          if (bodyPb && bodyVisible) {
             const positions = bodyPb.pb.getPositions()
             for (const [a, b, c] of tri.bodyTriangles) {
               const pa = positions[a], pb_ = positions[b], pc = positions[c]
@@ -197,6 +222,7 @@ export default function TriangulationLoopPreview({
           }
           // Zones
           for (const zoneId of Object.keys(tri.zoneTriangles)) {
+            if (vis[zoneId] === false) continue
             const p = playbacks.find(pb => pb.region === zoneId)
             if (!p) continue
             const positions = p.pb.getPositions()
@@ -338,6 +364,18 @@ export default function TriangulationLoopPreview({
           <input type="checkbox" checked={showBones} onChange={e => setShowBones(e.target.checked)} />
           Bones
         </label>
+        <span style={{ width: 1, height: 16, background: '#444', margin: '0 4px' }} />
+        {tri?.zones.map(z => (
+          <label key={z.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, cursor: 'pointer' }} title={z.label}>
+            <input
+              type="checkbox"
+              checked={regionVisibility[z.id] !== false}
+              onChange={e => setRegionVisibility(v => ({ ...v, [z.id]: e.target.checked }))}
+            />
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: z.color }} />
+            {z.label}
+          </label>
+        ))}
       </div>
       <div ref={containerRef} style={{ height, background }} />
     </div>

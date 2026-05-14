@@ -252,6 +252,121 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     return [a.id]
   }
 
+  /** Distance d'un point au segment AB et paramètre t∈[0,1] de la projection. */
+  function pointToSegment(p: Point2D, a: Point2D, b: Point2D): { dist: number; t: number } {
+    const dx = b.x - a.x, dy = b.y - a.y
+    const len2 = dx * dx + dy * dy
+    if (len2 < 1e-6) return { dist: Math.hypot(p.x - a.x, p.y - a.y), t: 0 }
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2
+    t = Math.max(0, Math.min(1, t))
+    const cx = a.x + t * dx, cy = a.y + t * dy
+    return { dist: Math.hypot(p.x - cx, p.y - cy), t }
+  }
+
+  /** Double-clic sur un segment de bone → insère un nouveau joint à la position. */
+  function handleCanvasDoubleClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!cotrackerFrames) return
+    if (mode.kind !== 'idle') return
+    const p = canvasToVideo(e)
+
+    // Hit-test joints en premier : si on tape un joint existant, on ne fait rien.
+    for (const j of skeleton.bodyChain) {
+      const pos = endpointPos(j.ref, jointKey(j))
+      if (pos && Math.hypot(pos.x - p.x, pos.y - p.y) < JOINT_HIT_R) return
+    }
+    for (const leg of skeleton.legs) {
+      const refs = legChainRefs(leg)
+      for (let ji = 0; ji < refs.length; ji++) {
+        const pos = legJointDisplayPos(leg, ji)
+        if (pos && Math.hypot(pos.x - p.x, pos.y - p.y) < JOINT_HIT_R) return
+      }
+    }
+
+    const SEG_HIT_R = 10
+    let bestBody: { dist: number; insertAt: number } | null = null
+    for (let i = 0; i < skeleton.bodyChain.length - 1; i++) {
+      const a = endpointPos(skeleton.bodyChain[i].ref, jointKey(skeleton.bodyChain[i]))
+      const b = endpointPos(skeleton.bodyChain[i + 1].ref, jointKey(skeleton.bodyChain[i + 1]))
+      if (!a || !b) continue
+      const { dist } = pointToSegment(p, a, b)
+      if (dist < SEG_HIT_R && (!bestBody || dist < bestBody.dist)) bestBody = { dist, insertAt: i + 1 }
+    }
+
+    let bestLeg: { dist: number; zoneId: string; insertJointIdx: number } | null = null
+    for (const leg of skeleton.legs) {
+      // Skip IK solver legs : la chaîne 3-points est gérée par IK 2-bones, ajouter un joint la casse.
+      if (leg.legSolverMode === 'solver' && legChainLen(leg) === 3) continue
+      const refs = legChainRefs(leg)
+      for (let i = 0; i < refs.length - 1; i++) {
+        const a = legJointDisplayPos(leg, i)
+        const b = legJointDisplayPos(leg, i + 1)
+        if (!a || !b) continue
+        const { dist } = pointToSegment(p, a, b)
+        if (dist < SEG_HIT_R && (!bestLeg || dist < bestLeg.dist)) {
+          // refs[i+1] = leg.joints[i] (joints[0] = refs[1]). Insertion à l'index i de joints.
+          bestLeg = { dist, zoneId: leg.zoneId, insertJointIdx: i }
+        }
+      }
+    }
+
+    // Choix du meilleur entre body et leg
+    if (!bestBody && !bestLeg) return
+    const pickLeg = bestLeg && (!bestBody || bestLeg.dist < bestBody.dist)
+
+    const nearestIds = nearestTrackerIds(p)
+    const newRef: CoTrackerEndpointRef = nearestIds.length > 0
+      ? makeEndpointRef(nearestIds)
+      : { pointIds: [], weights: [] }
+
+    if (pickLeg && bestLeg) {
+      const { zoneId, insertJointIdx } = bestLeg
+      const legIdx = skeleton.legs.findIndex(l => l.zoneId === zoneId)
+      if (legIdx < 0) return
+      const leg = skeleton.legs[legIdx]
+      const oldJoints = leg.joints ?? []
+      const newJoints = [...oldJoints.slice(0, insertJointIdx), newRef, ...oldJoints.slice(insertJointIdx)]
+      // Renumérotation drafts pour les joints d'index >= insertJointIdx (shift +1)
+      // Les drafts sont indexés sur la chaîne complète (hip=0, joints[k]=k+1, foot=last).
+      // L'insertion dans joints à insertJointIdx déplace les joints d'index ≥ insertJointIdx+1 dans la chaîne.
+      const newChainIdx = insertJointIdx + 1 // index dans la chaîne (hip + joints + foot)
+      setDrafts(d => {
+        const out: typeof d = {}
+        const prefix = `leg:${leg.id}:`
+        for (const [k, v] of Object.entries(d)) {
+          if (k.startsWith(prefix)) {
+            const idx = parseInt(k.slice(prefix.length), 10)
+            if (idx >= newChainIdx) out[`${prefix}${idx + 1}`] = v
+            else out[k] = v
+          } else out[k] = v
+        }
+        if (nearestIds.length === 0) out[`${prefix}${newChainIdx}`] = p
+        return out
+      })
+      setSkeleton(sk => {
+        const idx = sk.legs.findIndex(l => l.zoneId === zoneId)
+        if (idx < 0) return sk
+        const newLegs = sk.legs.slice()
+        newLegs[idx] = { ...newLegs[idx], joints: newJoints }
+        return { ...sk, legs: newLegs }
+      })
+      setPick({ kind: 'leg-joint', zoneId, jointIndex: newChainIdx })
+      return
+    }
+
+    if (bestBody) {
+      const id = crypto.randomUUID()
+      const joint: CoTrackerBodyJoint = {
+        id, name: `joint${skeleton.bodyChain.length + 1}`, ref: newRef,
+      }
+      if (nearestIds.length === 0) setDrafts(d => ({ ...d, [`body:${id}`]: p }))
+      setSkeleton(sk => ({
+        ...sk,
+        bodyChain: [...sk.bodyChain.slice(0, bestBody!.insertAt), joint, ...sk.bodyChain.slice(bestBody!.insertAt)],
+      }))
+      setPick({ kind: 'body-joint', index: bestBody.insertAt })
+    }
+  }
+
   function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     if (mode.kind !== 'idle' || frame !== 0) return
     const p = canvasToVideo(e)
@@ -591,7 +706,8 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       <p className="text-muted">
         "+ Body chain" : cliquez successivement sur le canvas pour poser chaque joint
         (barycentre auto = tracker le plus proche). Sélectionnez un joint et "Ajouter
-        points barycentres" pour enrichir le barycentre.
+        points barycentres" pour enrichir le barycentre. <strong>Double-clic sur un
+        segment</strong> pour insérer un joint intermédiaire (body chain ou patte).
       </p>
       <div style={{ display: 'flex', gap: 16 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -599,6 +715,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
+            onDoubleClick={handleCanvasDoubleClick}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}

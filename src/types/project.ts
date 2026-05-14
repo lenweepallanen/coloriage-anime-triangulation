@@ -505,7 +505,7 @@ export interface CoTrackerSkeleton {
   legs: CoTrackerLegBone[];
 }
 
-export type CoTrackerLBSMode = 'lbs' | 'lbs-arap' | 'lbs-area';
+export type CoTrackerLBSMode = 'lbs' | 'lbs-arap' | 'lbs-area' | 'lbs-contour-arap';
 
 export interface CoTrackerLBSParams {
   mode: CoTrackerLBSMode;
@@ -516,6 +516,18 @@ export interface CoTrackerLBSParams {
   arapIterations?: number;
   /** lbs-area : intensité de la correction d'aire par triangle (0-1). */
   areaStrength?: number;
+  /** Lissage Laplacien des weights le long du mesh. 0 = désactivé. */
+  weightSmoothIterations?: number;
+  /** Force du lissage par itération (0-1, défaut 0.5). */
+  weightSmoothAlpha?: number;
+  /** lbs-contour-arap : force d'attache du contour aux positions LBS (> 0). */
+  contourArapLambda?: number;
+  /** lbs-contour-arap : itérations local/global du solver 1D contour. */
+  contourArapIterations?: number;
+  /** Post-pass préservation d'aire lissée (0 = off, 1 = pleine correction par itération). */
+  areaPostStrength?: number;
+  /** Post-pass préservation d'aire : itérations. */
+  areaPostIterations?: number;
 }
 
 export const DEFAULT_COTRACKER_LBS_PARAMS: CoTrackerLBSParams = {
@@ -524,6 +536,12 @@ export const DEFAULT_COTRACKER_LBS_PARAMS: CoTrackerLBSParams = {
   weightEpsilon: 1,
   arapIterations: 3,
   areaStrength: 0.5,
+  weightSmoothIterations: 0,
+  weightSmoothAlpha: 0.5,
+  contourArapLambda: 1.0,
+  contourArapIterations: 2,
+  areaPostStrength: 0,
+  areaPostIterations: 3,
 };
 
 /**

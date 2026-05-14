@@ -23,6 +23,7 @@ const MODE_LABELS: Record<CoTrackerLBSMode, string> = {
   'lbs': 'LBS pur',
   'lbs-arap': 'LBS + ARAP intérieur',
   'lbs-area': 'LBS + préservation aire',
+  'lbs-contour-arap': 'LBS + ARAP contour + ARAP intérieur',
 }
 
 const MODE_HELP: Record<CoTrackerLBSMode, string> = {
@@ -38,6 +39,11 @@ const MODE_HELP: Record<CoTrackerLBSMode, string> = {
     'Post-pass triangle par triangle : on scale les vertices autour du centroïde pour ramener ' +
     'l\'aire courante vers l\'aire de repos. Atténue le rétrécissement sans changer la nature ' +
     'du LBS. Plus rapide qu\'ARAP, qualité inférieure.',
+  'lbs-contour-arap':
+    'Après LBS : (1) le contour est relaxé par ARAP 1D fermé avec les positions LBS comme ' +
+    'cibles douces (λ) — préserve longueurs et angles d\'arêtes du contour, supprime le shear ' +
+    'et le candy-wrapper sur la silhouette. (2) l\'intérieur est ensuite ré-solvé par ARAP body ' +
+    'avec le nouveau contour pinné dur. Coût : ~15-40 ms/frame.',
 }
 
 export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Props) {
@@ -60,11 +66,12 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
   const hasComputed = mesh?.walkBodyFrames != null && mesh?.walkZoneFrames != null
   const validated = mesh?.cotrackerLBSValidated ?? false
 
-  async function handleCompute(validate: boolean) {
+  async function handleCompute(validate: boolean, overrideParams?: CoTrackerLBSParams) {
     setError(null)
     setProgress({ phase: 'init', frame: 0, total: 1 })
+    const usedParams = overrideParams ?? params
     try {
-      const result = await runCoTrackerLBSCompute(project, animation, params, setProgress)
+      const result = await runCoTrackerLBSCompute(project, animation, usedParams, setProgress)
       const updatedAnim: Animation = {
         ...animation,
         mesh: {
@@ -81,7 +88,7 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
           cotrackerBodyJointFramesSmoothed: null,
           cotrackerLegBoneFramesSmoothed: null,
           cotrackerBoneSmoothingValidated: false,
-          cotrackerLBSParams: params,
+          cotrackerLBSParams: usedParams,
           cotrackerLBSValidated: validate ? true : (mesh?.cotrackerLBSValidated ?? false),
         },
       }
@@ -165,16 +172,120 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
             <span style={{ minWidth: 28, textAlign: 'right' }}>{(params.areaStrength ?? 0.5).toFixed(2)}</span>
           </label>
         )}
+        {params.mode === 'lbs-contour-arap' && (
+          <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+              <span style={{ minWidth: 100 }}>Attache λ (contour)</span>
+              <input type="range" min={0.05} max={10} step={0.05} value={params.contourArapLambda ?? 1.0}
+                onChange={e => updateParam('contourArapLambda', Number(e.target.value))} style={{ flex: 1 }} />
+              <span style={{ minWidth: 36, textAlign: 'right' }}>{(params.contourArapLambda ?? 1.0).toFixed(2)}</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+              <span style={{ minWidth: 100 }}>Itérations contour</span>
+              <input type="range" min={1} max={6} step={1} value={params.contourArapIterations ?? 2}
+                onChange={e => updateParam('contourArapIterations', Number(e.target.value))} style={{ flex: 1 }} />
+              <span style={{ minWidth: 28, textAlign: 'right' }}>{params.contourArapIterations ?? 2}</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+              <span style={{ minWidth: 100 }}>Itérations ARAP intérieur</span>
+              <input type="range" min={1} max={6} step={1} value={params.arapIterations ?? 3}
+                onChange={e => updateParam('arapIterations', Number(e.target.value))} style={{ flex: 1 }} />
+              <span style={{ minWidth: 28, textAlign: 'right' }}>{params.arapIterations ?? 3}</span>
+            </label>
+          </>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-        <button className="btn-secondary" onClick={() => handleCompute(false)} disabled={progress != null}>
-          {progress ? `Calcul… (${progress.phase} ${progress.frame}/${progress.total})` : 'Calculer & Preview'}
+        <button
+          className="btn-secondary"
+          onClick={() => handleCompute(false, { ...params, weightSmoothIterations: 0 })}
+          disabled={progress != null}
+        >
+          {progress ? `Calcul… (${progress.phase} ${progress.frame}/${progress.total})` : 'Calculer & Preview (brut)'}
         </button>
         <button className="btn-primary" onClick={() => handleCompute(true)} disabled={progress != null}>
           Valider
         </button>
         {validated && <span style={{ color: '#22c55e', fontSize: 12 }}>✓ Validé ({MODE_LABELS[mesh?.cotrackerLBSParams?.mode ?? 'lbs']})</span>}
+      </div>
+
+      <div style={{
+        marginBottom: 12, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 4,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Lissage Laplacien des weights</div>
+        <p style={{ fontSize: 11, opacity: 0.75, margin: '0 0 8px 0' }}>
+          Diffuse les transitions de poids entre bones le long des arêtes du mesh.
+          Élimine le shear sur les triangles à cheval sur deux bones. À 0 itération,
+          comportement strictement identique au calcul brut.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <span style={{ minWidth: 100 }}>Itérations</span>
+            <input
+              type="range" min={0} max={8} step={1}
+              value={params.weightSmoothIterations ?? 0}
+              onChange={e => updateParam('weightSmoothIterations', Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+            <span style={{ minWidth: 28, textAlign: 'right' }}>{params.weightSmoothIterations ?? 0}</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <span style={{ minWidth: 100 }}>Force α</span>
+            <input
+              type="range" min={0.1} max={1} step={0.05}
+              value={params.weightSmoothAlpha ?? 0.5}
+              onChange={e => updateParam('weightSmoothAlpha', Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+            <span style={{ minWidth: 28, textAlign: 'right' }}>{(params.weightSmoothAlpha ?? 0.5).toFixed(2)}</span>
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            className="btn-secondary"
+            onClick={() => handleCompute(false)}
+            disabled={progress != null || (params.weightSmoothIterations ?? 0) === 0}
+          >
+            Appliquer lissage & Preview
+          </button>
+          <span style={{ fontSize: 11, opacity: 0.6 }}>
+            Re-calcule LBS avec les weights lissés (puis ARAP/area selon mode)
+          </span>
+        </div>
+      </div>
+
+      <div style={{
+        marginBottom: 12, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 4,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Post-pass préservation d'aire (toutes modes)</div>
+        <p style={{ fontSize: 11, opacity: 0.75, margin: '0 0 8px 0' }}>
+          Champ scalaire de scale par vertex (rapport aire repos / aire courante) lissé sur le mesh,
+          puis chaque vertex s'écarte ou se rapproche de la moyenne de ses voisins. Préserve l'aire
+          régionale (la tête retrouve sa taille) sans casser les aspects ratio. À 0 force, désactivé.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <span style={{ minWidth: 100 }}>Force</span>
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={params.areaPostStrength ?? 0}
+              onChange={e => updateParam('areaPostStrength', Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+            <span style={{ minWidth: 36, textAlign: 'right' }}>{(params.areaPostStrength ?? 0).toFixed(2)}</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <span style={{ minWidth: 100 }}>Itérations</span>
+            <input
+              type="range" min={1} max={8} step={1}
+              value={params.areaPostIterations ?? 3}
+              onChange={e => updateParam('areaPostIterations', Number(e.target.value))}
+              style={{ flex: 1 }}
+            />
+            <span style={{ minWidth: 28, textAlign: 'right' }}>{params.areaPostIterations ?? 3}</span>
+          </label>
+        </div>
       </div>
 
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
