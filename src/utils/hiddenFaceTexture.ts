@@ -27,6 +27,12 @@ export function inpaintHiddenFaceOnScan(
   imageWidth: number,
   imageHeight: number,
   contentAlignment?: ContentAlignment,
+  /** Masque (scanW × scanH) des pixels à NE PAS utiliser comme échantillons de bordure.
+   *  Typiquement : union des silhouettes des zones membres (tête, pattes…) qui recouvrent
+   *  la face cachée. Sans ce filtre, le K-means apprend les couleurs des membres et
+   *  contamine la propagation. Les pixels exclus restent "interior" et sont remplis par BFS
+   *  depuis les vraies bordures body. */
+  excludeMask?: Uint8Array | null,
 ): void {
   if (zone.bodyTriangleIndices.length === 0) return
 
@@ -71,10 +77,18 @@ export function inpaintHiddenFaceOnScan(
     rasterizeTriangle(pa, pb, pc, minX, minY, w, h, mask)
   }
 
-  // 4. Identify border pixels
+  // 4. Identify border pixels — skipping pixels that fall in excluded zones (autres membres).
+  //    Ces pixels restent classés "interior" (1) et seront remplis par BFS depuis les vraies
+  //    bordures body, sans contaminer le K-means avec des couleurs étrangères au corps.
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (mask[y * w + x] !== 1) continue
+      if (excludeMask) {
+        const sx = minX + x, sy = minY + y
+        if (sx >= 0 && sx < scanW && sy >= 0 && sy < scanH && excludeMask[sy * scanW + sx]) {
+          continue
+        }
+      }
       const hasExterior =
         (x === 0 || mask[y * w + x - 1] === 0) ||
         (x === w - 1 || mask[y * w + x + 1] === 0) ||

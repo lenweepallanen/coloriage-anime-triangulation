@@ -90,6 +90,11 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   })
   const [manualPoints, setManualPoints] = useState<Record<string, Point2D[]>>(() => tri?.zoneManualPoints ?? {})
 
+  // Auto points "gelés" : à la première interaction sur un point auto (drag/delete), on
+  // matérialise tous les points auto courants en manuels, puis on désactive la génération
+  // auto via ce flag. Permet de bouger/supprimer les points auto comme des manuels.
+  const [autoFrozen, setAutoFrozen] = useState<Record<string, boolean>>({})
+
   // Manual triangles (mode "Relier") — indices into [...cPts, ...autoInternal, ...manualPoints]
   const [manualTriangles, setManualTriangles] = useState<Record<string, [number, number, number][]>>(() => tri?.zoneManualTriangles ?? {})
   const [bodyEditMode, setBodyEditMode] = useState<'add' | 'connect' | 'move'>('add')
@@ -112,6 +117,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     zoneId: string; type: 'anchor' | 'p0' | 'internal' | 'bodyExtra' | 'subdivision'; idx: number
   } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState<string | null>(null)
   const [imageLoaded, setImageLoaded] = useState(false)
   // Mirror transformRef to React state so overlay buttons reposition on pan/zoom
   const [transformState, setTransformState] = useState({ scale: 1, offsetX: 0, offsetY: 0 })
@@ -205,13 +211,31 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     if (!cPts || cPts.length < 3) return null
     const density = zoneDensity[zoneId] ?? DEFAULT_DENSITY
     const spacing = spacingForDensity(density)
-    const autoInternal = generateInternalPoints(cPts, spacing)
+    const autoInternal = autoFrozen[zoneId] ? [] : generateInternalPoints(cPts, spacing)
     const manual = manualPoints[zoneId] ?? []
     return {
       points: [...cPts, ...autoInternal, ...manual],
       cPts,
       autoCount: autoInternal.length,
     }
+  }
+
+  /**
+   * Première édition d'un point auto : on rapatrie tous les points auto courants dans
+   * manualPoints et on gèle la génération auto pour cette zone. Retourne le manualPoints
+   * mis à jour (nécessaire pour calculer l'index du point cliqué après matérialisation).
+   */
+  function freezeAutoPoints(zoneId: string): Point2D[] {
+    if (autoFrozen[zoneId]) return manualPoints[zoneId] ?? []
+    const cPts = buildClosedContour(zoneId)
+    if (!cPts) return manualPoints[zoneId] ?? []
+    const density = zoneDensity[zoneId] ?? DEFAULT_DENSITY
+    const spacing = spacingForDensity(density)
+    const autoInternal = generateInternalPoints(cPts, spacing)
+    const newManual = [...(manualPoints[zoneId] ?? []), ...autoInternal]
+    setManualPoints(prev => ({ ...prev, [zoneId]: newManual }))
+    setAutoFrozen(prev => ({ ...prev, [zoneId]: true }))
+    return newManual
   }
 
   /** Hit-test against all unified points for a zone. Returns pre-compact index or -1. */
@@ -348,7 +372,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       if (!cPts || cPts.length < 3) continue
       const density = zoneDensity[z.id] ?? DEFAULT_DENSITY
       const spacing = spacingForDensity(density)
-      const autoInternal = generateInternalPoints(cPts, spacing)
+      const autoInternal = autoFrozen[z.id] ? [] : generateInternalPoints(cPts, spacing)
       const manual = manualPoints[z.id] ?? []
       const allInternal = [...autoInternal, ...manual]
       let triResult = triangulateZone(cPts, allInternal, cPts)
@@ -403,7 +427,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allZones, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionValidated,
-    zoneDensity, manualPoints, manualTriangles, imageLoaded,
+    zoneDensity, manualPoints, manualTriangles, autoFrozen, imageLoaded,
   ])
 
   // ─── Draw ─────────────────────────────────────────────────────────
@@ -702,14 +726,33 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         return
       }
 
-      // ── Triangulation / Adjust sub-phase : click=add (re-Delaunay), drag=move, right-click=delete ──
-      if (phase === 'triangulation' || phase === 'adjust') {
+      // ── Adjust sub-phase : drag contour points only (anchors + subdivisions). Aucune action sur les internes. ──
+      if (phase === 'adjust') {
+        const anchors = zoneAnchors[activeZoneId] ?? []
+        for (let i = 0; i < anchors.length; i++) {
+          if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+            setDragTarget({ zoneId: activeZoneId, type: 'anchor', idx: i })
+            return
+          }
+        }
+        const subs = zoneSubdivisionPoints[activeZoneId] ?? []
+        for (let i = 0; i < subs.length; i++) {
+          if (Math.hypot(subs[i].x - imgPt.x, subs[i].y - imgPt.y) < hitR) {
+            setDragTarget({ zoneId: activeZoneId, type: 'subdivision', idx: i })
+            return
+          }
+        }
+        return
+      }
+
+      // ── Triangulation sub-phase : click=add (re-Delaunay), drag=move, right-click=delete ──
+      if (phase === 'triangulation') {
         const closedContour = buildClosedContour(activeZoneId)
         if (!closedContour) return
         const manual = manualPoints[activeZoneId] ?? []
 
         // ─── Body + triangulation : Relier mode = pick 3 points → manual triangle ───
-        if (activeZoneId === 'body' && phase === 'triangulation' && bodyEditMode === 'connect') {
+        if (activeZoneId === 'body' && bodyEditMode === 'connect') {
           const idx = hitTestUnified(imgPt, activeZoneId, hitR)
           if (idx < 0) return
           const next = [...connectBuffer, idx]
@@ -731,7 +774,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         }
 
         // ─── Body + triangulation : Move mode = drag manual points only ───
-        if (activeZoneId === 'body' && phase === 'triangulation' && bodyEditMode === 'move') {
+        if (activeZoneId === 'body' && bodyEditMode === 'move') {
           for (let i = manual.length - 1; i >= 0; i--) {
             if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
               setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
@@ -749,21 +792,28 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             return
           }
         }
-        // Try drag subdivision (only in adjust phase — otherwise they're auto-derived)
-        if (phase === 'adjust') {
-          const subs = zoneSubdivisionPoints[activeZoneId] ?? []
-          for (let i = 0; i < subs.length; i++) {
-            if (Math.hypot(subs[i].x - imgPt.x, subs[i].y - imgPt.y) < hitR) {
-              setDragTarget({ zoneId: activeZoneId, type: 'subdivision', idx: i })
-              return
-            }
-          }
-        }
         // Try drag existing manual point (hit-test on position directly)
         for (let i = manual.length - 1; i >= 0; i--) {
           if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
             setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
             return
+          }
+        }
+        // Try drag auto-generated internal point (materialize on first interaction)
+        if (!autoFrozen[activeZoneId]) {
+          const cPts = buildClosedContour(activeZoneId)
+          if (cPts) {
+            const density = zoneDensity[activeZoneId] ?? DEFAULT_DENSITY
+            const autoInternal = generateInternalPoints(cPts, spacingForDensity(density))
+            for (let i = 0; i < autoInternal.length; i++) {
+              const p = autoInternal[i]
+              if (Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+                const newManual = freezeAutoPoints(activeZoneId)
+                // Le point auto cliqué est désormais à l'index manual.length + i
+                setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: newManual.length - autoInternal.length + i })
+                return
+              }
+            }
           }
         }
         // Otherwise add point if inside the zone contour
@@ -882,6 +932,30 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       return
     }
 
+    // ── Adjust : suppression de subdivisions uniquement (contour). Anchors et internes intouchables. ──
+    if (phase === 'adjust') {
+      const subs = zoneSubdivisionPoints[activeZoneId] ?? []
+      for (let i = subs.length - 1; i >= 0; i--) {
+        const p = subs[i]
+        if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+          setZoneSubdivisionPoints(prev => {
+            const arr = [...(prev[activeZoneId] ?? [])]
+            arr.splice(i, 1)
+            return { ...prev, [activeZoneId]: arr }
+          })
+          setZoneSubdivisionParams(prev => {
+            const arr = [...(prev[activeZoneId] ?? [])]
+            arr.splice(i, 1)
+            return { ...prev, [activeZoneId]: arr }
+          })
+          setZonePixelAdjusted(prev => ({ ...prev, [activeZoneId]: true }))
+          setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
+          return
+        }
+      }
+      return
+    }
+
     // ── Triangulation : delete manual internal (body + legs, unified) ──
     if (phase === 'triangulation') {
       const manual = manualPoints[activeZoneId] ?? []
@@ -896,6 +970,28 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           // Also clear manual triangles referencing this point (indices shift)
           setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
           return
+        }
+      }
+      // Try delete auto-generated internal point (materialize first, then remove)
+      if (!autoFrozen[activeZoneId]) {
+        const cPts = buildClosedContour(activeZoneId)
+        if (cPts) {
+          const density = zoneDensity[activeZoneId] ?? DEFAULT_DENSITY
+          const autoInternal = generateInternalPoints(cPts, spacingForDensity(density))
+          for (let i = 0; i < autoInternal.length; i++) {
+            const p = autoInternal[i]
+            if (Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+              const newManual = freezeAutoPoints(activeZoneId)
+              const removeIdx = newManual.length - autoInternal.length + i
+              setManualPoints(prev => {
+                const arr = [...(prev[activeZoneId] ?? newManual)]
+                arr.splice(removeIdx, 1)
+                return { ...prev, [activeZoneId]: arr }
+              })
+              setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
+              return
+            }
+          }
         }
       }
     }
@@ -987,6 +1083,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
     // Auto-internal indices shift with density → manual triangles become stale
     setManualTriangles(prev => ({ ...prev, [zoneId]: [] }))
+    // Density change → user veut regénérer les auto → dégèle
+    setAutoFrozen(prev => ({ ...prev, [zoneId]: false }))
     setConnectBuffer([])
   }
 
@@ -994,23 +1092,40 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
 
   const allZonesReady = allZones.every(z => zoneStage(z.id) >= 4)
 
-  async function handleSave() {
-    if (!tri || !zoneMeshes) return
+  async function handleSave({ validate = true }: { validate?: boolean } = {}) {
+    if (!tri) return
     setSaving(true)
     try {
       const newZonePoints: Record<string, Point2D[]> = {}
       const newZoneTriangles: Record<string, [number, number, number][]> = {}
       const newZoneContourLength: Record<string, number> = {}
       for (const z of allZones) {
-        const zm = zoneMeshes[z.id]
+        const zm = zoneMeshes?.[z.id]
         if (zm) {
           newZonePoints[z.id] = zm.points
           newZoneTriangles[z.id] = zm.triangles
           newZoneContourLength[z.id] = zm.contourCount
+        } else if (tri.zonePoints?.[z.id] && tri.zoneTriangles?.[z.id]) {
+          // Zone non encore triangulée dans cette session : on conserve le mesh existant.
+          newZonePoints[z.id] = tri.zonePoints[z.id]
+          newZoneTriangles[z.id] = tri.zoneTriangles[z.id]
+          newZoneContourLength[z.id] = tri.zoneContourLength?.[z.id] ?? 0
         }
       }
 
       const updatedZones = allZones.map(z => ({ ...z, zOrder: zoneZOrder[z.id] ?? 0 }))
+
+      // ─── Snapshot des maillages "propres" (avant fusion des faces cachées) ──
+      // Sert au step3 pour pouvoir réinitialiser une face cachée sans résidus.
+      const bodyPointsBaseline = (newZonePoints['body'] ?? []).map(p => ({ ...p }))
+      const bodyTrianglesBaseline = (newZoneTriangles['body'] ?? []).map(t => [...t] as [number, number, number])
+      const zonePointsBaseline: Record<string, Point2D[]> = {}
+      const zoneTrianglesBaseline: Record<string, [number, number, number][]> = {}
+      for (const z of allZones) {
+        if (z.id === 'body') continue
+        zonePointsBaseline[z.id] = (newZonePoints[z.id] ?? []).map(p => ({ ...p }))
+        zoneTrianglesBaseline[z.id] = (newZoneTriangles[z.id] ?? []).map(t => [...t] as [number, number, number])
+      }
 
       // ─── Replay hidden-face triangulations on the new mesh (step3) ─────
       // bodyPoints/bodyTriangles + zonePoints[limb]/zoneTriangles[limb] are overwritten by the new mesh
@@ -1122,7 +1237,11 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           zoneDensity: { ...zoneDensity },
           bodyPoints: newZonePoints['body'] ?? [],
           bodyTriangles: newZoneTriangles['body'] ?? [],
-          step2Validated: true,
+          bodyPointsBaseline,
+          bodyTrianglesBaseline,
+          zonePointsBaseline,
+          zoneTrianglesBaseline,
+          step2Validated: validate ? true : (tri.step2Validated ?? false),
           // Hidden faces replayed in place on the new mesh : preserve step3 validation.
           ...(tri.step3Validated
             ? {
@@ -1133,6 +1252,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             : { step3Validated: topologyUnchanged ? (tri.step3Validated ?? false) : false }),
         },
       })
+      const now = new Date()
+      setSavedAt(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`)
     } catch (err) {
       console.error('[ProjectTriangMesh] save failed:', err)
     }
@@ -1231,7 +1352,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                 : activePhase === 'subdivision'
                   ? 'Clic sur un segment pour le surligner. Utilisez les +/- pour ajouter/retirer des points.'
                   : activePhase === 'adjust'
-                    ? 'Ajustement pixel : drag anchor/subdivision = libre (pas de snap, pas de recalcul curviligne). Clic = ajouter point interne. Clic droit = supprimer.'
+                    ? 'Ajustement pixel : drag anchor/subdivision = libre (pas de snap, pas de recalcul curviligne). Clic droit sur subdivision = supprimer. Les points internes ne sont pas modifiables ici.'
                     : 'Drag anchor (P0/rouge inclus) = repositionner (snap courbure, subdivisions recalculées). Clic = ajouter point interne. Clic droit = supprimer.'}
         </div>
       </div>
@@ -1489,6 +1610,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                 onClick={(e) => {
                   e.stopPropagation()
                   setManualPoints(prev => ({ ...prev, [activeZoneId]: [] }))
+                  setAutoFrozen(prev => ({ ...prev, [activeZoneId]: false }))
                 }}
                 style={{ width: '100%', fontSize: 11, marginBottom: 6 }}
               >
@@ -1533,18 +1655,31 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           </div>
         )}
 
-        {/* Global save */}
+        {/* Save buttons */}
+        <button
+          className="btn-secondary"
+          onClick={() => handleSave({ validate: false })}
+          disabled={saving}
+          style={{ width: '100%', marginBottom: 6 }}
+        >
+          {saving ? 'Sauvegarde…' : 'Sauvegarder progression'}
+        </button>
         <button
           className="btn-primary"
-          onClick={handleSave}
+          onClick={() => handleSave({ validate: true })}
           disabled={saving || !allZonesReady}
           style={{ width: '100%' }}
         >
           {saving ? 'Sauvegarde…' : 'Valider tout'}
         </button>
+        {savedAt && (
+          <div style={{ fontSize: 11, color: '#22c55e', marginTop: 6 }}>
+            ✓ Sauvegardé à {savedAt}
+          </div>
+        )}
         {!allZonesReady && (
           <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 6 }}>
-            Validez P0 + Anchors + Subdivision pour chaque zone.
+            Validation finale : P0 + Anchors + Subdivision requis pour chaque zone. La sauvegarde progression conserve l'état partiel.
           </div>
         )}
       </div>

@@ -49,7 +49,7 @@ export interface Bone {
 
 /** Zone-aware endpoint reference — barycentric between 1 or 2 zone anchors */
 export interface Sam2BoneEndpointRef {
-  zoneId: string;           // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  zoneId: string;           // libre — 'body' réservé pour la zone corps, autres IDs libres (membres)
   anchorIndexA: number;     // index into sam2ContourAnchors[zoneId]
   anchorIndexB: number;     // same zone. If A === B → snaps to anchor A
   t: number;                // barycentric weight: position = A + t × (B − A). 0=A, 1=B, 0.5=midpoint
@@ -70,7 +70,7 @@ export type Sam2LegHipMode = 'anchor' | 'body-vertex'
 /** Leg bone with IK knee (reuses ElbowMode from bone animations) */
 export interface Sam2LegBone {
   id: string;
-  zoneId: string;           // 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  zoneId: string;           // libre — ID de la zone membre (≠ 'body')
   name: string;
   hip: Sam2BoneEndpointRef;
   foot: Sam2BoneEndpointRef;
@@ -89,7 +89,7 @@ export interface Sam2LegBone {
 /** Complete skeleton definition for members-bones animations */
 export interface Sam2Skeleton {
   bodyChain: Sam2BodyJoint[];  // ordered chain, minimum 2 joints for 1 segment
-  legs: Sam2LegBone[];         // 0-4 legs
+  legs: Sam2LegBone[];         // 0..N membres (le nom 'legs' est historique — peut contenir tête, queue, ailes...)
 }
 
 export interface MeshData {
@@ -334,14 +334,14 @@ export type SAM2PromptLabel = 0 | 1
 export interface SAM2Prompt {
   x: number              // image coordinates
   y: number
-  zoneId: string         // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  zoneId: string         // libre — 'body' réservé pour la zone corps
   label: SAM2PromptLabel
 }
 
-/** A SAM 2 zone definition (body or one of the 4 legs) */
+/** Une zone SAM 2 : 'body' (zone corps obligatoire) + 0..N membres (tête, pattes, queue, ailes...) */
 export interface SAM2Zone {
-  id: string             // 'body' | 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
-  label: string          // "Body", "Patte AVG", etc.
+  id: string             // 'body' réservé pour la zone corps ; autres IDs libres
+  label: string          // libellé custom (renommable par l'admin)
   color: string          // hex for the editor / overlay
   zOrder?: number        // ordre de rendu (0 = derrière, plus grand = devant). Défini dans l'étape maillage.
 }
@@ -435,6 +435,14 @@ export interface ProjectTriangulation {
   zoneDensity: Record<string, number>                        // zoneId → slider densité intérieure
   bodyPoints: Point2D[]
   bodyTriangles: [number, number, number][]
+  /** Snapshot du body mesh "propre" (avant fusion des faces cachées). Permet
+   *  au step3 de réinitialiser une face cachée body sans laisser de résidus.
+   *  Capturé à chaque validation de step2 avant le replay des hidden faces. */
+  bodyPointsBaseline?: Point2D[]
+  bodyTrianglesBaseline?: [number, number, number][]
+  /** Snapshots équivalents pour chaque zone membre (faces cachées limb). */
+  zonePointsBaseline?: Record<string, Point2D[]>
+  zoneTrianglesBaseline?: Record<string, [number, number, number][]>
   step2Validated: boolean
 
   // Étape 3 : Faces cachées (même structure que Walk)
@@ -478,7 +486,7 @@ export interface CoTrackerBodyJoint {
 
 export interface CoTrackerLegBone {
   id: string;
-  zoneId: string;       // 'leg-fl' | 'leg-fr' | 'leg-bl' | 'leg-br'
+  zoneId: string;       // libre — ID de la zone membre (≠ 'body')
   name: string;
   hip: CoTrackerEndpointRef;
   // Joints intermédiaires (0..N) entre hip et foot. Chaîne complète = [hip, ...joints, foot].

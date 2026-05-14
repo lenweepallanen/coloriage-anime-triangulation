@@ -65,8 +65,16 @@ export default function ProjectTriangHiddenFaceStep({ project, onSave }: Props) 
 function HiddenFaceEditor({ project, onSave }: Props) {
   const pt = project.projectTriangulation!
 
-  // Leg zones only (exclude body)
-  const legZones = useMemo(() => pt.zones.filter(z => z.id.startsWith('leg-')), [pt.zones])
+  // Zones membres (toutes sauf body)
+  const legZones = useMemo(() => pt.zones.filter(z => z.id !== 'body'), [pt.zones])
+
+  // Baselines body + zones (maillages avant fusion des faces cachées). Fallback :
+  // pour les projets legacy sans baseline, on retombe sur les meshes actuels (= déjà
+  // pollués si step3 était validé) → reset équivaut à no-op (comportement historique).
+  const bodyBaselinePoints = pt.bodyPointsBaseline ?? pt.bodyPoints
+  const bodyBaselineTriangles = pt.bodyTrianglesBaseline ?? pt.bodyTriangles
+  const zoneBaselinePoints = pt.zonePointsBaseline ?? pt.zonePoints
+  const zoneBaselineTriangles = pt.zoneTrianglesBaseline ?? pt.zoneTriangles
 
   const [mode, setMode] = useState<HiddenFaceMode>('body')
 
@@ -242,10 +250,10 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       limbBoundaryVertexSet, transformRef, imageLoaded])
 
   function drawBodyMode(ctx: CanvasRenderingContext2D, t: { scale: number }, pr: number) {
-    // Draw body triangles (faded wireframe)
-    ctx.fillStyle = 'rgba(136,136,136,0.08)'
-    ctx.strokeStyle = 'rgba(136,136,136,0.2)'
-    ctx.lineWidth = 0.5 / t.scale
+    // Body wireframe — bleu translucide pour visualiser les zones manquantes à combler
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.12)'
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.55)'
+    ctx.lineWidth = 0.8 / t.scale
     for (const [a, b, c] of workBodyTriangles) {
       const pa = workBodyPoints[a], pb = workBodyPoints[b], pc = workBodyPoints[c]
       if (!pa || !pb || !pc) continue
@@ -254,14 +262,20 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       ctx.closePath(); ctx.fill(); ctx.stroke()
     }
 
-    // Draw hidden face triangles for all limbs (colored)
+    // Draw hidden face triangles for all limbs (selected = bleu translucide, autres = couleur zone)
     for (const zone of legZones) {
       const hf = hiddenFaces[zone.id]
       if (!hf || hf.bodyTriangleIndices.length === 0) continue
       const isActive = zone.id === activeLimbId
-      ctx.fillStyle = hexToRgba(zone.color, isActive ? 0.25 : 0.12)
-      ctx.strokeStyle = hexToRgba(zone.color, isActive ? 0.7 : 0.35)
-      ctx.lineWidth = (isActive ? 1.5 : 0.8) / t.scale
+      if (isActive) {
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'   // bleu translucide
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
+        ctx.lineWidth = 1.5 / t.scale
+      } else {
+        ctx.fillStyle = hexToRgba(zone.color, 0.18)
+        ctx.strokeStyle = hexToRgba(zone.color, 0.45)
+        ctx.lineWidth = 0.8 / t.scale
+      }
       for (const ti of hf.bodyTriangleIndices) {
         const tri = workBodyTriangles[ti]
         if (!tri) continue
@@ -342,13 +356,11 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       ctx.closePath(); ctx.fill(); ctx.stroke()
     }
 
-    // Draw extension triangles (colored)
+    // Draw extension triangles — bleu translucide (zone active)
     const hfl = limbHiddenFaces[activeLimbId]
     if (hfl && hfl.zoneTriangleIndices.length > 0) {
-      const zone = legZones.find(z => z.id === activeLimbId)
-      const color = zone?.color ?? '#f59e0b'
-      ctx.fillStyle = hexToRgba(color, 0.25)
-      ctx.strokeStyle = hexToRgba(color, 0.7)
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
       ctx.lineWidth = 1.5 / t.scale
       for (const ti of hfl.zoneTriangleIndices) {
         const tri = tris[ti]
@@ -494,9 +506,9 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     if (hiddenFaces[limbId]) {
       const hf = hiddenFaces[limbId]
       if (hf.generated && hf.bodyTriangleIndices.length > 0) {
-        // Reset body to base state (before any hidden face merges)
-        setWorkBodyPoints([...pt.bodyPoints])
-        setWorkBodyTriangles([...pt.bodyTriangles])
+        // Reset body to base state (before any hidden face merges) — depuis baseline.
+        setWorkBodyPoints([...bodyBaselinePoints])
+        setWorkBodyTriangles([...bodyBaselineTriangles])
         setHiddenFaces(prev => {
           const copy = { ...prev }
           delete copy[limbId]
@@ -524,11 +536,11 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       if (hfl.generated && hfl.zoneTriangleIndices.length > 0) {
         setWorkZonePoints(prev => ({
           ...prev,
-          [limbId]: [...(pt.zonePoints[limbId] ?? [])],
+          [limbId]: [...(zoneBaselinePoints[limbId] ?? pt.zonePoints[limbId] ?? [])],
         }))
         setWorkZoneTriangles(prev => ({
           ...prev,
-          [limbId]: [...(pt.zoneTriangles[limbId] ?? [])],
+          [limbId]: [...(zoneBaselineTriangles[limbId] ?? pt.zoneTriangles[limbId] ?? [])],
         }))
       }
       setLimbHiddenFaces(prev => { const copy = { ...prev }; delete copy[limbId]; return copy })
@@ -699,9 +711,9 @@ function HiddenFaceEditor({ project, onSave }: Props) {
   function handleReset() {
     if (!activeLimbId) return
     if (mode === 'body') {
-      // Reset body to base and invalidate all body hidden faces
-      setWorkBodyPoints([...pt.bodyPoints])
-      setWorkBodyTriangles([...pt.bodyTriangles])
+      // Reset body au baseline (avant toute fusion HF) et invalide toutes les body HF.
+      setWorkBodyPoints([...bodyBaselinePoints])
+      setWorkBodyTriangles([...bodyBaselineTriangles])
       setHiddenFaces(prev => {
         const copy = { ...prev }
         copy[activeLimbId] = { vertexA: null, vertexB: null, bridgePoints: [], bodyTriangleIndices: [], generated: false }
@@ -719,11 +731,11 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       }))
       setWorkZonePoints(prev => ({
         ...prev,
-        [activeLimbId]: [...(pt.zonePoints[activeLimbId] ?? [])],
+        [activeLimbId]: [...(zoneBaselinePoints[activeLimbId] ?? pt.zonePoints[activeLimbId] ?? [])],
       }))
       setWorkZoneTriangles(prev => ({
         ...prev,
-        [activeLimbId]: [...(pt.zoneTriangles[activeLimbId] ?? [])],
+        [activeLimbId]: [...(zoneBaselineTriangles[activeLimbId] ?? pt.zoneTriangles[activeLimbId] ?? [])],
       }))
     }
   }

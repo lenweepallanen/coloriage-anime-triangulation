@@ -103,9 +103,11 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
         ctx.fillText(label, tx, ty)
       }
 
-      // Tracked trajectories
+      // Tracked trajectories (only if no prompt overrides at this frame)
       if (trackedFrames) {
         points.forEach((pt, idx) => {
+          const hasPromptHere = pt.prompts.some(q => q.frameIdx === frame)
+          if (hasPromptHere) return // drawn below as manual marker
           const traj = trackedFrames[pt.id]
           if (!traj) return
           const f = traj[frame]
@@ -114,27 +116,31 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
           ctx.beginPath()
           ctx.arc(f.x, f.y, 6, 0, Math.PI * 2)
           ctx.fill()
-          ctx.strokeStyle = '#000'
-          ctx.lineWidth = 1
+          ctx.strokeStyle = pt.id === selectedId ? '#fff' : '#000'
+          ctx.lineWidth = pt.id === selectedId ? 2 : 1
           ctx.stroke()
           drawLabel(f.x, f.y, String(idx + 1))
         })
-      } else {
-        // Show prompts as halos at current frame
-        points.forEach((pt, idx) => {
-          for (const q of pt.prompts) {
-            if (q.frameIdx !== frame) continue
-            ctx.fillStyle = pt.color
-            ctx.beginPath()
-            ctx.arc(q.x, q.y, 7, 0, Math.PI * 2)
-            ctx.fill()
-            ctx.strokeStyle = pt.id === selectedId ? '#fff' : '#000'
-            ctx.lineWidth = pt.id === selectedId ? 3 : 1
-            ctx.stroke()
-            drawLabel(q.x, q.y, String(idx + 1))
-          }
-        })
       }
+      // Manual prompts at current frame — distinctive square + white double ring
+      points.forEach((pt, idx) => {
+        for (const q of pt.prompts) {
+          if (q.frameIdx !== frame) continue
+          // Outer white ring (manual marker)
+          ctx.strokeStyle = '#fff'
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.arc(q.x, q.y, 11, 0, Math.PI * 2)
+          ctx.stroke()
+          // Filled square (vs circle for auto-tracked)
+          ctx.fillStyle = pt.color
+          ctx.fillRect(q.x - 6, q.y - 6, 12, 12)
+          ctx.strokeStyle = pt.id === selectedId ? '#fff' : '#000'
+          ctx.lineWidth = pt.id === selectedId ? 3 : 1.5
+          ctx.strokeRect(q.x - 6, q.y - 6, 12, 12)
+          drawLabel(q.x, q.y, String(idx + 1) + '✎')
+        }
+      })
     }
     let raf = 0
     const tick = () => { render(); raf = requestAnimationFrame(tick) }
@@ -269,7 +275,10 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
       <h2>CoTracker3 — tracking de points</h2>
       <p className="text-muted">
         Clic gauche : ajouter un point (ou un prompt multi-frame si un point est sélectionné).
-        Clic droit : supprimer. Sélectionnez un point dans le panneau pour ajouter des prompts à d'autres frames.
+        Clic droit : supprimer. Sélectionnez un point dans le panneau, scrubbez à une frame où le tracking dérive,
+        et cliquez à la position correcte pour ajouter une correction. Les corrections sont visibles en
+        carré ✎ blanc-cerclé, et apparaissent comme tirets sous la timeline. Cliquez « Recalculer » pour
+        relancer CoTracker3 avec ces points de référence supplémentaires.
       </p>
       <div style={{ display: 'flex', gap: 16 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -282,14 +291,45 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <button className="btn-secondary" onClick={() => setFrame(0)}>⏮</button>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(0, totalFrames - 1)}
-              value={frame}
-              onChange={e => setFrame(Number(e.target.value))}
-              style={{ flex: 1 }}
-            />
+            <div style={{ flex: 1, position: 'relative' }}>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, totalFrames - 1)}
+                value={frame}
+                onChange={e => setFrame(Number(e.target.value))}
+                style={{ width: '100%', display: 'block' }}
+              />
+              {/* Tick marks for prompt frames */}
+              {totalFrames > 1 && (
+                <div style={{ position: 'relative', height: 10, marginTop: -2 }}>
+                  {points.flatMap(pt =>
+                    pt.prompts.map(pr => {
+                      const isSelectedPt = pt.id === selectedId
+                      return (
+                        <div
+                          key={`${pt.id}-${pr.frameIdx}`}
+                          onClick={() => setFrame(pr.frameIdx)}
+                          title={`${pt.name ?? pt.id.slice(0, 6)} — frame ${pr.frameIdx}`}
+                          style={{
+                            position: 'absolute',
+                            left: `${(pr.frameIdx / (totalFrames - 1)) * 100}%`,
+                            transform: 'translateX(-50%)',
+                            width: isSelectedPt ? 3 : 2,
+                            height: isSelectedPt ? 10 : 6,
+                            background: pt.color,
+                            border: isSelectedPt ? '1px solid #fff' : 'none',
+                            borderRadius: 1,
+                            cursor: 'pointer',
+                            opacity: selectedId && !isSelectedPt ? 0.35 : 1,
+                          }}
+                        />
+                      )
+                    })
+                  )}
+                </div>
+              )}
+            </div>
             <span>{frame} / {totalFrames - 1}</span>
           </div>
         </div>
@@ -309,6 +349,11 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
                 <span style={{ width: 14, height: 14, borderRadius: '50%', background: p.color, flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 12 }}>
                   {p.name ?? p.id.slice(0, 6)} — {p.prompts.length} prompt(s)
+                  {p.prompts.length > 1 && (
+                    <span style={{ display: 'block', fontSize: 10, opacity: 0.7 }}>
+                      frames : {p.prompts.map(q => q.frameIdx).join(', ')}
+                    </span>
+                  )}
                 </span>
                 <button
                   className="btn-icon btn-sm"
@@ -350,7 +395,9 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
               </label>
             </div>
             <button className="btn-primary" onClick={() => handleRun('standard')} disabled={tracking != null || points.length === 0}>
-              {tracking ? `CoTracker3… (${tracking.phase})` : 'Lancer CoTracker3'}
+              {tracking
+                ? `CoTracker3… (${tracking.phase})`
+                : (trackedFrames ? 'Recalculer (avec corrections)' : 'Lancer CoTracker3')}
             </button>
             <button
               className="btn-secondary"

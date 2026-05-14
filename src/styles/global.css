@@ -511,6 +511,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 100vh;
 }
 
 .admin-layout-header {
@@ -599,7 +600,15 @@ code {
 }
 
 .admin-layout-content {
+  flex: 1;
   min-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-layout-content > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Admin section menu */

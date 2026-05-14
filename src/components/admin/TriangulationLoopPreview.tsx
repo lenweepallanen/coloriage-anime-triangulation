@@ -26,6 +26,10 @@ interface Props {
   background?: string
   /** Si fourni, affiche un bouton "Sauvegarder crossfade" qui persiste mesh.crossfadeFrames. */
   onSave?: (project: Project, hints?: UploadHint[]) => Promise<void>
+  /** Si fourni, applique l'inpainting body + extension pattes sur les meshes textured.
+   *  bodyCanvas contient l'image originale + zones face-cachée body inpaintées (K-means+BFS).
+   *  limbCanvases[zoneId] contient l'image originale + extension perpendiculaire à la corde A↔B. */
+  inpaintedTextures?: { bodyCanvas: HTMLCanvasElement | null; limbCanvases: Record<string, HTMLCanvasElement> } | null
 }
 
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -51,7 +55,10 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
 
 export default function TriangulationLoopPreview({
   project, animation, height = 360, preferSmoothed = true, mode = 'textured', background = '#111', onSave,
+  inpaintedTextures = null,
 }: Props) {
+  // Si l'inpainting est généré, on force le rendu textured pour qu'il soit visible.
+  const effectiveMode: 'textured' | 'wireframe' = inpaintedTextures ? 'textured' : mode
   const bgNum = parseInt(background.replace('#', ''), 16)
   const mesh = animation.mesh
   const tri = project.projectTriangulation
@@ -74,8 +81,8 @@ export default function TriangulationLoopPreview({
   const [saving, setSaving] = useState(false)
   const [speed, setSpeed] = useState(1.0)
   const [playing, setPlaying] = useState(true)
-  const [showMesh, setShowMesh] = useState(mode === 'wireframe')
-  const [showBones, setShowBones] = useState(mode === 'wireframe')
+  const [showMesh, setShowMesh] = useState(effectiveMode === 'wireframe')
+  const [showBones, setShowBones] = useState(effectiveMode === 'wireframe')
   const zoneIds = useMemo(() => (tri ? tri.zones.map(z => z.id) : []), [tri])
   const [regionVisibility, setRegionVisibility] = useState<Record<string, boolean>>(() => {
     const m: Record<string, boolean> = {}
@@ -148,8 +155,21 @@ export default function TriangulationLoopPreview({
       const offsetY = (viewH - imgH * scale) / 2
 
       const separation = buildPseudoSeparation(tri)
-      const setup = buildZoneMeshes(separation, [], [], texture, imgW, imgH, scale, offsetX, offsetY)
-      if (mode === 'textured') app.stage.addChild(setup.container)
+      // Textures face-cachée (body + extensions pattes) — uniquement si inpainting généré.
+      let hfTexture: PIXI.Texture | undefined
+      let hflTextures: Record<string, PIXI.Texture> | undefined
+      if (inpaintedTextures?.bodyCanvas) hfTexture = PIXI.Texture.from(inpaintedTextures.bodyCanvas)
+      if (inpaintedTextures?.limbCanvases) {
+        hflTextures = {}
+        for (const [zoneId, canvas] of Object.entries(inpaintedTextures.limbCanvases)) {
+          hflTextures[zoneId] = PIXI.Texture.from(canvas)
+        }
+      }
+      const setup = buildZoneMeshes(
+        separation, [], [], texture, imgW, imgH, scale, offsetX, offsetY,
+        undefined, hfTexture, hflTextures,
+      )
+      if (effectiveMode === 'textured') app.stage.addChild(setup.container)
       setupRef.current = setup
 
       const overlay = new PIXI.Graphics()
@@ -308,7 +328,7 @@ export default function TriangulationLoopPreview({
       if (imageUrl) URL.revokeObjectURL(imageUrl)
       while (container.firstChild) container.removeChild(container.firstChild)
     }
-  }, [project, animation, tri, bodyFrames, zoneFrames, crossfade, mode, bgNum])
+  }, [project, animation, tri, bodyFrames, zoneFrames, crossfade, effectiveMode, bgNum, inpaintedTextures])
 
   if (!tri?.step3Validated) {
     return <div style={{ padding: 8, opacity: 0.7, fontSize: 12 }}>Preview indisponible : Triangulation projet incomplète.</div>

@@ -14,32 +14,44 @@ interface Props {
   onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
 }
 
-/** Default 5 zones (body + 4 legs). */
-const DEFAULT_ZONES: SAM2Zone[] = [
-  { id: 'body',   label: 'Body',      color: '#22c55e' },
-  { id: 'leg-fl', label: 'Patte AVG', color: '#f59e0b' },
-  { id: 'leg-fr', label: 'Patte AVD', color: '#ef4444' },
-  { id: 'leg-bl', label: 'Patte ARG', color: '#3b82f6' },
-  { id: 'leg-br', label: 'Patte ARD', color: '#a855f7' },
+/** Zone body initiale, créée par défaut si aucune zone n'existe encore. */
+const DEFAULT_BODY_ZONE: SAM2Zone = { id: 'body', label: 'Body', color: '#22c55e' }
+
+/** Palette pour assigner automatiquement une couleur aux nouveaux membres. */
+const MEMBER_COLOR_PALETTE = [
+  '#f59e0b', '#ef4444', '#3b82f6', '#a855f7',
+  '#ec4899', '#06b6d4', '#84cc16', '#f97316',
+  '#14b8a6', '#eab308', '#8b5cf6', '#10b981',
 ]
 
-const LEG_IDS = ['leg-fl', 'leg-fr', 'leg-bl', 'leg-br']
+function pickColor(existing: SAM2Zone[]): string {
+  const used = new Set(existing.map(z => z.color.toLowerCase()))
+  for (const c of MEMBER_COLOR_PALETTE) if (!used.has(c.toLowerCase())) return c
+  // Fallback : random pastel
+  const h = Math.floor(Math.random() * 360)
+  return `hsl(${h}, 70%, 55%)`
+}
 
 export default function ProjectTriangZonesStep({ project, onSave }: Props) {
   const [saving, setSaving] = useState(false)
   const [computing, setComputing] = useState(false)
 
-  // Zones (hardcoded 5)
-  const [zones] = useState<SAM2Zone[]>(
-    () => {
-      const saved = project.projectTriangulation?.zones
-      return saved && saved.length > 0 ? saved : DEFAULT_ZONES
+  // Zones (dynamiques : body obligatoire + 0..N membres custom)
+  const [zones, setZones] = useState<SAM2Zone[]>(() => {
+    const saved = project.projectTriangulation?.zones
+    if (saved && saved.length > 0) {
+      // Garantit qu'une zone body existe en tête.
+      if (saved.some(z => z.id === 'body')) return saved
+      return [DEFAULT_BODY_ZONE, ...saved]
     }
-  )
+    return [DEFAULT_BODY_ZONE]
+  })
 
-  const [activeZoneId, setActiveZoneId] = useState<string>(
-    () => project.projectTriangulation?.zones?.[0]?.id ?? DEFAULT_ZONES[0].id
-  )
+  const memberZones = zones.filter(z => z.id !== 'body')
+  const memberZoneIds = memberZones.map(z => z.id)
+
+  const [activeZoneId, setActiveZoneId] = useState<string>(() => zones[0]?.id ?? 'body')
+  const [renamingZoneId, setRenamingZoneId] = useState<string | null>(null)
 
   // Smoothing params
   const [sigma, setSigma] = useState<number>(
@@ -129,7 +141,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     off.width = w; off.height = h
     off.getContext('2d')!.drawImage(img, 0, 0)
     const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
-    const seeds = LEG_IDS
+    const seeds = memberZoneIds
       .filter(id => (seedsSnapshot[id]?.length ?? 0) > 0)
       .map(id => ({ id, waypoints: seedsSnapshot[id].map(p => ({ x: p.x, y: p.y })) }))
     setCannyComputing(true)
@@ -140,14 +152,14 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         inflate,
       )
       const nextLoops: Record<string, Point2D[]> = {}
-      for (const legId of LEG_IDS) {
+      for (const legId of memberZoneIds) {
         const c = result.zoneContours[legId]
         if (c && c.length >= 3) nextLoops[legId] = c
       }
       setLegLoops(nextLoops)
 
       if (result.silhouette && result.silhouette.length >= 3) {
-        const legContoursForBridge = LEG_IDS
+        const legContoursForBridge = memberZoneIds
           .map(id => nextLoops[id])
           .filter((c): c is Point2D[] => c != null && c.length >= 3)
         if (legContoursForBridge.length === 0) {
@@ -171,7 +183,8 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     } finally {
       setCannyComputing(false)
     }
-  }, [cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, inflate, bridgeThreshold])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, inflate, bridgeThreshold, memberZoneIds.join('|')])
 
   const scheduleCannyRecompute = useCallback((seedsSnapshot: Record<string, Point2D[]>) => {
     if (cannyComputeTimerRef.current) clearTimeout(cannyComputeTimerRef.current)
@@ -223,7 +236,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         ctx.closePath()
         ctx.stroke()
       }
-      for (const legId of LEG_IDS) {
+      for (const legId of memberZoneIds) {
         const loop = legLoops[legId]
         if (!loop || loop.length < 3) continue
         const zone = zones.find(z => z.id === legId)
@@ -238,7 +251,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         ctx.stroke()
       }
       const sr = 6 / t.scale
-      for (const legId of LEG_IDS) {
+      for (const legId of memberZoneIds) {
         const seeds = legSeeds[legId]
         if (!seeds) continue
         const zone = zones.find(z => z.id === legId)
@@ -334,7 +347,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     }
     if (activeZoneId === 'body') {
       handleCannyBodyClick()
-    } else if (LEG_IDS.includes(activeZoneId)) {
+    } else if (memberZoneIds.includes(activeZoneId)) {
       addLegSeed(activeZoneId, imgPos)
     }
   }
@@ -376,14 +389,14 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       alert('Cliquez sur le body pour détecter sa silhouette.')
       return null
     }
-    const missing = LEG_IDS.filter(id => !legLoops[id] || legLoops[id].length < 3)
+    const missing = memberZoneIds.filter(id => !legLoops[id] || legLoops[id].length < 3)
     if (missing.length > 0) {
       const names = missing.map(id => zones.find(z => z.id === id)?.label ?? id).join(', ')
-      alert(`Placez au moins 2 clics par patte pour fermer la boucle : ${names}`)
+      alert(`Placez au moins 2 clics par membre pour fermer la boucle : ${names}`)
       return null
     }
     const rawByZone: Record<string, Point2D[]> = { body: bodySilhouette }
-    for (const id of LEG_IDS) rawByZone[id] = legLoops[id]
+    for (const id of memberZoneIds) rawByZone[id] = legLoops[id]
     const smoothed: Record<string, Point2D[]> = {}
     const newMasks: Record<string, RLEMask[]> = {}
     for (const z of zones) {
@@ -477,39 +490,100 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         <span style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>Zone active :</span>
         {zones.map(z => {
           const isActive = z.id === activeZoneId
+          const isBody = z.id === 'body'
+          if (renamingZoneId === z.id) {
+            return (
+              <input
+                key={z.id}
+                autoFocus
+                defaultValue={z.label}
+                onBlur={e => {
+                  const v = e.currentTarget.value.trim()
+                  if (v) setZones(zs => zs.map(x => x.id === z.id ? { ...x, label: v } : x))
+                  setRenamingZoneId(null)
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
+                  if (e.key === 'Escape') setRenamingZoneId(null)
+                }}
+                style={{
+                  border: `2px solid ${z.color}`, padding: '4px 10px', borderRadius: 6,
+                  fontWeight: 'bold', fontSize: '0.95rem', background: '#fff', color: z.color,
+                }}
+              />
+            )
+          }
           return (
-            <button
-              key={z.id}
-              onClick={() => setActiveZoneId(z.id)}
-              style={{
-                background: isActive ? z.color : `${z.color}22`,
-                color: isActive ? '#fff' : z.color,
-                border: `2px solid ${z.color}`,
-                padding: '6px 14px',
-                borderRadius: 6,
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                fontSize: '0.95rem',
-                boxShadow: isActive ? `0 0 8px ${z.color}88` : 'none',
-                transition: 'all 0.15s',
-              }}
-            >
-              {z.label}
-            </button>
+            <span key={z.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+              <button
+                onClick={() => setActiveZoneId(z.id)}
+                onDoubleClick={() => setRenamingZoneId(z.id)}
+                title={isBody ? 'Zone body (obligatoire). Double-clic pour renommer.' : 'Double-clic pour renommer'}
+                style={{
+                  background: isActive ? z.color : `${z.color}22`,
+                  color: isActive ? '#fff' : z.color,
+                  border: `2px solid ${z.color}`,
+                  padding: '6px 14px',
+                  borderRadius: 6,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  fontSize: '0.95rem',
+                  boxShadow: isActive ? `0 0 8px ${z.color}88` : 'none',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {z.label}
+              </button>
+              {!isBody && (
+                <button
+                  onClick={() => {
+                    if (!confirm(`Supprimer la zone "${z.label}" ?`)) return
+                    setZones(zs => zs.filter(x => x.id !== z.id))
+                    setLegSeeds(prev => { const n = { ...prev }; delete n[z.id]; return n })
+                    setLegLoops(prev => { const n = { ...prev }; delete n[z.id]; return n })
+                    if (activeZoneId === z.id) setActiveZoneId('body')
+                  }}
+                  title="Supprimer ce membre"
+                  style={{
+                    border: 'none', background: 'transparent', color: '#94a3b8',
+                    cursor: 'pointer', fontSize: '1rem', padding: '0 4px',
+                  }}
+                >×</button>
+              )}
+            </span>
           )
         })}
+        <button
+          onClick={() => {
+            const idx = memberZones.length + 1
+            const newZone: SAM2Zone = {
+              id: `member-${crypto.randomUUID().slice(0, 8)}`,
+              label: `Membre ${idx}`,
+              color: pickColor(zones),
+            }
+            setZones(zs => [...zs, newZone])
+            setActiveZoneId(newZone.id)
+            setRenamingZoneId(newZone.id)
+          }}
+          title="Ajouter un membre (tête, patte, queue, aile…)"
+          style={{
+            border: '2px dashed #94a3b8', background: 'transparent', color: '#94a3b8',
+            padding: '6px 12px', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer',
+            fontSize: '0.95rem',
+          }}
+        >+ Ajouter un membre</button>
       </div>
 
       {/* Actions */}
       <div className="triangulation-toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
         <span className="toolbar-info">
-          {cannyComputing ? 'Calcul flood-fill...' : computing ? 'Calcul silhouette...' : 'Clic Body = silhouette, clic Patte = ajouter une région (clics multiples = union)'}
+          {cannyComputing ? 'Calcul flood-fill...' : computing ? 'Calcul silhouette...' : 'Clic Body = silhouette, clic Membre = ajouter une région (clics multiples = union)'}
         </span>
 
         <button
           className="btn-primary"
           onClick={handleSave}
-          disabled={saving || computing || !bodySilhouette || LEG_IDS.some(id => !legLoops[id])}
+          disabled={saving || computing || !bodySilhouette || memberZoneIds.some(id => !legLoops[id])}
         >
           {saving ? 'Sauvegarde...' : 'Valider'}
         </button>
@@ -621,9 +695,10 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       <div className="triangulation-help">
         <span>
           Body actif : clic = détecter la silhouette globale, clic droit = effacer.
-          Patte active : clic dans une région colorée (patte, sabot...) = flood-fill bounded par les traits noirs.
+          Membre actif : clic dans une région colorée (patte, tête, queue…) = flood-fill bounded par les traits noirs.
           Plusieurs clics = union des régions. Glisser une graine = déplacer,
           clic droit sur une graine = la supprimer. Espace + glisser = pan | Molette = zoom.
+          Double-clic sur le nom d'une zone pour la renommer.
         </span>
       </div>
 

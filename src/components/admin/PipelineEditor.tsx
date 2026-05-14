@@ -46,6 +46,7 @@ import CoTrackerBonesBoneStep from './CoTrackerBonesBoneStep'
 import CoTrackerBonesAnimationStep from './CoTrackerBonesAnimationStep'
 import CoTrackerBonesLBSStep from './CoTrackerBonesLBSStep'
 import TriangulationLoopPreview from './TriangulationLoopPreview'
+import InpaintedPreview from './InpaintedPreview'
 
 const REST_STEPS = [
   'Vidéo', 'Canny', 'Point 0 Contour', 'Tracking Point 0',
@@ -362,7 +363,7 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         {activeStep === 'Preview Animation' && isCoTrackerBonesAnim && (
           <div className="step-content">
             <h2>Preview Animation</h2>
-            <TriangulationLoopPreview project={project} animation={animation} mode="textured" height={520} background="#fff" onSave={projectSave} />
+            <InpaintedPreview project={project} animation={animation} height={520} background="#fff" onSave={projectSave} />
           </div>
         )}
         {activeStep === 'Triangulation' && !isBoneAnim && (

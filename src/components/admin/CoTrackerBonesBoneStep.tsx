@@ -26,8 +26,8 @@ interface Props {
   onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
 }
 
-const LEG_ZONES = ['leg-fl', 'leg-fr', 'leg-bl', 'leg-br'] as const
-const LEG_LABELS: Record<string, string> = {
+// Libellés legacy — fallback pour rétrocompat des anciens projets si la zone n'a pas de label dans projectTriangulation.zones.
+const LEGACY_ZONE_LABELS: Record<string, string> = {
   'leg-fl': 'Patte AVG', 'leg-fr': 'Patte AVD', 'leg-bl': 'Patte ARG', 'leg-br': 'Patte ARD',
 }
 
@@ -51,6 +51,18 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
 
   const initial: CoTrackerSkeleton = mesh?.cotrackerSkeleton ?? { bodyChain: [], legs: [] }
   const [skeleton, setSkeleton] = useState<CoTrackerSkeleton>(initial)
+
+  // Zones membres dérivées de la Triangulation projet (body + N membres). Fallback : les zones déjà référencées dans le squelette.
+  const memberZones = useMemo(() => {
+    const projZones = project.projectTriangulation?.zones ?? []
+    const fromProj = projZones.filter(z => z.id !== 'body')
+    if (fromProj.length > 0) return fromProj
+    // Legacy fallback : on dérive les zones depuis le squelette existant
+    const ids = Array.from(new Set(skeleton.legs.map(l => l.zoneId)))
+    return ids.map(id => ({ id, label: LEGACY_ZONE_LABELS[id] ?? id, color: '#888' }))
+  }, [project.projectTriangulation?.zones, skeleton.legs])
+  const zoneLabelOf = (zoneId: string): string =>
+    memberZones.find(z => z.id === zoneId)?.label ?? LEGACY_ZONE_LABELS[zoneId] ?? zoneId
   const [pick, setPick] = useState<PickTarget | null>(null)
   const [mode, setMode] = useState<Mode>({ kind: 'idle' })
   // Draft positions for joints/endpoints not yet bound to a barycentre.
@@ -434,7 +446,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
         // First click → create leg with hip only (foot still draft = same position)
         leg = {
           id: crypto.randomUUID(),
-          zoneId, name: LEG_LABELS[zoneId] ?? zoneId,
+          zoneId, name: zoneLabelOf(zoneId),
           hip: newRef,
           joints: [],
           foot: { pointIds: [], weights: [] },
@@ -689,13 +701,13 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
       ? `Joint "${skeleton.bodyChain[pick.index]?.name ?? '?'}"`
       : (() => {
           const leg = skeleton.legs.find(l => l.zoneId === pick.zoneId)
-          return leg ? `${LEG_LABELS[pick.zoneId] ?? pick.zoneId} — ${legJointLabel(leg, pick.jointIndex)}` : pick.zoneId
+          return leg ? `${zoneLabelOf(pick.zoneId)} — ${legJointLabel(leg, pick.jointIndex)}` : pick.zoneId
         })()
     : null
 
   const modeBanner = (() => {
     if (mode.kind === 'place-chain') return 'Cliquez successivement sur le canvas pour poser les joints de la body chain (barycentre = tracker le plus proche). Terminez quand vous avez fini.'
-    if (mode.kind === 'place-leg-chain') return `Cliquez successivement pour poser hip, joints intermédiaires (genoux, cheville, …) et foot de ${LEG_LABELS[mode.zoneId]}. Le 1er clic = hip, le dernier avant terminer = foot. Terminez quand vous avez fini.`
+    if (mode.kind === 'place-leg-chain') return `Cliquez successivement pour poser hip, joints intermédiaires (genou, …) et foot de ${zoneLabelOf(mode.zoneId)}. Le 1er clic = hip, le dernier avant terminer = foot. Terminez quand vous avez fini.`
     if (mode.kind === 'assign-bary') return `Cliquez les points trackers pour les ajouter/retirer du barycentre — ${pickLabel}`
     return null
   })()
@@ -775,8 +787,14 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
             </button>
           </section>
           <section style={{ marginTop: 12 }}>
-            <h3>Pattes</h3>
-            {LEG_ZONES.map(z => {
+            <h3>Membres</h3>
+            {memberZones.length === 0 && (
+              <div style={{ fontSize: 11, opacity: 0.7, padding: '4px 0' }}>
+                Aucune zone membre définie. Allez d'abord dans Triangulation projet → Zones SAM 2.
+              </div>
+            )}
+            {memberZones.map(zone => {
+              const z = zone.id
               const leg = skeleton.legs.find(l => l.zoneId === z)
               if (!leg) {
                 return (
@@ -785,7 +803,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
                       className="btn-secondary btn-sm"
                       onClick={() => startPlaceLeg(z)}
                       disabled={mode.kind !== 'idle'}
-                    >+ {LEG_LABELS[z]}</button>
+                    >+ {zone.label}</button>
                   </div>
                 )
               }
@@ -794,7 +812,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
               return (
                 <div key={z} style={{ border: '1px solid #444', padding: 6, marginBottom: 4 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{LEG_LABELS[z]} ({refs.length} joints)</span>
+                    <span style={{ color: zone.color }}>{zone.label} ({refs.length} joints)</span>
                     <button className="btn-icon btn-sm" onClick={() => deleteLeg(z)}>×</button>
                   </div>
                   <div style={{ fontSize: 11, marginTop: 2, display: 'flex', gap: 8 }}>
