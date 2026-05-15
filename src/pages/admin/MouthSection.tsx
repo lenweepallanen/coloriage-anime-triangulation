@@ -10,7 +10,7 @@ import {
 } from '../../types/project'
 import { findContainingAnchorTriangle, interpolateInternalPoint } from '../../utils/barycentricUtils'
 import { flattenClosedBezier } from '../../utils/bezierUtils'
-import { getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
+import { getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import MouthPixiPreview from '../../components/admin/MouthPixiPreview'
 import { useCanvasInteraction } from '../../components/triangulation/useCanvasInteraction'
@@ -27,6 +27,7 @@ interface DraftMouth {
   hinge: Point2D | null
   maxOpenAngleDeg: number
   rotationSign: 1 | -1
+  attachZoneId: string
 }
 
 function defaultDraftFromMouth(m: MouthDefinition | null): DraftMouth {
@@ -40,6 +41,7 @@ function defaultDraftFromMouth(m: MouthDefinition | null): DraftMouth {
     hinge: null,
     maxOpenAngleDeg: m?.maxOpenAngleDeg ?? DEFAULT_MOUTH_MAX_OPEN_DEG,
     rotationSign: m?.rotationSign ?? 1,
+    attachZoneId: m?.attachZoneId ?? 'body',
   }
 }
 
@@ -59,9 +61,29 @@ export default function MouthSection() {
   // Stable ref : getEyeBodyMeshData renvoie un objet neuf à chaque appel.
   // Sans memo, le re-render audio (RAF setLiveOpenness) recrée bodyMesh →
   // MouthPixiPreview détruit/recrée l'app PIXI à chaque frame → flicker blanc.
+  // Liste des zones disponibles : 'body' + zones définies dans la Triangulation projet.
+  // L'utilisateur choisit à quelle partie du squelette la bouche est rattachée.
+  const zoneOptions = useMemo(() => {
+    const opts: { id: string; label: string }[] = [{ id: 'body', label: 'Corps (body)' }]
+    const zones = project.projectTriangulation?.zones ?? []
+    for (const z of zones) {
+      if (z.id !== 'body') opts.push({ id: z.id, label: z.label || z.id })
+    }
+    return opts
+  }, [project.projectTriangulation])
+
+  const [attachZoneId, setAttachZoneId] = useState<string>(
+    () => project.projectMouth?.attachZoneId ?? 'body'
+  )
+
+  const attachMesh = useMemo(
+    () => getMouthAttachMesh(project, attachZoneId),
+    [project.projectTriangulation, project.animations, attachZoneId],
+  )
+  // Adapter au format attendu par MouthPixiPreview (bodyPoints/bodyTriangles).
   const bodyMesh = useMemo(
-    () => getEyeBodyMeshData(project),
-    [project.projectTriangulation, project.animations],
+    () => attachMesh ? { bodyPoints: attachMesh.points, bodyTriangles: attachMesh.triangles } : null,
+    [attachMesh],
   )
   const hasBodyMesh = bodyMesh != null && bodyMesh.bodyTriangles.length > 0
   const imageBlob = project.originalImageBlob
@@ -464,8 +486,9 @@ export default function MouthSection() {
       hingeBodyAnchor,
       maxOpenAngleDeg: draft.maxOpenAngleDeg,
       rotationSign: draft.rotationSign,
+      attachZoneId,
     }
-  }, [canSave, bodyMesh, draft, project.projectMouth])
+  }, [canSave, bodyMesh, draft, project.projectMouth, attachZoneId])
 
   async function handleSave() {
     if (!canSave || !bodyMesh) return
@@ -481,6 +504,7 @@ export default function MouthSection() {
       hingeBodyAnchor,
       maxOpenAngleDeg: draft.maxOpenAngleDeg,
       rotationSign: draft.rotationSign,
+      attachZoneId,
     }
     const next: Project = { ...project, projectMouth: mouth }
     await save(next)
@@ -503,13 +527,24 @@ export default function MouthSection() {
   }
 
   if (!hasBodyMesh) {
+    const zoneLabel = zoneOptions.find(z => z.id === attachZoneId)?.label ?? attachZoneId
     return (
       <div style={{ padding: 16 }}>
         <h2>Bouche</h2>
         <p style={{ color: 'var(--color-danger,#c00)' }}>
-          La triangulation projet doit être complète avant de définir la bouche.
-          Complétez l'onglet "Triangulation" (ou définissez une animation walk).
+          Aucun maillage disponible pour la zone <strong>{zoneLabel}</strong>.
+          Complétez l'onglet "Triangulation" pour cette zone (ou choisissez une autre zone ci-dessous).
         </p>
+        {zoneOptions.length > 1 && (
+          <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+            <span>Rattachée à :</span>
+            <select value={attachZoneId} onChange={e => setAttachZoneId(e.target.value)}>
+              {zoneOptions.map(z => (
+                <option key={z.id} value={z.id}>{z.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
     )
   }
@@ -575,6 +610,26 @@ export default function MouthSection() {
         <div style={{ flex: '0 0 320px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <h3 style={{ margin: '4px 0' }}>Paramètres</h3>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+              <span>Rattachée à :</span>
+              <select
+                value={attachZoneId}
+                onChange={e => {
+                  const next = e.target.value
+                  if (next === attachZoneId) return
+                  if (draft.nodes.length > 0 || draft.hinge != null) {
+                    if (!confirm('Changer de zone supprime le contour et la charnière actuels (les ancrages sont liés au maillage choisi). Continuer ?')) return
+                  }
+                  setAttachZoneId(next)
+                  setDraft(defaultDraftFromMouth(null))
+                  setPhase('contour')
+                }}
+              >
+                {zoneOptions.map(z => (
+                  <option key={z.id} value={z.id}>{z.label}</option>
+                ))}
+              </select>
+            </label>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
               <span>Angle d'ouverture max (°): <strong>{draft.maxOpenAngleDeg}</strong></span>
               <input type="range" min={2} max={60} step={1} value={draft.maxOpenAngleDeg}

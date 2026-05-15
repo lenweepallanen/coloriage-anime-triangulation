@@ -116,8 +116,16 @@ export class ScenePlayback {
   }
 
   private clampOffset(offset: number): number {
-    const maxOffset = Math.max(0, this.scene.backgroundLayers[2].width - this.viewportWidth)
+    const maxOffset = Math.max(0, this.getBgWidth() - this.viewportWidth)
     return Math.max(0, Math.min(maxOffset, offset))
+  }
+
+  private getBgWidth(): number {
+    let w = 0
+    for (const l of this.scene.backgroundLayers) {
+      if (l.imageBlob && l.width > w) w = l.width
+    }
+    return w
   }
 
   /** Get the transition object for a given transitionIndex (-1 = startTransition) */
@@ -377,6 +385,6 @@ export class ScenePlayback {
 
   /** Background width in pixels */
   get bgWidth(): number {
-    return this.scene.backgroundLayers[2].width
+    return this.getBgWidth()
   }
 }

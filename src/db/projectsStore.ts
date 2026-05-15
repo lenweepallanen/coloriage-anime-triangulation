@@ -167,11 +167,18 @@ interface ZoneAnimationMappingDoc {
   animationId: string
 }
 
+interface SceneSoundMetaDoc {
+  id: string
+  name: string
+}
+
 interface SceneRestPointDoc {
   id: string
   backgroundX: number
   restAnimationId?: string
   randomAnimationIds?: string[]
+  /** Sounds attached to each random animation entry — index-aligned with randomAnimationIds. */
+  randomAnimationSounds?: SceneSoundMetaDoc[][]
   zoneAnimationMappings?: ZoneAnimationMappingDoc[]
   availableAnimationIds?: string[]  // legacy fallback
   speakSoundIds?: string[]
@@ -181,6 +188,8 @@ interface SceneRestPointDoc {
 interface SceneSegmentDoc {
   duration: number
   animationId?: string
+  /** Sounds attached to this segment's animation. */
+  sounds?: SceneSoundMetaDoc[]
 }
 
 interface SceneTransitionDoc {
@@ -190,6 +199,7 @@ interface SceneTransitionDoc {
 
 interface SceneBackgroundLayerDoc {
   hasImage: boolean
+  hasVideo?: boolean
   width: number
   height: number
   depthFactor: number
@@ -289,6 +299,43 @@ function projectsCol() {
 
 function projectRef(id: string) {
   return doc(db, 'projects', id)
+}
+
+function collectSceneSoundIds(scene: Scene | null | undefined): string[] {
+  if (!scene) return []
+  const ids = new Set<string>()
+  for (const rp of scene.restPoints) {
+    for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
+  }
+  const collectFromTransition = (t: import('../types/project').SceneTransition | undefined) => {
+    for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) ids.add(s.id)
+  }
+  for (const t of scene.transitions) collectFromTransition(t)
+  collectFromTransition(scene.startTransition)
+  return [...ids]
+}
+
+function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
+  const scene = project.scene
+  if (!scene) return null
+  for (const rp of scene.restPoints) {
+    for (const arr of rp.randomAnimationSounds ?? []) {
+      const found = arr.find(s => s.id === soundId)
+      if (found?.blob) return found.blob
+    }
+  }
+  const fromTransition = (t: import('../types/project').SceneTransition | undefined): Blob | null => {
+    for (const seg of t?.segments ?? []) {
+      const found = seg.sounds?.find(s => s.id === soundId)
+      if (found?.blob) return found.blob
+    }
+    return null
+  }
+  for (const t of scene.transitions) {
+    const b = fromTransition(t)
+    if (b) return b
+  }
+  return fromTransition(scene.startTransition)
 }
 
 async function uploadBlob(path: string, blob: Blob): Promise<void> {
@@ -683,6 +730,9 @@ function transitionToDoc(t: import('../types/project').SceneTransition): SceneTr
     segments: t.segments.map(s => ({
       duration: s.duration,
       ...(s.animationId != null && { animationId: s.animationId }),
+      ...(s.sounds != null && s.sounds.length > 0 && {
+        sounds: s.sounds.map(snd => ({ id: snd.id, name: snd.name })),
+      }),
     })),
   }
 }
@@ -693,6 +743,7 @@ function sceneToDoc(scene: Scene): SceneDoc {
     name: scene.name,
     backgroundLayers: scene.backgroundLayers.map(l => ({
       hasImage: l.imageBlob != null,
+      hasVideo: l.videoBlob != null,
       width: l.width,
       height: l.height,
       depthFactor: l.depthFactor,
@@ -704,6 +755,9 @@ function sceneToDoc(scene: Scene): SceneDoc {
       backgroundX: rp.backgroundX,
       ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
       ...(rp.randomAnimationIds != null && { randomAnimationIds: rp.randomAnimationIds }),
+      ...(rp.randomAnimationSounds != null && rp.randomAnimationSounds.some(arr => arr.length > 0) && {
+        randomAnimationSounds: rp.randomAnimationSounds.map(arr => arr.map(s => ({ id: s.id, name: s.name }))),
+      }),
       ...(rp.zoneAnimationMappings != null && rp.zoneAnimationMappings.length > 0 && { zoneAnimationMappings: rp.zoneAnimationMappings }),
       ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
       ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
@@ -990,7 +1044,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       // New format: 3 layers
       sceneLayerBlobs = await Promise.all(
         projDoc.scene.backgroundLayers.map((l, i) =>
-          l.hasImage ? downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`) : Promise.resolve(null)
+          (l.hasImage || l.hasVideo) ? downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`) : Promise.resolve(null)
         )
       )
     } else if (projDoc.scene.hasBackgroundImage) {
@@ -1037,11 +1091,35 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   )
 
   // Reconstruct scene if present
+  let sceneSoundBlobs: Map<string, Blob | null> = new Map()
+  if (projDoc.scene) {
+    // Gather all unique sound IDs from rest points + transitions to download in parallel.
+    const ids = new Set<string>()
+    for (const rp of projDoc.scene.restPoints ?? []) {
+      for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
+    }
+    const collectSegmentIds = (t: SceneTransitionDoc | undefined) => {
+      for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) ids.add(s.id)
+    }
+    for (const t of projDoc.scene.transitions ?? []) collectSegmentIds(t)
+    collectSegmentIds(projDoc.scene.startTransition)
+
+    const idList = [...ids]
+    const blobs = await Promise.all(
+      idList.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`))
+    )
+    sceneSoundBlobs = new Map(idList.map((sid, i) => [sid, blobs[i]]))
+  }
+
+  const hydrateSounds = (metas: SceneSoundMetaDoc[] | undefined): import('../types/project').SceneSound[] =>
+    (metas ?? []).map(m => ({ id: m.id, name: m.name, blob: sceneSoundBlobs.get(m.id) ?? null }))
+
   const docToTransition = (td: SceneTransitionDoc): import('../types/project').SceneTransition => ({
     waypoints: td.waypoints ?? [],
     segments: (td.segments ?? []).map(s => ({
       duration: s.duration,
       ...(s.animationId != null && { animationId: s.animationId }),
+      ...(s.sounds != null && s.sounds.length > 0 && { sounds: hydrateSounds(s.sounds) }),
     })),
   })
 
@@ -1058,7 +1136,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       { hasImage: projDoc.scene.hasBackgroundImage ?? false, width: projDoc.scene.backgroundWidth ?? 0, height: projDoc.scene.backgroundHeight ?? 0, depthFactor: 1.0 },
     ]
     const backgroundLayers: SceneBackgroundLayer[] = layerDocs.map((l, i) => ({
-      imageBlob: sceneLayerBlobs[i] ?? null,
+      imageBlob: l.hasVideo ? null : (sceneLayerBlobs[i] ?? null),
+      videoBlob: l.hasVideo ? (sceneLayerBlobs[i] ?? null) : null,
       width: l.width,
       height: l.height,
       depthFactor: l.depthFactor,
@@ -1075,6 +1154,9 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         backgroundX: rp.backgroundX,
         ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
         randomAnimationIds: rp.randomAnimationIds ?? rp.availableAnimationIds,
+        ...(rp.randomAnimationSounds != null && {
+          randomAnimationSounds: rp.randomAnimationSounds.map(arr => hydrateSounds(arr)),
+        }),
         ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
         ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
         ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
@@ -1354,6 +1436,8 @@ export type UploadHint =
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string }
   | { deleteSpeakSoundId: string }
+  | { sceneSoundId: string }
+  | { deleteSceneSoundId: string }
 
 /** Flat upload hint used by step components (legacy-compatible strings) */
 export type StepUploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | AnimationUploadField
@@ -1413,7 +1497,8 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       )
     } else if (typeof hint === 'string' && hint.startsWith('sceneBackgroundLayer') && project.scene) {
       const layerIdx = parseInt(hint.slice(-1))
-      const blob = project.scene.backgroundLayers[layerIdx]?.imageBlob
+      const layer = project.scene.backgroundLayers[layerIdx]
+      const blob = layer?.videoBlob ?? layer?.imageBlob
       if (blob) {
         console.log(`[Storage] Uploading scene background layer ${layerIdx} for:`, id)
         uploads.push(
@@ -1437,6 +1522,22 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       console.log(`[Storage] Deleting speak sound ${soundId}`)
       uploads.push(
         deleteObject(ref(storage, `projects/${id}/scene/speakSounds/${soundId}`)).catch(() => {})
+      )
+    } else if (typeof hint === 'object' && 'sceneSoundId' in hint) {
+      const soundId = hint.sceneSoundId
+      const blob = findSceneSoundBlob(project, soundId)
+      if (blob) {
+        console.log(`[Storage] Uploading scene sound ${soundId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/scene/sounds/${soundId}`, blob)
+            .then(() => console.log(`[Storage] Scene sound ${soundId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'deleteSceneSoundId' in hint) {
+      const soundId = hint.deleteSceneSoundId
+      console.log(`[Storage] Deleting scene sound ${soundId}`)
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/scene/sounds/${soundId}`)).catch(() => {})
       )
     } else if (typeof hint === 'object' && 'animationId' in hint) {
       const { animationId, field } = hint
@@ -1575,6 +1676,19 @@ export async function deleteProject(id: string): Promise<void> {
     for (const sound of sceneDoc?.speakSounds ?? []) {
       deletions.push(deleteObject(ref(storage, `projects/${id}/scene/speakSounds/${sound.id}`)).catch(() => {}))
     }
+    // Scene sounds (rattachés inline aux rest points / segments)
+    const sceneSoundIds = new Set<string>()
+    for (const rp of sceneDoc?.restPoints ?? []) {
+      for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) sceneSoundIds.add(s.id)
+    }
+    const collectFromTransitionDoc = (t: SceneTransitionDoc | undefined) => {
+      for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) sceneSoundIds.add(s.id)
+    }
+    for (const t of sceneDoc?.transitions ?? []) collectFromTransitionDoc(t)
+    collectFromTransitionDoc(sceneDoc?.startTransition)
+    for (const sid of sceneSoundIds) {
+      deletions.push(deleteObject(ref(storage, `projects/${id}/scene/sounds/${sid}`)).catch(() => {}))
+    }
   }
 
   // Delete animation storage files
@@ -1663,11 +1777,14 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   if (duplicate.projectTriangulation?.contours) hints.push('triangulationContours')
   if (duplicate.scene) {
     duplicate.scene.backgroundLayers.forEach((l, i) => {
-      if (l.imageBlob) hints.push(`sceneBackgroundLayer${i}` as UploadHint)
+      if (l.imageBlob || l.videoBlob) hints.push(`sceneBackgroundLayer${i}` as UploadHint)
     })
   }
   for (const sound of duplicate.scene?.speakSounds ?? []) {
     hints.push({ speakSoundId: sound.id })
+  }
+  for (const sid of collectSceneSoundIds(duplicate.scene)) {
+    hints.push({ sceneSoundId: sid })
   }
   for (const anim of duplicate.animations) {
     const newAnimId = anim.id

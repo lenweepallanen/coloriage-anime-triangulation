@@ -373,7 +373,7 @@ function ScanFlow({ project }: { project: Project }) {
       )}
 
       {stage === 'animation' && processor.rectifiedCanvas && (
-        project.scene && project.scene.backgroundLayers[2].imageBlob && project.scene.restPoints.length > 0
+        project.scene && project.scene.backgroundLayers.some(l => l.imageBlob || l.videoBlob) && project.scene.restPoints.length > 0
           ? <ScenePlayer
               project={project}
               scanCanvas={processor.rectifiedCanvas}

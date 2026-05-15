@@ -21,6 +21,27 @@ export function getEyeBodyMeshData(project: Project): {
   return null
 }
 
+/** Returns the mesh (frame-0 image coords + triangles) used to anchor the mouth.
+ *  For attachZoneId === 'body' or undefined → body mesh (same as getEyeBodyMeshData).
+ *  For any other zone id → projectTriangulation.zonePoints/zoneTriangles for that zone. */
+export function getMouthAttachMesh(project: Project, attachZoneId: string | undefined): {
+  points: Point2D[]
+  triangles: [number, number, number][]
+} | null {
+  const zoneId = attachZoneId ?? 'body'
+  if (zoneId === 'body') {
+    const m = getEyeBodyMeshData(project)
+    return m ? { points: m.bodyPoints, triangles: m.bodyTriangles } : null
+  }
+  const tri = project.projectTriangulation
+  const pts = tri?.zonePoints?.[zoneId]
+  const tris = tri?.zoneTriangles?.[zoneId]
+  if (pts && tris && pts.length > 0 && tris.length > 0) {
+    return { points: pts, triangles: tris }
+  }
+  return null
+}
+
 type BlinkPhase = 'idle' | 'closing' | 'opening'
 
 interface BlinkState {

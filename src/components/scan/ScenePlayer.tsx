@@ -13,7 +13,7 @@ import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUti
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
-import { EyeBlinkOverlay, getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
+import { EyeBlinkOverlay, getEyeBodyMeshData, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { MouthOverlay } from '../../utils/mouthOverlay'
 import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 
@@ -121,6 +121,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [showHelpBubble, setShowHelpBubble] = useState(false)
   const [currentHelpText, setCurrentHelpText] = useState('')
   const speakAudioRef = useRef<HTMLAudioElement | null>(null)
+  // Active overlapping audio instances for attached scene animation sounds.
+  const animSoundAudiosRef = useRef<HTMLAudioElement[]>([])
   // Lecteur WebAudio pour la bouche animée (RMS lip-sync).
   const mouthAudioRef = useRef<MouthAudioPlayer | null>(null)
   // RMS courant lu par le ticker PIXI (0 si aucun speak en cours).
@@ -212,35 +214,93 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     const bgSprites: (PIXI.Sprite | null)[] = [null, null, null]
     const bgImageUrls: string[] = []
-    const frontLayer = scene.backgroundLayers[2]
-    const bgScale = viewH / frontLayer.height
+    // Pick the highest-index layer that actually has an image; fall back to viewport dims
+    // so the scene still renders (character only) when no background layers are imported.
+    let frontLayer = scene.backgroundLayers[2]
+    for (let i = 2; i >= 0; i--) {
+      const l = scene.backgroundLayers[i]
+      if ((l?.imageBlob || l?.videoBlob) && l.height > 0) { frontLayer = l; break }
+    }
+    const bgScale = ((frontLayer.imageBlob || frontLayer.videoBlob) && frontLayer.height > 0)
+      ? viewH / frontLayer.height
+      : 1
 
     // Pre-create 3 containers to guarantee z-order
     const layerContainers = [new PIXI.Container(), new PIXI.Container(), new PIXI.Container()]
     for (const lc of layerContainers) bgContainer.addChild(lc)
 
+    const bgVideoElements: HTMLVideoElement[] = []
     for (let li = 0; li < 3; li++) {
       const layer = scene.backgroundLayers[li]
-      if (!layer.imageBlob) continue
-      const url = URL.createObjectURL(layer.imageBlob)
-      bgImageUrls.push(url)
-      const bgImg = new Image()
-      bgImg.src = url
       const layerIndex = li
-      bgImg.onload = () => {
-        const bgCanvas = document.createElement('canvas')
-        bgCanvas.width = bgImg.naturalWidth
-        bgCanvas.height = bgImg.naturalHeight
-        const bgCtx = bgCanvas.getContext('2d')!
-        bgCtx.drawImage(bgImg, 0, 0)
-
-        const bgTexture = PIXI.Texture.from(bgCanvas)
+      if (layer.videoBlob) {
+        const url = URL.createObjectURL(layer.videoBlob)
+        bgImageUrls.push(url)
+        const vid = document.createElement('video')
+        // iOS Safari : muted + playsInline DOIVENT être définis avant src,
+        // sinon l'autoplay est bloqué et la texture PIXI reste blanche.
+        vid.muted = true
+        vid.defaultMuted = true
+        vid.loop = true
+        vid.autoplay = true
+        vid.playsInline = true
+        vid.setAttribute('muted', '')
+        vid.setAttribute('playsinline', '')
+        vid.setAttribute('webkit-playsinline', '')
+        vid.setAttribute('autoplay', '')
+        vid.setAttribute('loop', '')
+        vid.crossOrigin = 'anonymous'
+        vid.src = url
+        // iOS exige que la <video> soit dans le DOM pour décoder. On l'ajoute en
+        // caché — PIXI lira les frames via la même balise.
+        vid.style.position = 'absolute'
+        vid.style.width = '1px'
+        vid.style.height = '1px'
+        vid.style.opacity = '0'
+        vid.style.pointerEvents = 'none'
+        document.body.appendChild(vid)
+        bgVideoElements.push(vid)
+        const tryPlay = () => vid.play().catch(() => { /* retry on user gesture */ })
+        tryPlay()
+        // iOS bloque l'autoplay tant qu'il n'y a pas un geste utilisateur. On retente
+        // au premier touch/pointer/click n'importe où, en phase capture pour passer
+        // avant les handlers de la page.
+        const onGesture = () => {
+          tryPlay()
+          document.removeEventListener('pointerdown', onGesture, true)
+          document.removeEventListener('touchstart', onGesture, true)
+          document.removeEventListener('click', onGesture, true)
+        }
+        document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
+        document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
+        document.addEventListener('click', onGesture, { passive: true, capture: true })
+        const bgTexture = PIXI.Texture.from(vid)
         const sprite = new PIXI.Sprite(bgTexture)
         const layerScale = viewH / layer.height
         sprite.width = layer.width * layerScale
         sprite.height = viewH
         layerContainers[layerIndex].addChild(sprite)
         bgSprites[layerIndex] = sprite
+      } else if (layer.imageBlob) {
+        const url = URL.createObjectURL(layer.imageBlob)
+        bgImageUrls.push(url)
+        const bgImg = new Image()
+        bgImg.src = url
+        bgImg.onload = () => {
+          const bgCanvas = document.createElement('canvas')
+          bgCanvas.width = bgImg.naturalWidth
+          bgCanvas.height = bgImg.naturalHeight
+          const bgCtx = bgCanvas.getContext('2d')!
+          bgCtx.drawImage(bgImg, 0, 0)
+
+          const bgTexture = PIXI.Texture.from(bgCanvas)
+          const sprite = new PIXI.Sprite(bgTexture)
+          const layerScale = viewH / layer.height
+          sprite.width = layer.width * layerScale
+          sprite.height = viewH
+          layerContainers[layerIndex].addChild(sprite)
+          bgSprites[layerIndex] = sprite
+        }
       }
     }
 
@@ -314,15 +374,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // les positions body courantes (walk/MB) ou les positions du mesh legacy.
     let mouthOverlay: MouthOverlay | null = null
     let mouthOverlayBodyFrame0: Point2D[] | null = null
+    const mouthAttachZoneId = project.projectMouth?.attachZoneId ?? 'body'
     if (project.projectMouth) {
-      const mouthBodyMesh = getEyeBodyMeshData(project)
-      if (mouthBodyMesh && mouthBodyMesh.bodyTriangles.length > 0) {
-        mouthOverlayBodyFrame0 = mouthBodyMesh.bodyPoints
+      const mouthAttach = getMouthAttachMesh(project, mouthAttachZoneId)
+      if (mouthAttach && mouthAttach.triangles.length > 0) {
+        mouthOverlayBodyFrame0 = mouthAttach.points
         mouthOverlay = new MouthOverlay(
           project.projectMouth,
           characterContainer,
-          mouthBodyMesh.bodyPoints,
-          mouthBodyMesh.bodyTriangles,
+          mouthAttach.points,
+          mouthAttach.triangles,
           texture,
           scanCanvas.width,
           scanCanvas.height,
@@ -421,12 +482,31 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     canvas.style.touchAction = 'none'
 
     // --- Scene playback state machine ---
+    const playSceneSounds = (sounds: import('../../types/project').SceneSound[]) => {
+      for (const sound of sounds) {
+        if (!sound.blob) continue
+        const url = URL.createObjectURL(sound.blob)
+        const audio = new Audio(url)
+        animSoundAudiosRef.current.push(audio)
+        audio.play().catch(() => {})
+        audio.onended = () => {
+          URL.revokeObjectURL(url)
+          animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+        }
+      }
+    }
+
     const scenePlayback = new ScenePlayback({
       scene,
       viewportWidth: viewW / bgScale,
       viewportHeight: viewH / bgScale,
       onRestPointArrival: (index) => {
         setCurrentRestIdx(index)
+      },
+      onSegmentStart: (transitionIndex, segmentIndex) => {
+        const transition = transitionIndex === -1 ? scene.startTransition : scene.transitions[transitionIndex]
+        const seg = transition?.segments[segmentIndex]
+        if (seg?.sounds && seg.sounds.length > 0) playSceneSounds(seg.sounds)
       },
     })
     scenePlaybackRef.current = scenePlayback
@@ -474,11 +554,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // Create per-zone LoopPlayback
         const sep = anim.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
         if (!sep) return
-        activeZonePlaybacks = sep.zones.map(zone => ({
+        // Capture les refs localement pour que la closure `currentAdvance` n'avance
+        // QUE ses propres playbacks même après que `activeZonePlaybacks`/`activeBodyPlayback`
+        // soient réassignés par un beginCrossfade ultérieur.
+        const localZP = sep.zones.map(zone => ({
           zoneId: zone.id,
           playback: new LoopPlayback(anim.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 }),
         }))
-        activeBodyPlayback = new LoopPlayback(anim.mesh.walkBodyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 })
+        const localBP = new LoopPlayback(anim.mesh.walkBodyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 })
+        activeZonePlaybacks = localZP
+        activeBodyPlayback = localBP
 
         // currentGetPositions still returns legacy positions for blending/touch detection
         const legacyFrames = anim.mesh.videoFramesMesh
@@ -487,14 +572,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           currentGetPositions = () => legacyPb.getPositions()
           currentAdvance = (delta) => {
             legacyPb.advance(delta)
-            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
-            activeBodyPlayback?.advance(delta)
+            for (const zp of localZP) zp.playback.advance(delta)
+            localBP.advance(delta)
           }
         } else {
           currentGetPositions = () => allPoints
           currentAdvance = (delta) => {
-            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
-            activeBodyPlayback?.advance(delta)
+            for (const zp of localZP) zp.playback.advance(delta)
+            localBP.advance(delta)
           }
         }
         return
@@ -527,11 +612,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
         const sep = rest.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
         if (!sep) return
-        activeZonePlaybacks = sep.zones.map(zone => ({
+        const localZP = sep.zones.map(zone => ({
           zoneId: zone.id,
           playback: new LoopPlayback(rest.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 }),
         }))
-        activeBodyPlayback = new LoopPlayback(rest.mesh.walkBodyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 })
+        const localBP = new LoopPlayback(rest.mesh.walkBodyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 })
+        activeZonePlaybacks = localZP
+        activeBodyPlayback = localBP
 
         // Positions legacy pour blending / hit-test ; oneshots non supportés ici (le rest
         // est zone-based, les overlays mesh classique ne s'alignent pas).
@@ -541,14 +628,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           currentGetPositions = () => legacyPb.getPositions()
           currentAdvance = (delta) => {
             legacyPb.advance(delta)
-            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
-            activeBodyPlayback?.advance(delta)
+            for (const zp of localZP) zp.playback.advance(delta)
+            localBP.advance(delta)
           }
         } else {
           currentGetPositions = () => allPoints
           currentAdvance = (delta) => {
-            activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
-            activeBodyPlayback?.advance(delta)
+            for (const zp of localZP) zp.playback.advance(delta)
+            localBP.advance(delta)
           }
         }
         return
@@ -655,13 +742,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       pixiMesh.visible = false
 
       const fps = 24
-      activeZonePlaybacks = sep.zones.map(zone => ({
+      const localZP = sep.zones.map(zone => ({
         zoneId: zone.id,
         playback: new OncePlayback(anim.mesh!.walkZoneFrames![zone.id], { fps }),
       }))
-      const bodyPb = new OncePlayback(anim.mesh.walkBodyFrames, { fps })
-      activeBodyPlayback = bodyPb
-      zoneOneshotBody = bodyPb
+      const localBP = new OncePlayback(anim.mesh.walkBodyFrames, { fps })
+      activeZonePlaybacks = localZP
+      activeBodyPlayback = localBP
+      zoneOneshotBody = localBP
 
       const legacyFrames = anim.mesh.videoFramesMesh
       if (legacyFrames && legacyFrames.length > 0) {
@@ -669,14 +757,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         currentGetPositions = () => legacyPb.getPositions()
         currentAdvance = (delta) => {
           legacyPb.advance(delta)
-          activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
-          activeBodyPlayback?.advance(delta)
+          for (const zp of localZP) zp.playback.advance(delta)
+          localBP.advance(delta)
         }
       } else {
         currentGetPositions = () => allPoints
         currentAdvance = (delta) => {
-          activeZonePlaybacks?.forEach(zp => zp.playback.advance(delta))
-          activeBodyPlayback?.advance(delta)
+          for (const zp of localZP) zp.playback.advance(delta)
+          localBP.advance(delta)
         }
       }
       return true
@@ -899,7 +987,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
 
       // Eye blink overlay (positioned in character space)
-      const bodyPositionsForOverlays = activeBodyPlayback ? activeBodyPlayback.getPositions() : null
+      // Applique le crossfade aussi aux positions body utilisées par les overlays,
+      // sinon yeux/bouche sautent au moment du switch d'animation.
+      let bodyPositionsForOverlays: Point2D[] | null = activeBodyPlayback ? activeBodyPlayback.getPositions() : null
+      if (bodyPositionsForOverlays && fadeActive && prevBodyPlayback) {
+        bodyPositionsForOverlays = blendPts(prevBodyPlayback.getPositions(), bodyPositionsForOverlays, fadeT)
+      }
       if (eyeOverlay) {
         eyeOverlay.update(positions, bodyPositionsForOverlays, charScale, charOffsetX, charOffsetY, (delta / 60) * 1000)
       }
@@ -908,7 +1001,21 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Si pas d'animation walk/MB active, on déforme la bouche dans le repère
       // body frame 0 (statique) — la mâchoire reste centrée sur le perso au repos.
       if (mouthOverlay) {
-        const bodyForMouth = bodyPositionsForOverlays ?? mouthOverlayBodyFrame0
+        // Si la bouche est rattachée à une zone membre (head, etc.), on prend
+        // les positions de cette zone plutôt que celles du body, blendées avec
+        // le prev playback pendant le crossfade.
+        let bodyForMouth: Point2D[] | null = bodyPositionsForOverlays ?? mouthOverlayBodyFrame0
+        if (mouthAttachZoneId !== 'body' && activeZonePlaybacks) {
+          const zp = activeZonePlaybacks.find(z => z.zoneId === mouthAttachZoneId)
+          if (zp) {
+            let pts = zp.playback.getPositions()
+            if (fadeActive && prevZonePlaybacks) {
+              const prevZp = prevZonePlaybacks.find(z => z.zoneId === mouthAttachZoneId)
+              if (prevZp) pts = blendPts(prevZp.playback.getPositions(), pts, fadeT)
+            }
+            bodyForMouth = pts
+          }
+        }
         const rms = mouthAudioRef.current ? mouthAudioRef.current.getRMS() : 0
         mouthOpennessRef.current = rms
         mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, rms)
@@ -938,6 +1045,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       scenePlaybackRef.current = null
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('resize', handleResize)
+      for (const v of bgVideoElements) { v.pause(); v.src = ''; v.remove() }
       for (const url of bgImageUrls) URL.revokeObjectURL(url)
       for (const audio of animAudioElements.values()) { audio.pause() }
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
@@ -961,12 +1069,27 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
   const handleRandomAnimation = useCallback(() => {
     const rp = scene.restPoints[currentRestIdx]
-    const ids = (rp?.randomAnimationIds ?? []).filter(id => {
-      const a = project.animations.find(a => a.id === id)
-      return a != null && animationHasFrames(a)
-    })
-    if (ids.length === 0) return
-    const randomId = ids[Math.floor(Math.random() * ids.length)]
+    const allIds = rp?.randomAnimationIds ?? []
+    const playableOriginalIndices: number[] = []
+    for (let i = 0; i < allIds.length; i++) {
+      const a = project.animations.find(x => x.id === allIds[i])
+      if (a != null && animationHasFrames(a)) playableOriginalIndices.push(i)
+    }
+    if (playableOriginalIndices.length === 0) return
+    const originalIdx = playableOriginalIndices[Math.floor(Math.random() * playableOriginalIndices.length)]
+    const randomId = allIds[originalIdx]
+    const sounds = rp?.randomAnimationSounds?.[originalIdx] ?? []
+    for (const sound of sounds) {
+      if (!sound.blob) continue
+      const url = URL.createObjectURL(sound.blob)
+      const audio = new Audio(url)
+      animSoundAudiosRef.current.push(audio)
+      audio.play().catch(() => {})
+      audio.onended = () => {
+        URL.revokeObjectURL(url)
+        animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+      }
+    }
     const sp = scenePlaybackRef.current as unknown as {
       getMultiPlayback?: () => MultiAnimationPlayback | null
       triggerZoneOneshot?: (animId: string) => boolean
@@ -974,7 +1097,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const mp = sp?.getMultiPlayback?.()
     if (mp) mp.requestOneshot(randomId)
     else sp?.triggerZoneOneshot?.(randomId)
-  }, [currentRestIdx, scene.restPoints, project.animations])
+  }, [currentRestIdx, scene, project.animations])
 
   const handleSpeak = useCallback(async () => {
     const rp = scene.restPoints[currentRestIdx]
@@ -1037,6 +1160,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
     mouthAudioRef.current?.cleanup()
     mouthAudioRef.current = null
+    for (const audio of animSoundAudiosRef.current) {
+      audio.pause()
+      try { URL.revokeObjectURL(audio.src) } catch { /* */ }
+    }
+    animSoundAudiosRef.current = []
   }, [])
 
   const currentRp = scene.restPoints[currentRestIdx]

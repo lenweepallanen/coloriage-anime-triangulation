@@ -622,11 +622,23 @@ export function getGeometryOwner(animations: Animation[]): Animation | undefined
     ?? animations.find(a => a.mesh != null && (a.mesh.triangles?.length ?? 0) > 0)
 }
 
+/**
+ * Son rattaché à une référence d'animation (rest point random ou segment).
+ * `blob` est nullable car les métadonnées sont chargées avant les blobs Storage.
+ */
+export interface SceneSound {
+  id: string;
+  name: string;
+  blob: Blob | null;
+}
+
 export interface SceneRestPoint {
   id: string;
   backgroundX: number;
   restAnimationId?: string;
   randomAnimationIds?: string[];
+  /** Index-aligned with randomAnimationIds: sounds attached to each random animation entry. */
+  randomAnimationSounds?: SceneSound[][];
   zoneAnimationMappings?: ZoneAnimationMapping[];
   speakSoundIds?: string[];
   helpTexts?: string[];
@@ -647,6 +659,8 @@ export interface SceneSegment {
   animationId?: string;
   easing?: SegmentEasing;
   crossfadeMs?: number;
+  /** Sons attachés à l'animation de ce segment. */
+  sounds?: SceneSound[];
 }
 
 export interface SceneTransition {
@@ -656,6 +670,7 @@ export interface SceneTransition {
 
 export interface SceneBackgroundLayer {
   imageBlob: Blob | null;
+  videoBlob: Blob | null;
   width: number;
   height: number;
   depthFactor: number;
@@ -727,6 +742,10 @@ export interface MouthDefinition {
   maxOpenAngleDeg: number;
   /** Sens de rotation : 1 ou -1 selon l'orientation visuelle souhaitée. */
   rotationSign: 1 | -1;
+  /** Zone du squelette à laquelle la bouche est rattachée. 'body' par défaut.
+   *  Si !== 'body', la bouche suit le maillage de la zone correspondante
+   *  (`projectTriangulation.zonePoints[id]` / `zoneTriangles[id]`). */
+  attachZoneId?: string;
 }
 
 export const DEFAULT_MOUTH_MAX_OPEN_DEG = 18;
