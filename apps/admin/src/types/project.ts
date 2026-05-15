@@ -765,6 +765,10 @@ export interface Project {
   projectTriangulation: ProjectTriangulation | null;
   projectEyes: ProjectEyes | null;
   projectMouth: MouthDefinition | null;
+  /** Si true, le projet est accessible sur play.NDD/p/{id}. Par défaut false. */
+  published: boolean;
+  /** Timestamp de la première publication (ou re-publication). null tant que jamais publié. */
+  publishedAt: number | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

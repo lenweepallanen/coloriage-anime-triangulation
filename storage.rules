@@ -1,0 +1,29 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAdmin() {
+      return request.auth != null
+        && firestore.exists(
+          /databases/(default)/documents/admins/$(request.auth.uid)
+        );
+    }
+
+    // Assets projet : lecture publique (play doit pouvoir charger les vidéos
+    // et JSON même sans auth). Écriture : admin uniquement.
+    // Note : la protection effective du contenu repose sur le flag `published`
+    // côté Firestore — un projet non publié ne sera pas atteignable côté play
+    // car la lecture du doc projet sera refusée par firestore.rules.
+    match /projects/{projectId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Scans : créés sans auth (utilisateur final scanne son coloriage).
+    match /scans/{scanId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

@@ -6,6 +6,7 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
+import { logAudit } from './audit'
 import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
@@ -279,6 +280,8 @@ interface ProjectDoc {
   projectTriangulation?: ProjectTriangulationDoc | null
   projectEyes?: Project['projectEyes']
   projectMouth?: Project['projectMouth']
+  published?: boolean
+  publishedAt?: number | null
 }
 
 // Legacy project doc (v4 format — single mesh + video at root)
@@ -786,6 +789,8 @@ function toDoc(project: Project): ProjectDoc {
     ...(project.projectTriangulation != null && { projectTriangulation: projectTriangulationToDoc(project.projectTriangulation) }),
     ...(project.projectEyes != null && { projectEyes: project.projectEyes }),
     ...(project.projectMouth != null && { projectMouth: project.projectMouth }),
+    published: project.published === true,
+    publishedAt: project.publishedAt ?? null,
   }
 }
 
@@ -1204,6 +1209,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     projectTriangulation,
     projectEyes: projDoc.projectEyes ?? null,
     projectMouth: projDoc.projectMouth ?? null,
+    published: projDoc.published === true,
+    publishedAt: projDoc.publishedAt ?? null,
   }
 }
 
@@ -1259,6 +1266,8 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
+    published: false,
+    publishedAt: null,
   }
 }
 
@@ -1324,9 +1333,12 @@ export async function createProject(name: string): Promise<Project> {
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
+    published: false,
+    publishedAt: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
   console.log('[Firebase] Project created:', project.id)
+  await logAudit('project.create', project.id, { name })
   return project
 }
 
@@ -1374,6 +1386,8 @@ export async function getAllProjects(): Promise<Project[]> {
         projectTriangulation: null,
         projectEyes: null,
         projectMouth: null,
+        published: false,
+        publishedAt: null,
       }
     }
 
@@ -1410,6 +1424,8 @@ export async function getAllProjects(): Promise<Project[]> {
       projectTriangulation: null,
       projectEyes: projDoc.projectEyes ?? null,
       projectMouth: projDoc.projectMouth ?? null,
+      published: projDoc.published === true,
+      publishedAt: projDoc.publishedAt ?? null,
     }
   })
 }
@@ -1730,6 +1746,7 @@ export async function deleteProject(id: string): Promise<void> {
 
   deletions.push(deleteDoc(projectRef(id)))
   await Promise.all(deletions)
+  await logAudit('project.delete', id)
 }
 
 const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
@@ -1804,5 +1821,6 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
 
   await updateProject(duplicate, hints)
   console.log(`[Firebase] Project duplicated: ${sourceId} -> ${newId}`)
+  await logAudit('project.duplicate', newId, { sourceId })
   return duplicate
 }

@@ -2,6 +2,88 @@
 
 Application web de livres de coloriage animés avec triangulation de maillage et suivi vidéo.
 
+## Monorepo (npm workspaces)
+
+Le projet est splitté en **deux applications** déployées sur deux domaines distincts, partageant un **seul backend Firebase** (`coloriage-anime-prod`).
+
+```
+.
+├── apps/
+│   ├── admin/        @coloriage/admin  → admin.NDD (édition, auth requise)
+│   └── play/         @coloriage/play   → play.NDD (scan + animation, public)
+├── packages/
+│   └── shared/       (réservé pour une extraction future ; vide pour l'instant)
+├── functions/        Cloud Functions (LaMa, inchangé)
+├── sam2/, sam2-local/, cotracker/, cotracker-local/   inchangés
+├── firestore.rules, storage.rules, firebase.json, .firebaserc
+└── package.json      (workspaces : apps/*, packages/*)
+```
+
+**Partage de code** : `apps/play` n'a **pas** de code dupliqué — il importe ce dont il a besoin depuis `apps/admin/src/...` via l'alias TypeScript/Vite `@shared/*`. Concrètement :
+- `apps/play/src/pages/PlayPage.tsx` charge le projet, vérifie `project.published === true`, puis monte `ScanPage` importé via `@shared/pages/ScanPage`.
+- Vite ne bundle dans `play` que les modules réellement importés (≈ 367 KB gzippé vs 707 KB pour admin).
+- Si plus tard la limite devient gênante, on extraira un vrai `packages/shared/` (types + db + utils playback).
+
+Note : `apps/play` tire actuellement Firebase Auth dans son bundle parce que `projectsStore` importe `audit.ts` (qui dépend du singleton `auth`). C'est < 60 KB, acceptable. Optimisation future possible : séparer un `projectsStore.read.ts` sans dépendance audit.
+
+## Authentification (admin uniquement)
+
+Firebase Auth (Google sign-in) + allowlist d'emails stockée dans la collection Firestore `admins/{uid}`. Le bootstrap se fait à la main dans la console Firebase (ajouter un doc avec l'UID Google du premier admin).
+
+- `apps/admin/src/auth/AuthProvider.tsx` — contexte React, vérifie l'appartenance à `admins/` à chaque changement d'état auth.
+- `apps/admin/src/auth/LoginPage.tsx` — bouton Google sign-in, monté sur `/login`.
+- `apps/admin/src/auth/ProtectedRoute.tsx` — wrap toutes les autres routes admin, redirige vers `/login` si pas admin.
+
+## Audit log
+
+- Collection `auditLog/{autoId}` : `{ uid, email, action, projectId, timestamp, details? }`.
+- Actions tracées : `project.create`, `project.delete`, `project.duplicate`, `project.publish`, `project.unpublish`.
+- Helper : `apps/admin/src/db/audit.ts` (`logAudit(action, projectId, details?)`).
+- Login history : collection `loginHistory/{autoId}` écrite par `AuthProvider` au sign-in.
+
+## Publication d'un projet
+
+- Champ `Project.published: boolean` (+ `publishedAt: number | null`) sauvé dans Firestore.
+- `apps/admin/src/components/admin/PublishPanel.tsx` (intégré dans la `GeneralSection`) — bascule publish/dépublish + copie de l'URL play.
+- L'URL play est `${VITE_PLAY_BASE_URL}/p/{projectId}` (défaut `https://play.NDD`, à configurer en var d'env Vercel).
+- Côté play : `apps/play/src/pages/PlayPage.tsx` refuse l'accès si `project.published !== true`.
+
+## Règles Firebase
+
+Voir `firestore.rules` et `storage.rules` à la racine. Helper `isAdmin()` = `exists(/databases/$(database)/documents/admins/$(request.auth.uid))`.
+
+- `projects/{id}` : lecture publique si `published == true`, sinon admin. Écriture : admin only.
+- `admins/{uid}` : édition console uniquement (`write: false`).
+- `auditLog`, `loginHistory` : append-only, immuables.
+- `scans/{id}` : create public (play.NDD crée des scans sans auth), reste admin only.
+
+Déploiement des rules : `firebase deploy --only firestore:rules,storage:rules` (depuis la racine).
+
+## Commandes (racine du monorepo)
+
+```bash
+npm install               # installe toutes les workspaces
+npm run dev:admin         # démarre apps/admin (HTTPS, port Vite par défaut)
+npm run dev:play          # démarre apps/play  (HTTPS, port 5175)
+npm run build:admin       # build apps/admin
+npm run build:play        # build apps/play
+npm run build             # build les deux
+```
+
+## Déploiement Vercel
+
+Deux projets Vercel pointant vers le même repo, avec **Root Directory** différent :
+
+| Projet Vercel  | Root Directory | Domaine        |
+|----------------|----------------|----------------|
+| coloriage-admin | `apps/admin`   | `admin.NDD`    |
+| coloriage-play  | `apps/play`    | `play.NDD`     |
+
+Le `vercel.json` de chaque app exécute `cd ../.. && npm run build:<app>` puis sert `dist/`. Variables d'env nécessaires :
+- Admin & Play : config Firebase (les valeurs sont déjà inlinées dans `firebase.ts`, mais à terme on peut les passer en `VITE_*`).
+- Admin : `VITE_PLAY_BASE_URL=https://play.NDD` (utilisé par `buildPlayUrl`).
+
+
 ## Concept
 
 L'utilisateur crée un projet avec une image de coloriage et **plusieurs animations** (une "rest" en boucle infinie + des "oneshot" déclenchées à la demande). L'admin définit des **anchor points** (points structurels trackés) sur l'image, puis un maillage triangulé avec des points internes. Le suivi optique est pré-calculé sur les anchors seuls, avec validation par keyframes. Les points internes suivent via coordonnées barycentriques. Toutes les animations partagent la même géométrie (topologie mesh) mais ont chacune leur propre vidéo et tracking. L'utilisateur final scanne son coloriage colorié, et l'app injecte ses couleurs dans le maillage animé via PIXI.js avec transitions fluides entre animations.

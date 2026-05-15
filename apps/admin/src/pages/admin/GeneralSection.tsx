@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAdminContext } from './AdminLayout'
 import ProjectImportSection from '../../components/admin/ProjectImportSection'
+import PublishPanel from '../../components/admin/PublishPanel'
 import { generateTemplatePDF } from '../../utils/pdfGenerator'
 
 export default function GeneralSection() {
@@ -76,6 +77,18 @@ export default function GeneralSection() {
             </svg>
           </h3>
         )}
+      </div>
+
+      <div style={{ margin: '16px 0' }}>
+        <PublishPanel
+          projectId={project.id}
+          published={project.published}
+          publishedAt={project.publishedAt}
+          onChange={(published) => {
+            const updated = { ...project, published, publishedAt: published ? Date.now() : project.publishedAt }
+            void save(updated)
+          }}
+        />
       </div>
 
       <ProjectImportSection project={project} onSave={save} />

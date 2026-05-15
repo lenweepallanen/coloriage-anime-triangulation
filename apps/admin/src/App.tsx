@@ -11,23 +11,28 @@ import TriangulationSection from './pages/admin/TriangulationSection'
 import EyesSection from './pages/admin/EyesSection'
 import MouthSection from './pages/admin/MouthSection'
 import ScanPage from './pages/ScanPage'
+import LoginPage from './auth/LoginPage'
+import ProtectedRoute from './auth/ProtectedRoute'
 
 function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/admin/:projectId" element={<AdminLayout />}>
-          <Route index element={<AdminSectionMenu />} />
-          <Route path="general" element={<GeneralSection />} />
-          <Route path="animations" element={<AnimationsSection />} />
-          <Route path="zones" element={<BodyZonesSection />} />
-          <Route path="scene" element={<SceneSection />} />
-          <Route path="triangulation" element={<TriangulationSection />} />
-          <Route path="eyes" element={<EyesSection />} />
-          <Route path="mouth" element={<MouthSection />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<ProtectedRoute />}>
+        <Route element={<Layout />}>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/admin/:projectId" element={<AdminLayout />}>
+            <Route index element={<AdminSectionMenu />} />
+            <Route path="general" element={<GeneralSection />} />
+            <Route path="animations" element={<AnimationsSection />} />
+            <Route path="zones" element={<BodyZonesSection />} />
+            <Route path="scene" element={<SceneSection />} />
+            <Route path="triangulation" element={<TriangulationSection />} />
+            <Route path="eyes" element={<EyesSection />} />
+            <Route path="mouth" element={<MouthSection />} />
+          </Route>
+          <Route path="/scan/:projectId" element={<ScanPage />} />
         </Route>
-        <Route path="/scan/:projectId" element={<ScanPage />} />
       </Route>
     </Routes>
   )
