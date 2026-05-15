@@ -6,8 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// apps/play/ — application USER (déployée sur https://coloriage-anime-play.vercel.app
-// ou un domaine custom branché plus tard).
+// apps/play/ — application USER (play.NDD).
 // Importe son code partagé depuis apps/admin/src via l'alias `@shared/*`.
 // Le `publicDir` pointe vers apps/admin/public pour réutiliser opencv.js + worker
 // sans duplication.

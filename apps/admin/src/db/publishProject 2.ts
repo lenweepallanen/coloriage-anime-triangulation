@@ -16,10 +16,10 @@ export async function setProjectPublished(projectId: string, published: boolean)
 }
 
 /**
- * Génère l'URL publique du projet côté play. Lue depuis VITE_PLAY_BASE_URL
- * (configurée en prod via Vercel env var), fallback sur l'URL Vercel par défaut.
+ * Génère l'URL publique du projet côté play. Lue depuis VITE_PLAY_BASE_URL,
+ * fallback sur https://play.NDD (à configurer en prod via Vercel env var).
  */
 export function buildPlayUrl(projectId: string): string {
-  const base = (import.meta.env.VITE_PLAY_BASE_URL ?? 'https://coloriage-anime-play.vercel.app').replace(/\/+$/, '')
+  const base = (import.meta.env.VITE_PLAY_BASE_URL ?? 'https://play.NDD').replace(/\/+$/, '')
   return `${base}/p/${projectId}`
 }

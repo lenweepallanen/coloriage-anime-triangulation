@@ -70,7 +70,7 @@ export default function PublishPanel({ projectId, published, publishedAt, onChan
       )}
       {!published && (
         <p style={{ marginTop: 8, color: '#666', fontSize: 13, marginBottom: 0 }}>
-          Tant que le projet n'est pas publié, le lien play.NDD/p/{projectId.slice(0, 8)}… renvoie « Coloriage indisponible ».
+          Tant que le projet n'est pas publié, le lien play renvoie « Coloriage indisponible ».
         </p>
       )}
     </div>

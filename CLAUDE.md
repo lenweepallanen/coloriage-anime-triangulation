@@ -9,8 +9,8 @@ Le projet est splitté en **deux applications** déployées sur deux domaines di
 ```
 .
 ├── apps/
-│   ├── admin/        @coloriage/admin  → admin.NDD (édition, auth requise)
-│   └── play/         @coloriage/play   → play.NDD (scan + animation, public)
+│   ├── admin/        @coloriage/admin  → coloriage-anime-admin.vercel.app (édition, auth requise)
+│   └── play/         @coloriage/play   → coloriage-anime-play.vercel.app (scan + animation, public)
 ├── packages/
 │   └── shared/       (réservé pour une extraction future ; vide pour l'instant)
 ├── functions/        Cloud Functions (LaMa, inchangé)
@@ -47,7 +47,7 @@ Firebase Auth **email + mot de passe** + allowlist Firestore `admins/{uid}`. Les
 
 - Champ `Project.published: boolean` (+ `publishedAt: number | null`) sauvé dans Firestore.
 - `apps/admin/src/components/admin/PublishPanel.tsx` (intégré dans la `GeneralSection`) — bascule publish/dépublish + copie de l'URL play.
-- L'URL play est `${VITE_PLAY_BASE_URL}/p/{projectId}` (défaut `https://play.NDD`, à configurer en var d'env Vercel).
+- L'URL play est `${VITE_PLAY_BASE_URL}/p/{projectId}` (défaut `https://coloriage-anime-play.vercel.app`, à configurer en var d'env Vercel).
 - Côté play : `apps/play/src/pages/PlayPage.tsx` refuse l'accès si `project.published !== true`.
 
 ## Règles Firebase
@@ -57,7 +57,7 @@ Voir `firestore.rules` et `storage.rules` à la racine. Helper `isAdmin()` = `ex
 - `projects/{id}` : lecture publique si `published == true`, sinon admin. Écriture : admin only.
 - `admins/{uid}` : édition console uniquement (`write: false`).
 - `auditLog`, `loginHistory` : append-only, immuables.
-- `scans/{id}` : create public (play.NDD crée des scans sans auth), reste admin only.
+- `scans/{id}` : create public (coloriage-anime-play.vercel.app crée des scans sans auth), reste admin only.
 
 Déploiement des rules : `firebase deploy --only firestore:rules,storage:rules` (depuis la racine).
 
@@ -78,12 +78,12 @@ Deux projets Vercel pointant vers le même repo, avec **Root Directory** différ
 
 | Projet Vercel  | Root Directory | Domaine        |
 |----------------|----------------|----------------|
-| coloriage-admin | `apps/admin`   | `admin.NDD`    |
-| coloriage-play  | `apps/play`    | `play.NDD`     |
+| coloriage-admin | `apps/admin`   | `coloriage-anime-admin.vercel.app`    |
+| coloriage-play  | `apps/play`    | `coloriage-anime-play.vercel.app`     |
 
 Le `vercel.json` de chaque app exécute `cd ../.. && npm run build:<app>` puis sert `dist/`. Variables d'env nécessaires :
 - Admin & Play : config Firebase (les valeurs sont déjà inlinées dans `firebase.ts`, mais à terme on peut les passer en `VITE_*`).
-- Admin : `VITE_PLAY_BASE_URL=https://play.NDD` (utilisé par `buildPlayUrl`).
+- Admin : `VITE_PLAY_BASE_URL=https://coloriage-anime-play.vercel.app` (utilisé par `buildPlayUrl`).
 
 
 ## Concept
