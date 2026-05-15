@@ -1,8 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import {
-  GoogleAuthProvider,
-  signInWithPopup,
+  signInWithEmailAndPassword,
   signOut as fbSignOut,
   onAuthStateChanged,
 } from 'firebase/auth'
@@ -14,7 +13,7 @@ interface AuthContextValue {
   user: User | null
   isAdmin: boolean
   loading: boolean
-  signIn: () => Promise<void>
+  signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   error: string | null
 }
@@ -57,12 +56,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsub
   }, [])
 
-  const signIn = useCallback(async () => {
+  const signIn = useCallback(async (email: string, password: string) => {
     setError(null)
     setLoading(true)
     try {
-      const provider = new GoogleAuthProvider()
-      const cred = await signInWithPopup(auth, provider)
+      const cred = await signInWithEmailAndPassword(auth, email, password)
       // Login history — best-effort, on rule denial cela échouera silencieusement.
       try {
         await addDoc(collection(db, 'loginHistory'), {
@@ -74,8 +72,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('[Auth] loginHistory write failed:', e)
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setError(`Échec de la connexion : ${msg}`)
+      // Firebase Auth renvoie des codes comme auth/invalid-credential, auth/user-not-found.
+      const code = (e as { code?: string })?.code ?? ''
+      const friendly =
+        code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found'
+          ? 'Email ou mot de passe incorrect.'
+          : code === 'auth/too-many-requests'
+            ? 'Trop de tentatives, réessaye dans quelques minutes.'
+            : code === 'auth/invalid-email'
+              ? 'Email invalide.'
+              : `Échec de la connexion : ${e instanceof Error ? e.message : String(e)}`
+      setError(friendly)
       setLoading(false)
     }
   }, [])

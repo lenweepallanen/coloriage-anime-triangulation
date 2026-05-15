@@ -28,11 +28,13 @@ Note : `apps/play` tire actuellement Firebase Auth dans son bundle parce que `pr
 
 ## Authentification (admin uniquement)
 
-Firebase Auth (Google sign-in) + allowlist d'emails stockée dans la collection Firestore `admins/{uid}`. Le bootstrap se fait à la main dans la console Firebase (ajouter un doc avec l'UID Google du premier admin).
+Firebase Auth **email + mot de passe** + allowlist Firestore `admins/{uid}`. Les comptes sont créés à la main dans la console Firebase, puis un doc `admins/{uid}` autorise l'accès.
 
-- `apps/admin/src/auth/AuthProvider.tsx` — contexte React, vérifie l'appartenance à `admins/` à chaque changement d'état auth.
-- `apps/admin/src/auth/LoginPage.tsx` — bouton Google sign-in, monté sur `/login`.
+- `apps/admin/src/auth/AuthProvider.tsx` — contexte React (`signInWithEmailAndPassword`), vérifie l'appartenance à `admins/` à chaque changement d'état auth.
+- `apps/admin/src/auth/LoginPage.tsx` — formulaire email + mot de passe, monté sur `/login`.
 - `apps/admin/src/auth/ProtectedRoute.tsx` — wrap toutes les autres routes admin, redirige vers `/login` si pas admin.
+
+**Bootstrap** : Firebase Console → Authentication → Sign-in method → activer **Email/Password**. Puis Authentication → Users → **Add user**. Copier l'UID généré → Firestore `admins/{uid}` = `{ email, addedAt, addedBy }`.
 
 ## Audit log
 
