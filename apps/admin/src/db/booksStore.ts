@@ -26,7 +26,7 @@ function bookRef(id: string) {
 }
 
 async function uploadBlob(path: string, blob: Blob): Promise<void> {
-  await uploadBytes(ref(storage, path), blob)
+  await uploadBytes(ref(storage, path), blob, { cacheControl: 'public, max-age=31536000, immutable' })
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {

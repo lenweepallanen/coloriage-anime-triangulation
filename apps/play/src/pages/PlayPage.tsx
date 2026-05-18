@@ -1,10 +1,10 @@
-import { useParams, Navigate } from 'react-router-dom'
-import { useProject } from '@shared/hooks/useProject'
+import { useParams } from 'react-router-dom'
+import { useProjectForPlay } from '@shared/hooks/useProjectForPlay'
 import ScanPage from '@shared/pages/ScanPage'
 
 export default function PlayPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { project, loading } = useProject(projectId!)
+  const { project, loading } = useProjectForPlay(projectId!)
 
   if (loading) return <div className="loading">Chargement…</div>
 
@@ -16,7 +16,7 @@ export default function PlayPage() {
     return <UnavailableMessage reason="not-published" />
   }
 
-  return <ScanPage />
+  return <ScanPage project={project} loading={false} />
 }
 
 function UnavailableMessage({ reason }: { reason: 'not-found' | 'not-published' }) {

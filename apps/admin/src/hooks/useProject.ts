@@ -2,11 +2,16 @@ import { useState, useEffect, useCallback } from 'react'
 import { getProject, updateProject, type UploadHint } from '../db/projectsStore'
 import type { Project } from '../types/project'
 
-export function useProject(projectId: string) {
+export function useProject(projectId: string | null | undefined) {
   const [project, setProject] = useState<Project | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!!projectId)
 
   useEffect(() => {
+    if (!projectId) {
+      setProject(null)
+      setLoading(false)
+      return
+    }
     let cancelled = false
     setLoading(true)
     getProject(projectId).then(p => {

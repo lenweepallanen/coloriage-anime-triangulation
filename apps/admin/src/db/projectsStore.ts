@@ -1,6 +1,6 @@
 import {
   doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc,
-  collection, query, where, orderBy
+  collection, query, where
 } from 'firebase/firestore'
 import {
   ref, uploadBytes, getDownloadURL, deleteObject
@@ -344,9 +344,11 @@ function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
   return fromTransition(scene.startTransition)
 }
 
+const STORAGE_CACHE_METADATA = { cacheControl: 'public, max-age=31536000, immutable' }
+
 async function uploadBlob(path: string, blob: Blob): Promise<void> {
   const storageRef = ref(storage, path)
-  await uploadBytes(storageRef, blob)
+  await uploadBytes(storageRef, blob, STORAGE_CACHE_METADATA)
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {
@@ -1928,4 +1930,244 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
 /** Télécharge uniquement la vignette d'un projet (pour le menu livre côté play). */
 export async function getProjectThumbnailBlob(projectId: string): Promise<Blob | null> {
   return downloadBlob(`projects/${projectId}/thumbnail`)
+}
+
+// ===================================================================
+// Play-optimized loaders
+// ===================================================================
+// Le pipeline play (apps/play) n'a besoin que des données de rendu finales :
+// - image projet (texture du mesh)
+// - per-animation : videoFramesMesh, walkBodyFrames, walkZoneFrames (+ smoothed)
+// - bodyZones, scene.restPoints, projectTriangulation (zones / triangles)
+// Tout le reste (vidéos sources, keyframes, sam2*, cotrackerFrames, Canny cache,
+// triangulation reference/masks/contours) ne sert qu'au pipeline d'édition admin.
+//
+// Loaders en deux phases : essential = bloquant (image + meshes), deferred =
+// arrière-plan (audio + vidéo bg + scene layers + speak sounds + anim audio).
+// ===================================================================
+
+async function loadAnimationJSONForPlay(
+  projectId: string,
+  animId: string,
+  meshDoc: MeshDoc,
+): Promise<Partial<ReturnType<typeof loadAnimationJSON> extends Promise<infer T> ? T : never>> {
+  const path = (file: string) => animStoragePath(projectId, animId, file)
+  const [videoFramesMesh, walkZoneFrames, walkBodyFrames, walkBodyFramesSmoothed, walkZoneFramesSmoothed] = await Promise.all([
+    meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(path('videoFramesMesh.json')) : null,
+    meshDoc.hasWalkZoneFrames ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFrames.json')) : null,
+    meshDoc.hasWalkBodyFrames ? downloadJSON<Point2D[][]>(path('walkBodyFrames.json')) : null,
+    meshDoc.hasWalkBodyFramesSmoothed ? downloadJSON<Point2D[][]>(path('walkBodyFramesSmoothed.json')) : null,
+    meshDoc.hasWalkZoneFramesSmoothed ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFramesSmoothed.json')) : null,
+  ])
+  return { videoFramesMesh, walkZoneFrames, walkBodyFrames, walkBodyFramesSmoothed, walkZoneFramesSmoothed }
+}
+
+/** Charge le minimum pour afficher la page scan : image projet + meshes finaux. */
+export async function loadProjectForPlayEssential(id: string): Promise<Project | undefined> {
+  const snap = await getDoc(projectRef(id))
+  if (!snap.exists()) return undefined
+  const data = snap.data() as Record<string, unknown>
+
+  if (isLegacyProjectDoc(data)) {
+    // Legacy : passe par fromLegacyDoc (déjà optimisé pour ce format simple).
+    return fromLegacyDoc(data as unknown as LegacyProjectDoc)
+  }
+
+  const projDoc = data as unknown as ProjectDoc
+
+  // Image projet : seule donnée Storage bloquante (texture).
+  const imageBlob = projDoc.hasImage ? await downloadBlob(`projects/${id}/originalImage`) : null
+
+  // Animations : meshes finaux uniquement (pas de vidéo source, pas de keyframes admin).
+  const animations: Animation[] = await Promise.all(
+    projDoc.animations.map(async animDoc => {
+      let mesh: MeshData | null = null
+      if (animDoc.mesh) {
+        const jsonData = await loadAnimationJSONForPlay(id, animDoc.id, animDoc.mesh as MeshDoc)
+        const base = meshShellFromDoc(animDoc.mesh as MeshDoc)
+        mesh = { ...base, ...jsonData }
+      }
+      return {
+        id: animDoc.id,
+        name: animDoc.name,
+        type: animDoc.type,
+        playbackMode: animDoc.playbackMode ?? 'oneshot',
+        createdAt: animDoc.createdAt,
+        videoBlob: null,            // Jamais nécessaire au play
+        mesh,
+        physicsCode: animDoc.physicsCode ?? null,
+        physicsDuration: animDoc.physicsDuration ?? null,
+        physicsOverlay: animDoc.physicsOverlay ?? false,
+        audioBlob: null,            // Différé
+        audioEnabled: animDoc.audioEnabled ?? false,
+      }
+    })
+  )
+
+  // Triangulation : on hydrate les données géométriques (déjà dans Firestore doc)
+  // mais on saute referenceImage / masksRLE / contours (admin only).
+  let projectTriangulation: ProjectTriangulation | null = null
+  if (projDoc.projectTriangulation) {
+    const triBase = projectTriangulationFromDoc(projDoc.projectTriangulation)
+    projectTriangulation = { ...triBase, referenceImageBlob: null, masksRLE: null, contours: null }
+  }
+
+  // Scene : on hydrate les méta mais on garde les blobs lourds (layers / sounds) pour la phase différée.
+  let scene: Scene | null = null
+  if (projDoc.scene) {
+    const speakSounds = projDoc.scene.speakSounds ?? []
+    const layerDocs = projDoc.scene.backgroundLayers ?? [
+      { hasImage: false, width: 0, height: 0, depthFactor: 0.3 },
+      { hasImage: false, width: 0, height: 0, depthFactor: 0.6 },
+      { hasImage: projDoc.scene.hasBackgroundImage ?? false, width: projDoc.scene.backgroundWidth ?? 0, height: projDoc.scene.backgroundHeight ?? 0, depthFactor: 1.0 },
+    ]
+    const backgroundLayers: SceneBackgroundLayer[] = layerDocs.map(l => ({
+      imageBlob: null, videoBlob: null, width: l.width, height: l.height, depthFactor: l.depthFactor,
+    }))
+    const docToTransition = (td: SceneTransitionDoc): import('../types/project').SceneTransition => ({
+      waypoints: td.waypoints ?? [],
+      segments: (td.segments ?? []).map(s => ({
+        duration: s.duration,
+        ...(s.animationId != null && { animationId: s.animationId }),
+        ...(s.sounds != null && s.sounds.length > 0 && { sounds: s.sounds.map(m => ({ id: m.id, name: m.name, blob: null })) }),
+      })),
+    })
+    scene = {
+      id: projDoc.scene.id,
+      name: projDoc.scene.name,
+      backgroundLayers,
+      characterScale: projDoc.scene.characterScale,
+      characterY: projDoc.scene.characterY,
+      restPoints: (projDoc.scene.restPoints ?? []).map(rp => ({
+        id: rp.id,
+        backgroundX: rp.backgroundX,
+        ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
+        randomAnimationIds: rp.randomAnimationIds ?? rp.availableAnimationIds,
+        ...(rp.randomAnimationSounds != null && {
+          randomAnimationSounds: rp.randomAnimationSounds.map(arr => arr.map(m => ({ id: m.id, name: m.name, blob: null }))),
+        }),
+        ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
+        ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
+        ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
+      })),
+      transitions: (projDoc.scene.transitions ?? []).map(docToTransition),
+      startMode: projDoc.scene.startMode ?? 'rest',
+      ...(projDoc.scene.startX != null && { startX: projDoc.scene.startX }),
+      ...(projDoc.scene.startTransition != null && { startTransition: docToTransition(projDoc.scene.startTransition) }),
+      speakSounds,
+      speakSoundBlobs: speakSounds.map(() => null),
+    }
+  }
+
+  return {
+    id: projDoc.id,
+    name: projDoc.name,
+    createdAt: projDoc.createdAt,
+    originalImageBlob: imageBlob,
+    backgroundVideoBlob: null,       // Différé
+    ambientSoundBlob: null,          // Différé
+    ambientSoundEnabled: projDoc.ambientSoundEnabled ?? false,
+    animations,
+    bodyZones: (projDoc.bodyZones ?? []).map((z: Record<string, unknown>) => ({
+      id: z.id as string,
+      label: z.label as string,
+      color: z.color as string,
+      triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
+    })),
+    markers: projDoc.markers,
+    scene,
+    projectTriangulation,
+    projectEyes: projDoc.projectEyes ?? null,
+    projectMouth: projDoc.projectMouth ?? null,
+    published: projDoc.published === true,
+    publishedAt: projDoc.publishedAt ?? null,
+    bookId: projDoc.bookId ?? null,
+    bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
+    thumbnailBlob: null,
+  }
+}
+
+/** Complète un Project chargé par essential avec les médias non-bloquants (audio + bg-video + scene assets). */
+export async function loadProjectForPlayDeferred(project: Project): Promise<Project> {
+  const id = project.id
+
+  const [backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
+    project.backgroundVideoBlob === null ? downloadBlob(`projects/${id}/backgroundVideo`).catch(() => null) : Promise.resolve(project.backgroundVideoBlob),
+    project.ambientSoundBlob === null ? downloadBlob(`projects/${id}/ambientSound`).catch(() => null) : Promise.resolve(project.ambientSoundBlob),
+  ])
+
+  // Per-animation audio (oneshot trigger sound)
+  const animationsWithAudio = await Promise.all(
+    project.animations.map(async anim => {
+      if (anim.audioBlob != null) return anim
+      const audio = await downloadBlob(animStoragePath(id, anim.id, 'audio')).catch(() => null)
+      return { ...anim, audioBlob: audio }
+    })
+  )
+
+  // Scene background layers + speak sounds + scene sounds
+  let scene = project.scene
+  if (scene) {
+    const layerBlobs = await Promise.all(
+      scene.backgroundLayers.map((l, i) =>
+        (l.imageBlob || l.videoBlob) ? Promise.resolve(l.imageBlob ?? l.videoBlob)
+          : downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`).catch(() => null)
+      )
+    )
+    const speakSoundBlobs = await Promise.all(
+      scene.speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`).catch(() => null))
+    )
+    // Collect sceneSounds IDs from restPoints + transitions, download in parallel.
+    const soundIds = new Set<string>()
+    for (const rp of scene.restPoints) for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) soundIds.add(s.id)
+    const collectFromTransition = (t?: import('../types/project').SceneTransition) => {
+      for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) soundIds.add(s.id)
+    }
+    for (const t of scene.transitions) collectFromTransition(t)
+    collectFromTransition(scene.startTransition)
+    const ids = [...soundIds]
+    const sceneSoundBlobs = await Promise.all(ids.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`).catch(() => null)))
+    const sceneSoundMap = new Map(ids.map((sid, i) => [sid, sceneSoundBlobs[i]]))
+
+    const hydrateSounds = (sounds: import('../types/project').SceneSound[] | undefined): import('../types/project').SceneSound[] =>
+      (sounds ?? []).map(s => ({ ...s, blob: sceneSoundMap.get(s.id) ?? s.blob ?? null }))
+
+    scene = {
+      ...scene,
+      backgroundLayers: scene.backgroundLayers.map((l, i) => ({
+        ...l,
+        imageBlob: l.imageBlob ?? (layerBlobs[i] ?? null),
+        videoBlob: l.videoBlob ?? null,
+      })),
+      restPoints: scene.restPoints.map(rp => ({
+        ...rp,
+        ...(rp.randomAnimationSounds != null && { randomAnimationSounds: rp.randomAnimationSounds.map(arr => hydrateSounds(arr)) }),
+      })),
+      transitions: scene.transitions.map(t => ({
+        ...t,
+        segments: t.segments.map(seg => ({
+          ...seg,
+          ...(seg.sounds != null && { sounds: hydrateSounds(seg.sounds) }),
+        })),
+      })),
+      ...(scene.startTransition != null && {
+        startTransition: {
+          ...scene.startTransition,
+          segments: scene.startTransition.segments.map(seg => ({
+            ...seg,
+            ...(seg.sounds != null && { sounds: hydrateSounds(seg.sounds) }),
+          })),
+        },
+      }),
+      speakSoundBlobs,
+    }
+  }
+
+  return {
+    ...project,
+    backgroundVideoBlob,
+    ambientSoundBlob,
+    animations: animationsWithAudio,
+    scene,
+  }
 }

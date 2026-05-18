@@ -12,9 +12,17 @@ import { requestLamaInpainting } from '../utils/lamaInpainting'
 import { renderIsolatedLimbDebug } from '../utils/hiddenFaceTexture'
 import type { Point2D, Project } from '../types/project'
 
-export default function ScanPage() {
+interface ScanPageProps {
+  /** Si fourni, court-circuite useProject (utilisé par play pour passer un projet light). */
+  project?: Project | null
+  loading?: boolean
+}
+
+export default function ScanPage({ project: projectProp, loading: loadingProp }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
-  const { project, loading } = useProject(projectId!)
+  const fallback = useProject(projectProp === undefined ? projectId : null)
+  const project = projectProp !== undefined ? projectProp : fallback.project
+  const loading = loadingProp !== undefined ? loadingProp : fallback.loading
 
   if (loading) return <div className="loading">Chargement...</div>
   if (!project) return <Navigate to="/" replace />
