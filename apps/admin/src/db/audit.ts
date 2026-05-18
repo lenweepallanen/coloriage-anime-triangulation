@@ -7,7 +7,13 @@ export type AuditAction =
   | 'project.duplicate'
   | 'project.publish'
   | 'project.unpublish'
+  | 'project.move'
   | 'animation.delete'
+  | 'book.create'
+  | 'book.update'
+  | 'book.delete'
+  | 'book.publish'
+  | 'book.unpublish'
 
 /**
  * Log an admin write to Firestore. Best-effort : si l'écriture échoue (offline,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, Navigate } from 'react-router-dom'
+import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
+import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
 import CornerAdjustment from '../components/scan/CornerAdjustment'
@@ -41,6 +42,14 @@ export default function ScanPage() {
 }
 
 function ScanFlow({ project }: { project: Project }) {
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const bookId = searchParams.get('book')
+  const [paused, setPaused] = useState(false)
+  function handleBack() {
+    if (bookId) navigate(`/livre/${bookId}`)
+    else navigate(-1)
+  }
   type ScanStage = 'camera' | 'adjust' | 'processing' | 'debug' | 'preview' | 'animation'
   type LamaStatus = 'idle' | 'generating-mask' | 'warmup' | 'inpainting' | 'done' | 'error' | 'not-needed'
 
@@ -62,6 +71,13 @@ function ScanFlow({ project }: { project: Project }) {
       setStage('debug')
     }
   }, [processor.rectifiedCanvas, processor.processing, stage])
+
+  // Marque le coloriage comme scanné dès qu'on entre dans l'animation
+  useEffect(() => {
+    if (stage === 'animation') {
+      try { localStorage.setItem(`scanned:${project.id}`, '1') } catch { /* ignore */ }
+    }
+  }, [stage, project.id])
 
   // Trigger LaMa inpainting after rectified canvas is ready
   useEffect(() => {
@@ -370,6 +386,19 @@ function ScanFlow({ project }: { project: Project }) {
             </button>
           </div>
         </div>
+      )}
+
+      {stage === 'animation' && (
+        <>
+          <SettingsButton onClick={() => setPaused(true)} />
+          {paused && (
+            <PauseOverlay
+              onContinue={() => setPaused(false)}
+              onBack={handleBack}
+              backLabel={bookId ? 'Revenir aux coloriages' : 'Quitter'}
+            />
+          )}
+        </>
       )}
 
       {stage === 'animation' && processor.rectifiedCanvas && (

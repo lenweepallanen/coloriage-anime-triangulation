@@ -11,6 +11,7 @@ import TriangulationSection from './pages/admin/TriangulationSection'
 import EyesSection from './pages/admin/EyesSection'
 import MouthSection from './pages/admin/MouthSection'
 import ScanPage from './pages/ScanPage'
+import BookPage from './pages/BookPage'
 import LoginPage from './auth/LoginPage'
 import ProtectedRoute from './auth/ProtectedRoute'
 
@@ -31,6 +32,7 @@ function App() {
             <Route path="eyes" element={<EyesSection />} />
             <Route path="mouth" element={<MouthSection />} />
           </Route>
+          <Route path="/books/:bookId" element={<BookPage />} />
           <Route path="/scan/:projectId" element={<ScanPage />} />
         </Route>
       </Route>

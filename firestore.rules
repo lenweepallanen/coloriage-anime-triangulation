@@ -24,6 +24,20 @@ service cloud.firestore {
       }
     }
 
+    // Livres : lecture publique si publié, sinon admin. Écriture admin only.
+    match /books/{bookId} {
+      allow read: if isAdmin()
+        || (resource.data.published == true);
+      allow create: if isAdmin()
+        && request.resource.data.published == false;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+
+      match /{document=**} {
+        allow read, write: if isAdmin();
+      }
+    }
+
     // Liste d'admins : gérée à la main dans la console Firebase.
     match /admins/{uid} {
       allow read: if isAdmin();

@@ -1,6 +1,6 @@
 import {
-  doc, setDoc, getDoc, getDocs, deleteDoc,
-  collection, query, where
+  doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc,
+  collection, query, where, orderBy
 } from 'firebase/firestore'
 import {
   ref, uploadBytes, getDownloadURL, deleteObject
@@ -282,6 +282,9 @@ interface ProjectDoc {
   projectMouth?: Project['projectMouth']
   published?: boolean
   publishedAt?: number | null
+  bookId?: string | null
+  bookOrder?: number
+  hasThumbnail?: boolean
 }
 
 // Legacy project doc (v4 format — single mesh + video at root)
@@ -791,6 +794,9 @@ function toDoc(project: Project): ProjectDoc {
     ...(project.projectMouth != null && { projectMouth: project.projectMouth }),
     published: project.published === true,
     publishedAt: project.publishedAt ?? null,
+    bookId: project.bookId ?? null,
+    bookOrder: project.bookOrder ?? 0,
+    hasThumbnail: project.thumbnailBlob != null,
   }
 }
 
@@ -1036,10 +1042,11 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   const projDoc = data as unknown as ProjectDoc
   const id = projDoc.id
 
-  const [imageBlob, backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
+  const [imageBlob, backgroundVideoBlob, ambientSoundBlob, thumbnailBlob] = await Promise.all([
     projDoc.hasImage ? downloadBlob(`projects/${id}/originalImage`) : Promise.resolve(null),
     projDoc.hasBackgroundVideo ? downloadBlob(`projects/${id}/backgroundVideo`) : Promise.resolve(null),
     (projDoc as ProjectDoc).hasAmbientSound ? downloadBlob(`projects/${id}/ambientSound`) : Promise.resolve(null),
+    projDoc.hasThumbnail ? downloadBlob(`projects/${id}/thumbnail`) : Promise.resolve(null),
   ])
 
   // Download scene background layer blobs
@@ -1211,6 +1218,9 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     projectMouth: projDoc.projectMouth ?? null,
     published: projDoc.published === true,
     publishedAt: projDoc.publishedAt ?? null,
+    bookId: projDoc.bookId ?? null,
+    bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
+    thumbnailBlob: thumbnailBlob,
   }
 }
 
@@ -1268,6 +1278,9 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     projectMouth: null,
     published: false,
     publishedAt: null,
+    bookId: null,
+    bookOrder: data.createdAt,
+    thumbnailBlob: null,
   }
 }
 
@@ -1335,6 +1348,9 @@ export async function createProject(name: string): Promise<Project> {
     projectMouth: null,
     published: false,
     publishedAt: null,
+    bookId: null,
+    bookOrder: Date.now(),
+    thumbnailBlob: null,
   }
   await setDoc(projectRef(project.id), toDoc(project))
   console.log('[Firebase] Project created:', project.id)
@@ -1388,6 +1404,9 @@ export async function getAllProjects(): Promise<Project[]> {
         projectMouth: null,
         published: false,
         publishedAt: null,
+        bookId: null,
+        bookOrder: legacy.createdAt,
+        thumbnailBlob: null,
       }
     }
 
@@ -1426,6 +1445,9 @@ export async function getAllProjects(): Promise<Project[]> {
       projectMouth: projDoc.projectMouth ?? null,
       published: projDoc.published === true,
       publishedAt: projDoc.publishedAt ?? null,
+      bookId: projDoc.bookId ?? null,
+      bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
+      thumbnailBlob: null,
     }
   })
 }
@@ -1446,7 +1468,7 @@ export type AnimationUploadField =
   | 'cotrackerFrames'
 
 export type UploadHint =
-  | 'image' | 'backgroundVideo' | 'ambientSound'
+  | 'image' | 'backgroundVideo' | 'ambientSound' | 'thumbnail'
   | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
   | 'triangulationReferenceImage' | 'triangulationMasks' | 'triangulationContours'
   | { animationId: string; field: AnimationUploadField }
@@ -1456,7 +1478,7 @@ export type UploadHint =
   | { deleteSceneSoundId: string }
 
 /** Flat upload hint used by step components (legacy-compatible strings) */
-export type StepUploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | AnimationUploadField
+export type StepUploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | 'thumbnail' | AnimationUploadField
 
 export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
   const id = project.id
@@ -1482,6 +1504,12 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       uploads.push(
         uploadBlob(`projects/${id}/backgroundVideo`, project.backgroundVideoBlob)
           .then(() => console.log('[Storage] Background video uploaded'))
+      )
+    } else if (hint === 'thumbnail' && project.thumbnailBlob) {
+      console.log('[Storage] Uploading thumbnail for:', id)
+      uploads.push(
+        uploadBlob(`projects/${id}/thumbnail`, project.thumbnailBlob)
+          .then(() => console.log('[Storage] Thumbnail uploaded'))
       )
     } else if (hint === 'ambientSound' && project.ambientSoundBlob) {
       console.log('[Storage] Uploading ambient sound for:', id)
@@ -1672,6 +1700,7 @@ export async function deleteProject(id: string): Promise<void> {
   // Delete project-level storage files
   const projectFiles = [
     `projects/${id}/originalImage`,
+    `projects/${id}/thumbnail`,
     `projects/${id}/backgroundVideo`,
     `projects/${id}/ambientSound`,
     `projects/${id}/sceneBackground`,
@@ -1761,7 +1790,13 @@ const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'sam2SmoothedAnchorFrames', 'sam2SmoothedSubdivisionFrames', 'sam2SmoothedContourOriginFrames',
 ]
 
-export async function duplicateProject(sourceId: string): Promise<Project> {
+export interface DuplicateProjectOverrides {
+  name?: string
+  bookId?: string | null
+  bookOrder?: number
+}
+
+export async function duplicateProject(sourceId: string, overrides?: DuplicateProjectOverrides): Promise<Project> {
   const source = await getProject(sourceId)
   if (!source) throw new Error('Project not found')
 
@@ -1775,18 +1810,23 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   const duplicate: Project = {
     ...source,
     id: newId,
-    name: `${source.name} (copie)`,
+    name: overrides?.name ?? `${source.name} (copie)`,
     createdAt: Date.now(),
     animations: source.animations.map(a => ({
       ...a,
       id: animIdMap.get(a.id)!,
       createdAt: Date.now(),
     })),
+    bookId: overrides?.bookId !== undefined ? overrides.bookId : source.bookId,
+    bookOrder: overrides?.bookOrder !== undefined ? overrides.bookOrder : Date.now(),
+    published: false,
+    publishedAt: null,
   }
 
   // Build upload hints for all blobs
   const hints: UploadHint[] = []
   if (duplicate.originalImageBlob) hints.push('image')
+  if (duplicate.thumbnailBlob) hints.push('thumbnail')
   if (duplicate.backgroundVideoBlob) hints.push('backgroundVideo')
   if (duplicate.ambientSoundBlob) hints.push('ambientSound')
   if (duplicate.projectTriangulation?.referenceImageBlob) hints.push('triangulationReferenceImage')
@@ -1823,4 +1863,69 @@ export async function duplicateProject(sourceId: string): Promise<Project> {
   console.log(`[Firebase] Project duplicated: ${sourceId} -> ${newId}`)
   await logAudit('project.duplicate', newId, { sourceId })
   return duplicate
+}
+
+/** Met à jour le rattachement livre d'un projet (Firestore minimal, sans toucher les blobs). */
+export async function setProjectBook(projectId: string, bookId: string | null, bookOrder?: number): Promise<void> {
+  await updateDoc(projectRef(projectId), {
+    bookId,
+    bookOrder: bookOrder ?? Date.now(),
+  })
+  await logAudit('project.move', projectId, { bookId })
+}
+
+/** Liste les projets rattachés à un livre, triés par bookOrder asc. Métadonnées only (pas de blobs).
+ *  Si `publishedOnly` est true, ne retourne que les projets publiés (requis pour la lecture anonyme côté play). */
+export async function getProjectsByBook(bookId: string, publishedOnly = false): Promise<Project[]> {
+  const constraints = [where('bookId', '==', bookId)]
+  if (publishedOnly) constraints.push(where('published', '==', true))
+  const q = query(projectsCol(), ...constraints)
+  const snap = await getDocs(q)
+  const list = snap.docs.map(d => {
+    const projDoc = d.data() as unknown as ProjectDoc
+    return {
+      id: projDoc.id,
+      name: projDoc.name,
+      createdAt: projDoc.createdAt,
+      originalImageBlob: null,
+      backgroundVideoBlob: null,
+      ambientSoundBlob: null,
+      ambientSoundEnabled: projDoc.ambientSoundEnabled ?? false,
+      animations: projDoc.animations.map(animDoc => ({
+        id: animDoc.id,
+        name: animDoc.name,
+        type: animDoc.type,
+        createdAt: animDoc.createdAt,
+        videoBlob: null,
+        mesh: animDoc.mesh ? meshShellFromDoc(animDoc.mesh as MeshDoc) : null,
+        physicsCode: animDoc.physicsCode ?? null,
+        physicsDuration: animDoc.physicsDuration ?? null,
+        physicsOverlay: animDoc.physicsOverlay ?? false,
+        audioBlob: null,
+        audioEnabled: animDoc.audioEnabled ?? false,
+      })),
+      bodyZones: (projDoc.bodyZones ?? []).map((z: Record<string, unknown>) => ({
+        id: z.id as string,
+        label: z.label as string,
+        color: z.color as string,
+        triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
+      })),
+      markers: projDoc.markers,
+      scene: null,
+      projectTriangulation: null,
+      projectEyes: projDoc.projectEyes ?? null,
+      projectMouth: projDoc.projectMouth ?? null,
+      published: projDoc.published === true,
+      publishedAt: projDoc.publishedAt ?? null,
+      bookId: projDoc.bookId ?? null,
+      bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
+      thumbnailBlob: null,
+    }
+  })
+  return list.sort((a, b) => (a.bookOrder ?? 0) - (b.bookOrder ?? 0))
+}
+
+/** Télécharge uniquement la vignette d'un projet (pour le menu livre côté play). */
+export async function getProjectThumbnailBlob(projectId: string): Promise<Blob | null> {
+  return downloadBlob(`projects/${projectId}/thumbnail`)
 }

@@ -18,6 +18,12 @@ service firebase.storage {
       allow write: if request.auth != null;
     }
 
+    // Assets livre (cover) : lecture publique, écriture user authentifié.
+    match /books/{bookId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
     // Scans : créés sans auth (utilisateur final scanne son coloriage).
     match /scans/{scanId}/{allPaths=**} {
       allow read: if true;

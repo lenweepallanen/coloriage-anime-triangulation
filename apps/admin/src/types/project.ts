@@ -769,6 +769,23 @@ export interface Project {
   published: boolean;
   /** Timestamp de la première publication (ou re-publication). null tant que jamais publié. */
   publishedAt: number | null;
+  /** Livre auquel ce projet est rattaché (null = non rangé). */
+  bookId: string | null;
+  /** Position dans le livre (asc). Initialisé à Date.now() lors du rattachement. */
+  bookOrder: number;
+  /** Vignette affichée dans le menu du livre côté play. */
+  thumbnailBlob: Blob | null;
+}
+
+export interface Book {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** Image de couverture optionnelle (affichage admin). */
+  coverImageBlob: Blob | null;
+  /** Si true, le menu livre est accessible publiquement (play.<domaine>/livre/{id}). */
+  published: boolean;
+  publishedAt: number | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

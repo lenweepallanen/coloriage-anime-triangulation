@@ -9,6 +9,7 @@ interface Props {
 
 export default function ProjectImportSection({ project, onSave }: Props) {
   const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null)
   const [bgVideoUrl, setBgVideoUrl] = useState<string | null>(null)
   const [ambientUrl, setAmbientUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -22,6 +23,16 @@ export default function ProjectImportSection({ project, onSave }: Props) {
       setImageUrl(null)
     }
   }, [project.originalImageBlob])
+
+  useEffect(() => {
+    if (project.thumbnailBlob) {
+      const url = URL.createObjectURL(project.thumbnailBlob)
+      setThumbUrl(url)
+      return () => URL.revokeObjectURL(url)
+    } else {
+      setThumbUrl(null)
+    }
+  }, [project.thumbnailBlob])
 
   useEffect(() => {
     if (project.backgroundVideoBlob) {
@@ -52,6 +63,19 @@ export default function ProjectImportSection({ project, onSave }: Props) {
     } catch (err) {
       console.error('Failed to save image:', err)
       alert('Erreur lors de la sauvegarde de l\'image : ' + (err instanceof Error ? err.message : err))
+    }
+    setSaving(false)
+  }
+
+  async function handleThumbChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setSaving(true)
+    try {
+      await onSave({ ...project, thumbnailBlob: file }, ['thumbnail'])
+    } catch (err) {
+      console.error('Failed to save thumbnail:', err)
+      alert('Erreur lors de la sauvegarde de la vignette : ' + (err instanceof Error ? err.message : err))
     }
     setSaving(false)
   }
@@ -123,6 +147,24 @@ export default function ProjectImportSection({ project, onSave }: Props) {
           )}
           {!imageUrl && (
             <div className="project-import-empty">Aucune image</div>
+          )}
+        </div>
+
+        <div className="project-import-slot">
+          <label className="project-import-slot-label">Vignette (menu livre) <span className="project-import-optional">(optionnel)</span></label>
+          <input
+            type="file"
+            accept="image/png,image/jpeg"
+            onChange={handleThumbChange}
+            disabled={saving}
+          />
+          {thumbUrl && (
+            <div className="preview">
+              <img src={thumbUrl} alt="Vignette" style={{ maxWidth: '100%', maxHeight: 160 }} />
+            </div>
+          )}
+          {!thumbUrl && (
+            <div className="project-import-empty">Aucune vignette</div>
           )}
         </div>
 
