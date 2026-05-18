@@ -4,7 +4,7 @@ import ScanPage from '@shared/pages/ScanPage'
 
 export default function PlayPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { project, loading } = useProjectForPlay(projectId!)
+  const { project, loading, deferredLoaded } = useProjectForPlay(projectId!)
 
   if (loading) return <div className="loading">Chargement…</div>
 
@@ -16,7 +16,7 @@ export default function PlayPage() {
     return <UnavailableMessage reason="not-published" />
   }
 
-  return <ScanPage project={project} loading={false} />
+  return <ScanPage project={project} loading={false} deferredLoaded={deferredLoaded} />
 }
 
 function UnavailableMessage({ reason }: { reason: 'not-found' | 'not-published' }) {

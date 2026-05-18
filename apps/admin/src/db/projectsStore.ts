@@ -1962,47 +1962,46 @@ async function loadAnimationJSONForPlay(
   return { videoFramesMesh, walkZoneFrames, walkBodyFrames, walkBodyFramesSmoothed, walkZoneFramesSmoothed }
 }
 
-/** Charge le minimum pour afficher la page scan : image projet + meshes finaux. */
+/** Charge UNIQUEMENT le doc Firestore (métadonnées, mesh topology, markers,
+ *  zones, scene config, projectTriangulation géométrie). Pas un seul fetch
+ *  Storage : ~50 ms. Suffit pour valider le projet et démarrer l'UI scan.
+ *  Tous les blobs (image, vidéos, audio, JSON videoFramesMesh, etc.) sont
+ *  chargés ensuite par loadProjectForPlayDeferred en arrière-plan pendant
+ *  que l'utilisateur prend sa photo. */
 export async function loadProjectForPlayEssential(id: string): Promise<Project | undefined> {
   const snap = await getDoc(projectRef(id))
   if (!snap.exists()) return undefined
   const data = snap.data() as Record<string, unknown>
 
   if (isLegacyProjectDoc(data)) {
-    // Legacy : passe par fromLegacyDoc (déjà optimisé pour ce format simple).
     return fromLegacyDoc(data as unknown as LegacyProjectDoc)
   }
 
   const projDoc = data as unknown as ProjectDoc
 
-  // Image projet : seule donnée Storage bloquante (texture).
-  const imageBlob = projDoc.hasImage ? await downloadBlob(`projects/${id}/originalImage`) : null
-
-  // Animations : meshes finaux uniquement (pas de vidéo source, pas de keyframes admin).
-  const animations: Animation[] = await Promise.all(
-    projDoc.animations.map(async animDoc => {
-      let mesh: MeshData | null = null
-      if (animDoc.mesh) {
-        const jsonData = await loadAnimationJSONForPlay(id, animDoc.id, animDoc.mesh as MeshDoc)
-        const base = meshShellFromDoc(animDoc.mesh as MeshDoc)
-        mesh = { ...base, ...jsonData }
-      }
-      return {
-        id: animDoc.id,
-        name: animDoc.name,
-        type: animDoc.type,
-        playbackMode: animDoc.playbackMode ?? 'oneshot',
-        createdAt: animDoc.createdAt,
-        videoBlob: null,            // Jamais nécessaire au play
-        mesh,
-        physicsCode: animDoc.physicsCode ?? null,
-        physicsDuration: animDoc.physicsDuration ?? null,
-        physicsOverlay: animDoc.physicsOverlay ?? false,
-        audioBlob: null,            // Différé
-        audioEnabled: animDoc.audioEnabled ?? false,
-      }
-    })
-  )
+  // Pas de fetch Storage en phase 1 → image, audio, JSON tous chargés en phase 2.
+  const animations: Animation[] = projDoc.animations.map(animDoc => {
+    let mesh: MeshData | null = null
+    if (animDoc.mesh) {
+      // Topologie mesh hydratée depuis le Firestore doc (triangles, anchors, internalBarycentrics)
+      // mais sans les gros JSON (videoFramesMesh, walk*Frames) — phase 2.
+      mesh = meshShellFromDoc(animDoc.mesh as MeshDoc)
+    }
+    return {
+      id: animDoc.id,
+      name: animDoc.name,
+      type: animDoc.type,
+      playbackMode: animDoc.playbackMode ?? 'oneshot',
+      createdAt: animDoc.createdAt,
+      videoBlob: null,
+      mesh,
+      physicsCode: animDoc.physicsCode ?? null,
+      physicsDuration: animDoc.physicsDuration ?? null,
+      physicsOverlay: animDoc.physicsOverlay ?? false,
+      audioBlob: null,
+      audioEnabled: animDoc.audioEnabled ?? false,
+    }
+  })
 
   // Triangulation : on hydrate les données géométriques (déjà dans Firestore doc)
   // mais on saute referenceImage / masksRLE / contours (admin only).
@@ -2063,7 +2062,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
     id: projDoc.id,
     name: projDoc.name,
     createdAt: projDoc.createdAt,
-    originalImageBlob: imageBlob,
+    originalImageBlob: null,         // Différé (chargé en phase 2)
     backgroundVideoBlob: null,       // Différé
     ambientSoundBlob: null,          // Différé
     ambientSoundEnabled: projDoc.ambientSoundEnabled ?? false,
@@ -2087,21 +2086,36 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
   }
 }
 
-/** Complète un Project chargé par essential avec les médias non-bloquants (audio + bg-video + scene assets). */
+/** Complète un Project chargé par essential avec tous les blobs Storage :
+ *  image, vidéo de fond, audio, JSON videoFramesMesh/walk*Frames par animation,
+ *  per-animation audio, calques de scène, speak sounds, scene sounds.
+ *  Tout est téléchargé en parallèle. */
 export async function loadProjectForPlayDeferred(project: Project): Promise<Project> {
   const id = project.id
 
-  const [backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
+  // Snapshot Firestore pour récupérer les flags hasXxx des meshes (sans refetcher tout).
+  const snap = await getDoc(projectRef(id))
+  const projDoc = snap.data() as unknown as ProjectDoc | undefined
+
+  const [originalImageBlob, backgroundVideoBlob, ambientSoundBlob] = await Promise.all([
+    project.originalImageBlob === null ? downloadBlob(`projects/${id}/originalImage`).catch(() => null) : Promise.resolve(project.originalImageBlob),
     project.backgroundVideoBlob === null ? downloadBlob(`projects/${id}/backgroundVideo`).catch(() => null) : Promise.resolve(project.backgroundVideoBlob),
     project.ambientSoundBlob === null ? downloadBlob(`projects/${id}/ambientSound`).catch(() => null) : Promise.resolve(project.ambientSoundBlob),
   ])
 
-  // Per-animation audio (oneshot trigger sound)
+  // Per-animation : audio + JSON videoFramesMesh / walk*Frames (en parallèle).
   const animationsWithAudio = await Promise.all(
     project.animations.map(async anim => {
-      if (anim.audioBlob != null) return anim
-      const audio = await downloadBlob(animStoragePath(id, anim.id, 'audio')).catch(() => null)
-      return { ...anim, audioBlob: audio }
+      const animDoc = projDoc?.animations.find(a => a.id === anim.id)
+      const meshDoc = animDoc?.mesh as MeshDoc | null | undefined
+      const [audio, meshJson] = await Promise.all([
+        anim.audioBlob != null
+          ? Promise.resolve(anim.audioBlob)
+          : downloadBlob(animStoragePath(id, anim.id, 'audio')).catch(() => null),
+        meshDoc ? loadAnimationJSONForPlay(id, anim.id, meshDoc) : Promise.resolve({}),
+      ])
+      const mesh: MeshData | null = anim.mesh ? { ...anim.mesh, ...(meshJson as Partial<MeshData>) } : null
+      return { ...anim, audioBlob: audio, mesh }
     })
   )
 
@@ -2165,6 +2179,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
 
   return {
     ...project,
+    originalImageBlob,
     backgroundVideoBlob,
     ambientSoundBlob,
     animations: animationsWithAudio,

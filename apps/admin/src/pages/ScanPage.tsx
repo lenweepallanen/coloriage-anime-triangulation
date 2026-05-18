@@ -16,9 +16,12 @@ interface ScanPageProps {
   /** Si fourni, court-circuite useProject (utilisé par play pour passer un projet light). */
   project?: Project | null
   loading?: boolean
+  /** Si false, indique que des blobs (image, JSON) sont encore en train de charger en arrière-plan.
+   *  Quand true, on peut afficher l'animation. Tant que false, l'UI scan tolère les blobs null. */
+  deferredLoaded?: boolean
 }
 
-export default function ScanPage({ project: projectProp, loading: loadingProp }: ScanPageProps = {}) {
+export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
   const fallback = useProject(projectProp === undefined ? projectId : null)
   const project = projectProp !== undefined ? projectProp : fallback.project
@@ -27,18 +30,21 @@ export default function ScanPage({ project: projectProp, loading: loadingProp }:
   if (loading) return <div className="loading">Chargement...</div>
   if (!project) return <Navigate to="/" replace />
 
-  // Géométrie disponible : soit pipeline legacy (mesh.triangles), soit pipeline autonome
-  // (projectTriangulation step3 validée, partagée par les anims members-bones-v3/cotracker-bones).
+  // Géométrie disponible : soit pipeline legacy (mesh.triangles), soit pipeline autonome.
   const hasLegacyMesh = project.animations.some(a => a.mesh != null && (a.mesh.triangles?.length ?? 0) > 0)
   const hasProjectTri = project.projectTriangulation?.step3Validated === true
   const hasMesh = hasLegacyMesh || hasProjectTri
 
-  if (!project.originalImageBlob || !hasMesh) {
+  // En mode play avec deferred-loading, ne pas afficher l'erreur "aucune image" tant que
+  // la phase 2 n'est pas finie (l'image arrive en arrière-plan).
+  const skipImageCheck = deferredLoaded === false
+
+  if ((!skipImageCheck && !project.originalImageBlob) || !hasMesh) {
     return (
       <div className="scan-page">
         <h2>{project.name} — Mode Coloriage</h2>
         <div className="placeholder">
-          {!project.originalImageBlob && 'Aucune image importée. '}
+          {!skipImageCheck && !project.originalImageBlob && 'Aucune image importée. '}
           {!hasMesh && 'Aucun mesh défini. '}
           Configurez le projet dans le mode Admin d'abord.
         </div>
@@ -46,10 +52,10 @@ export default function ScanPage({ project: projectProp, loading: loadingProp }:
     )
   }
 
-  return <ScanFlow project={project} />
+  return <ScanFlow project={project} deferredLoaded={deferredLoaded} />
 }
 
-function ScanFlow({ project }: { project: Project }) {
+function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoaded?: boolean }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
@@ -385,9 +391,13 @@ function ScanFlow({ project }: { project: Project }) {
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button
               onClick={() => setStage('animation')}
-              disabled={lamaStatus === 'generating-mask' || lamaStatus === 'warmup' || lamaStatus === 'inpainting'}
+              disabled={lamaStatus === 'generating-mask' || lamaStatus === 'warmup' || lamaStatus === 'inpainting' || deferredLoaded === false}
             >
-              {lamaStatus === 'warmup' || lamaStatus === 'inpainting' ? 'Inpainting en cours...' : 'Lancer l\'animation'}
+              {deferredLoaded === false
+                ? 'Chargement des animations...'
+                : lamaStatus === 'warmup' || lamaStatus === 'inpainting'
+                  ? 'Inpainting en cours...'
+                  : 'Lancer l\'animation'}
             </button>
             <button onClick={handleRetake}>
               Rescanner
