@@ -68,6 +68,8 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     () => project.projectTriangulation?.cannyParams ?? DEFAULT_CANNY
   )
   const [inflate, setInflate] = useState<number>(12)
+  const [zoneInflates, setZoneInflates] = useState<Record<string, number>>({})
+  const inflateFor = useCallback((zoneId: string) => zoneInflates[zoneId] ?? inflate, [zoneInflates, inflate])
 
   // ---- Canny interactive state ----
   const [legSeeds, setLegSeeds] = useState<Record<string, Point2D[]>>({})
@@ -141,40 +143,41 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     off.width = w; off.height = h
     off.getContext('2d')!.drawImage(img, 0, 0)
     const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
-    const seeds = memberZoneIds
-      .filter(id => (seedsSnapshot[id]?.length ?? 0) > 0)
-      .map(id => ({ id, waypoints: seedsSnapshot[id].map(p => ({ x: p.x, y: p.y })) }))
+    const activeZoneIds = memberZoneIds.filter(id => (seedsSnapshot[id]?.length ?? 0) > 0)
     setCannyComputing(true)
     try {
-      const result = await flowCannySegmentZones(
-        imgData, seeds,
-        cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
-        inflate,
-      )
       const nextLoops: Record<string, Point2D[]> = {}
-      for (const legId of memberZoneIds) {
-        const c = result.zoneContours[legId]
-        if (c && c.length >= 3) nextLoops[legId] = c
+      let silhouette: Point2D[] | null = null
+      for (const zoneId of activeZoneIds) {
+        const result = await flowCannySegmentZones(
+          imgData,
+          [{ id: zoneId, waypoints: seedsSnapshot[zoneId].map(p => ({ x: p.x, y: p.y })) }],
+          cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
+          inflateFor(zoneId),
+        )
+        const c = result.zoneContours[zoneId]
+        if (c && c.length >= 3) nextLoops[zoneId] = c
+        if (!silhouette && result.silhouette) silhouette = result.silhouette
       }
       setLegLoops(nextLoops)
 
-      if (result.silhouette && result.silhouette.length >= 3) {
+      if (silhouette && silhouette.length >= 3) {
         const legContoursForBridge = memberZoneIds
           .map(id => nextLoops[id])
           .filter((c): c is Point2D[] => c != null && c.length >= 3)
         if (legContoursForBridge.length === 0) {
-          setBodySilhouette(result.silhouette)
+          setBodySilhouette(silhouette)
         } else {
           try {
-            const bodyRLE = rasterizePolygonToMaskRLE(result.silhouette, w, h)
+            const bodyRLE = rasterizePolygonToMaskRLE(silhouette, w, h)
             const legRLEs = legContoursForBridge.map(c => rasterizePolygonToMaskRLE(c, w, h))
             const bodyMinusLegs = decodeRLEMinusRLEs(bodyRLE, legRLEs)
             const rawBody = await flowMaskToContour(bodyMinusLegs, w, h)
             const bridged = bridgeContourAtLegs(rawBody, legContoursForBridge, bridgeThreshold)
-            setBodySilhouette(bridged.length >= 3 ? bridged : result.silhouette)
+            setBodySilhouette(bridged.length >= 3 ? bridged : silhouette)
           } catch (err) {
             console.error('Body subtract/bridge failed:', err)
-            setBodySilhouette(result.silhouette)
+            setBodySilhouette(silhouette)
           }
         }
       }
@@ -184,7 +187,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       setCannyComputing(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, inflate, bridgeThreshold, memberZoneIds.join('|')])
+  }, [cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, inflateFor, bridgeThreshold, memberZoneIds.join('|')])
 
   const scheduleCannyRecompute = useCallback((seedsSnapshot: Record<string, Point2D[]>) => {
     if (cannyComputeTimerRef.current) clearTimeout(cannyComputeTimerRef.current)
@@ -195,7 +198,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     if (!imageReady) return
     scheduleCannyRecompute(legSeeds)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageReady, cannyParamsKey, inflate, bridgeThreshold])
+  }, [imageReady, cannyParamsKey, inflate, JSON.stringify(zoneInflates), bridgeThreshold])
 
   // ---------- Draw loop ----------
   useEffect(() => {
@@ -631,14 +634,37 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
           </select>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}
-          title="Dilatation appliquée à chaque région cliquée. Engulfe le trait noir et, si deux dilatations se touchent, elles fusionnent automatiquement.">
-          Inflate:
+          title="Dilatation globale appliquée par défaut à chaque zone. Engulfe le trait noir et, si deux dilatations se touchent, elles fusionnent automatiquement.">
+          Inflate global:
           <input type="range" min={0} max={80} step={1}
             value={inflate}
             onChange={e => setInflate(parseInt(e.target.value))}
             style={{ width: 100 }} />
           <span style={{ minWidth: 28, textAlign: 'center' }}>{inflate}</span>
         </label>
+        {(() => {
+          const activeZone = zones.find(z => z.id === activeZoneId)
+          if (!activeZone || activeZone.id === 'body') return null
+          const val = zoneInflates[activeZoneId] ?? inflate
+          return (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}
+              title={`Inflate spécifique à la zone "${activeZone.label}". Override de l'inflate global.`}>
+              <span style={{ color: activeZone.color, fontWeight: 'bold' }}>Inflate {activeZone.label} :</span>
+              <input type="range" min={0} max={80} step={1}
+                value={val}
+                onChange={e => setZoneInflates(prev => ({ ...prev, [activeZoneId]: parseInt(e.target.value) }))}
+                style={{ width: 100 }} />
+              <span style={{ minWidth: 28, textAlign: 'center' }}>{val}</span>
+              {zoneInflates[activeZoneId] != null && (
+                <button
+                  className="btn-ghost btn-sm"
+                  onClick={() => setZoneInflates(prev => { const n = { ...prev }; delete n[activeZoneId]; return n })}
+                  title="Réinitialiser à l'inflate global"
+                >↺</button>
+              )}
+            </label>
+          )
+        })()}
       </div>
 
       {/* Smoothing controls */}
