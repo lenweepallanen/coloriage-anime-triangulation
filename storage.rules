@@ -3,21 +3,19 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    function isAdmin() {
-      return request.auth != null
-        && firestore.exists(
-          /databases/(default)/documents/admins/$(request.auth.uid)
-        );
-    }
+    // Les Storage Rules ne peuvent pas interroger une base Firestore nommée
+    // (limitation Firebase : `firestore.exists()` ne supporte que `(default)`,
+    // pas notre base `coloriages`). On se contente donc d'exiger un user
+    // authentifié pour les writes sur les assets projet. Le vrai contrôle
+    // d'accès admin se fait côté Firestore (qui gate les docs `projects/{id}`),
+    // donc un non-admin connecté ne peut pas créer/modifier un projet via
+    // l'app.
 
     // Assets projet : lecture publique (play doit pouvoir charger les vidéos
-    // et JSON même sans auth). Écriture : admin uniquement.
-    // Note : la protection effective du contenu repose sur le flag `published`
-    // côté Firestore — un projet non publié ne sera pas atteignable côté play
-    // car la lecture du doc projet sera refusée par firestore.rules.
+    // et JSON même sans auth). Écriture : tout user authentifié.
     match /projects/{projectId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if request.auth != null;
     }
 
     // Scans : créés sans auth (utilisateur final scanne son coloriage).
