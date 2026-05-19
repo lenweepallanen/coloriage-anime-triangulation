@@ -103,17 +103,45 @@ function Vignette({ project, onClick }: { project: Project; onClick: () => void 
         boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
         display: 'flex',
         flexDirection: 'column',
-        filter: scanned ? 'grayscale(1)' : 'none',
-        opacity: scanned ? 0.6 : 1,
         transition: 'transform 0.15s',
       }}
       onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.03)')}
       onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
     >
-      <div style={{ aspectRatio: '1 / 1', background: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {url ? <img src={url} alt={project.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ color: '#aaa' }}>—</span>}
+      <div style={{
+        aspectRatio: '1 / 1',
+        background: '#f0f0f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+      }}>
+        <div style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          filter: scanned ? 'none' : 'grayscale(1)',
+          opacity: scanned ? 1 : 0.6,
+        }}>
+          {url ? <img src={url} alt={project.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ color: '#aaa' }}>—</span>}
+        </div>
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <svg viewBox="0 0 64 64" width="22%" height="22%" style={{ opacity: 0.55, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.4))' }} aria-hidden="true">
+            <circle cx="32" cy="32" r="30" fill="rgba(255,255,255,0.85)" />
+            <polygon points="26,20 26,44 46,32" fill="#222" />
+          </svg>
+        </div>
       </div>
-      <div style={{ padding: '8px 12px', fontSize: 14, textAlign: 'center' }}>{project.name}</div>
+      <div style={{ padding: '8px 12px', fontSize: 14, textAlign: 'center', color: '#000' }}>{project.name}</div>
     </div>
   )
 }

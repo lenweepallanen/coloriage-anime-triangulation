@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getBook, updateBook, deleteBook } from '../db/booksStore'
 import { getProjectsByBook, getProjectThumbnail, setProjectBook } from '../db/projectsStore'
@@ -98,6 +98,48 @@ export default function BookPage() {
     } catch (err) {
       alert('Erreur : ' + (err instanceof Error ? err.message : err))
     }
+  }
+
+  const [draggedId, setDraggedId] = useState<string | null>(null)
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const prevRectsRef = useRef<Map<string, DOMRect>>(new Map())
+
+  // FLIP animation : glissement fluide des cards à chaque réordonnement
+  useLayoutEffect(() => {
+    cardRefs.current.forEach((el, id) => {
+      const next = el.getBoundingClientRect()
+      const prev = prevRectsRef.current.get(id)
+      if (prev) {
+        const dx = prev.left - next.left
+        const dy = prev.top - next.top
+        if (dx !== 0 || dy !== 0) {
+          el.style.transition = 'none'
+          el.style.transform = `translate(${dx}px, ${dy}px)`
+          requestAnimationFrame(() => {
+            el.style.transition = 'transform 250ms cubic-bezier(.2,.8,.2,1)'
+            el.style.transform = ''
+          })
+        }
+      }
+      prevRectsRef.current.set(id, next)
+    })
+  }, [projects])
+
+  async function persistOrder(list: Project[]) {
+    // Reattribue bookOrder = index pour chaque projet et persiste.
+    await Promise.all(list.map((p, i) => setProjectBook(p.id, book!.id, i)))
+  }
+
+  function handleReorder(targetId: string) {
+    if (!draggedId || draggedId === targetId) return
+    const from = projects.findIndex(p => p.id === draggedId)
+    const to = projects.findIndex(p => p.id === targetId)
+    if (from < 0 || to < 0) return
+    const next = [...projects]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    setProjects(next)
+    persistOrder(next).catch(err => alert('Erreur ordre : ' + (err instanceof Error ? err.message : err)))
   }
 
   async function handleRemoveProject(projectId: string) {
@@ -204,6 +246,14 @@ export default function BookPage() {
                 key={p.id}
                 project={p}
                 onRemove={() => handleRemoveProject(p.id)}
+                isDragging={draggedId === p.id}
+                onDragStart={() => setDraggedId(p.id)}
+                onDragEnd={() => setDraggedId(null)}
+                onDragOver={handleReorder}
+                registerRef={el => {
+                  if (el) cardRefs.current.set(p.id, el)
+                  else cardRefs.current.delete(p.id)
+                }}
               />
             ))}
           </div>
@@ -213,7 +263,15 @@ export default function BookPage() {
   )
 }
 
-function BookProjectCard({ project, onRemove }: { project: Project; onRemove: () => void }) {
+function BookProjectCard({ project, onRemove, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
+  project: Project
+  onRemove: () => void
+  isDragging: boolean
+  onDragStart: () => void
+  onDragEnd: () => void
+  onDragOver: (targetId: string) => void
+  registerRef: (el: HTMLDivElement | null) => void
+}) {
   const navigate = useNavigate()
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
 
@@ -231,10 +289,21 @@ function BookProjectCard({ project, onRemove }: { project: Project; onRemove: ()
 
   return (
     <div
+      ref={registerRef}
       className="project-card"
       onClick={() => navigate(`/admin/${project.id}`)}
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; onDragStart() }}
+      onDragEnd={onDragEnd}
+      onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; onDragOver(project.id) }}
+      style={{
+        opacity: isDragging ? 0.5 : 1,
+        cursor: isDragging ? 'grabbing' : 'grab',
+        boxShadow: isDragging ? '0 10px 24px rgba(0,0,0,0.18)' : undefined,
+        zIndex: isDragging ? 2 : 1,
+      }}
     >
       <div className="project-thumb">
         {thumbUrl ? <img src={thumbUrl} alt={project.name} /> : <div className="no-thumb">Pas d'image</div>}
