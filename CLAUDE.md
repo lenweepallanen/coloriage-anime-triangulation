@@ -810,6 +810,12 @@ Pour repasser au cloud : commenter ou supprimer cette ligne et redémarrer Vite.
 - Les pixels retournés par OpenCV `findContours` sont déjà ordonnés — `orderContourPixels()` n'est plus nécessaire dans le pipeline normal
 - Le cache `contourCannyFrames` (calculé étape 6) est propagé aux étapes 7 et 10 pour éviter la re-détection Canny
 - **Frame 0 cohérence vidéo** : le tracking contour (étape 7) détecte le Canny sur la frame 0 de la vidéo (pas l'image statique) et snappe les anchors dessus. L'optical flow (étape 9) applique le snap-to-contour à frame 0 aussi. Le bone solver utilise `trackedFrames[0]` comme rest pose. Cela élimine le micro-décalage image statique vs vidéo frame 0.
+- **Canvas éditables — pan/zoom obligatoires** : tout canvas où l'admin édite quelque chose (points, courbes, zones, bones, masques…) doit exposer un viewport pan/zoom. Convention :
+  - **Molette** = zoom anchoré sur le curseur (listener `wheel` non-passif pour `preventDefault`).
+  - **Espace maintenu + clic-glisser** = pan (curseur `grab` quand Espace est down, `grabbing` pendant le drag). Alt+clic et bouton du milieu acceptés en plus.
+  - Bornes zoom typiques `[0.2, 8]`, fit-to-container au montage, bouton « Réinit. vue » + raccourci **Cmd/Ctrl+0**.
+  - Implémentation : appliquer la transformation via `ctx.setTransform(k, 0, 0, k, panX, panY)` avec `k = baseScale * zoom` (coords image partout dans la logique métier), et diviser les épaisseurs/rayons d'écran par `k` pour qu'ils restent constants visuellement. Hit-tests en coords image avec rayon `pxScreen / k`.
+  - Référence d'implémentation : `apps/admin/src/pages/admin/EyesSection.tsx`.
 
 ## Commandes
 

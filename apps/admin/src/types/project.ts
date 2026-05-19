@@ -693,12 +693,18 @@ export interface Scene {
 
 export interface EyeRegion {
   id: string;
-  contourPoints: Point2D[];        // polygone fermé, coords IMAGE
+  /** Source de vérité de la forme : courbe de Bézier fermée (coords IMAGE).
+   *  Une ellipse par défaut a 4-8 nœuds smooth ; l'utilisateur peut ajouter/supprimer
+   *  des nœuds et basculer smooth↔corner pour une forme custom. */
+  bezierNodes: BezierNode[];
+  /** Polygone échantillonné depuis bezierNodes (recalculé à la validation).
+   *  Consommé par le rendu/clignement et l'ancrage barycentrique. */
+  contourPoints: Point2D[];
   barycentricRefs: BarycentricRef[]; // 1 par point, via trackedTriangles du mesh rest
   /** Refs barycentriques contre le maillage body (projectTriangulation ou walkLimbSeparation).
    *  Utilisé pour suivre la déformation des animations walk/members-bones. */
   bodyBarycentricRefs?: BarycentricRef[];
-  seed: Point2D;                    // point cliqué (debug/redétection)
+  seed: Point2D;                    // centre approximatif (debug)
 }
 
 export interface ProjectEyes {
