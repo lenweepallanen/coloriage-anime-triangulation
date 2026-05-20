@@ -245,6 +245,21 @@ export interface MeshData {
   cotrackerLBSParams?: CoTrackerLBSParams;
   cotrackerLBSValidated?: boolean;
 
+  // ─── Marche (animation type 'marche') ──────────────────────────────────
+  // Étape 1 : héritage depuis une animation parente cotracker-bones (snapshot)
+  marcheParentAnimationId?: string | null;
+  marcheSkeleton?: CoTrackerSkeleton | null;
+  marcheBodyJointRestPositions?: Point2D[];      // coords image (frame 0 du parent, mappées)
+  marcheLegRestPositions?: Record<string, { hip: Point2D; joints: Point2D[]; foot: Point2D }>;
+  marcheInheritValidated?: boolean;
+  // Étape 2 : sélection des pattes participant au cycle de marche
+  marcheGaitLegIds?: string[];
+  marcheGaitLegsValidated?: boolean;
+  // Phase d'oscillation par patte (0..1), keyé par leg.id. Utilisé pour gait ET non-gait.
+  // Si absent : préset 4-pattes [0,.5,.25,.75] pour gait, 0.37*idx pour non-gait.
+  marcheLegPhases?: Record<string, number>;
+  // Étape 3 : params + sortie via walkParams + walkBodyFrames + walkZoneFrames (champs existants)
+
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;
   walkLimbSeparationValidated?: boolean;
@@ -305,6 +320,9 @@ export interface WalkParams {
   headSway: number;        // intensité oscillation cou/tête (0-100, défaut 50)
   kneeForwardFront: boolean;  // si true, genoux avant plient vers l'avant (humain) au lieu de l'arrière (cheval)
   kneeForwardBack: boolean;   // si true, genoux arrière plient vers l'avant (humain) au lieu de l'arrière (cheval)
+  direction?: 1 | -1;         // sens de marche : 1 = droite, -1 = gauche (défaut 1)
+  secondarySway?: number;     // oscillation secondaire des membres non-gait (0-100, défaut 30)
+  jumpHeight?: number;        // hauteur de saut du corps quand les pattes décollent (px, défaut 0)
 }
 
 // ─── Walk Limb Separation ─────────────────────────────────────────────
@@ -470,7 +488,7 @@ export interface ProjectTriangulation {
   previewInpaintingEnabled?: boolean                   // toggle inpainting LaMa dans le preview
 }
 
-export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones';
+export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones' | 'marche';
 
 // ─── CoTracker3 + Bones (animation type 'cotracker-bones') ────────────────
 

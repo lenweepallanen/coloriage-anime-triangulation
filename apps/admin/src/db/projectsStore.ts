@@ -109,6 +109,15 @@ interface MeshDoc {
   cotrackerBoneSmoothingValidated?: boolean
   cotrackerLBSParams?: import('../types/project').CoTrackerLBSParams
   cotrackerLBSValidated?: boolean
+  // Marche
+  marcheParentAnimationId?: string | null
+  marcheSkeleton?: import('../types/project').CoTrackerSkeleton | null
+  marcheBodyJointRestPositions?: Point2D[]
+  marcheLegRestPositions?: Record<string, { hip: Point2D; joints: Point2D[]; foot: Point2D }>
+  marcheInheritValidated?: boolean
+  marcheGaitLegIds?: string[]
+  marcheGaitLegsValidated?: boolean
+  marcheLegPhases?: Record<string, number>
 }
 
 // Legacy formats (v1-v3)
@@ -743,6 +752,15 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     ...(mesh.cotrackerBoneSmoothingValidated != null && { cotrackerBoneSmoothingValidated: mesh.cotrackerBoneSmoothingValidated }),
     ...(mesh.cotrackerLBSParams != null && { cotrackerLBSParams: mesh.cotrackerLBSParams }),
     ...(mesh.cotrackerLBSValidated != null && { cotrackerLBSValidated: mesh.cotrackerLBSValidated }),
+    // Marche (animation type 'marche')
+    ...(mesh.marcheParentAnimationId != null && { marcheParentAnimationId: mesh.marcheParentAnimationId }),
+    ...(mesh.marcheSkeleton != null && { marcheSkeleton: mesh.marcheSkeleton }),
+    ...(mesh.marcheBodyJointRestPositions != null && { marcheBodyJointRestPositions: mesh.marcheBodyJointRestPositions }),
+    ...(mesh.marcheLegRestPositions != null && { marcheLegRestPositions: mesh.marcheLegRestPositions }),
+    ...(mesh.marcheInheritValidated != null && { marcheInheritValidated: mesh.marcheInheritValidated }),
+    ...(mesh.marcheGaitLegIds != null && { marcheGaitLegIds: mesh.marcheGaitLegIds }),
+    ...(mesh.marcheGaitLegsValidated != null && { marcheGaitLegsValidated: mesh.marcheGaitLegsValidated }),
+    ...(mesh.marcheLegPhases != null && { marcheLegPhases: mesh.marcheLegPhases }),
   }
 }
 
@@ -971,6 +989,15 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     cotrackerBoneSmoothingValidated: d.cotrackerBoneSmoothingValidated,
     cotrackerLBSParams: d.cotrackerLBSParams,
     cotrackerLBSValidated: d.cotrackerLBSValidated,
+    // Marche
+    marcheParentAnimationId: d.marcheParentAnimationId,
+    marcheSkeleton: d.marcheSkeleton,
+    marcheBodyJointRestPositions: d.marcheBodyJointRestPositions,
+    marcheLegRestPositions: d.marcheLegRestPositions,
+    marcheInheritValidated: d.marcheInheritValidated,
+    marcheGaitLegIds: d.marcheGaitLegIds,
+    marcheGaitLegsValidated: d.marcheGaitLegsValidated,
+    marcheLegPhases: d.marcheLegPhases,
   }
 }
 

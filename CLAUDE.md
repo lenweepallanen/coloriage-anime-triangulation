@@ -264,6 +264,18 @@ Refonte majeure : V3 supprime la duplication de topologie entre `projectTriangul
 - Body et pattes partagent la même topologie que les hidden faces → alignement naturel au rendu.
 - V2 reste disponible en parallèle pour projets legacy ; pas de migration automatique.
 
+### Pipeline marche (3 étapes — squelette hérité d'une animation CoTracker + gait procédural)
+
+Animation procédurale qui **hérite la topologie** de `projectTriangulation` (comme V3) **et le squelette** (`CoTrackerSkeleton`) d'une animation parente `cotracker-bones` validée. Pas de vidéo propre, pas de tracking : les positions du squelette sont calculées frame par frame via les sliders `WalkParams`. Sortie : `walkBodyFrames` + `walkZoneFrames` consommés par `zoneMeshRenderer` exactement comme V3.
+
+**Pré-requis** : `projectTriangulation.step3Validated === true` ET au moins une animation `cotracker-bones` avec `cotrackerBonesValidated === true`.
+
+1. **Hériter bones** — sélecteur d'animation parente cotracker-bones. À la validation, copie de `cotrackerSkeleton` → `mesh.marcheSkeleton`, extraction des positions rest des joints (frame 0 des chaînes lissées du parent), conversion video→image coords. Stocke `marcheBodyJointRestPositions` + `marcheLegRestPositions`.
+2. **Pattes** — liste à cocher des `marcheSkeleton.legs[]`. L'admin coche les bones qui suivent le cycle de marche (pied au sol/en l'air) ; les non cochés restent fixes à leur rest position. `mesh.marcheGaitLegIds[]`.
+3. **Paramètres marche** — sliders `WalkParams` (speed, strideLength, footLift, bodySway, headSway, kneeForward front/back). Preview live du squelette animé en boucle. Bouton « Calculer » → [marcheSolver.computeMarcheFrames](apps/admin/src/utils/marcheSolver.ts) → `walkBodyFrames` + `walkZoneFrames`.
+
+**Solver** : `marcheSolver.ts` construit des sub-bones à partir des paires de joints consécutifs (body chain + chaque chaîne de patte `[hip, ...joints, foot]`). Auto-weights par distance inverse au carré, restreints par zone (les vertices `body` ne sont influencés que par les sub-bones du body chain ; les vertices d'une zone-patte par les sub-bones de cette patte uniquement). Trajectoire pied stance/aerial + IK 2-bones pour les genoux (legs avec 1 joint intermédiaire) ou interpolation proportionnelle (≥2 joints intermédiaires).
+
 ### Pipeline bone (7 étapes)
 1. **Vidéo** — Upload vidéo d'animation (image héritée du projet)
 2. **Canny** — Preview contour Canny sur la vidéo bone (géométrie héritée de rest en lecture seule)
@@ -444,7 +456,7 @@ public/
 ## Modèle de données
 
 ```typescript
-AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3'
+AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones' | 'marche'
 
 Animation {
   id: string                         // crypto.randomUUID()

@@ -213,22 +213,41 @@ export interface LBSComputeResult {
   cotrackerLegBoneFrames: Record<string, { chain: Point2D[][] }>
 }
 
+/** Override bone frames already resolved in image coords (no cotrackerFrames needed). */
+export interface LBSBoneFramesOverride {
+  /** Body joints rest pose (image coords, frame 0). */
+  restBodyJointsImg: Point2D[]
+  /** Leg rest chain per zoneId (image coords). chain[0]=hip, last=foot. */
+  restLegChainsImg: Record<string, Point2D[]>
+  /** Per-frame body joints in image coords. Indexing: [jointIdx][frame]. */
+  bodyJointFramesImg: Point2D[][]
+  /** Per-frame leg chains per zoneId, image coords. [zoneId][jointIdx][frame]. */
+  legChainFramesImg: Record<string, Point2D[][]>
+  totalFrames: number
+}
+
 export async function runCoTrackerLBSCompute(
   project: Project, animation: Animation,
   params: CoTrackerLBSParams,
   onProgress?: (p: { phase: string; frame: number; total: number }) => void,
+  override?: LBSBoneFramesOverride,
 ): Promise<LBSComputeResult> {
   const mesh = animation.mesh!
   const tri = project.projectTriangulation!
   const skeleton = mesh.cotrackerSkeleton!
-  const ctFrames = mesh.cotrackerFrames!
-  const vidW = mesh.cotrackerVideoWidth!
-  const vidH = mesh.cotrackerVideoHeight!
+  const ctFrames = override ? null : mesh.cotrackerFrames!
+  const vidW = mesh.cotrackerVideoWidth ?? tri.maskWidth
+  const vidH = mesh.cotrackerVideoHeight ?? tri.maskHeight
   const imgW = tri.maskWidth
   const imgH = tri.maskHeight
 
-  const anyTraj = Object.values(ctFrames)[0]
-  const totalFrames = anyTraj?.length ?? 0
+  let totalFrames: number
+  if (override) {
+    totalFrames = override.totalFrames
+  } else {
+    const anyTraj = Object.values(ctFrames!)[0]
+    totalFrames = anyTraj?.length ?? 0
+  }
   if (totalFrames === 0) throw new Error('Aucune frame trackée')
 
   const power = params.weightPower
@@ -239,8 +258,9 @@ export async function runCoTrackerLBSCompute(
   onProgress?.({ phase: 'Rest poses', frame: 0, total: totalFrames })
 
   // ── Body rest pose + weights ─────────────────────────────────────
-  const bodyJointsF0Vid = resolveCoTrackerBodyChain(skeleton.bodyChain, ctFrames, 0)
-  const bodyJointsF0Img = bodyJointsF0Vid.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+  const bodyJointsF0Img = override
+    ? override.restBodyJointsImg
+    : resolveCoTrackerBodyChain(skeleton.bodyChain, ctFrames!, 0).map(p => videoToImage(p, imgW, imgH, vidW, vidH))
   const restBodySubBones: { head: Point2D; tail: Point2D }[] = []
   for (let i = 0; i < bodyJointsF0Img.length - 1; i++) {
     restBodySubBones.push({ head: bodyJointsF0Img[i], tail: bodyJointsF0Img[i + 1] })
@@ -252,14 +272,16 @@ export async function runCoTrackerLBSCompute(
   }
 
   // ── Leg rest poses + weights ─────────────────────────────────────
-  const legRestPoses: CoTrackerLegRestPose[] = skeleton.legs.map(leg =>
-    computeCoTrackerLegRestPose(leg, ctFrames)
-  )
+  const legRestPoses: CoTrackerLegRestPose[] = override
+    ? []
+    : skeleton.legs.map(leg => computeCoTrackerLegRestPose(leg, ctFrames!))
   const legSubBones: Record<string, { head: Point2D; tail: Point2D }[]> = {}
   const legWeights: Record<string, number[][]> = {}
   for (let li = 0; li < skeleton.legs.length; li++) {
     const leg = skeleton.legs[li]
-    const chainImg = legRestPoses[li].chain.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+    const chainImg = override
+      ? (override.restLegChainsImg[leg.zoneId] ?? [])
+      : legRestPoses[li].chain.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
     const subs: { head: Point2D; tail: Point2D }[] = []
     for (let i = 0; i < chainImg.length - 1; i++) subs.push({ head: chainImg[i], tail: chainImg[i + 1] })
     legSubBones[leg.zoneId] = subs
@@ -327,16 +349,33 @@ export async function runCoTrackerLBSCompute(
 
   let prevSkeletonFrame: CoTrackerSkeletonFrame | null = null
   for (let f = 0; f < totalFrames; f++) {
-    const skf = resolveCoTrackerSkeletonFrame(skeleton, ctFrames, f, legRestPoses, prevSkeletonFrame)
-    prevSkeletonFrame = skf
-    skf.bodyJoints.forEach((p, j) => { cotrackerBodyJointFrames[j].push(p) })
-    skf.legs.forEach((legF, li) => {
-      const zoneId = skeleton.legs[li].zoneId
-      const chainStore = cotrackerLegBoneFrames[zoneId].chain
-      legF.chain.forEach((p, i) => { chainStore[i].push(p) })
-    })
-
-    const bodyJointsImg = skf.bodyJoints.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+    let bodyJointsImg: Point2D[]
+    let legChainsImg: Point2D[][]  // per leg index → chain
+    if (override) {
+      bodyJointsImg = override.bodyJointFramesImg.map(traj => traj[f])
+      legChainsImg = skeleton.legs.map(leg => {
+        const chains = override.legChainFramesImg[leg.zoneId] ?? []
+        return chains.map(jointTraj => jointTraj[f])
+      })
+      // Store raw bone frames (in image coords — for marche, video=image)
+      bodyJointsImg.forEach((p, j) => { cotrackerBodyJointFrames[j].push(p) })
+      legChainsImg.forEach((chain, li) => {
+        const zoneId = skeleton.legs[li].zoneId
+        const store = cotrackerLegBoneFrames[zoneId].chain
+        chain.forEach((p, i) => { store[i].push(p) })
+      })
+    } else {
+      const skf = resolveCoTrackerSkeletonFrame(skeleton, ctFrames!, f, legRestPoses, prevSkeletonFrame)
+      prevSkeletonFrame = skf
+      skf.bodyJoints.forEach((p, j) => { cotrackerBodyJointFrames[j].push(p) })
+      skf.legs.forEach((legF, li) => {
+        const zoneId = skeleton.legs[li].zoneId
+        const chainStore = cotrackerLegBoneFrames[zoneId].chain
+        legF.chain.forEach((p, i) => { chainStore[i].push(p) })
+      })
+      bodyJointsImg = skf.bodyJoints.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+      legChainsImg = skf.legs.map(legF => legF.chain.map(p => videoToImage(p, imgW, imgH, vidW, vidH)))
+    }
     const bodyMatrices: AffineMatrix[] = []
     for (let i = 0; i < restBodySubBones.length; i++) {
       const curr = { head: bodyJointsImg[i], tail: bodyJointsImg[i + 1] }
@@ -347,8 +386,7 @@ export async function runCoTrackerLBSCompute(
 
     for (let li = 0; li < skeleton.legs.length; li++) {
       const leg = skeleton.legs[li]
-      const legF = skf.legs[li]
-      const chainImg = legF.chain.map(p => videoToImage(p, imgW, imgH, vidW, vidH))
+      const chainImg = legChainsImg[li] ?? []
       const rest = legSubBones[leg.zoneId]
       const matrices: AffineMatrix[] = []
       for (let i = 0; i < rest.length; i++) {

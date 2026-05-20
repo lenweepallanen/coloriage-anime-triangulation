@@ -11,7 +11,8 @@ import type { Project, Animation, CoTrackerLBSParams, CoTrackerLBSMode } from '.
 import { DEFAULT_COTRACKER_LBS_PARAMS } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import TriangulationLoopPreview from './TriangulationLoopPreview'
-import { runCoTrackerLBSCompute } from '../../utils/cotrackerLBSCompute'
+import { runCoTrackerLBSCompute, type LBSBoneFramesOverride } from '../../utils/cotrackerLBSCompute'
+import type { Point2D } from '../../types/project'
 
 interface Props {
   project: Project
@@ -45,13 +46,21 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
   const [progress, setProgress] = useState<{ phase: string; frame: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const ready =
+  // Marche : ready when bone joint frames have been computed (cotrackerFrames may be empty {})
+  const isMarche = animation.type === 'marche'
+  const hasMarcheBoneFrames =
+    isMarche
+    && mesh?.cotrackerBodyJointFrames != null
+    && mesh?.cotrackerLegBoneFrames != null
+    && mesh?.cotrackerSkeleton != null
+  const ready = hasMarcheBoneFrames || (
     mesh?.cotrackerFrames != null &&
     mesh?.cotrackerSkeleton != null &&
     mesh?.cotrackerBonesValidated === true &&
     tri?.step3Validated === true &&
     mesh?.cotrackerVideoWidth != null &&
     mesh?.cotrackerVideoHeight != null
+  )
 
   const hasComputed = mesh?.walkBodyFrames != null && mesh?.walkZoneFrames != null
   const validated = mesh?.cotrackerLBSValidated ?? false
@@ -61,7 +70,37 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
     setProgress({ phase: 'init', frame: 0, total: 1 })
     const usedParams = overrideParams ?? params
     try {
-      const result = await runCoTrackerLBSCompute(project, animation, usedParams, setProgress)
+      // For marche animations, supply pre-computed bone frames as override —
+      // skipping the cotrackerFrames-based resolution.
+      let boneOverride: LBSBoneFramesOverride | undefined
+      if (isMarche && mesh?.cotrackerBodyJointFrames && mesh?.cotrackerLegBoneFrames && mesh?.cotrackerSkeleton) {
+        const bodyFrames = mesh.cotrackerBodyJointFrames
+        const totalFrames = bodyFrames[0]?.length ?? 0
+        // True rest pose = inherited from parent (marcheBodyJointRestPositions / marcheLegRestPositions).
+        // Using frame 0 as rest is WRONG when a leg has a phase offset — frame 0 is mid-cycle for
+        // that leg, so weights would be computed around the wrong pose → mesh shift visible at runtime.
+        const restBodyJointsImg: Point2D[] = mesh.marcheBodyJointRestPositions
+          ? mesh.marcheBodyJointRestPositions.map(p => ({ ...p }))
+          : bodyFrames.map(traj => ({ ...traj[0] }))
+        const restLegChainsImg: Record<string, Point2D[]> = {}
+        const legChainFramesImg: Record<string, Point2D[][]> = {}
+        for (const leg of mesh.cotrackerSkeleton.legs) {
+          const chain = mesh.cotrackerLegBoneFrames[leg.zoneId]?.chain
+          if (!chain) continue
+          const lr = mesh.marcheLegRestPositions?.[leg.id]
+          restLegChainsImg[leg.zoneId] = lr
+            ? [lr.hip, ...lr.joints, lr.foot].map(p => ({ ...p }))
+            : chain.map(traj => ({ ...traj[0] }))
+          legChainFramesImg[leg.zoneId] = chain
+        }
+        boneOverride = {
+          restBodyJointsImg, restLegChainsImg,
+          bodyJointFramesImg: bodyFrames,
+          legChainFramesImg,
+          totalFrames,
+        }
+      }
+      const result = await runCoTrackerLBSCompute(project, animation, usedParams, setProgress, boneOverride)
       const updatedAnim: Animation = {
         ...animation,
         mesh: {
