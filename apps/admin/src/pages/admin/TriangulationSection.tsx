@@ -5,8 +5,9 @@ import type { UploadHint } from '../../db/projectsStore'
 import ProjectTriangZonesStep from '../../components/admin/ProjectTriangZonesStep'
 import ProjectTriangMeshStep from '../../components/admin/ProjectTriangMeshStep'
 import ProjectTriangHiddenFaceStep from '../../components/admin/ProjectTriangHiddenFaceStep'
+import ProjectTriangPreviewStep from '../../components/admin/ProjectTriangPreviewStep'
 
-const STEPS = ['Image référence', 'Zones SAM 2', 'Maillage par zone', 'Faces cachées'] as const
+const STEPS = ['Image référence', 'Zones SAM 2', 'Maillage par zone', 'Faces cachées', 'Preview'] as const
 type TriangStep = (typeof STEPS)[number]
 
 const SHORT_LABELS: Record<string, string> = {
@@ -14,6 +15,7 @@ const SHORT_LABELS: Record<string, string> = {
   'Zones SAM 2': 'Zones',
   'Maillage par zone': 'Maillage',
   'Faces cachées': 'Faces cachées',
+  'Preview': 'Preview',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -25,6 +27,7 @@ function getStepStatus(step: TriangStep, activeStep: TriangStep, tri: ProjectTri
     case 'Zones SAM 2': return tri?.step1Validated ? 'done' : 'pending'
     case 'Maillage par zone': return tri?.step2Validated ? 'done' : 'pending'
     case 'Faces cachées': return tri?.step3Validated ? 'done' : 'pending'
+    case 'Preview': return tri?.step3Validated ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -74,6 +77,9 @@ export default function TriangulationSection() {
         )}
         {activeStep === 'Faces cachées' && (
           <ProjectTriangHiddenFaceStep project={project} onSave={save} />
+        )}
+        {activeStep === 'Preview' && (
+          <ProjectTriangPreviewStep project={project} onSave={save} />
         )}
       </div>
     </div>

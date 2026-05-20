@@ -378,6 +378,7 @@ export interface WalkLimbSeparation {
   // Body = rest triangles not touching any limb zone (vertex-based filtering)
   bodyTriangleIndices: number[];                               // indices into rest mesh triangles[]
   // Body mesh (auto rest triangles + manual patch)
+  bodyZOrder?: number;                                         // zIndex du body (défaut 0 si absent)
   bodyPoints?: Point2D[];                                      // all body vertices (auto + manual extras)
   bodyTriangles?: [number, number, number][];                  // all body triangles (auto + manual, indexed into bodyPoints)
   bodyExtraPoints?: Point2D[];                                 // manually added points
@@ -449,6 +450,24 @@ export interface ProjectTriangulation {
   hiddenFaceZones: HiddenFaceZone[]          // corps caché derrière patte
   hiddenFaceLimbZones: HiddenFaceLimbZone[]  // extension patte sous corps
   step3Validated: boolean
+
+  // Étape 5 : Preview / Rendu — épaisseur du contour noir ajouté autour de chaque zone (px image).
+  // L'érosion de 1px (gomme blanc résiduel) est appliquée automatiquement en plus.
+  outlineWidthGlobal?: number                          // défaut 2
+  outlineWidthByZone?: Record<string, number>          // override par zone (sinon prend global)
+  /** Alignement du trait : 0 = 100% extérieur, 0.5 = centré, 1 = 100% intérieur. Défaut 0.5. */
+  outlineAlignment?: number
+  /** Override alignement par zone (sinon prend outlineAlignment global). */
+  outlineAlignmentByZone?: Record<string, number>
+  /** Lissage du contour : 0 = ligne brisée, 5 = très lisse (Chaikin iters). Défaut 0. */
+  outlineSmoothing?: number
+  outlineSmoothingByZone?: Record<string, number>
+  /** Couleur du trait par zone (hex). Défaut "#000". */
+  outlineColorByZone?: Record<string, string>
+  /** Décalage (inflate/deflate) du contour en px image. Positif = vers l'extérieur, négatif = vers l'intérieur. Défaut 0. */
+  outlineInflateGlobal?: number
+  outlineInflateByZone?: Record<string, number>
+  previewInpaintingEnabled?: boolean                   // toggle inpainting LaMa dans le preview
 }
 
 export type AnimationType = 'rest' | 'oneshot' | 'physics' | 'bone' | 'walk' | 'members-bones' | 'members-bones-v2' | 'members-bones-v3' | 'cotracker-bones';

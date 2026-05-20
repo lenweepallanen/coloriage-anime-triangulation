@@ -14,6 +14,7 @@ import * as PIXI from 'pixi.js'
 import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
@@ -36,6 +37,7 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
     zonePoints: tri.zonePoints,
     zoneTriangles: tri.zoneTriangles,
     bodyTriangleIndices: [],
+    bodyZOrder: tri.zones.find(z => z.id === 'body')?.zOrder ?? 0,
     bodyPoints: tri.bodyPoints,
     bodyTriangles: tri.bodyTriangles,
     hiddenFaceZones: tri.hiddenFaceZones,
@@ -103,6 +105,7 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation, onSa
       texCanvas.width = imgW
       texCanvas.height = imgH
       texCanvas.getContext('2d')!.drawImage(img, 0, 0)
+      // Outlines : tracées en overlay PIXI dans le ticker.
       const texture = PIXI.Texture.from(texCanvas)
 
       // Container size
@@ -134,6 +137,17 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation, onSa
         scale, offsetX, offsetY,
       )
       app.stage.addChild(setup.container)
+      // Une PIXI.Graphics par zone pour les outlines, interleavée par z-order
+      // via setup.container.sortableChildren = true (déjà activé).
+      const outlineGraphics = new Map<string, PIXI.Graphics>()
+      if (hasZoneOutlineData(tri)) {
+        for (const zone of tri.zones ?? []) {
+          const g = new PIXI.Graphics()
+          g.zIndex = (zone.zOrder ?? 0) + 0.9
+          setup.container.addChild(g)
+          outlineGraphics.set(zone.id, g)
+        }
+      }
       setupRef.current = setup
 
       // Build LoopPlaybacks (one per region)
@@ -171,6 +185,21 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation, onSa
           const baseZoneId = hfl.zoneId.replace(/^__hfl_/, '')
           const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
+        }
+
+        // Outlines de zones (une Graphics par zone, interleavée par z-order)
+        if (hasZoneOutlineData(tri)) {
+          const bodyPositions = bodyPb ? bodyPb.pb.getPositions() : null
+          const limbPositions: Record<string, Point2D[]> = {}
+          for (const p of playbacks) {
+            if (p.region !== 'body') limbPositions[p.region] = p.pb.getPositions()
+          }
+          const polylines = computeZoneOutlinePolylines(
+            tri,
+            { body: bodyPositions, limbs: limbPositions },
+            (pt) => ({ x: pt.x * scale + offsetX, y: pt.y * scale + offsetY }),
+          )
+          drawZoneOutlinesPixi(outlineGraphics, polylines)
         }
       }
       app.ticker.add(tickerFn)

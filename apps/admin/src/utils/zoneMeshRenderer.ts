@@ -86,7 +86,7 @@ export function buildZoneMeshes(
         const extInfo = buildMesh(
           `__hfl_${zone.id}`, pts, extTris,
           limbTex, imageWidth, imageHeight, scale, offsetX, offsetY,
-          zone.zOrder - 0.1, contentAlignment,
+          zone.zOrder + 0.5, contentAlignment,
         )
         hiddenFaceLimbMeshes.push(extInfo)
         container.addChild(extInfo.pixiMesh)
@@ -138,7 +138,8 @@ export function buildZoneMeshes(
   }
 
   // Pure body mesh (z=0, uses scan texture)
-  const bodyInfo = buildMesh('__body__', bodyPts, pureBodyTris, texture, imageWidth, imageHeight, scale, offsetX, offsetY, 0, contentAlignment)
+  const bodyZOrder = separation.bodyZOrder ?? 0
+  const bodyInfo = buildMesh('__body__', bodyPts, pureBodyTris, texture, imageWidth, imageHeight, scale, offsetX, offsetY, bodyZOrder, contentAlignment)
   container.addChild(bodyInfo.pixiMesh)
 
   // Hidden face meshes — same bodyPoints, but only the marked triangles
@@ -147,8 +148,8 @@ export function buildZoneMeshes(
       if (hfz.bodyTriangleIndices.length === 0) continue
       const hfTris = hfz.bodyTriangleIndices.map(ti => bodyTris[ti]).filter(Boolean)
       if (hfTris.length === 0) continue
-      const parentZone = separation.zones.find(z => z.id === hfz.limbZoneId)
-      const hfZOrder = parentZone ? parentZone.zOrder - 0.5 : 0
+      // HFZ appartient au body : zOrder = body.zOrder + 0.5
+      const hfZOrder = bodyZOrder + 0.5
       const info = buildMesh(
         `__hf_${hfz.limbZoneId}`, bodyPts, hfTris,
         hiddenFaceTexture ?? texture, imageWidth, imageHeight, scale, offsetX, offsetY,

@@ -263,6 +263,17 @@ interface ProjectTriangulationDoc {
   hiddenFaceZones: import('../types/project').HiddenFaceZone[]
   hiddenFaceLimbZones: import('../types/project').HiddenFaceLimbZone[]
   step3Validated: boolean
+  // Step 5 — preview outlines
+  outlineWidthGlobal?: number
+  outlineWidthByZone?: Record<string, number>
+  outlineAlignment?: number
+  outlineAlignmentByZone?: Record<string, number>
+  outlineSmoothing?: number
+  outlineSmoothingByZone?: Record<string, number>
+  outlineColorByZone?: Record<string, string>
+  outlineInflateGlobal?: number
+  outlineInflateByZone?: Record<string, number>
+  previewInpaintingEnabled?: boolean
 }
 
 interface ProjectDoc {
@@ -556,6 +567,16 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     hiddenFaceZones: tri.hiddenFaceZones ?? [],
     hiddenFaceLimbZones: tri.hiddenFaceLimbZones ?? [],
     step3Validated: tri.step3Validated ?? false,
+    ...(tri.outlineWidthGlobal != null && { outlineWidthGlobal: tri.outlineWidthGlobal }),
+    ...(tri.outlineWidthByZone != null && { outlineWidthByZone: tri.outlineWidthByZone }),
+    ...(tri.outlineAlignment != null && { outlineAlignment: tri.outlineAlignment }),
+    ...(tri.outlineAlignmentByZone != null && { outlineAlignmentByZone: tri.outlineAlignmentByZone }),
+    ...(tri.outlineSmoothing != null && { outlineSmoothing: tri.outlineSmoothing }),
+    ...(tri.outlineSmoothingByZone != null && { outlineSmoothingByZone: tri.outlineSmoothingByZone }),
+    ...(tri.outlineColorByZone != null && { outlineColorByZone: tri.outlineColorByZone }),
+    ...(tri.outlineInflateGlobal != null && { outlineInflateGlobal: tri.outlineInflateGlobal }),
+    ...(tri.outlineInflateByZone != null && { outlineInflateByZone: tri.outlineInflateByZone }),
+    ...(tri.previewInpaintingEnabled != null && { previewInpaintingEnabled: tri.previewInpaintingEnabled }),
   }
 }
 
@@ -599,6 +620,16 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     hiddenFaceZones: doc.hiddenFaceZones ?? [],
     hiddenFaceLimbZones: doc.hiddenFaceLimbZones ?? [],
     step3Validated: doc.step3Validated ?? false,
+    outlineWidthGlobal: doc.outlineWidthGlobal,
+    outlineWidthByZone: doc.outlineWidthByZone,
+    outlineAlignment: doc.outlineAlignment,
+    outlineAlignmentByZone: doc.outlineAlignmentByZone,
+    outlineSmoothing: doc.outlineSmoothing,
+    outlineSmoothingByZone: doc.outlineSmoothingByZone,
+    outlineColorByZone: doc.outlineColorByZone,
+    outlineInflateGlobal: doc.outlineInflateGlobal,
+    outlineInflateByZone: doc.outlineInflateByZone,
+    previewInpaintingEnabled: doc.previewInpaintingEnabled,
   }
 }
 

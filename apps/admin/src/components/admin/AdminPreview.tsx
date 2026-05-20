@@ -6,6 +6,7 @@ import { LoopPlayback } from '../../utils/loopPlayback'
 import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
@@ -138,6 +139,7 @@ export default function AdminPreview({ project, style }: Props) {
       texCanvas.height = img.naturalHeight
       const texCtx = texCanvas.getContext('2d')!
       texCtx.drawImage(img, 0, 0)
+      // Outlines : tracées en overlay PIXI dans le ticker, pas bakées dans la texture.
 
       // Mesh texture & geometry
       const texture = PIXI.Texture.from(texCanvas)
@@ -167,6 +169,7 @@ export default function AdminPreview({ project, style }: Props) {
       // Check for walk animations with limb separation
       const walkAnim = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
       let zoneMeshSetup: ZoneMeshSetup | null = null
+      const zoneOutlineGraphics = new Map<string, PIXI.Graphics>()
 
       if (walkAnim?.mesh?.walkLimbSeparation) {
         zoneMeshSetup = buildZoneMeshes(
@@ -182,6 +185,14 @@ export default function AdminPreview({ project, style }: Props) {
         )
         meshContainer.addChild(zoneMeshSetup.container)
         zoneMeshSetup.container.visible = false
+        if (project.projectTriangulation && hasZoneOutlineData(project.projectTriangulation)) {
+          for (const zone of project.projectTriangulation.zones ?? []) {
+            const g = new PIXI.Graphics()
+            g.zIndex = (zone.zOrder ?? 0) + 0.9
+            zoneMeshSetup.container.addChild(g)
+          zoneOutlineGraphics.set(zone.id, g)
+          }
+        }
       }
 
       // Main mesh
@@ -260,6 +271,11 @@ export default function AdminPreview({ project, style }: Props) {
       const walkBodyFrames = walkAnim?.mesh?.walkBodyFrames
       const walkTotalFrames = walkBodyFrames?.length ?? 0
 
+      // Overlay PIXI pour les outlines de zones (par-dessus tous les meshes).
+      const outlineOverlay = new PIXI.Graphics()
+      meshContainer.addChild(outlineOverlay)
+      const tri = project.projectTriangulation
+
       // Animation loop
       app.ticker.add((delta) => {
         if (playingRef.current) advancePlayback(delta)
@@ -293,6 +309,39 @@ export default function AdminPreview({ project, style }: Props) {
             (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
           }
           verts.update()
+        }
+
+        // Outlines de zones
+        outlineOverlay.clear()
+        if (tri && hasZoneOutlineData(tri)) {
+          const bodyPositions = isWalkZonePlaying && walkBodyFrames
+            ? walkBodyFrames[walkFrameCounter] ?? tri.bodyPoints
+            : tri.bodyPoints
+          const limbPositions: Record<string, typeof tri.bodyPoints> = {}
+          for (const zoneId of Object.keys(tri.zonePoints ?? {})) {
+            const wf = isWalkZonePlaying && walkZoneFrames ? walkZoneFrames[zoneId]?.[walkFrameCounter] : null
+            limbPositions[zoneId] = wf ?? tri.zonePoints![zoneId]
+          }
+          const polylines = computeZoneOutlinePolylines(
+            tri,
+            { body: bodyPositions, limbs: limbPositions },
+            (pt) => ({ x: pt.x * scale + offsetX, y: pt.y * scale + offsetY }),
+          )
+          if (isWalkZonePlaying && zoneOutlineGraphics.size > 0) {
+            drawZoneOutlinesPixi(zoneOutlineGraphics, polylines)
+          } else {
+            for (const pl of polylines) {
+              if (pl.points.length < 3) continue
+              const colorNum = parseInt(pl.color.replace('#', ''), 16) || 0
+              outlineOverlay.lineStyle({ width: pl.width, color: colorNum, alignment: 0.5, cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND })
+              outlineOverlay.moveTo(pl.points[0].x, pl.points[0].y)
+              for (let i = 1; i < pl.points.length; i++) outlineOverlay.lineTo(pl.points[i].x, pl.points[i].y)
+              outlineOverlay.lineTo(pl.points[0].x, pl.points[0].y)
+            }
+            outlineOverlay.lineStyle(0)
+          }
+          if (isWalkZonePlaying) outlineOverlay.clear()
+          else { for (const g of zoneOutlineGraphics.values()) g.clear(); for (const m of zoneOutlineMasks.values()) m.clear() }
         }
       })
 

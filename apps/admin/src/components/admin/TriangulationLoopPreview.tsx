@@ -8,9 +8,10 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react'
 import * as PIXI from 'pixi.js'
-import type { Project, Animation, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
+import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
 interface Props {
@@ -46,6 +47,7 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
     zonePoints: tri.zonePoints,
     zoneTriangles: tri.zoneTriangles,
     bodyTriangleIndices: [],
+    bodyZOrder: tri.zones.find(z => z.id === 'body')?.zOrder ?? 0,
     bodyPoints: tri.bodyPoints,
     bodyTriangles: tri.bodyTriangles,
     hiddenFaceZones: tri.hiddenFaceZones,
@@ -137,6 +139,7 @@ export default function TriangulationLoopPreview({
       const texCanvas = document.createElement('canvas')
       texCanvas.width = imgW; texCanvas.height = imgH
       texCanvas.getContext('2d')!.drawImage(img, 0, 0)
+      // Outlines : tracées en overlay PIXI dans le ticker, pas bakées.
       const texture = PIXI.Texture.from(texCanvas)
 
       const rect = container.getBoundingClientRect()
@@ -174,6 +177,19 @@ export default function TriangulationLoopPreview({
 
       const overlay = new PIXI.Graphics()
       app.stage.addChild(overlay)
+
+      // Une PIXI.Graphics par zone pour les outlines + une mask Graphics qui
+      // exclut les polygones des zones à zOrder strictement supérieur, pour
+      // que l'outline d'une zone ne déborde pas sur les zones au-dessus.
+      const outlineGraphics = new Map<string, PIXI.Graphics>()
+      if (tri && hasZoneOutlineData(tri)) {
+        for (const zone of tri.zones ?? []) {
+          const g = new PIXI.Graphics()
+          g.zIndex = (zone.zOrder ?? 0) + 0.9
+          setup.container.addChild(g)
+          outlineGraphics.set(zone.id, g)
+        }
+      }
 
       // Bone frames (cotracker), in VIDEO coords — converted to image coords for drawing.
       const skeleton = mesh?.cotrackerSkeleton ?? null
@@ -310,6 +326,22 @@ export default function TriangulationLoopPreview({
             }
             overlay.endFill()
           }
+        }
+
+        // Outlines de zones — une Graphics par zone, interleavée par z-order
+        // avec les meshes via sortableChildren sur setup.container.
+        if (tri && hasZoneOutlineData(tri)) {
+          const bodyPositions = bodyPb ? bodyPb.pb.getPositions() : null
+          const limbPositions: Record<string, Point2D[]> = {}
+          for (const p of playbacks) {
+            if (p.region !== 'body') limbPositions[p.region] = p.pb.getPositions()
+          }
+          const polylines = computeZoneOutlinePolylines(
+            tri,
+            { body: bodyPositions, limbs: limbPositions },
+            (pt) => ({ x: pt.x * scale + offsetX, y: pt.y * scale + offsetY }),
+          )
+          drawZoneOutlinesPixi(outlineGraphics, polylines, (zoneId) => vis[zoneId] !== false)
         }
       }
       app.ticker.add(tickerFn)

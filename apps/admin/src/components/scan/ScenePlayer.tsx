@@ -11,6 +11,7 @@ import { ScenePlayback } from '../../utils/scenePlayback'
 import type { SceneState } from '../../utils/scenePlayback'
 import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUtils'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import { EyeBlinkOverlay, getEyeBodyMeshData, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
@@ -27,6 +28,7 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
     zonePoints: tri.zonePoints,
     zoneTriangles: tri.zoneTriangles,
     bodyTriangleIndices: [],
+    bodyZOrder: tri.zones.find(z => z.id === 'body')?.zOrder ?? 0,
     bodyPoints: tri.bodyPoints,
     bodyTriangles: tri.bodyTriangles,
     hiddenFaceZones: tri.hiddenFaceZones,
@@ -326,9 +328,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // Fallback: Laplacian diffusion on a copy of the scan
     // In both cases, pure body + limbs use the original high-res scan texture
     let hfTexture: PIXI.Texture | undefined
+    let hfCanvasForOutline: HTMLCanvasElement | null = null
     const walkAnimForInpaint = project.animations.find(a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.hiddenFaceZones)
+    // Fallback project triangulation (members-bones-v3 sans LaMa).
+    const triHiddenFace = project.projectTriangulation?.step3Validated && project.projectTriangulation.hiddenFaceZones.length > 0
+      ? project.projectTriangulation : null
     if (lamaCanvas) {
-      hfTexture = PIXI.Texture.from(lamaCanvas)
+      hfCanvasForOutline = lamaCanvas
     } else if (walkAnimForInpaint?.mesh?.walkLimbSeparation) {
       const sep = walkAnimForInpaint.mesh.walkLimbSeparation
       if (sep.hiddenFaceZones && sep.hiddenFaceZones.length > 0 && sep.bodyPoints && sep.bodyTriangles) {
@@ -339,10 +345,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         for (const hfz of sep.hiddenFaceZones) {
           inpaintHiddenFaceOnScan(hfCanvas, hfz, sep.bodyPoints, sep.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
         }
-        hfTexture = PIXI.Texture.from(hfCanvas)
+        hfCanvasForOutline = hfCanvas
       }
+    } else if (triHiddenFace && triHiddenFace.bodyPoints.length > 0 && triHiddenFace.bodyTriangles.length > 0) {
+      const hfCanvas = document.createElement('canvas')
+      hfCanvas.width = scanCanvas.width
+      hfCanvas.height = scanCanvas.height
+      hfCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
+      for (const hfz of triHiddenFace.hiddenFaceZones) {
+        inpaintHiddenFaceOnScan(hfCanvas, hfz, triHiddenFace.bodyPoints, triHiddenFace.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+      }
+      hfCanvasForOutline = hfCanvas
+    }
+    if (hfCanvasForOutline) {
+      hfTexture = PIXI.Texture.from(hfCanvasForOutline)
     }
 
+    // Outlines : tracées en overlay PIXI dans le ticker, pas bakées.
     const texture = PIXI.Texture.from(scanCanvas)
     const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
 
@@ -416,6 +435,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       ? project.animations.filter(a => (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3' || a.type === 'cotracker-bones') && a.mesh?.walkZoneFrames)
       : []
     const walkZoneMeshMap = new Map<string, ZoneMeshSetup>()
+    // Outlines de zones par anim : Map animId → Map zoneId → PIXI.Graphics
+    const zoneOutlineByAnim = new Map<string, Map<string, PIXI.Graphics>>()
 
     const allZoneAnims = [
       ...walkAnims.map(a => ({ anim: a, sep: a.mesh!.walkLimbSeparation! })),
@@ -449,6 +470,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       setup.container.visible = false
       characterContainer.addChild(setup.container)
       walkZoneMeshMap.set(wa.id, setup)
+      // Outlines : une Graphics par zone, ajoutée dans setup.container avec
+      // zIndex = zone.zOrder + 0.5 → s'interleave entre les meshes.
+      if (project.projectTriangulation && hasZoneOutlineData(project.projectTriangulation)) {
+        const outlineMap = new Map<string, PIXI.Graphics>()
+        for (const zone of project.projectTriangulation.zones ?? []) {
+          const g = new PIXI.Graphics()
+          g.zIndex = (zone.zOrder ?? 0) + 0.9
+          setup.container.addChild(g)
+          outlineMap.set(zone.id, g)
+        }
+        zoneOutlineByAnim.set(wa.id, outlineMap)
+      }
     }
     // Track which walk zone mesh is currently active
     let activeWalkZoneAnimId: string | null = null
@@ -814,6 +847,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
     canvas.addEventListener('pointerdown', onPointerDown)
 
+    // Overlay PIXI legacy (utilisé quand AUCUN setup walk/MB n'est actif —
+    // on dessine au-dessus du single mesh).
+    const outlineOverlay = new PIXI.Graphics()
+    characterContainer.addChild(outlineOverlay)
+    const triForOutline = project.projectTriangulation
+
     // --- Main ticker ---
     app.ticker.add((delta) => {
       const deltaSeconds = delta / 60
@@ -1028,6 +1067,77 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const sprite = bgSprites[li]
         if (!sprite) continue
         sprite.x = -frontOffsetPx * scene.backgroundLayers[li].depthFactor
+      }
+
+      // Outlines de zones
+      outlineOverlay.clear()
+      // Clear toutes les Graphics zone des anims non actifs.
+      for (const [animId, map] of zoneOutlineByAnim) {
+        if (animId !== activeWalkZoneAnimId) {
+          for (const g of map.values()) g.clear()
+        }
+      }
+      if (triForOutline && hasZoneOutlineData(triForOutline)) {
+        // Body positions avec crossfade pour rester aligné avec le mesh body.
+        let bodyPositions: Point2D[] | undefined
+        if (activeWalkZoneAnimId && activeBodyPlayback) {
+          bodyPositions = activeBodyPlayback.getPositions()
+          if (fadeActive && prevBodyPlayback) {
+            bodyPositions = blendPts(prevBodyPlayback.getPositions(), bodyPositions, fadeT)
+          }
+        } else {
+          bodyPositions = triForOutline.bodyPoints
+        }
+        const limbPositions: Record<string, Point2D[]> = {}
+        for (const zoneId of Object.keys(triForOutline.zonePoints ?? {})) {
+          const zp = (activeWalkZoneAnimId && activeZonePlaybacks) ? activeZonePlaybacks.find(z => z.zoneId === zoneId) : null
+          if (zp) {
+            let pts = zp.playback.getPositions()
+            if (fadeActive && prevZonePlaybacks) {
+              const prevZp = prevZonePlaybacks.find(z => z.zoneId === zoneId)
+              if (prevZp) pts = blendPts(prevZp.playback.getPositions(), pts, fadeT)
+            }
+            limbPositions[zoneId] = pts
+          } else {
+            limbPositions[zoneId] = triForOutline.zonePoints![zoneId]
+          }
+        }
+        const mapPoint = (pt: Point2D) => {
+          if (contentAlignment) {
+            const { drawBBox, meshBBox } = contentAlignment
+            const meshW = meshBBox.maxX - meshBBox.minX
+            const meshH = meshBBox.maxY - meshBBox.minY
+            const drawW = drawBBox.maxX - drawBBox.minX
+            const drawH = drawBBox.maxY - drawBBox.minY
+            const nx = meshW > 0 ? (pt.x - meshBBox.minX) / meshW : 0.5
+            const ny = meshH > 0 ? (pt.y - meshBBox.minY) / meshH : 0.5
+            return {
+              x: (nx * drawW + drawBBox.minX) * charScale + charOffsetX,
+              y: (ny * drawH + drawBBox.minY) * charScale + charOffsetY,
+            }
+          }
+          return { x: pt.x * charScale + charOffsetX, y: pt.y * charScale + charOffsetY }
+        }
+        const polylines = computeZoneOutlinePolylines(
+          triForOutline,
+          { body: bodyPositions, limbs: limbPositions },
+          mapPoint,
+        )
+        const activeZoneOutlineMap = activeWalkZoneAnimId ? zoneOutlineByAnim.get(activeWalkZoneAnimId) : null
+        if (activeZoneOutlineMap && activeZoneOutlineMap.size > 0) {
+          drawZoneOutlinesPixi(activeZoneOutlineMap, polylines)
+        } else {
+          // Legacy : pas de setup actif, dessine sur l'overlay global.
+          for (const pl of polylines) {
+            if (pl.points.length < 3) continue
+            const colorNum = parseInt(pl.color.replace('#', ''), 16) || 0
+            outlineOverlay.lineStyle({ width: pl.width, color: colorNum, alignment: 0.5, cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND })
+            outlineOverlay.moveTo(pl.points[0].x, pl.points[0].y)
+            for (let i = 1; i < pl.points.length; i++) outlineOverlay.lineTo(pl.points[i].x, pl.points[i].y)
+            outlineOverlay.lineTo(pl.points[0].x, pl.points[0].y)
+          }
+          outlineOverlay.lineStyle(0)
+        }
       }
     })
 

@@ -8,6 +8,7 @@ import { MultiAnimationPlayback } from '../../utils/multiAnimationPlayback'
 import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { DeviceParallax } from '../../utils/deviceParallax'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import { EyeBlinkOverlay, getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
@@ -27,6 +28,7 @@ function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
     zonePoints: tri.zonePoints,
     zoneTriangles: tri.zoneTriangles,
     bodyTriangleIndices: [],
+    bodyZOrder: tri.zones.find(z => z.id === 'body')?.zOrder ?? 0,
     bodyPoints: tri.bodyPoints,
     bodyTriangles: tri.bodyTriangles,
     hiddenFaceZones: tri.hiddenFaceZones,
@@ -330,12 +332,13 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     // Fallback: Laplacian diffusion on a copy of the scan
     // In both cases, pure body + limbs use the original high-res scan texture
     let hfTexture: PIXI.Texture | undefined
+    let hfCanvasForOutline: HTMLCanvasElement | null = null
     const walkAnim0 = project.animations.find(a => a.type === 'walk' && a.mesh?.walkLimbSeparation?.hiddenFaceZones)
     // Also check project triangulation hidden face zones
     const triHiddenFace = project.projectTriangulation?.step3Validated && project.projectTriangulation.hiddenFaceZones.length > 0
       ? project.projectTriangulation : null
     if (lamaCanvas) {
-      hfTexture = PIXI.Texture.from(lamaCanvas)
+      hfCanvasForOutline = lamaCanvas
     } else if (walkAnim0?.mesh?.walkLimbSeparation) {
       const sep = walkAnim0.mesh.walkLimbSeparation
       if (sep.hiddenFaceZones && sep.hiddenFaceZones.length > 0 && sep.bodyPoints && sep.bodyTriangles) {
@@ -346,10 +349,9 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
         for (const hfz of sep.hiddenFaceZones) {
           inpaintHiddenFaceOnScan(hfCanvas, hfz, sep.bodyPoints, sep.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
         }
-        hfTexture = PIXI.Texture.from(hfCanvas)
+        hfCanvasForOutline = hfCanvas
       }
     } else if (triHiddenFace && triHiddenFace.bodyPoints.length > 0 && triHiddenFace.bodyTriangles.length > 0) {
-      // Fallback: inpaint hidden face from project triangulation
       const hfCanvas = document.createElement('canvas')
       hfCanvas.width = scanCanvas.width
       hfCanvas.height = scanCanvas.height
@@ -357,10 +359,14 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       for (const hfz of triHiddenFace.hiddenFaceZones) {
         inpaintHiddenFaceOnScan(hfCanvas, hfz, triHiddenFace.bodyPoints, triHiddenFace.bodyTriangles, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
       }
-      hfTexture = PIXI.Texture.from(hfCanvas)
+      hfCanvasForOutline = hfCanvas
+    }
+    if (hfCanvasForOutline) {
+      hfTexture = PIXI.Texture.from(hfCanvasForOutline)
     }
 
     // --- Mesh texture & geometry ---
+    // Outlines : tracées en overlay PIXI dans le ticker, pas bakées.
     const texture = PIXI.Texture.from(scanCanvas)
     const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
 
@@ -392,6 +398,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3' || a.type === 'cotracker-bones') && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated
     ) : null
     let zoneMeshSetup: ZoneMeshSetup | null = null
+    const zoneOutlineGraphics = new Map<string, PIXI.Graphics>()
 
     // Build zone separation from walk or project triangulation
     const zoneSep = walkAnim?.mesh?.walkLimbSeparation
@@ -422,6 +429,16 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       )
       meshContainer.addChild(zoneMeshSetup.container)
       zoneMeshSetup.container.visible = false
+      // Outlines interleavés par z-order : une Graphics par zone dans le
+      // container du setup (sortableChildren déjà true).
+      if (project.projectTriangulation && hasZoneOutlineData(project.projectTriangulation)) {
+        for (const zone of project.projectTriangulation.zones ?? []) {
+          const g = new PIXI.Graphics()
+          g.zIndex = (zone.zOrder ?? 0) + 0.9
+          zoneMeshSetup.container.addChild(g)
+          zoneOutlineGraphics.set(zone.id, g)
+        }
+      }
     }
 
     // Main mesh (used for rest + non-walk animations)
@@ -548,6 +565,10 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
         })
       }
 
+      const outlineOverlay = new PIXI.Graphics()
+      app.stage.addChild(outlineOverlay)
+      const triForOutline = project.projectTriangulation
+
       app.ticker.add((delta) => {
         if (playing) advancePlayback(delta)
 
@@ -620,6 +641,58 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           const p = parallax.getOffset()
           bgSprite.x = bgBase.x + p.offsetX * visualRef.current.parallaxRangeX
           bgSprite.y = bgBase.y + p.offsetY * visualRef.current.parallaxRangeY
+        }
+
+        // Outlines de zones
+        outlineOverlay.clear()
+        if (triForOutline && hasZoneOutlineData(triForOutline)) {
+          const bodyPositions = isWalkZonePlaying && walkBodyFrames
+            ? walkBodyFrames[walkFrameCounter] ?? triForOutline.bodyPoints
+            : triForOutline.bodyPoints
+          const limbPositions: Record<string, typeof triForOutline.bodyPoints> = {}
+          for (const zoneId of Object.keys(triForOutline.zonePoints ?? {})) {
+            const wf = isWalkZonePlaying && walkZoneFrames ? walkZoneFrames[zoneId]?.[walkFrameCounter] : null
+            limbPositions[zoneId] = wf ?? triForOutline.zonePoints![zoneId]
+          }
+          const mapPoint = (pt: Point2D) => {
+            if (contentAlignment) {
+              const { drawBBox, meshBBox } = contentAlignment
+              const meshW = meshBBox.maxX - meshBBox.minX
+              const meshH = meshBBox.maxY - meshBBox.minY
+              const drawW = drawBBox.maxX - drawBBox.minX
+              const drawH = drawBBox.maxY - drawBBox.minY
+              const nx = meshW > 0 ? (pt.x - meshBBox.minX) / meshW : 0.5
+              const ny = meshH > 0 ? (pt.y - meshBBox.minY) / meshH : 0.5
+              return {
+                x: (nx * drawW + drawBBox.minX) * scale + offsetX,
+                y: (ny * drawH + drawBBox.minY) * scale + offsetY,
+              }
+            }
+            return { x: pt.x * scale + offsetX, y: pt.y * scale + offsetY }
+          }
+          const polylines = computeZoneOutlinePolylines(
+            triForOutline,
+            { body: bodyPositions, limbs: limbPositions },
+            mapPoint,
+          )
+          // Cas walk/MB actif : per-zone Graphics interleavées (z-order respecté).
+          // Cas legacy : overlay global au-dessus du single mesh.
+          if (isWalkZonePlaying && zoneOutlineGraphics.size > 0) {
+            drawZoneOutlinesPixi(zoneOutlineGraphics, polylines)
+          } else {
+            for (const pl of polylines) {
+              if (pl.points.length < 3) continue
+              const colorNum = parseInt(pl.color.replace('#', ''), 16) || 0
+              outlineOverlay.lineStyle({ width: pl.width, color: colorNum, alignment: 0.5, cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND })
+              outlineOverlay.moveTo(pl.points[0].x, pl.points[0].y)
+              for (let i = 1; i < pl.points.length; i++) outlineOverlay.lineTo(pl.points[i].x, pl.points[i].y)
+              outlineOverlay.lineTo(pl.points[0].x, pl.points[0].y)
+            }
+            outlineOverlay.lineStyle(0)
+          }
+          // Si on bascule depuis walk/MB vers legacy ou inverse, on clear l'autre.
+          if (isWalkZonePlaying) outlineOverlay.clear()
+          else { for (const g of zoneOutlineGraphics.values()) g.clear(); for (const m of zoneOutlineMasks.values()) m.clear() }
         }
       })
     }
