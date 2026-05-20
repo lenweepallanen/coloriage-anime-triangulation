@@ -1319,20 +1319,6 @@ export async function getProjectThumbnail(projectId: string): Promise<Blob | nul
 }
 
 export async function createProject(name: string): Promise<Project> {
-  const defaultAnimation: Animation = {
-    id: crypto.randomUUID(),
-    name: 'Animation',
-    type: 'rest',
-    playbackMode: 'loop',
-    createdAt: Date.now(),
-    videoBlob: null,
-    mesh: null,
-    physicsCode: null,
-    physicsDuration: null,
-    physicsOverlay: false,
-    audioBlob: null,
-    audioEnabled: false,
-  }
   const project: Project = {
     id: crypto.randomUUID(),
     name,
@@ -1341,7 +1327,7 @@ export async function createProject(name: string): Promise<Project> {
     backgroundVideoBlob: null,
     ambientSoundBlob: null,
     ambientSoundEnabled: false,
-    animations: [defaultAnimation],
+    animations: [],
     bodyZones: [],
     markers: null,
     scene: null,

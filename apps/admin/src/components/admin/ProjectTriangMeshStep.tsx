@@ -100,6 +100,69 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const [bodyEditMode, setBodyEditMode] = useState<'add' | 'connect' | 'move'>('add')
   const [connectBuffer, setConnectBuffer] = useState<number[]>([]) // collected indices for current manual triangle
 
+  // ─── Undo history (triangulation sub-phase only) ───────────────────
+  type TriSnapshot = {
+    manualPoints: Record<string, Point2D[]>
+    manualTriangles: Record<string, [number, number, number][]>
+    autoFrozen: Record<string, boolean>
+    zoneDensity: Record<string, number>
+    bodyEditMode: 'add' | 'connect' | 'move'
+    connectBuffer: number[]
+    zoneAnchors: Record<string, Point2D[]>
+    zoneSubdivisionPoints: Record<string, Point2D[]>
+    zoneSubdivisionParams: Record<string, CurvilinearParam[]>
+    zonePixelAdjusted: Record<string, boolean>
+  }
+  const HISTORY_LIMIT = 50
+  const [history, setHistory] = useState<TriSnapshot[]>([])
+  const pushHistory = useCallback(() => {
+    setHistory(prev => {
+      const snap: TriSnapshot = {
+        manualPoints: structuredClone(manualPoints),
+        manualTriangles: structuredClone(manualTriangles),
+        autoFrozen: { ...autoFrozen },
+        zoneDensity: { ...zoneDensity },
+        bodyEditMode,
+        connectBuffer: [...connectBuffer],
+        zoneAnchors: structuredClone(zoneAnchors),
+        zoneSubdivisionPoints: structuredClone(zoneSubdivisionPoints),
+        zoneSubdivisionParams: structuredClone(zoneSubdivisionParams),
+        zonePixelAdjusted: { ...zonePixelAdjusted },
+      }
+      const next = [...prev, snap]
+      if (next.length > HISTORY_LIMIT) next.shift()
+      return next
+    })
+  }, [manualPoints, manualTriangles, autoFrozen, zoneDensity, bodyEditMode, connectBuffer, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionParams, zonePixelAdjusted])
+  const undo = useCallback(() => {
+    setHistory(prev => {
+      if (prev.length === 0) return prev
+      const snap = prev[prev.length - 1]
+      setManualPoints(snap.manualPoints)
+      setManualTriangles(snap.manualTriangles)
+      setAutoFrozen(snap.autoFrozen)
+      setZoneDensity(snap.zoneDensity)
+      setBodyEditMode(snap.bodyEditMode)
+      setConnectBuffer(snap.connectBuffer)
+      setZoneAnchors(snap.zoneAnchors)
+      setZoneSubdivisionPoints(snap.zoneSubdivisionPoints)
+      setZoneSubdivisionParams(snap.zoneSubdivisionParams)
+      setZonePixelAdjusted(snap.zonePixelAdjusted)
+      return prev.slice(0, -1)
+    })
+  }, [])
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey) return
+      const tgt = e.target as HTMLElement | null
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return
+      e.preventDefault()
+      undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo])
+
   // ─── Z-order ──────────────────────────────────────────────────────
   const [zoneZOrder, setZoneZOrder] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {}
@@ -731,6 +794,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         const anchors = zoneAnchors[activeZoneId] ?? []
         for (let i = 0; i < anchors.length; i++) {
           if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+            pushHistory()
             setDragTarget({ zoneId: activeZoneId, type: 'anchor', idx: i })
             return
           }
@@ -738,6 +802,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         const subs = zoneSubdivisionPoints[activeZoneId] ?? []
         for (let i = 0; i < subs.length; i++) {
           if (Math.hypot(subs[i].x - imgPt.x, subs[i].y - imgPt.y) < hitR) {
+            pushHistory()
             setDragTarget({ zoneId: activeZoneId, type: 'subdivision', idx: i })
             return
           }
@@ -755,6 +820,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         if (activeZoneId === 'body' && bodyEditMode === 'connect') {
           const idx = hitTestUnified(imgPt, activeZoneId, hitR)
           if (idx < 0) return
+          pushHistory()
           const next = [...connectBuffer, idx]
           if (next.length < 3) {
             setConnectBuffer(next)
@@ -777,6 +843,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         if (activeZoneId === 'body' && bodyEditMode === 'move') {
           for (let i = manual.length - 1; i >= 0; i--) {
             if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
+              pushHistory()
               setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
               return
             }
@@ -795,6 +862,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         // Try drag existing manual point (hit-test on position directly)
         for (let i = manual.length - 1; i >= 0; i--) {
           if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
+            pushHistory()
             setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: i })
             return
           }
@@ -808,6 +876,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             for (let i = 0; i < autoInternal.length; i++) {
               const p = autoInternal[i]
               if (Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+                pushHistory()
                 const newManual = freezeAutoPoints(activeZoneId)
                 // Le point auto cliqué est désormais à l'index manual.length + i
                 setDragTarget({ zoneId: activeZoneId, type: 'internal', idx: newManual.length - autoInternal.length + i })
@@ -818,6 +887,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         }
         // Otherwise add point if inside the zone contour
         if (pointInPolygon(imgPt, closedContour)) {
+          pushHistory()
           setManualPoints(prev => ({
             ...prev,
             [activeZoneId]: [...(prev[activeZoneId] ?? []), imgPt],
@@ -918,6 +988,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           const cx = (pa.x + pb.x + pc.x) / 3
           const cy = (pa.y + pb.y + pc.y) / 3
           if (Math.hypot(cx - imgPt.x, cy - imgPt.y) < hitR * 2) {
+            pushHistory()
             setManualTriangles(prev => {
               const arr = [...(prev[activeZoneId] ?? [])]
               arr.splice(i, 1)
@@ -928,7 +999,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         }
       }
       // No triangle hit → cancel the in-progress chain
-      if (connectBuffer.length > 0) setConnectBuffer([])
+      if (connectBuffer.length > 0) { pushHistory(); setConnectBuffer([]) }
       return
     }
 
@@ -938,6 +1009,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       for (let i = subs.length - 1; i >= 0; i--) {
         const p = subs[i]
         if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+          pushHistory()
           setZoneSubdivisionPoints(prev => {
             const arr = [...(prev[activeZoneId] ?? [])]
             arr.splice(i, 1)
@@ -962,6 +1034,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       for (let i = manual.length - 1; i >= 0; i--) {
         const p = manual[i]
         if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+          pushHistory()
           setManualPoints(prev => {
             const arr = [...(prev[activeZoneId] ?? [])]
             arr.splice(i, 1)
@@ -981,6 +1054,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           for (let i = 0; i < autoInternal.length; i++) {
             const p = autoInternal[i]
             if (Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+              pushHistory()
               const newManual = freezeAutoPoints(activeZoneId)
               const removeIdx = newManual.length - autoInternal.length + i
               setManualPoints(prev => {
@@ -1079,6 +1153,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   }
 
   function handleDensityChange(zoneId: string, value: number) {
+    pushHistory()
     setZoneDensity(prev => ({ ...prev, [zoneId]: value }))
     setManualPoints(prev => ({ ...prev, [zoneId]: [] }))
     // Auto-internal indices shift with density → manual triangles become stale
@@ -1556,6 +1631,15 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>
                 Triangulation : {activeLabel}
               </span>
+              <button
+                className="btn-sm btn-ghost"
+                onClick={undo}
+                disabled={history.length === 0}
+                title="Annuler (Ctrl/Cmd+Z)"
+                style={{ marginLeft: 'auto', fontSize: 11, opacity: history.length === 0 ? 0.4 : 1 }}
+              >
+                ↶ Annuler
+              </button>
             </div>
 
             <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>
@@ -1576,7 +1660,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                     <button
                       key={m}
                       className={bodyEditMode === m ? 'btn-sm btn-primary' : 'btn-sm btn-ghost'}
-                      onClick={() => { setBodyEditMode(m); setConnectBuffer([]) }}
+                      onClick={() => { pushHistory(); setBodyEditMode(m); setConnectBuffer([]) }}
                       style={{ flex: 1, fontSize: 11 }}
                     >
                       {{ add: 'Ajouter', connect: 'Relier', move: 'Déplacer' }[m]}
@@ -1593,6 +1677,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                   <button
                     className="btn-sm btn-danger"
                     onClick={() => {
+                      pushHistory()
                       setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
                       setConnectBuffer([])
                     }}
@@ -1609,6 +1694,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
                 className="btn-sm btn-danger"
                 onClick={(e) => {
                   e.stopPropagation()
+                  pushHistory()
                   setManualPoints(prev => ({ ...prev, [activeZoneId]: [] }))
                   setAutoFrozen(prev => ({ ...prev, [activeZoneId]: false }))
                 }}

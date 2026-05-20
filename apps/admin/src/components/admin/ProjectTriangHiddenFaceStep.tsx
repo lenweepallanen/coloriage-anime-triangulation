@@ -130,6 +130,63 @@ function HiddenFaceEditor({ project, onSave }: Props) {
   const [saving, setSaving] = useState(false)
   const [imageLoaded, setImageLoaded] = useState(false)
 
+  // ─── Undo history ─────────────────────────────────────────────────
+  type HFSnapshot = {
+    mode: HiddenFaceMode
+    activeLimbId: string | null
+    hiddenFaces: Record<string, HiddenFaceState>
+    workBodyPoints: Point2D[]
+    workBodyTriangles: [number, number, number][]
+    limbHiddenFaces: Record<string, HiddenFaceLimbState>
+    workZonePoints: Record<string, Point2D[]>
+    workZoneTriangles: Record<string, [number, number, number][]>
+  }
+  const HISTORY_LIMIT = 50
+  const [history, setHistory] = useState<HFSnapshot[]>([])
+  const pushHistory = useCallback(() => {
+    setHistory(prev => {
+      const snap: HFSnapshot = {
+        mode,
+        activeLimbId,
+        hiddenFaces: structuredClone(hiddenFaces),
+        workBodyPoints: workBodyPoints.map(p => ({ ...p })),
+        workBodyTriangles: workBodyTriangles.map(t => [...t] as [number, number, number]),
+        limbHiddenFaces: structuredClone(limbHiddenFaces),
+        workZonePoints: structuredClone(workZonePoints),
+        workZoneTriangles: structuredClone(workZoneTriangles),
+      }
+      const next = [...prev, snap]
+      if (next.length > HISTORY_LIMIT) next.shift()
+      return next
+    })
+  }, [mode, activeLimbId, hiddenFaces, workBodyPoints, workBodyTriangles, limbHiddenFaces, workZonePoints, workZoneTriangles])
+  const undo = useCallback(() => {
+    setHistory(prev => {
+      if (prev.length === 0) return prev
+      const s = prev[prev.length - 1]
+      setMode(s.mode)
+      setActiveLimbId(s.activeLimbId)
+      setHiddenFaces(s.hiddenFaces)
+      setWorkBodyPoints(s.workBodyPoints)
+      setWorkBodyTriangles(s.workBodyTriangles)
+      setLimbHiddenFaces(s.limbHiddenFaces)
+      setWorkZonePoints(s.workZonePoints)
+      setWorkZoneTriangles(s.workZoneTriangles)
+      return prev.slice(0, -1)
+    })
+  }, [])
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey) return
+      const tgt = e.target as HTMLElement | null
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return
+      e.preventDefault()
+      undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo])
+
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } = useCanvasInteraction(canvasRef)
   const imageRef = useRef<HTMLImageElement | null>(null)
@@ -503,6 +560,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
   // ─── Toggle hidden face per zone ───────────────────────────────────
 
   function toggleBodyHiddenFace(limbId: string) {
+    pushHistory()
     if (hiddenFaces[limbId]) {
       const hf = hiddenFaces[limbId]
       if (hf.generated && hf.bodyTriangleIndices.length > 0) {
@@ -531,6 +589,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
   }
 
   function toggleLimbHiddenFace(limbId: string) {
+    pushHistory()
     if (limbHiddenFaces[limbId]) {
       const hfl = limbHiddenFaces[limbId]
       if (hfl.generated && hfl.zoneTriangleIndices.length > 0) {
@@ -558,7 +617,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
   function handleGenerate() {
     if (!activeLimbId) return
-
+    pushHistory()
     if (mode === 'body') {
       if (!activeBodyHF || activeBodyHF.vertexA === null || activeBodyHF.vertexB === null) return
       const result = triangulateHiddenFace(
@@ -612,6 +671,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     if (editPhase === 'select-a') {
       const idx = hitTestBoundaryVertex(imgPt, hitR)
       if (idx >= 0) {
+        pushHistory()
         if (mode === 'body') {
           setHiddenFaces(prev => ({ ...prev, [activeLimbId]: { ...prev[activeLimbId], vertexA: idx } }))
         } else {
@@ -625,6 +685,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       const idx = hitTestBoundaryVertex(imgPt, hitR)
       const vertA = mode === 'body' ? activeBodyHF?.vertexA : activeLimbHF?.zoneVertexA
       if (idx >= 0 && idx !== vertA) {
+        pushHistory()
         if (mode === 'body') {
           setHiddenFaces(prev => ({ ...prev, [activeLimbId]: { ...prev[activeLimbId], vertexB: idx } }))
         } else {
@@ -637,10 +698,12 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     if (editPhase === 'bridge') {
       const bpIdx = hitTestBridgePoint(imgPt, hitR)
       if (bpIdx >= 0) {
+        pushHistory()
         setDragIdx(bpIdx)
         return
       }
       // Add new bridge point
+      pushHistory()
       if (mode === 'body') {
         setHiddenFaces(prev => ({
           ...prev,
@@ -688,6 +751,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
     const bpIdx = hitTestBridgePoint(imgPt, hitR)
     if (bpIdx >= 0) {
+      pushHistory()
       if (mode === 'body') {
         setHiddenFaces(prev => {
           const hf = prev[activeLimbId]
@@ -710,6 +774,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
   function handleReset() {
     if (!activeLimbId) return
+    pushHistory()
     if (mode === 'body') {
       // Reset body au baseline (avant toute fusion HF) et invalide toutes les body HF.
       setWorkBodyPoints([...bodyBaselinePoints])
@@ -832,19 +897,29 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
           <button
             className={`btn-sm ${mode === 'body' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => { setMode('body'); setActiveLimbId(null) }}
+            onClick={() => { pushHistory(); setMode('body'); setActiveLimbId(null) }}
             style={{ flex: 1, fontSize: 11 }}
           >
             Face cachee body
           </button>
           <button
             className={`btn-sm ${mode === 'limb' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => { setMode('limb'); setActiveLimbId(null) }}
+            onClick={() => { pushHistory(); setMode('limb'); setActiveLimbId(null) }}
             style={{ flex: 1, fontSize: 11 }}
           >
             Face cachee jambe
           </button>
         </div>
+
+        <button
+          className="btn-sm btn-ghost"
+          onClick={undo}
+          disabled={history.length === 0}
+          title="Annuler (Ctrl/Cmd+Z)"
+          style={{ width: '100%', fontSize: 11, marginBottom: 8, opacity: history.length === 0 ? 0.4 : 1 }}
+        >
+          ↶ Annuler
+        </button>
 
         <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 12 }}>
           {mode === 'body'
