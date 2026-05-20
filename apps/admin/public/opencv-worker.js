@@ -1328,12 +1328,12 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
     cv.GaussianBlur(gray, blurred, new cv.Size(kSize, kSize), 0);
     cv.Canny(blurred, edges, lowThreshold, highThreshold);
 
-    // Heavy barrier (5×5 × 3 iters + 7×7 close ≈ 8 px) — used for zone
-    // separation; must be watertight even where the trace has gaps.
-    dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
-    cv.dilate(edges, barrier, dilateKernel, new cv.Point(-1, -1), 3);
-    closeKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
-    cv.morphologyEx(barrier, barrier, cv.MORPH_CLOSE, closeKernel);
+    // EXPERIMENT: no barrier at all — raw Canny edges, no dilation, no close.
+    // Most permissive setting; expect flood-fill leaks across zones wherever
+    // the Canny trace has micro-gaps.
+    dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+    closeKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+    edges.copyTo(barrier);
 
     // Light barrier (3×3 × 1 iter ≈ 1 px) — used for the silhouette outer
     // contour so it sits on the real black trace, not the inflated barrier.
@@ -1394,6 +1394,36 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
       candidates.push({ points: pts, area: a });
     }
 
+    // ---- Fine candidates (light barrier) ----
+    // The heavy barrier eats ~8 px of white on each side of every black trace,
+    // so very thin features (claws, hooves narrower than ~16 px) disappear
+    // from `walkable` entirely. We compute a second set of candidates from a
+    // light-barrier walkable so a click on a small claw still finds *something*
+    // to pick. Used only as a fallback when no heavy candidate contains the click.
+    var fineWalkable = new cv.Mat();
+    var fineContours = new cv.MatVector();
+    var fineHier = new cv.Mat();
+    var fineCandidates = [];
+    try {
+      cv.subtract(silMask, lightBarrier, fineWalkable);
+      cv.findContours(fineWalkable, fineContours, fineHier, cv.RETR_LIST, cv.CHAIN_APPROX_NONE);
+      for (var fc = 0; fc < fineContours.size(); fc++) {
+        var fcnt = fineContours.get(fc);
+        if (fcnt.rows < 3) continue;
+        var fa = cv.contourArea(fcnt);
+        if (fa < minArea) continue;
+        var fpts = [];
+        for (var fp = 0; fp < fcnt.rows; fp++) {
+          fpts.push({ x: fcnt.data32S[fp * 2], y: fcnt.data32S[fp * 2 + 1] });
+        }
+        fineCandidates.push({ points: fpts, area: fa });
+      }
+    } finally {
+      fineWalkable.delete();
+      fineContours.delete();
+      fineHier.delete();
+    }
+
     // For each seed click, pick the candidate whose boundary the click sits on
     // (smallest min-distance), then polygon-offset its boundary by `inflate` px.
     // Overlapping offsets merge naturally when rasterized into the union mask.
@@ -1430,16 +1460,43 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
       pv.delete();
     }
 
-    // Each click picks INDEPENDENTLY its closest candidate. All picked
-    // candidates are unioned into the final zone mask — so clicking once on
-    // the leg trace + once on a hoof trace yields leg ∪ hoof.
-    function pickClosestCandidateIdx(wp) {
-      var bestIdx = -1, bestD = Infinity;
-      for (var ci = 0; ci < candidates.length; ci++) {
-        var d = minDistToPolygonSq(wp.x, wp.y, candidates[ci].points);
-        if (d < bestD) { bestD = d; bestIdx = ci; }
+    // Each click picks INDEPENDENTLY the candidate that CONTAINS it (bounded
+    // by black edges). In case of nesting, the smallest containing candidate
+    // wins (= the actual local region you clicked in). All picked candidates
+    // are unioned into the final zone mask — so clicking once on the leg + once
+    // on the hoof yields leg ∪ hoof, and a large `inflate` bridges them.
+    // Clicks landing on a trace / outside any white region are ignored.
+    function pointInPoly(px, py, poly) {
+      var inside = false;
+      for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        var xi = poly[i].x, yi = poly[i].y;
+        var xj = poly[j].x, yj = poly[j].y;
+        var denom = (yj - yi) || 1e-12;
+        var intersect = ((yi > py) !== (yj > py)) &&
+          (px < (xj - xi) * (py - yi) / denom + xi);
+        if (intersect) inside = !inside;
       }
-      return bestIdx;
+      return inside;
+    }
+    function pickContainingCandidateIdx(wp) {
+      var bestIdx = -1, bestA = Infinity;
+      for (var ci = 0; ci < candidates.length; ci++) {
+        if (!pointInPoly(wp.x, wp.y, candidates[ci].points)) continue;
+        if (candidates[ci].area < bestA) { bestA = candidates[ci].area; bestIdx = ci; }
+      }
+      if (bestIdx >= 0) return bestIdx;
+      // Fallback: try the fine (light-barrier) candidate set so a click landing
+      // on a thin feature (claw, hoof) still gets a region. Append the picked
+      // fine candidate to the main `candidates` array so the downstream code
+      // (offsetPolygon / fillContourInto) treats it like any other.
+      var fineBest = -1, fineBestA = Infinity;
+      for (var fi = 0; fi < fineCandidates.length; fi++) {
+        if (!pointInPoly(wp.x, wp.y, fineCandidates[fi].points)) continue;
+        if (fineCandidates[fi].area < fineBestA) { fineBestA = fineCandidates[fi].area; fineBest = fi; }
+      }
+      if (fineBest < 0) return -1;
+      candidates.push(fineCandidates[fineBest]);
+      return candidates.length - 1;
     }
 
     // Per-seed mask + per-seed contour
@@ -1456,7 +1513,7 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
         // Each waypoint picks its own closest candidate; union them.
         var pickedIdxs = {};
         for (var wpi = 0; wpi < waypoints.length; wpi++) {
-          var pi = pickClosestCandidateIdx(waypoints[wpi]);
+          var pi = pickContainingCandidateIdx(waypoints[wpi]);
           if (pi >= 0) pickedIdxs[pi] = 1;
         }
         var pickedList = Object.keys(pickedIdxs).map(function (k) { return parseInt(k, 10); });
@@ -1478,19 +1535,21 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
           polyMask = cv.Mat.zeros(h, w, cv.CV_8UC1); // unused placeholder for cleanup symmetry
 
           cv.findContours(dilated, legContours, legHier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
-          if (legContours.size() > 0) {
-            var ba = 0, bi = 0;
-            for (var kk = 0; kk < legContours.size(); kk++) {
-              var aa = cv.contourArea(legContours.get(kk));
-              if (aa > ba) { ba = aa; bi = kk; }
-            }
-            var lc = legContours.get(bi);
+          // Return ALL union components, not just the largest. The user adds
+          // independent contours by clicking different regions; only by tuning
+          // `inflate` large enough do they merge. We send them all back and let
+          // the UI display them (and warn at save time if still disconnected).
+          var loops = [];
+          for (var kk = 0; kk < legContours.size(); kk++) {
+            var lc = legContours.get(kk);
+            if (lc.rows < 3) continue;
             var lpts = [];
             for (var nn = 0; nn < lc.rows; nn++) {
               lpts.push({ x: lc.data32S[nn * 2], y: lc.data32S[nn * 2 + 1] });
             }
-            zoneContours[seed.id] = lpts;
+            loops.push(lpts);
           }
+          if (loops.length > 0) zoneContours[seed.id] = loops;
 
           dilated.delete();
           polyMask.delete();

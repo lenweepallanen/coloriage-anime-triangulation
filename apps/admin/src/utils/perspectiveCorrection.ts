@@ -235,7 +235,7 @@ export async function flowCannySegmentZones(
   inflate = 12,
 ): Promise<{
   silhouette: { x: number; y: number }[] | null
-  zoneContours: Record<string, { x: number; y: number }[]>
+  zoneContours: Record<string, { x: number; y: number }[][]>
 }> {
   if (!workerReady) await loadOpenCVWorker()
   const result = await workerRpc({

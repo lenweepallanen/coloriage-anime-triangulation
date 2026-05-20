@@ -73,7 +73,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
 
   // ---- Canny interactive state ----
   const [legSeeds, setLegSeeds] = useState<Record<string, Point2D[]>>({})
-  const [legLoops, setLegLoops] = useState<Record<string, Point2D[]>>({})
+  // One zone can hold several disconnected loops while editing. Inflate must
+  // be large enough to merge them into a single loop before validating.
+  const [legLoops, setLegLoops] = useState<Record<string, Point2D[][]>>({})
   const [bodySilhouette, setBodySilhouette] = useState<Point2D[] | null>(null)
   const [cannyComputing, setCannyComputing] = useState(false)
   const draggingSeedRef = useRef<{ zoneId: string; index: number } | null>(null)
@@ -146,7 +148,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     const activeZoneIds = memberZoneIds.filter(id => (seedsSnapshot[id]?.length ?? 0) > 0)
     setCannyComputing(true)
     try {
-      const nextLoops: Record<string, Point2D[]> = {}
+      const nextLoops: Record<string, Point2D[][]> = {}
       let silhouette: Point2D[] | null = null
       for (const zoneId of activeZoneIds) {
         const result = await flowCannySegmentZones(
@@ -155,15 +157,15 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
           cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
           inflateFor(zoneId),
         )
-        const c = result.zoneContours[zoneId]
-        if (c && c.length >= 3) nextLoops[zoneId] = c
+        const loops = (result.zoneContours[zoneId] ?? []).filter(l => l.length >= 3)
+        if (loops.length > 0) nextLoops[zoneId] = loops
         if (!silhouette && result.silhouette) silhouette = result.silhouette
       }
       setLegLoops(nextLoops)
 
       if (silhouette && silhouette.length >= 3) {
         const legContoursForBridge = memberZoneIds
-          .map(id => nextLoops[id])
+          .flatMap(id => nextLoops[id] ?? [])
           .filter((c): c is Point2D[] => c != null && c.length >= 3)
         if (legContoursForBridge.length === 0) {
           setBodySilhouette(silhouette)
@@ -240,18 +242,27 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         ctx.stroke()
       }
       for (const legId of memberZoneIds) {
-        const loop = legLoops[legId]
-        if (!loop || loop.length < 3) continue
+        const loops = legLoops[legId]
+        if (!loops || loops.length === 0) continue
         const zone = zones.find(z => z.id === legId)
         if (!zone) continue
-        const sm = smoothPolygonGaussian(loop, sigmaFor(legId))
-        ctx.strokeStyle = zone.color
-        ctx.lineWidth = 3 / t.scale
-        ctx.beginPath()
-        ctx.moveTo(sm[0].x, sm[0].y)
-        for (let i = 1; i < sm.length; i++) ctx.lineTo(sm[i].x, sm[i].y)
-        ctx.closePath()
-        ctx.stroke()
+        const multi = loops.length > 1
+        for (const loop of loops) {
+          if (loop.length < 3) continue
+          const sm = smoothPolygonGaussian(loop, sigmaFor(legId))
+          // Dashed stroke when the zone has several disconnected pieces — a
+          // visual warning that the user must raise `inflate` to merge them
+          // (the curviligne mesh pipeline downstream needs a single contour).
+          ctx.strokeStyle = zone.color
+          ctx.lineWidth = 3 / t.scale
+          if (multi) ctx.setLineDash([8 / t.scale, 6 / t.scale])
+          ctx.beginPath()
+          ctx.moveTo(sm[0].x, sm[0].y)
+          for (let i = 1; i < sm.length; i++) ctx.lineTo(sm[i].x, sm[i].y)
+          ctx.closePath()
+          ctx.stroke()
+          if (multi) ctx.setLineDash([])
+        }
       }
       const sr = 6 / t.scale
       for (const legId of memberZoneIds) {
@@ -392,14 +403,20 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       alert('Cliquez sur le body pour détecter sa silhouette.')
       return null
     }
-    const missing = memberZoneIds.filter(id => !legLoops[id] || legLoops[id].length < 3)
+    const missing = memberZoneIds.filter(id => !legLoops[id] || legLoops[id].length === 0)
     if (missing.length > 0) {
       const names = missing.map(id => zones.find(z => z.id === id)?.label ?? id).join(', ')
-      alert(`Placez au moins 2 clics par membre pour fermer la boucle : ${names}`)
+      alert(`Placez au moins un clic dans chaque membre : ${names}`)
+      return null
+    }
+    const disconnected = memberZoneIds.filter(id => (legLoops[id]?.length ?? 0) > 1)
+    if (disconnected.length > 0) {
+      const names = disconnected.map(id => zones.find(z => z.id === id)?.label ?? id).join(', ')
+      alert(`Plusieurs zones déconnectées détectées (${names}). Augmente l'inflate pour les fusionner en une seule, ou retire un clic.`)
       return null
     }
     const rawByZone: Record<string, Point2D[]> = { body: bodySilhouette }
-    for (const id of memberZoneIds) rawByZone[id] = legLoops[id]
+    for (const id of memberZoneIds) rawByZone[id] = legLoops[id][0]
     const smoothed: Record<string, Point2D[]> = {}
     const newMasks: Record<string, RLEMask[]> = {}
     for (const z of zones) {
