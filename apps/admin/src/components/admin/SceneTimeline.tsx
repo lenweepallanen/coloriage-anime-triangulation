@@ -1,30 +1,21 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
-import type { SceneRestPoint, SceneTransition } from '../../types/project'
 
 export type TimelineSelection =
-  | { type: 'restPoint'; index: number }
-  | { type: 'startPoint' }
-  | { type: 'segment'; transitionIndex: number; segmentIndex: number }
+  | { type: 'restPoint' }
+  | { type: 'entryStart' }
 
 interface Props {
   backgroundImageUrl: string | null
   backgroundWidth: number
   backgroundHeight: number
-  restPoints: SceneRestPoint[]
-  transitions: SceneTransition[]
-  startMode: 'rest' | 'transition'
-  startX?: number
-  startTransition?: SceneTransition
+  restPointX: number
+  entry: 'fixed' | 'moving'
+  entryStartX?: number
   selection: TimelineSelection | null
   onSelect: (selection: TimelineSelection | null) => void
-  onMoveRestPoint: (index: number, backgroundX: number) => void
-  onMoveStartPoint: (backgroundX: number) => void
-  onMoveWaypoint: (transitionIndex: number, waypointIndex: number, backgroundX: number) => void
-  onAddWaypoint: (transitionIndex: number, backgroundX: number) => void
-  onDeleteRestPoint: (index: number) => void
-  onDeleteWaypoint: (transitionIndex: number, waypointIndex: number) => void
-  onAddRestPoint: (backgroundX: number) => void
-  // Character preview on timeline
+  onMoveRestPoint: (backgroundX: number) => void
+  onMoveEntryStart: (backgroundX: number) => void
+  // Character preview
   characterImageUrl?: string | null
   characterImageWidth?: number
   characterImageHeight?: number
@@ -36,33 +27,21 @@ const MIN_TIMELINE_HEIGHT = 100
 const DEFAULT_TIMELINE_HEIGHT = 200
 const MAX_TIMELINE_HEIGHT = 800
 const REST_POINT_RADIUS = 12
-const WAYPOINT_RADIUS = 7
-const START_POINT_SIZE = 14
-const MIN_DISTANCE = 20
+const ENTRY_POINT_SIZE = 14
 
-type DragTarget =
-  | { type: 'restPoint'; index: number }
-  | { type: 'startPoint' }
-  | { type: 'waypoint'; transitionIndex: number; waypointIndex: number }
+type DragTarget = 'restPoint' | 'entryStart'
 
 export default function SceneTimeline({
   backgroundImageUrl,
   backgroundWidth,
   backgroundHeight,
-  restPoints,
-  transitions,
-  startMode,
-  startX,
-  startTransition,
+  restPointX,
+  entry,
+  entryStartX,
   selection,
   onSelect,
   onMoveRestPoint,
-  onMoveStartPoint,
-  onMoveWaypoint,
-  onAddWaypoint,
-  onDeleteRestPoint,
-  onDeleteWaypoint,
-  onAddRestPoint,
+  onMoveEntryStart,
   characterImageUrl,
   characterImageWidth,
   characterImageHeight,
@@ -75,38 +54,18 @@ export default function SceneTimeline({
   const [timelineHeight, setTimelineHeight] = useState(DEFAULT_TIMELINE_HEIGHT)
   const [resizing, setResizing] = useState(false)
 
-  // Compute scale from height, then clamp width to wrapper
   const aspectRatio = backgroundHeight > 0 ? backgroundWidth / backgroundHeight : 1
   const wrapperWidth = wrapperRef.current?.clientWidth ?? Infinity
   const rawWidth = timelineHeight * aspectRatio
   const timelineWidth = Math.min(rawWidth, wrapperWidth)
-  // If width-clamped, recompute effective height to keep ratio
-  const effectiveHeight = rawWidth > wrapperWidth
-    ? wrapperWidth / aspectRatio
-    : timelineHeight
+  const effectiveHeight = rawWidth > wrapperWidth ? wrapperWidth / aspectRatio : timelineHeight
   const scale = backgroundHeight > 0 ? effectiveHeight / backgroundHeight : 1
 
   const toTimelineX = useCallback((bgX: number) => bgX * scale, [scale])
   const toBackgroundX = useCallback((tlX: number) => Math.round(tlX / scale), [scale])
 
-  // Get all X positions for a transition (fromX, waypoints..., toX)
-  const getTransitionXPositions = useCallback((transitionIndex: number): number[] => {
-    if (transitionIndex === -1) {
-      // startTransition
-      const fromX = startX ?? 0
-      const toX = restPoints[0]?.backgroundX ?? 0
-      return [fromX, ...(startTransition?.waypoints ?? []), toX]
-    }
-    const fromX = restPoints[transitionIndex]?.backgroundX ?? 0
-    const toX = restPoints[transitionIndex + 1]?.backgroundX ?? 0
-    const transition = transitions[transitionIndex]
-    return [fromX, ...(transition?.waypoints ?? []), toX]
-  }, [restPoints, transitions, startMode, startX, startTransition])
-
-  // Resize handle drag
   useEffect(() => {
     if (!resizing) return
-
     const onMouseMove = (e: MouseEvent) => {
       const wrapper = wrapperRef.current
       if (!wrapper) return
@@ -114,13 +73,11 @@ export default function SceneTimeline({
       const newHeight = Math.max(MIN_TIMELINE_HEIGHT, Math.min(MAX_TIMELINE_HEIGHT, e.clientY - wrapperRect.top))
       setTimelineHeight(newHeight)
     }
-
     const onMouseUp = () => {
       setResizing(false)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('mousemove', onMouseMove)
@@ -131,22 +88,6 @@ export default function SceneTimeline({
     }
   }, [resizing])
 
-  // Click on timeline background
-  const handleTimelineClick = useCallback((e: React.MouseEvent) => {
-    if (dragging) return
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    const x = e.clientX - rect.left + (e.currentTarget as HTMLElement).scrollLeft
-    const bgX = toBackgroundX(x)
-
-    // Check if clicking on a transition line segment
-    // For simplicity, add a rest point at click position
-    const tooClose = restPoints.some(rp => Math.abs(toTimelineX(rp.backgroundX) - x) < MIN_DISTANCE)
-    if (!tooClose) {
-      onAddRestPoint(Math.max(0, Math.min(backgroundWidth, bgX)))
-    }
-  }, [dragging, restPoints, toBackgroundX, toTimelineX, backgroundWidth, onAddRestPoint])
-
-  // Drag handling
   useEffect(() => {
     if (!dragging) return
     const container = containerRef.current
@@ -157,22 +98,14 @@ export default function SceneTimeline({
       const x = e.clientX - rect.left + container.scrollLeft
       const bgX = toBackgroundX(Math.max(0, Math.min(timelineWidth, x)))
       const clampedBgX = Math.max(0, Math.min(backgroundWidth, bgX))
-
-      if (dragging.type === 'restPoint') {
-        onMoveRestPoint(dragging.index, clampedBgX)
-      } else if (dragging.type === 'startPoint') {
-        onMoveStartPoint(clampedBgX)
-      } else if (dragging.type === 'waypoint') {
-        onMoveWaypoint(dragging.transitionIndex, dragging.waypointIndex, clampedBgX)
-      }
+      if (dragging === 'restPoint') onMoveRestPoint(clampedBgX)
+      else if (dragging === 'entryStart') onMoveEntryStart(clampedBgX)
     }
-
     const onMouseUp = () => {
       setDragging(null)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-
     document.body.style.cursor = 'grabbing'
     document.body.style.userSelect = 'none'
     window.addEventListener('mousemove', onMouseMove)
@@ -181,275 +114,119 @@ export default function SceneTimeline({
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-  }, [dragging, toBackgroundX, timelineWidth, backgroundWidth, onMoveRestPoint, onMoveStartPoint, onMoveWaypoint])
+  }, [dragging, toBackgroundX, timelineWidth, backgroundWidth, onMoveRestPoint, onMoveEntryStart])
 
-  // Handle click on a transition line to add a waypoint
-  const handleLineClick = useCallback((e: React.MouseEvent, transitionIndex: number) => {
-    e.stopPropagation()
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const x = e.clientX - rect.left + (containerRef.current?.scrollLeft ?? 0)
-    const bgX = toBackgroundX(x)
-    onAddWaypoint(transitionIndex, Math.max(0, Math.min(backgroundWidth, bgX)))
-  }, [toBackgroundX, backgroundWidth, onAddWaypoint])
+  const restX = toTimelineX(restPointX)
+  const entryX = entryStartX != null ? toTimelineX(entryStartX) : null
 
-  // Render a transition (lines + waypoints)
-  const renderTransition = (transitionIndex: number) => {
-    const xPositions = getTransitionXPositions(transitionIndex)
-    const transition = transitionIndex === -1 ? startTransition : transitions[transitionIndex]
-    if (!transition || xPositions.length < 2) return null
-
-    const elements: React.ReactNode[] = []
-
-    // Lines between consecutive X positions (each is a segment)
-    for (let i = 0; i < xPositions.length - 1; i++) {
-      const x1 = toTimelineX(xPositions[i])
-      const x2 = toTimelineX(xPositions[i + 1])
-      const isSelected = selection?.type === 'segment'
-        && selection.transitionIndex === transitionIndex
-        && selection.segmentIndex === i
-
-      elements.push(
-        <line
-          key={`line-${transitionIndex}-${i}`}
-          x1={x1} y1={effectiveHeight / 2}
-          x2={x2} y2={effectiveHeight / 2}
-          stroke={isSelected ? 'var(--color-primary-hover)' : 'var(--color-primary)'}
-          strokeWidth={isSelected ? 4 : 2.5}
-          opacity={0.8}
-          style={{ cursor: 'pointer' }}
-          onClick={(e) => {
-            e.stopPropagation()
-            onSelect({ type: 'segment', transitionIndex, segmentIndex: i })
-          }}
-          onDoubleClick={(e) => handleLineClick(e, transitionIndex)}
-        />
-      )
-    }
-
-    // Waypoints
-    const waypoints = transition.waypoints
-    for (let wi = 0; wi < waypoints.length; wi++) {
-      const wx = toTimelineX(waypoints[wi])
-      elements.push(
-        <g key={`wp-${transitionIndex}-${wi}`}>
-          <circle
-            cx={wx} cy={effectiveHeight / 2}
-            r={WAYPOINT_RADIUS}
-            fill="var(--color-primary)"
-            stroke="white"
-            strokeWidth={1.5}
-            style={{ cursor: 'grab' }}
-            onMouseDown={(e) => {
-              e.stopPropagation()
-              setDragging({ type: 'waypoint', transitionIndex, waypointIndex: wi })
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-          {/* Delete button for waypoint on right-click or via context */}
-        </g>
-      )
-    }
-
-    return elements
-  }
-
-  const isRestPointSelected = (index: number) =>
-    selection?.type === 'restPoint' && selection.index === index
-
-  const isStartPointSelected = selection?.type === 'startPoint'
-
-  // --- Viewport frame & character preview ---
-  // Simulate ScenePlayback offset logic to show what the player will render
-  const SCREEN_ASPECT = 16 / 9
-  // Viewport in background-image pixels
-  const viewportWidthBg = backgroundHeight > 0 ? backgroundHeight * SCREEN_ASPECT : 0
-  const viewportHeightBg = backgroundHeight
-
-  // Compute backgroundOffsetX for a given character X (same logic as ScenePlayback)
-  function computeViewportOffset(charBgX: number): number {
-    const maxOffset = Math.max(0, backgroundWidth - viewportWidthBg)
-    const raw = charBgX - viewportWidthBg / 2
-    return Math.max(0, Math.min(maxOffset, raw))
-  }
-
-  // Character dimensions in background pixels
-  // In ScenePlayer: charH_screen = viewH * characterScale, charH_bg = backgroundHeight * characterScale
-  const charHBg = backgroundHeight * charScale
-  const charAspect = (characterImageWidth && characterImageHeight) ? characterImageWidth / characterImageHeight : 1
-  const charWBg = charAspect * charHBg
-
-  // Selected rest point for viewport preview
-  const selectedRpIndex = selection?.type === 'restPoint' ? selection.index : null
-  const selectedRp = selectedRpIndex != null ? restPoints[selectedRpIndex] : null
-
-  // Compute viewport frame and character position for the selected rest point
-  const viewportPreview = selectedRp ? (() => {
-    const bgX = selectedRp.backgroundX
-    const offset = computeViewportOffset(bgX)
-    // Character screen position in bg coords:
-    // charScreenX_bg = currentX - offset - charW_bg / 2
-    const charXBg = bgX - offset - charWBg / 2
-    const charYBg = (viewportHeightBg - charHBg) / 2 + charY
-    // Clamp viewport width to background width (viewport can't exceed it)
-    const clampedVpW = Math.min(viewportWidthBg, backgroundWidth)
-    return {
-      // Viewport rectangle in timeline coords
-      vpX: toTimelineX(offset),
-      vpY: 0,
-      vpW: toTimelineX(clampedVpW),
-      vpH: effectiveHeight,
-      // Character position in timeline coords (absolute on background)
-      charX: toTimelineX(bgX - charWBg / 2),
-      charY: charYBg * scale,
-      charW: charWBg * scale,
-      charH: charHBg * scale,
-    }
-  })() : null
+  // Character preview at rest point
+  const charPx = characterImageWidth && characterImageHeight && characterImageWidth > 0
+    ? {
+        w: characterImageWidth * scale * charScale,
+        h: characterImageHeight * scale * charScale,
+        y: effectiveHeight / 2 - (charY * scale),
+      }
+    : null
 
   return (
-    <div className="scene-timeline-wrapper" ref={wrapperRef}>
+    <div ref={wrapperRef} className="scene-timeline-wrapper">
       <div
         ref={containerRef}
         className="scene-timeline"
-        style={{ width: timelineWidth, height: effectiveHeight }}
-        onClick={handleTimelineClick}
+        style={{
+          width: timelineWidth,
+          height: effectiveHeight,
+          backgroundImage: backgroundImageUrl ? `url(${backgroundImageUrl})` : undefined,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          position: 'relative',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-sm)',
+          overflow: 'hidden',
+        }}
       >
-        {backgroundImageUrl && (
-          <img
-            src={backgroundImageUrl}
-            alt="Scene background"
-            className="scene-timeline-bg"
-            style={{ width: timelineWidth, height: effectiveHeight }}
-            draggable={false}
-          />
-        )}
-
-        {/* Viewport frame overlay (darkens areas outside viewport) */}
-        {viewportPreview && (
+        {/* Entry start (fantôme) */}
+        {entry === 'moving' && entryX != null && (
           <>
-            {/* Dark overlay left of viewport */}
-            {viewportPreview.vpX > 0 && (
-              <div className="scene-timeline-viewport-mask" style={{
-                left: 0, top: 0, width: viewportPreview.vpX, height: effectiveHeight,
-              }} />
-            )}
-            {/* Dark overlay right of viewport */}
-            {viewportPreview.vpX + viewportPreview.vpW < timelineWidth && (
-              <div className="scene-timeline-viewport-mask" style={{
-                left: viewportPreview.vpX + viewportPreview.vpW, top: 0,
-                width: timelineWidth - viewportPreview.vpX - viewportPreview.vpW, height: effectiveHeight,
-              }} />
-            )}
-            {/* Viewport border */}
-            <div className="scene-timeline-viewport-frame" style={{
-              left: viewportPreview.vpX, top: 0,
-              width: viewportPreview.vpW, height: effectiveHeight,
-            }} />
+            {/* Arrow line entryStart → restPoint */}
+            <svg
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+            >
+              <line
+                x1={entryX} y1={effectiveHeight / 2}
+                x2={restX} y2={effectiveHeight / 2}
+                stroke="rgba(255,255,255,0.5)"
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                markerEnd="url(#tl-arrow)"
+              />
+              <defs>
+                <marker id="tl-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255,255,255,0.7)" />
+                </marker>
+              </defs>
+            </svg>
+            <div
+              onMouseDown={(e) => { e.stopPropagation(); setDragging('entryStart'); onSelect({ type: 'entryStart' }) }}
+              style={{
+                position: 'absolute',
+                left: entryX - ENTRY_POINT_SIZE / 2,
+                top: effectiveHeight / 2 - ENTRY_POINT_SIZE / 2,
+                width: ENTRY_POINT_SIZE, height: ENTRY_POINT_SIZE,
+                background: selection?.type === 'entryStart' ? '#ffa726' : 'rgba(255,167,38,0.5)',
+                border: '2px solid #fff',
+                cursor: 'grab',
+                transform: 'rotate(45deg)',
+              }}
+              title="Position de départ"
+            />
           </>
         )}
 
-        {/* Character preview image at selected rest point */}
-        {viewportPreview && characterImageUrl && viewportPreview.charW > 0 && (
+        {/* Character preview at rest point */}
+        {characterImageUrl && charPx && (
           <img
             src={characterImageUrl}
             alt=""
-            className="scene-timeline-character-preview"
             style={{
-              left: viewportPreview.charX,
-              top: viewportPreview.charY,
-              width: viewportPreview.charW,
-              height: viewportPreview.charH,
+              position: 'absolute',
+              left: restX - charPx.w / 2,
+              top: charPx.y - charPx.h / 2,
+              width: charPx.w, height: charPx.h,
+              pointerEvents: 'none',
+              opacity: 0.85,
             }}
-            draggable={false}
           />
         )}
 
-        <svg className="scene-timeline-lines" style={{ width: timelineWidth, height: effectiveHeight }}>
-          {/* Start transition (if startMode='transition') */}
-          {startMode === 'transition' && startTransition && restPoints.length > 0 && (
-            renderTransition(-1)
-          )}
-
-          {/* Transitions between rest points */}
-          {transitions.map((_, i) => (
-            <g key={`transition-${i}`}>{renderTransition(i)}</g>
-          ))}
-        </svg>
-
-        {/* Start point (triangle) */}
-        {startMode === 'transition' && startX != null && (
-          <div
-            className={`scene-timeline-start ${isStartPointSelected ? 'scene-timeline-start--selected' : ''}`}
-            style={{ left: toTimelineX(startX) - START_POINT_SIZE / 2 }}
-            onMouseDown={(e) => {
-              e.stopPropagation()
-              setDragging({ type: 'startPoint' })
-              onSelect({ type: 'startPoint' })
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <svg viewBox="0 0 24 24" width={START_POINT_SIZE} height={START_POINT_SIZE}>
-              <polygon points="4,2 20,12 4,22" fill="var(--color-type-physics)" stroke="white" strokeWidth="1.5" />
-            </svg>
-          </div>
-        )}
-
-        {/* Rest point markers */}
-        {restPoints.map((rp, index) => {
-          const x = toTimelineX(rp.backgroundX)
-          const selected = isRestPointSelected(index)
-          return (
-            <div
-              key={rp.id}
-              className={`scene-timeline-restpoint ${selected ? 'scene-timeline-restpoint--selected' : ''}`}
-              style={{ left: x - REST_POINT_RADIUS }}
-              onMouseDown={(e) => {
-                e.stopPropagation()
-                setDragging({ type: 'restPoint', index })
-                onSelect({ type: 'restPoint', index })
-              }}
-              onClick={(e) => e.stopPropagation()}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                if (restPoints.length > 1) {
-                  onDeleteRestPoint(index)
-                }
-              }}
-            >
-              <div className="scene-timeline-restpoint-circle">
-                {index + 1}
-              </div>
-              {selected && restPoints.length > 1 && (
-                <button
-                  className="scene-timeline-restpoint-delete"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onDeleteRestPoint(index)
-                  }}
-                  title="Supprimer"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          )
-        })}
-
-        {restPoints.length === 0 && backgroundImageUrl && (
-          <div className="scene-timeline-hint">
-            Cliquez sur le panorama pour ajouter des rest points
-          </div>
-        )}
+        {/* Rest point handle */}
+        <div
+          onMouseDown={(e) => { e.stopPropagation(); setDragging('restPoint'); onSelect({ type: 'restPoint' }) }}
+          style={{
+            position: 'absolute',
+            left: restX - REST_POINT_RADIUS,
+            top: effectiveHeight / 2 - REST_POINT_RADIUS,
+            width: REST_POINT_RADIUS * 2,
+            height: REST_POINT_RADIUS * 2,
+            borderRadius: '50%',
+            background: selection?.type === 'restPoint' ? '#42a5f5' : 'rgba(66,165,245,0.5)',
+            border: '2px solid #fff',
+            cursor: 'grab',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+          }}
+          title="Rest point (position au repos)"
+        />
       </div>
 
       {/* Resize handle */}
       <div
-        className="scene-timeline-resize-handle"
-        onMouseDown={(e) => {
-          e.preventDefault()
-          setResizing(true)
+        onMouseDown={() => setResizing(true)}
+        style={{
+          height: 6,
+          cursor: 'ns-resize',
+          background: 'transparent',
+          borderTop: '1px dashed var(--border)',
+          marginTop: 4,
         }}
       />
     </div>

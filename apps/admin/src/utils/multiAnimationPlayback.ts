@@ -45,6 +45,8 @@ export class MultiAnimationPlayback {
   private _state: PlaybackState = 'rest'
   private pendingOneshotId: string | null = null
   private activeOneshotId: string | null = null
+  /** Queue d'animations à enchaîner après l'oneshot courant (sans repasser par la rest). */
+  private oneshotQueue: string[] = []
 
   // Transition state
   private transitionFrames: number
@@ -106,26 +108,45 @@ export class MultiAnimationPlayback {
   }
 
   requestOneshot(animId: string): void {
-    if (!this.oneshotData.has(animId)) return
+    this.requestSequence([animId])
+  }
 
-    // Overlay animations start immediately on top of rest
-    if (this.overlayIds.has(animId)) {
-      this.activeOverlayId = animId
+  /**
+   * Joue une séquence d'animations à la suite (sans retour rest entre les éléments).
+   * - Si une seule animation : équivalent à l'ancien `requestOneshot`.
+   * - Si plusieurs : la 1ʳᵉ démarre via le pipeline rest→trans-out→oneshot habituel,
+   *   les suivantes s'enchaînent directement par un court blend `trans-out` entre la
+   *   dernière frame de l'oneshot précédent et la frame 0 de l'oneshot suivant.
+   * Le 1ᵉʳ id de la séquence peut être un overlay : dans ce cas il démarre
+   *   immédiatement et les éventuelles suivantes sont ignorées (overlay ≠ séquence).
+   */
+  requestSequence(animIds: string[]): void {
+    if (animIds.length === 0) return
+    const validIds = animIds.filter(id => this.oneshotData.has(id))
+    if (validIds.length === 0) return
+
+    const firstId = validIds[0]
+
+    // Overlay : démarrage immédiat, pas de queue
+    if (this.overlayIds.has(firstId)) {
+      this.activeOverlayId = firstId
       this.overlayCursor = 0
-      this.overlayTotalFrames = this.oneshotData.get(animId)!.length
-      this.onOverlayStart?.(animId)
+      this.overlayTotalFrames = this.oneshotData.get(firstId)!.length
+      this.onOverlayStart?.(firstId)
       return
     }
 
-    // If already playing or transitioning, queue
+    const rest = validIds.slice(1)
+
     if (this._state === 'rest') {
-      this.pendingOneshotId = animId
+      this.pendingOneshotId = firstId
+      this.oneshotQueue = rest
       this._state = 'wait'
     } else if (this._state === 'wait') {
-      // Replace pending
-      this.pendingOneshotId = animId
+      this.pendingOneshotId = firstId
+      this.oneshotQueue = rest
     }
-    // If playing oneshot or transitioning, ignore (current oneshot must finish)
+    // Si on est en oneshot/transition : on ignore (la séquence courante doit finir)
   }
 
   advance(deltaTicks: number): void {
@@ -175,7 +196,13 @@ export class MultiAnimationPlayback {
         this.oneshotCursor += advance
         if (this.oneshotCursor >= this.oneshotTotalFrames - 1) {
           this.oneshotCursor = this.oneshotTotalFrames - 1
-          this.startTransitionIn()
+          // Si la queue n'est pas vide, chaîner directement sur le prochain oneshot
+          // sans repasser par la rest (court blend entre last frame courant → frame 0 suivant).
+          if (this.oneshotQueue.length > 0) {
+            this.startNextInQueue()
+          } else {
+            this.startTransitionIn()
+          }
         }
         break
       }
@@ -271,6 +298,29 @@ export class MultiAnimationPlayback {
     this.oneshotTotalFrames = oneshotFrames.length
     // Resolve easing: per-animation override → global default
     const easingName = this.oneshotEasings.get(oneshotId) ?? this.defaultEasing
+    this.activeEasing = EASING_FUNCTIONS[easingName]
+  }
+
+  private startNextInQueue(): void {
+    const nextId = this.oneshotQueue.shift()!
+    const nextFrames = this.oneshotData.get(nextId)
+    if (!nextFrames) {
+      // Skip si manquante, essaie le suivant
+      if (this.oneshotQueue.length > 0) {
+        this.startNextInQueue()
+      } else {
+        this.startTransitionIn()
+      }
+      return
+    }
+    const prevFrames = this.oneshotData.get(this.activeOneshotId!)!
+    this.activeOneshotId = nextId
+    this._state = 'trans-out'
+    this.transitionCursor = 0
+    this.transitionFrom = prevFrames[prevFrames.length - 1]
+    this.transitionTo = nextFrames[0]
+    this.oneshotTotalFrames = nextFrames.length
+    const easingName = this.oneshotEasings.get(nextId) ?? this.defaultEasing
     this.activeEasing = EASING_FUNCTIONS[easingName]
   }
 

@@ -1,113 +1,70 @@
-import type { Scene, SceneRestPoint, SceneTransition, SceneSegment, SegmentEasing } from '../types/project'
+import type { Scene, SceneRestPoint } from '../types/project'
 
 function smoothstep(t: number): number {
   const c = Math.max(0, Math.min(1, t))
   return c * c * (3 - 2 * c)
 }
 
-function linear(t: number): number {
-  return Math.max(0, Math.min(1, t))
-}
-
-/** Cubique de Hermite f(0)=0, f(1)=1 avec dérivées prescrites m0, m1. */
-function hermite(m0: number, m1: number): (t: number) => number {
-  return (t: number) => {
-    const c = Math.max(0, Math.min(1, t))
-    const c2 = c * c
-    const c3 = c2 * c
-    return m0 * (c3 - 2 * c2 + c) + (-2 * c3 + 3 * c2) + m1 * (c3 - c2)
-  }
-}
-
-/** Dérivée intrinsèque de l'easing à une borne, pour le matching de vitesse au voisin.
- *  Pour ease-out/ease-in à la borne "matching", on retourne 1 (vitesse linéaire) afin
- *  d'éviter la circularité — le matching réel se fait côté segment courant. */
-function intrinsicSlope(easing: SegmentEasing | undefined, side: 'start' | 'end'): number {
-  switch (easing ?? 'smoothstep') {
-    case 'smoothstep': return 0
-    case 'linear': return 1
-    case 'ease-out': return side === 'start' ? 1 : 0
-    case 'ease-in':  return side === 'start' ? 0 : 1
-  }
-}
-
-export type SceneState = 'interaction' | 'segment' | 'blend'
+export type SceneState = 'entering' | 'interaction' | 'blend'
 
 export interface ScenePlaybackConfig {
   scene: Scene
   viewportWidth: number
   viewportHeight: number
-  onRestPointArrival?: (restPointIndex: number, restPoint: SceneRestPoint) => void
-  onSegmentStart?: (transitionIndex: number, segmentIndex: number) => void
+  onRestPointArrival?: (restPoint: SceneRestPoint) => void
 }
 
 /**
- * Resolves all X positions for a transition path (from → waypoints → to).
- */
-function getTransitionXPositions(fromX: number, toX: number, transition: SceneTransition): number[] {
-  return [fromX, ...transition.waypoints, toX]
-}
-
-/**
- * Pure state machine for scene playback with rest points + transitions.
- * Manages background scroll position and progression through rest points.
+ * Machine d'états simplifiée pour la lecture d'une scène :
+ *   - `entering` (uniquement si `scene.entry === 'moving'`) : trajet de `entryStartX`
+ *     vers `restPoint.backgroundX` sur `entryDurationMs`, easing smoothstep.
+ *   - `blend` : court fondu (7/24 s) entre la fin du trajet et l'idle.
+ *   - `interaction` : idle, position figée au rest point, boutons ☆ actifs.
  */
 export class ScenePlayback {
   private scene: Scene
-  private _currentRestIndex: number = 0
   private _state: SceneState = 'interaction'
   private viewportWidth: number
 
-  // Segment state (movement between two X positions)
-  private segmentProgress: number = 0
-  private segmentStartX: number = 0
-  private segmentEndX: number = 0
-  private segmentStartRawX: number = 0  // un-clamped X position at segment start
-  private segmentEndRawX: number = 0    // un-clamped X position at segment end
-  private segmentDuration: number = 0
-  private _currentTransitionIndex: number = -1  // -1 = startTransition
-  private _currentSegmentIndex: number = 0
-  private _currentSegmentAnimationId?: string
-  private _currentSegmentEasing: (t: number) => number = smoothstep
+  // Entering state
+  private enterProgress: number = 0
+  private enterDurationSec: number = 1.5
+  private enterStartRawX: number = 0
+  private enterEndRawX: number = 0
+  private enterStartOffsetX: number = 0
+  private enterEndOffsetX: number = 0
 
   private _backgroundOffsetX: number = 0
-  private _currentX: number = 0  // current character position on background (not clamped)
+  private _currentX: number = 0
 
-  // Blend state (brief transition between segment and interaction animations)
   private blendProgress: number = 0
   private blendDuration: number = 7 / 24
 
-  // Callbacks
-  private onRestPointArrival?: (restPointIndex: number, restPoint: SceneRestPoint) => void
-  private onSegmentStart?: (transitionIndex: number, segmentIndex: number) => void
+  private onRestPointArrival?: (restPoint: SceneRestPoint) => void
 
   constructor(config: ScenePlaybackConfig) {
     this.scene = config.scene
     this.viewportWidth = config.viewportWidth
     this.onRestPointArrival = config.onRestPointArrival
-    this.onSegmentStart = config.onSegmentStart
 
-    // Initialize based on startMode
-    if (this.scene.restPoints.length === 0) return
+    const rp = this.scene.restPoint
+    if (!rp) return
 
-    if (this.scene.startMode === 'transition' && this.scene.startTransition && this.scene.startX != null) {
-      // Start in movement: traverse startTransition segments → restPoints[0]
-      this._currentX = this.scene.startX
-      this._backgroundOffsetX = this.computeOffsetForX(this.scene.startX)
-      this._currentTransitionIndex = -1
-      this.startTransitionSegments(-1)
+    if (this.scene.entry === 'moving' && this.scene.entryStartX != null) {
+      this.enterStartRawX = this.scene.entryStartX
+      this.enterEndRawX = rp.backgroundX
+      this.enterStartOffsetX = this.computeOffsetForX(this.enterStartRawX)
+      this.enterEndOffsetX = this.computeOffsetForX(this.enterEndRawX)
+      this.enterDurationSec = Math.max(0.1, (this.scene.entryDurationMs ?? 1500) / 1000)
+      this.enterProgress = 0
+      this._currentX = this.enterStartRawX
+      this._backgroundOffsetX = this.enterStartOffsetX
+      this._state = 'entering'
     } else {
-      // Start at rest point 0
-      this._currentX = this.scene.restPoints[0]?.backgroundX ?? 0
-      this._backgroundOffsetX = this.computeOffsetForRestPoint(0)
+      this._currentX = rp.backgroundX
+      this._backgroundOffsetX = this.computeOffsetForX(rp.backgroundX)
       this._state = 'interaction'
     }
-  }
-
-  private computeOffsetForRestPoint(index: number): number {
-    const rp = this.scene.restPoints[index]
-    if (!rp) return 0
-    return this.computeOffsetForX(rp.backgroundX)
   }
 
   private computeOffsetForX(x: number): number {
@@ -128,134 +85,33 @@ export class ScenePlayback {
     return w
   }
 
-  /** Get the transition object for a given transitionIndex (-1 = startTransition) */
-  private getTransition(transitionIndex: number): SceneTransition | undefined {
-    if (transitionIndex === -1) return this.scene.startTransition
-    return this.scene.transitions[transitionIndex]
-  }
-
-  /** Get fromX and toX for a transition */
-  private getTransitionEndpoints(transitionIndex: number): { fromX: number; toX: number } {
-    if (transitionIndex === -1) {
-      return {
-        fromX: this.scene.startX ?? this.scene.restPoints[0]?.backgroundX ?? 0,
-        toX: this.scene.restPoints[0]?.backgroundX ?? 0,
-      }
-    }
-    return {
-      fromX: this.scene.restPoints[transitionIndex]?.backgroundX ?? 0,
-      toX: this.scene.restPoints[transitionIndex + 1]?.backgroundX ?? 0,
-    }
-  }
-
-  /** Start traversing segments of a transition */
-  private startTransitionSegments(transitionIndex: number): void {
-    const transition = this.getTransition(transitionIndex)
-    if (!transition || transition.segments.length === 0) {
-      // No segments — jump to destination
-      if (transitionIndex === -1) {
-        this.arriveAtRestPoint(0)
-      } else {
-        this.arriveAtRestPoint(transitionIndex + 1)
-      }
-      return
-    }
-
-    this._currentTransitionIndex = transitionIndex
-    this._currentSegmentIndex = 0
-    this.startSegment(transitionIndex, 0)
-  }
-
-  /** Construit l'easing du segment courant, avec matching de vitesse aux voisins
-   *  pour les types 'ease-out' (départ ← vitesse du segment précédent) et
-   *  'ease-in' (fin → vitesse du segment suivant). */
-  private buildSegmentEasing(transition: SceneTransition, segmentIndex: number, xPositions: number[]): (t: number) => number {
-    const segment = transition.segments[segmentIndex]
-    const easing: SegmentEasing = segment.easing ?? 'smoothstep'
-    if (easing === 'smoothstep') return smoothstep
-    if (easing === 'linear') return linear
-
-    const dxCur = xPositions[segmentIndex + 1] - xPositions[segmentIndex]
-    const durCur = segment.duration
-
-    if (easing === 'ease-out') {
-      // m0 = pente normalisée à l'entrée qui matche la vitesse pixel de fin du segment précédent
-      let m0 = 1
-      const prev = transition.segments[segmentIndex - 1]
-      if (prev && Math.abs(dxCur) > 1e-6 && durCur > 0 && prev.duration > 0) {
-        const dxPrev = xPositions[segmentIndex] - xPositions[segmentIndex - 1]
-        const prevEndSlope = intrinsicSlope(prev.easing, 'end')
-        // vitesse pixel fin prev = prevEndSlope * dxPrev / prev.duration
-        // pente normalisée requise à t=0 : m0 * dxCur / durCur = vitesse pixel
-        m0 = (prevEndSlope * dxPrev / prev.duration) * durCur / dxCur
-      }
-      return hermite(m0, 0)
-    }
-
-    // ease-in
-    let m1 = 1
-    const next = transition.segments[segmentIndex + 1]
-    if (next && Math.abs(dxCur) > 1e-6 && durCur > 0 && next.duration > 0) {
-      const dxNext = xPositions[segmentIndex + 2] - xPositions[segmentIndex + 1]
-      const nextStartSlope = intrinsicSlope(next.easing, 'start')
-      m1 = (nextStartSlope * dxNext / next.duration) * durCur / dxCur
-    }
-    return hermite(0, m1)
-  }
-
-  /** Start a single segment within a transition */
-  private startSegment(transitionIndex: number, segmentIndex: number): void {
-    const transition = this.getTransition(transitionIndex)!
-    const segment = transition.segments[segmentIndex]
-    const { fromX, toX } = this.getTransitionEndpoints(transitionIndex)
-    const xPositions = getTransitionXPositions(fromX, toX, transition)
-
-    this._state = 'segment'
-    this.segmentProgress = 0
-    this.segmentStartRawX = xPositions[segmentIndex]
-    this.segmentEndRawX = xPositions[segmentIndex + 1]
-    this.segmentStartX = this.computeOffsetForX(xPositions[segmentIndex])
-    this.segmentEndX = this.computeOffsetForX(xPositions[segmentIndex + 1])
-    this.segmentDuration = segment.duration
-    this._currentSegmentAnimationId = segment.animationId
-    this._currentSegmentEasing = this.buildSegmentEasing(transition, segmentIndex, xPositions)
-    this._currentTransitionIndex = transitionIndex
-    this._currentSegmentIndex = segmentIndex
-
-    this.onSegmentStart?.(transitionIndex, segmentIndex)
-  }
-
-  /** Called by the user pressing "Continue" */
+  /** No-op kept for backwards compatibility with callers (was used to advance multi-rest). */
   advance(): void {
-    if (this._state !== 'interaction') return
-    if (this._currentRestIndex >= this.scene.restPoints.length - 1) return
-
-    this.startTransitionSegments(this._currentRestIndex)
+    /* no-op : pas de multi-rest dans le nouveau modèle */
   }
 
-  /** Called each frame with delta in seconds */
   update(deltaSeconds: number): void {
     switch (this._state) {
       case 'interaction':
         break
 
-      case 'segment': {
-        if (this.segmentDuration <= 0) {
-          this.finishSegment()
+      case 'entering': {
+        if (this.enterDurationSec <= 0) {
+          this.arriveAtRestPoint()
           break
         }
-        this.segmentProgress += deltaSeconds / this.segmentDuration
-        if (this.segmentProgress >= 1) {
-          this.segmentProgress = 1
-          this._backgroundOffsetX = this.segmentEndX
-          this._currentX = this.segmentEndRawX
-          this.finishSegment()
+        this.enterProgress += deltaSeconds / this.enterDurationSec
+        if (this.enterProgress >= 1) {
+          this.enterProgress = 1
+          this._backgroundOffsetX = this.enterEndOffsetX
+          this._currentX = this.enterEndRawX
+          this.arriveAtRestPoint()
         } else {
-          const t = this._currentSegmentEasing(this.segmentProgress)
+          const t = smoothstep(this.enterProgress)
           this._backgroundOffsetX = this.clampOffset(
-            this.segmentStartX + (this.segmentEndX - this.segmentStartX) * t
+            this.enterStartOffsetX + (this.enterEndOffsetX - this.enterStartOffsetX) * t
           )
-          this._currentX = this.segmentStartRawX + (this.segmentEndRawX - this.segmentStartRawX) * t
+          this._currentX = this.enterStartRawX + (this.enterEndRawX - this.enterStartRawX) * t
         }
         break
       }
@@ -271,34 +127,15 @@ export class ScenePlayback {
     }
   }
 
-  /** Finish current segment — advance to next segment or arrive at rest point */
-  private finishSegment(): void {
-    const transition = this.getTransition(this._currentTransitionIndex)!
-    const nextSegmentIndex = this._currentSegmentIndex + 1
-
-    if (nextSegmentIndex < transition.segments.length) {
-      // More segments in this transition
-      this.startSegment(this._currentTransitionIndex, nextSegmentIndex)
-    } else {
-      // Transition complete — arrive at destination rest point
-      const destIndex = this._currentTransitionIndex === -1 ? 0 : this._currentTransitionIndex + 1
-      this.arriveAtRestPoint(destIndex)
-    }
-  }
-
-  private arriveAtRestPoint(index: number): void {
-    this._currentRestIndex = index
-    const rp = this.scene.restPoints[index]
+  private arriveAtRestPoint(): void {
+    const rp = this.scene.restPoint
     if (!rp) {
       this._state = 'interaction'
       return
     }
-
     this._currentX = rp.backgroundX
-    this._backgroundOffsetX = this.computeOffsetForRestPoint(index)
-    this.onRestPointArrival?.(index, rp)
-
-    // Enter blend state briefly, then interaction
+    this._backgroundOffsetX = this.computeOffsetForX(rp.backgroundX)
+    this.onRestPointArrival?.(rp)
     this._state = 'blend'
     this.blendProgress = 0
   }
@@ -309,7 +146,6 @@ export class ScenePlayback {
     return this._backgroundOffsetX
   }
 
-  /** Current character X position on the background (not clamped by viewport) */
   get currentX(): number {
     return this._currentX
   }
@@ -318,16 +154,12 @@ export class ScenePlayback {
     return this._state
   }
 
-  get currentRestIndex(): number {
-    return this._currentRestIndex
-  }
-
   get currentRestPoint(): SceneRestPoint | null {
-    return this.scene.restPoints[this._currentRestIndex] ?? null
+    return this.scene.restPoint ?? null
   }
 
   get isComplete(): boolean {
-    return this._currentRestIndex >= this.scene.restPoints.length - 1 && this._state === 'interaction'
+    return this._state === 'interaction'
   }
 
   get characterScale(): number {
@@ -338,52 +170,51 @@ export class ScenePlayback {
     return this.scene.characterY
   }
 
-  /** Animation ID for the current segment (during movement) */
+  /** Animation jouée pendant la phase d'entrée : entryAnimationId si défini, sinon idle du restPoint. */
   get currentSegmentAnimationId(): string | undefined {
-    if (this._state !== 'segment') return undefined
-    return this._currentSegmentAnimationId
+    if (this._state !== 'entering') return undefined
+    return this.scene.entryAnimationId ?? this.scene.restPoint?.restAnimationId
   }
 
-  /** Current segment object (during movement) */
-  get currentSegment(): SceneSegment | undefined {
-    if (this._state !== 'segment') return undefined
-    const transition = this.getTransition(this._currentTransitionIndex)
-    return transition?.segments[this._currentSegmentIndex]
-  }
-
-  /** Rest animation ID for the current rest point */
   get interactionRestAnimationId(): string | undefined {
     if (this._state !== 'interaction' && this._state !== 'blend') return undefined
     return this.currentRestPoint?.restAnimationId
   }
 
-  /** Available animation IDs for the current rest point */
+  /**
+   * Animations disponibles (déclenchables) au rest point courant — utilisé pour le
+   * gating UI du bouton ☆. Retourne le flatmap des actions, fallback legacy
+   * `randomAnimationIds` si présent.
+   */
   get interactionAnimationIds(): string[] {
     if (this._state !== 'interaction' && this._state !== 'blend') return []
-    return this.currentRestPoint?.randomAnimationIds ?? []
+    const rp = this.currentRestPoint
+    if (!rp) return []
+    if (rp.actions && rp.actions.length > 0) {
+      return rp.actions.flatMap(a => a.steps.map(s => s.animationId))
+    }
+    return rp.randomAnimationIds ?? []
   }
 
-  /** Blend progress [0,1] when in blend state */
   get blendAlpha(): number {
     if (this._state !== 'blend') return 0
     return smoothstep(this.blendProgress)
   }
 
-  /** Segment progress [0,1] when in segment state */
+  /** Progression du trajet d'entrée [0,1], 0 hors phase 'entering'. */
   get segmentAlpha(): number {
-    if (this._state !== 'segment') return 0
-    return this.segmentProgress
+    if (this._state !== 'entering') return 0
+    return this.enterProgress
   }
 
-  /** Update viewport width (on resize) */
   setViewportWidth(width: number): void {
     this.viewportWidth = width
     if (this._state === 'interaction') {
-      this._backgroundOffsetX = this.computeOffsetForRestPoint(this._currentRestIndex)
+      const rp = this.scene.restPoint
+      if (rp) this._backgroundOffsetX = this.computeOffsetForX(rp.backgroundX)
     }
   }
 
-  /** Background width in pixels */
   get bgWidth(): number {
     return this.getBgWidth()
   }

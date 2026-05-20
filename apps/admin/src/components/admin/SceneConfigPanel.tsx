@@ -1,41 +1,24 @@
 import { useState, useRef, useCallback } from 'react'
-import { animationHasFrames, isLoopAnimation, type SceneRestPoint, type SceneTransition, type SceneSegment, type SceneSound, type Animation, type SpeakSound, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
-import type { TimelineSelection } from './SceneTimeline'
+import { animationHasFrames, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound, type Animation, type SpeakSound, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
 
 interface Props {
-  selection: TimelineSelection
-  restPoints: SceneRestPoint[]
-  transitions: SceneTransition[]
-  startMode: 'rest' | 'transition'
-  startX?: number
-  startTransition?: SceneTransition
+  restPoint: SceneRestPoint
   animations: Animation[]
   bodyZones: BodyZone[]
-  onRestPointChange: (index: number, updated: SceneRestPoint) => void
-  onSegmentChange: (transitionIndex: number, segmentIndex: number, updated: SceneSegment) => void
-  onStartModeChange: (mode: 'rest' | 'transition') => void
+  onRestPointChange: (updated: SceneRestPoint) => void
   speakSounds: SpeakSound[]
   speakSoundBlobs: (Blob | null)[]
   onSpeakSoundImport: (file: File) => void
   onSpeakSoundDelete: (soundId: string) => void
-  /** Called when an animation sound is imported (caller registers upload hint). */
   onSceneSoundImported: (soundId: string) => void
-  /** Called when an animation sound is deleted (caller registers delete hint). */
   onSceneSoundDeleted: (soundId: string) => void
 }
 
 export default function SceneConfigPanel({
-  selection,
-  restPoints,
-  transitions,
-  startMode,
-  startX,
-  startTransition,
+  restPoint: rp,
   animations,
   bodyZones,
   onRestPointChange,
-  onSegmentChange,
-  onStartModeChange,
   speakSounds,
   speakSoundBlobs,
   onSpeakSoundImport,
@@ -44,367 +27,330 @@ export default function SceneConfigPanel({
   onSceneSoundDeleted,
 }: Props) {
   const readyAnimations = animations.filter(a => animationHasFrames(a))
-  const loopAnimations = readyAnimations.filter(isLoopAnimation)
-  const oneshotAnimations = readyAnimations.filter(a => !isLoopAnimation(a))
+  const actions = rp.actions ?? []
 
-  if (selection.type === 'restPoint') {
-    const rp = restPoints[selection.index]
-    if (!rp) return null
+  const updateActions = (next: SceneAction[]) => {
+    onRestPointChange({ ...rp, actions: next.length > 0 ? next : undefined })
+  }
 
-    const randomIds = rp.randomAnimationIds ?? []
-    const randomSounds = rp.randomAnimationSounds ?? []
-
-    const updateSoundsAtIndex = (entryIdx: number, nextList: SceneSound[]) => {
-      const padded: SceneSound[][] = randomIds.map((_, i) => (randomSounds[i] ?? []).slice())
-      padded[entryIdx] = nextList
-      onRestPointChange(selection.index, {
-        ...rp,
-        randomAnimationSounds: padded.some(arr => arr.length > 0) ? padded : undefined,
-      })
+  const handleAddAction = () => {
+    const newAction: SceneAction = {
+      id: crypto.randomUUID(),
+      name: `Action ${actions.length + 1}`,
+      steps: [],
     }
+    updateActions([...actions, newAction])
+  }
 
-    const toggleAnimation = (animId: string, checked: boolean) => {
-      if (checked) {
-        const newIds = [...randomIds, animId]
-        const newSounds: SceneSound[][] = newIds.map((_, i) => (randomSounds[i] ?? []).slice())
-        onRestPointChange(selection.index, {
-          ...rp,
-          randomAnimationIds: newIds,
-          randomAnimationSounds: newSounds.some(arr => arr.length > 0) ? newSounds : undefined,
-        })
-      } else {
-        const removeIdx = randomIds.indexOf(animId)
-        const removed = randomSounds[removeIdx] ?? []
-        for (const s of removed) onSceneSoundDeleted(s.id)
-        const newIds = randomIds.filter(id => id !== animId)
-        const newSounds = randomSounds.filter((_, i) => i !== removeIdx)
-        onRestPointChange(selection.index, {
-          ...rp,
-          randomAnimationIds: newIds,
-          randomAnimationSounds: newSounds.some(arr => arr.length > 0) ? newSounds : undefined,
-        })
-      }
-    }
+  const handleUpdateAction = (idx: number, partial: Partial<SceneAction>) => {
+    updateActions(actions.map((a, i) => i === idx ? { ...a, ...partial } : a))
+  }
 
-    return (
-      <div className="scene-config-panel">
-        <div className="scene-config-panel-header">
-          <h4>Rest Point #{selection.index + 1}</h4>
-          <span className="scene-config-panel-pos">X: {rp.backgroundX}px</span>
-        </div>
+  const handleDeleteAction = (idx: number) => {
+    const a = actions[idx]
+    if (a?.sound) onSceneSoundDeleted(a.sound.id)
+    for (const s of a?.steps ?? []) if (s.sound) onSceneSoundDeleted(s.sound.id)
+    updateActions(actions.filter((_, i) => i !== idx))
+  }
 
-        <div className="scene-config-panel-field">
-          <label>Animation idle (loop)</label>
-          <select
-            value={rp.restAnimationId ?? ''}
-            onChange={(e) => onRestPointChange(selection.index, {
-              ...rp, restAnimationId: e.target.value || undefined,
-            })}
-          >
-            <option value="">(Aucune)</option>
-            {loopAnimations.map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-          {loopAnimations.length === 0 && (
-            <span className="scene-config-panel-empty">Aucune animation en mode loop. Bascule une animation en loop depuis sa carte.</span>
+  return (
+    <div className="scene-config-panel">
+      <div className="scene-config-panel-header">
+        <h4>Rest Point</h4>
+        <span className="scene-config-panel-pos">X: {rp.backgroundX}px</span>
+      </div>
+
+      <div className="scene-config-panel-field">
+        <label>Animation idle (boucle)</label>
+        <select
+          value={rp.restAnimationId ?? ''}
+          onChange={(e) => onRestPointChange({ ...rp, restAnimationId: e.target.value || undefined })}
+        >
+          <option value="">(Aucune)</option>
+          {readyAnimations.map(a => (
+            <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
+          ))}
+        </select>
+        {readyAnimations.length === 0 && (
+          <span className="scene-config-panel-empty">Aucune animation prête.</span>
+        )}
+      </div>
+
+      <div className="scene-config-panel-field">
+        <label>Actions (bouton ☆)</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {actions.map((action, idx) => (
+            <ActionCard
+              key={action.id}
+              action={action}
+              readyAnimations={readyAnimations}
+              onChange={(partial) => handleUpdateAction(idx, partial)}
+              onDelete={() => handleDeleteAction(idx)}
+              onSceneSoundImported={onSceneSoundImported}
+              onSceneSoundDeleted={onSceneSoundDeleted}
+            />
+          ))}
+          <button className="btn-sm btn-secondary" onClick={handleAddAction}>
+            + Nouvelle action
+          </button>
+          {actions.length === 0 && (
+            <span className="scene-config-panel-empty">Aucune action — clique sur "+ Nouvelle action" pour ajouter une séquence d'animations déclenchée par le bouton ☆.</span>
           )}
         </div>
+      </div>
 
-        <div className="scene-config-panel-field">
-          <label>Animations aléatoires (oneshot)</label>
-          <div className="scene-config-panel-checkboxes">
-            {oneshotAnimations.map(a => {
-              const checked = randomIds.includes(a.id)
-              const entryIdx = randomIds.indexOf(a.id)
-              const sounds = entryIdx >= 0 ? (randomSounds[entryIdx] ?? []) : []
-              return (
-                <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label className="scene-config-panel-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => toggleAnimation(a.id, e.target.checked)}
-                    />
-                    <span>{a.name} ({a.type})</span>
-                  </label>
-                  {checked && (
-                    <AnimationSoundsRow
-                      sounds={sounds}
-                      onImport={(file) => {
-                        const id = crypto.randomUUID()
-                        const next: SceneSound[] = [...sounds, { id, name: file.name, blob: file }]
-                        updateSoundsAtIndex(entryIdx, next)
-                        onSceneSoundImported(id)
-                      }}
-                      onDelete={(soundId) => {
-                        const next = sounds.filter(s => s.id !== soundId)
-                        updateSoundsAtIndex(entryIdx, next)
-                        onSceneSoundDeleted(soundId)
-                      }}
-                    />
-                  )}
-                </div>
-              )
-            })}
-            {oneshotAnimations.length === 0 && (
-              <span className="scene-config-panel-empty">Aucune animation oneshot disponible</span>
-            )}
-          </div>
-        </div>
-
-        {bodyZones.length > 0 && (
-          <ZoneAnimationMappingsSection
-            rp={rp}
-            rpIndex={selection.index}
-            bodyZones={bodyZones}
-            animations={oneshotAnimations}
-            onRestPointChange={onRestPointChange}
-          />
-        )}
-
-        <SpeakSoundsSection
+      {bodyZones.length > 0 && (
+        <ZoneAnimationMappingsSection
           rp={rp}
-          rpIndex={selection.index}
-          speakSounds={speakSounds}
-          speakSoundBlobs={speakSoundBlobs}
-          onRestPointChange={onRestPointChange}
-          onSpeakSoundImport={onSpeakSoundImport}
-          onSpeakSoundDelete={onSpeakSoundDelete}
-        />
-
-        <div className="scene-config-panel-field">
-          <label>Fondu d'arrivée (ms) — {rp.arrivalCrossfadeMs ?? 290}</label>
-          <input
-            type="range"
-            min={0}
-            max={3000}
-            step={10}
-            value={rp.arrivalCrossfadeMs ?? 290}
-            onChange={(e) => onRestPointChange(selection.index, {
-              ...rp, arrivalCrossfadeMs: parseInt(e.target.value, 10),
-            })}
-          />
-        </div>
-
-        <HelpTextsSection
-          rp={rp}
-          rpIndex={selection.index}
+          bodyZones={bodyZones}
+          animations={readyAnimations}
           onRestPointChange={onRestPointChange}
         />
+      )}
+
+      <SpeakSoundsSection
+        rp={rp}
+        speakSounds={speakSounds}
+        speakSoundBlobs={speakSoundBlobs}
+        onRestPointChange={onRestPointChange}
+        onSpeakSoundImport={onSpeakSoundImport}
+        onSpeakSoundDelete={onSpeakSoundDelete}
+      />
+
+      <div className="scene-config-panel-field">
+        <label>Fondu d'arrivée (ms) — {rp.arrivalCrossfadeMs ?? 290}</label>
+        <input
+          type="range" min={0} max={3000} step={10}
+          value={rp.arrivalCrossfadeMs ?? 290}
+          onChange={(e) => onRestPointChange({ ...rp, arrivalCrossfadeMs: parseInt(e.target.value, 10) })}
+        />
       </div>
-    )
-  }
 
-  if (selection.type === 'segment') {
-    const { transitionIndex, segmentIndex } = selection
-    const transition = transitionIndex === -1 ? startTransition : transitions[transitionIndex]
-    const segment = transition?.segments[segmentIndex]
-    if (!transition || !segment) return null
-
-    const label = transitionIndex === -1
-      ? `Départ → Rest Point #1, segment ${segmentIndex + 1}`
-      : `Rest Point #${transitionIndex + 1} → #${transitionIndex + 2}, segment ${segmentIndex + 1}`
-
-    const segSounds = segment.sounds ?? []
-    const updateSegSounds = (next: SceneSound[]) => {
-      onSegmentChange(transitionIndex, segmentIndex, {
-        ...segment, sounds: next.length > 0 ? next : undefined,
-      })
-    }
-
-    return (
-      <div className="scene-config-panel">
-        <div className="scene-config-panel-header">
-          <h4>{label}</h4>
-        </div>
-
-        <div className="scene-config-panel-field">
-          <label>Durée (secondes)</label>
-          <input
-            type="number"
-            min={0.5}
-            max={60}
-            step={0.5}
-            value={segment.duration}
-            onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
-              ...segment, duration: parseFloat(e.target.value) || 3,
-            })}
-          />
-        </div>
-
-        <div className="scene-config-panel-field">
-          <label>Animation de mouvement</label>
-          <select
-            value={segment.animationId ?? ''}
-            onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
-              ...segment, animationId: e.target.value || undefined,
-            })}
-          >
-            <option value="">— Aucune —</option>
-            {readyAnimations.map(a => (
-              <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="scene-config-panel-field">
-          <label>Sons de cette animation</label>
-          <AnimationSoundsRow
-            sounds={segSounds}
-            onImport={(file) => {
-              const id = crypto.randomUUID()
-              updateSegSounds([...segSounds, { id, name: file.name, blob: file }])
-              onSceneSoundImported(id)
-            }}
-            onDelete={(soundId) => {
-              updateSegSounds(segSounds.filter(s => s.id !== soundId))
-              onSceneSoundDeleted(soundId)
-            }}
-          />
-        </div>
-
-        <div className="scene-config-panel-field">
-          <label>Mouvement</label>
-          <select
-            value={segment.easing ?? 'smoothstep'}
-            onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
-              ...segment, easing: e.target.value as 'smoothstep' | 'linear' | 'ease-out' | 'ease-in',
-            })}
-          >
-            <option value="smoothstep">Ease in-out (accélère/décélère)</option>
-            <option value="linear">Linéaire (vitesse constante)</option>
-            <option value="ease-out">Ralentir à la fin (départ continu du segment précédent)</option>
-            <option value="ease-in">Accélérer au début (fin continue vers le segment suivant)</option>
-          </select>
-        </div>
-
-        <div className="scene-config-panel-field">
-          <label>Fondu (ms) — {segment.crossfadeMs ?? 290}</label>
-          <input
-            type="range"
-            min={0}
-            max={1500}
-            step={10}
-            value={segment.crossfadeMs ?? 290}
-            onChange={(e) => onSegmentChange(transitionIndex, segmentIndex, {
-              ...segment, crossfadeMs: parseInt(e.target.value, 10),
-            })}
-          />
-        </div>
-      </div>
-    )
-  }
-
-  if (selection.type === 'startPoint') {
-    return (
-      <div className="scene-config-panel">
-        <div className="scene-config-panel-header">
-          <h4>Point de départ</h4>
-          {startX != null && <span className="scene-config-panel-pos">X: {startX}px</span>}
-        </div>
-
-        <div className="scene-config-panel-field">
-          <label>Mode de démarrage</label>
-          <div className="scene-config-panel-type-toggle">
-            <button
-              className={`btn-sm ${startMode === 'rest' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => onStartModeChange('rest')}
-            >
-              Rest Point
-            </button>
-            <button
-              className={`btn-sm ${startMode === 'transition' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => onStartModeChange('transition')}
-            >
-              En mouvement
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return null
+      <HelpTextsSection rp={rp} onRestPointChange={onRestPointChange} />
+    </div>
+  )
 }
 
-// --- Animation sounds row (list + import + delete + preview) ---
+// --- Action card (séquence ordonnée + son unique) ---
 
-function AnimationSoundsRow({ sounds, onImport, onDelete }: {
-  sounds: SceneSound[]
-  onImport: (file: File) => void
-  onDelete: (soundId: string) => void
+function ActionCard({ action, readyAnimations, onChange, onDelete, onSceneSoundImported, onSceneSoundDeleted }: {
+  action: SceneAction
+  readyAnimations: Animation[]
+  onChange: (partial: Partial<SceneAction>) => void
+  onDelete: () => void
+  onSceneSoundImported: (soundId: string) => void
+  onSceneSoundDeleted: (soundId: string) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [playingId, setPlayingId] = useState<string | null>(null)
+  const [playingSound, setPlayingSound] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  const handlePreview = useCallback((soundId: string) => {
+  const updateStep = (i: number, partial: Partial<SceneActionStep>) => {
+    const next = [...action.steps]
+    next[i] = { ...next[i], ...partial }
+    onChange({ steps: next })
+  }
+  const moveStep = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= action.steps.length) return
+    const next = [...action.steps]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onChange({ steps: next })
+  }
+  const removeStep = (i: number) => {
+    const removed = action.steps[i]
+    if (removed?.sound) onSceneSoundDeleted(removed.sound.id)
+    onChange({ steps: action.steps.filter((_, k) => k !== i) })
+  }
+  const addStep = () => {
+    onChange({ steps: [...action.steps, { animationId: readyAnimations[0]?.id ?? '' }] })
+  }
+  const setStepSound = (i: number, sound: SceneSound | undefined) => {
+    const prev = action.steps[i]?.sound
+    if (prev && (!sound || prev.id !== sound.id)) onSceneSoundDeleted(prev.id)
+    updateStep(i, { sound })
+  }
+
+  const handleSoundImport = (file: File) => {
+    if (action.sound) onSceneSoundDeleted(action.sound.id)
+    const id = crypto.randomUUID()
+    onChange({ sound: { id, name: file.name, blob: file } })
+    onSceneSoundImported(id)
+  }
+
+  const handleSoundDelete = () => {
+    if (!action.sound) return
+    onSceneSoundDeleted(action.sound.id)
+    onChange({ sound: undefined })
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; setPlayingSound(false) }
+  }
+
+  const togglePreview = useCallback(() => {
     if (audioRef.current) {
       audioRef.current.pause()
       try { URL.revokeObjectURL(audioRef.current.src) } catch { /* */ }
       audioRef.current = null
-    }
-    if (playingId === soundId) {
-      setPlayingId(null)
+      setPlayingSound(false)
       return
     }
-    const sound = sounds.find(s => s.id === soundId)
-    if (!sound?.blob) return
-    const url = URL.createObjectURL(sound.blob)
+    if (!action.sound?.blob) return
+    const url = URL.createObjectURL(action.sound.blob)
     const audio = new Audio(url)
     audioRef.current = audio
-    setPlayingId(soundId)
+    setPlayingSound(true)
     audio.play().catch(() => {})
-    audio.onended = () => { URL.revokeObjectURL(url); setPlayingId(null); audioRef.current = null }
-  }, [playingId, sounds])
+    audio.onended = () => { URL.revokeObjectURL(url); setPlayingSound(false); audioRef.current = null }
+  }, [action.sound])
 
   return (
-    <div style={{ paddingLeft: 24, display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>Sons</span>
-        <button
-          className="btn-sm btn-secondary"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          + Importer son
-        </button>
         <input
-          ref={fileInputRef}
-          type="file"
-          accept="audio/*"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) onImport(file)
-            e.target.value = ''
-          }}
+          type="text"
+          value={action.name}
+          onChange={(e) => onChange({ name: e.target.value })}
+          placeholder="Nom de l'action"
+          style={{ flex: 1 }}
         />
+        <button className="btn-icon btn-sm btn-danger" onClick={onDelete} title="Supprimer l'action">&times;</button>
       </div>
-      {sounds.map(sound => (
-        <div key={sound.id} className="scene-config-panel-sound-row" style={{ fontSize: 12 }}>
-          <span>{sound.name}</span>
-          <div className="scene-config-panel-sound-actions">
-            <button
-              className="btn-icon btn-sm"
-              onClick={() => handlePreview(sound.id)}
-              title={playingId === sound.id ? 'Stop' : 'Écouter'}
-              disabled={!sound.blob}
-            >
-              {playingId === sound.id ? '⏹' : '▶'}
-            </button>
-            <button
-              className="btn-icon btn-sm btn-danger"
-              onClick={() => onDelete(sound.id)}
-              title="Supprimer"
-            >
-              &times;
-            </button>
+
+      {/* Steps */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8 }}>
+        {action.steps.map((step, i) => (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 4, background: 'var(--bg-soft, rgba(255,255,255,0.03))', borderRadius: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 24, opacity: 0.5, fontSize: 12 }}>{i + 1}.</span>
+              <select
+                value={step.animationId}
+                onChange={(e) => updateStep(i, { animationId: e.target.value })}
+                style={{ flex: 1 }}
+              >
+                <option value="">— Aucune —</option>
+                {readyAnimations.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
+                ))}
+              </select>
+              <button className="btn-icon btn-sm" onClick={() => moveStep(i, -1)} disabled={i === 0} title="Monter">↑</button>
+              <button className="btn-icon btn-sm" onClick={() => moveStep(i, +1)} disabled={i === action.steps.length - 1} title="Descendre">↓</button>
+              <button className="btn-icon btn-sm btn-danger" onClick={() => removeStep(i)} title="Retirer">&times;</button>
+            </div>
+            <StepSoundRow
+              step={step}
+              onChange={(partial) => updateStep(i, partial)}
+              onImport={(file) => {
+                const id = crypto.randomUUID()
+                setStepSound(i, { id, name: file.name, blob: file })
+                onSceneSoundImported(id)
+              }}
+              onDelete={() => setStepSound(i, undefined)}
+            />
           </div>
-        </div>
-      ))}
-      {sounds.length === 0 && (
-        <span className="scene-config-panel-empty" style={{ fontSize: 12 }}>Aucun son</span>
+        ))}
+        <button className="btn-sm btn-ghost" onClick={addStep} disabled={readyAnimations.length === 0} style={{ alignSelf: 'flex-start' }}>
+          + Animation
+        </button>
+      </div>
+
+      {/* Action sound */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8 }}>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>Son d'action :</span>
+        {action.sound ? (
+          <>
+            <span style={{ fontSize: 12, flex: 1 }}>{action.sound.name}</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }} title="Pilote la bouche (lip-sync) pendant la lecture">
+              <input
+                type="checkbox"
+                checked={action.isSpoken ?? false}
+                onChange={(e) => onChange({ isSpoken: e.target.checked || undefined })}
+              />
+              parlé
+            </label>
+            <button className="btn-icon btn-sm" onClick={togglePreview} disabled={!action.sound.blob} title={playingSound ? 'Stop' : 'Écouter'}>
+              {playingSound ? '⏹' : '▶'}
+            </button>
+            <button className="btn-icon btn-sm btn-danger" onClick={handleSoundDelete} title="Retirer">&times;</button>
+          </>
+        ) : (
+          <>
+            <button className="btn-sm btn-secondary" onClick={() => fileInputRef.current?.click()}>
+              + Importer
+            </button>
+            <input
+              ref={fileInputRef} type="file" accept="audio/*" style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) handleSoundImport(file)
+                e.target.value = ''
+              }}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// --- Row for a step's sound (import + delete + spoken toggle + preview) ---
+
+function StepSoundRow({ step, onChange, onImport, onDelete }: {
+  step: SceneActionStep
+  onChange: (partial: Partial<SceneActionStep>) => void
+  onImport: (file: File) => void
+  onDelete: () => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [playing, setPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  const togglePreview = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      try { URL.revokeObjectURL(audioRef.current.src) } catch { /* */ }
+      audioRef.current = null
+      setPlaying(false)
+      return
+    }
+    if (!step.sound?.blob) return
+    const url = URL.createObjectURL(step.sound.blob)
+    const audio = new Audio(url)
+    audioRef.current = audio
+    setPlaying(true)
+    audio.play().catch(() => {})
+    audio.onended = () => { URL.revokeObjectURL(url); setPlaying(false); audioRef.current = null }
+  }, [step.sound])
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 28, fontSize: 12 }}>
+      <span style={{ opacity: 0.7 }}>son :</span>
+      {step.sound ? (
+        <>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.sound.name}</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }} title="Pilote la bouche (lip-sync) pendant la lecture">
+            <input
+              type="checkbox"
+              checked={step.isSpoken ?? false}
+              onChange={(e) => onChange({ isSpoken: e.target.checked || undefined })}
+            />
+            parlé
+          </label>
+          <button className="btn-icon btn-sm" onClick={togglePreview} disabled={!step.sound.blob} title={playing ? 'Stop' : 'Écouter'}>
+            {playing ? '⏹' : '▶'}
+          </button>
+          <button className="btn-icon btn-sm btn-danger" onClick={onDelete} title="Retirer">&times;</button>
+        </>
+      ) : (
+        <>
+          <button className="btn-sm btn-ghost" onClick={() => fileInputRef.current?.click()}>+ son</button>
+          <input
+            ref={fileInputRef} type="file" accept="audio/*" style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) onImport(file)
+              e.target.value = ''
+            }}
+          />
+        </>
       )}
     </div>
   )
@@ -412,12 +358,11 @@ function AnimationSoundsRow({ sounds, onImport, onDelete }: {
 
 // --- Speak Sounds sub-section ---
 
-function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestPointChange, onSpeakSoundImport, onSpeakSoundDelete }: {
+function SpeakSoundsSection({ rp, speakSounds, speakSoundBlobs, onRestPointChange, onSpeakSoundImport, onSpeakSoundDelete }: {
   rp: SceneRestPoint
-  rpIndex: number
   speakSounds: SpeakSound[]
   speakSoundBlobs: (Blob | null)[]
-  onRestPointChange: (index: number, updated: SceneRestPoint) => void
+  onRestPointChange: (updated: SceneRestPoint) => void
   onSpeakSoundImport: (file: File) => void
   onSpeakSoundDelete: (soundId: string) => void
 }) {
@@ -431,10 +376,7 @@ function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestP
       URL.revokeObjectURL(audioRef.current.src)
       audioRef.current = null
     }
-    if (playingId === soundId) {
-      setPlayingId(null)
-      return
-    }
+    if (playingId === soundId) { setPlayingId(null); return }
     const idx = speakSounds.findIndex(s => s.id === soundId)
     const blob = idx >= 0 ? speakSoundBlobs[idx] : null
     if (!blob) return
@@ -449,18 +391,11 @@ function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestP
   return (
     <div className="scene-config-panel-field">
       <label>Sons "Parler"</label>
-      <button
-        className="btn-sm btn-secondary"
-        style={{ marginBottom: 8 }}
-        onClick={() => fileInputRef.current?.click()}
-      >
+      <button className="btn-sm btn-secondary" style={{ marginBottom: 8 }} onClick={() => fileInputRef.current?.click()}>
         + Importer son
       </button>
       <input
-        ref={fileInputRef}
-        type="file"
-        accept="audio/*"
-        style={{ display: 'none' }}
+        ref={fileInputRef} type="file" accept="audio/*" style={{ display: 'none' }}
         onChange={(e) => {
           const file = e.target.files?.[0]
           if (file) onSpeakSoundImport(file)
@@ -481,26 +416,16 @@ function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestP
                     const updated = e.target.checked
                       ? [...current, sound.id]
                       : current.filter(id => id !== sound.id)
-                    onRestPointChange(rpIndex, { ...rp, speakSoundIds: updated })
+                    onRestPointChange({ ...rp, speakSoundIds: updated })
                   }}
                 />
                 <span>{sound.name}</span>
               </label>
               <div className="scene-config-panel-sound-actions">
-                <button
-                  className="btn-icon btn-sm"
-                  onClick={() => handlePreview(sound.id)}
-                  title={playingId === sound.id ? 'Stop' : 'Écouter'}
-                >
+                <button className="btn-icon btn-sm" onClick={() => handlePreview(sound.id)} title={playingId === sound.id ? 'Stop' : 'Écouter'}>
                   {playingId === sound.id ? '⏹' : '▶'}
                 </button>
-                <button
-                  className="btn-icon btn-sm btn-danger"
-                  onClick={() => onSpeakSoundDelete(sound.id)}
-                  title="Supprimer"
-                >
-                  &times;
-                </button>
+                <button className="btn-icon btn-sm btn-danger" onClick={() => onSpeakSoundDelete(sound.id)} title="Supprimer">&times;</button>
               </div>
             </div>
           )
@@ -515,23 +440,20 @@ function SpeakSoundsSection({ rp, rpIndex, speakSounds, speakSoundBlobs, onRestP
 
 // --- Zone Animation Mappings sub-section ---
 
-function ZoneAnimationMappingsSection({ rp, rpIndex, bodyZones, animations, onRestPointChange }: {
+function ZoneAnimationMappingsSection({ rp, bodyZones, animations, onRestPointChange }: {
   rp: SceneRestPoint
-  rpIndex: number
   bodyZones: BodyZone[]
   animations: Animation[]
-  onRestPointChange: (index: number, updated: SceneRestPoint) => void
+  onRestPointChange: (updated: SceneRestPoint) => void
 }) {
   const mappings = rp.zoneAnimationMappings ?? []
-
   const handleChange = (zoneId: string, animationId: string) => {
     const filtered = mappings.filter(m => m.zoneId !== zoneId)
     const updated: ZoneAnimationMapping[] = animationId
       ? [...filtered, { zoneId, animationId }]
       : filtered
-    onRestPointChange(rpIndex, { ...rp, zoneAnimationMappings: updated })
+    onRestPointChange({ ...rp, zoneAnimationMappings: updated })
   }
-
   return (
     <div className="scene-config-panel-field">
       <label>Zones Corporelles</label>
@@ -540,15 +462,9 @@ function ZoneAnimationMappingsSection({ rp, rpIndex, bodyZones, animations, onRe
           const mapping = mappings.find(m => m.zoneId === zone.id)
           return (
             <div key={zone.id} className="scene-config-panel-zone-row">
-              <span
-                className="scene-config-panel-zone-swatch"
-                style={{ backgroundColor: zone.color }}
-              />
+              <span className="scene-config-panel-zone-swatch" style={{ backgroundColor: zone.color }} />
               <span className="scene-config-panel-zone-label">{zone.label}</span>
-              <select
-                value={mapping?.animationId ?? ''}
-                onChange={e => handleChange(zone.id, e.target.value)}
-              >
+              <select value={mapping?.animationId ?? ''} onChange={e => handleChange(zone.id, e.target.value)}>
                 <option value="">— Aucune —</option>
                 {animations.map(a => (
                   <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
@@ -564,10 +480,9 @@ function ZoneAnimationMappingsSection({ rp, rpIndex, bodyZones, animations, onRe
 
 // --- Help Texts sub-section ---
 
-function HelpTextsSection({ rp, rpIndex, onRestPointChange }: {
+function HelpTextsSection({ rp, onRestPointChange }: {
   rp: SceneRestPoint
-  rpIndex: number
-  onRestPointChange: (index: number, updated: SceneRestPoint) => void
+  onRestPointChange: (updated: SceneRestPoint) => void
 }) {
   const [newText, setNewText] = useState('')
   const texts = rp.helpTexts ?? []
@@ -575,12 +490,11 @@ function HelpTextsSection({ rp, rpIndex, onRestPointChange }: {
   const handleAdd = () => {
     const trimmed = newText.trim()
     if (!trimmed) return
-    onRestPointChange(rpIndex, { ...rp, helpTexts: [...texts, trimmed] })
+    onRestPointChange({ ...rp, helpTexts: [...texts, trimmed] })
     setNewText('')
   }
-
   const handleRemove = (index: number) => {
-    onRestPointChange(rpIndex, { ...rp, helpTexts: texts.filter((_, i) => i !== index) })
+    onRestPointChange({ ...rp, helpTexts: texts.filter((_, i) => i !== index) })
   }
 
   return (
@@ -588,8 +502,7 @@ function HelpTextsSection({ rp, rpIndex, onRestPointChange }: {
       <label>Textes d'aide "?"</label>
       <div className="scene-config-panel-help-add">
         <input
-          type="text"
-          value={newText}
+          type="text" value={newText}
           onChange={(e) => setNewText(e.target.value)}
           placeholder="Nouveau texte d'aide..."
           onKeyDown={(e) => { if (e.key === 'Enter') handleAdd() }}
@@ -600,13 +513,7 @@ function HelpTextsSection({ rp, rpIndex, onRestPointChange }: {
         {texts.map((text, i) => (
           <div key={i} className="scene-config-panel-help-item">
             <span className="scene-config-panel-help-text">"{text}"</span>
-            <button
-              className="btn-icon btn-sm btn-danger"
-              onClick={() => handleRemove(i)}
-              title="Supprimer"
-            >
-              &times;
-            </button>
+            <button className="btn-icon btn-sm btn-danger" onClick={() => handleRemove(i)} title="Supprimer">&times;</button>
           </div>
         ))}
         {texts.length === 0 && (

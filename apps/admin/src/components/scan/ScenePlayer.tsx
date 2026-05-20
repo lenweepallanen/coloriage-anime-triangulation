@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation } from '../../types/project'
+import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneActionStep } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -119,7 +119,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [playing, setPlaying] = useState(true)
   const playingRef = useRef(true)
   const [sceneState, setSceneState] = useState<SceneState>('interaction')
-  const [currentRestIdx, setCurrentRestIdx] = useState(0)
   const [showHelpBubble, setShowHelpBubble] = useState(false)
   const [currentHelpText, setCurrentHelpText] = useState('')
   const speakAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -129,6 +128,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const mouthAudioRef = useRef<MouthAudioPlayer | null>(null)
   // RMS courant lu par le ticker PIXI (0 si aucun speak en cours).
   const mouthOpennessRef = useRef(0)
+  // Étapes de l'action en cours (déclenchée par le bouton ☆) et son curseur.
+  // Quand non-null, chaque démarrage d'oneshot consomme l'étape suivante et joue son son.
+  const activeActionStepsRef = useRef<SceneActionStep[] | null>(null)
+  const actionStepIdxRef = useRef(0)
   const scenePlaybackRef = useRef<ScenePlayback | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -136,10 +139,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   useEffect(() => { playingRef.current = playing }, [playing])
 
   const scene = project.scene!
-  // Animation idle de la scène : on suit le 1er rest point si une animation est
-  // sélectionnée, sinon on prend la 1ère loop ready, puis fallback legacy rest.
-  const firstRp = scene.restPoints[0]
-  const restAnim = getIdleAnimation(project.animations, firstRp?.restAnimationId)
+  // Animation idle de la scène : on suit l'animation idle du rest point, sinon fallback.
+  const restAnim = getIdleAnimation(project.animations, scene.restPoint?.restAnimationId)
     ?? getGeometryOwner(project.animations)
 
   const animMap = useRef(new Map<string, Animation>())
@@ -502,6 +503,41 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (audio) { audio.currentTime = 0; audio.play().catch(() => {}) }
     }
 
+    /**
+     * Joue un son de scène (action.sound ou step.sound). Si `isSpoken`, route via
+     * MouthAudioPlayer pour piloter la bouche (lip-sync RMS) ; sinon HTMLAudio simple
+     * empilé dans animSoundAudiosRef (cleanup au démontage ou au prochain ☆).
+     */
+    const playSceneSound = async (blob: Blob, isSpoken: boolean) => {
+      if (isSpoken && project.projectMouth) {
+        mouthAudioRef.current?.cleanup()
+        mouthAudioRef.current = null
+        try {
+          const player = await loadMouthAudio(blob, {
+            onEnded: () => {
+              mouthOpennessRef.current = 0
+              mouthAudioRef.current?.cleanup()
+              mouthAudioRef.current = null
+            },
+          })
+          mouthAudioRef.current = player
+          await player.play()
+        } catch (err) {
+          console.error('[ScenePlayer] spoken scene sound failed', err)
+        }
+        return
+      }
+      // Non parlé (ou pas de bouche définie) : HTMLAudio empilé
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      animSoundAudiosRef.current.push(audio)
+      audio.play().catch(() => {})
+      audio.onended = () => {
+        URL.revokeObjectURL(url)
+        animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+      }
+    }
+
     // --- Zone touch detection (setup) ---
     const triangleZoneMap = buildTriangleZoneMap(mesh.triangles, project.bodyZones ?? [])
     let latestPositions: Point2D[] = allPoints
@@ -514,33 +550,31 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const canvas = app.view as HTMLCanvasElement
     canvas.style.touchAction = 'none'
 
-    // --- Scene playback state machine ---
-    const playSceneSounds = (sounds: import('../../types/project').SceneSound[]) => {
-      for (const sound of sounds) {
-        if (!sound.blob) continue
-        const url = URL.createObjectURL(sound.blob)
-        const audio = new Audio(url)
-        animSoundAudiosRef.current.push(audio)
-        audio.play().catch(() => {})
-        audio.onended = () => {
-          URL.revokeObjectURL(url)
-          animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
-        }
+    // --- Son d'ambiance (boucle continue) + son d'entrée (1 fois au début) ---
+    let sceneAmbientAudio: HTMLAudioElement | null = null
+    if (scene.ambientSound?.blob) {
+      const url = URL.createObjectURL(scene.ambientSound.blob)
+      const audio = new Audio(url)
+      audio.loop = true
+      audio.play().catch(() => {})
+      sceneAmbientAudio = audio
+    }
+    if (scene.entrySound?.blob) {
+      const url = URL.createObjectURL(scene.entrySound.blob)
+      const audio = new Audio(url)
+      animSoundAudiosRef.current.push(audio)
+      audio.play().catch(() => {})
+      audio.onended = () => {
+        URL.revokeObjectURL(url)
+        animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
       }
     }
 
+    // --- Scene playback state machine ---
     const scenePlayback = new ScenePlayback({
       scene,
       viewportWidth: viewW / bgScale,
       viewportHeight: viewH / bgScale,
-      onRestPointArrival: (index) => {
-        setCurrentRestIdx(index)
-      },
-      onSegmentStart: (transitionIndex, segmentIndex) => {
-        const transition = transitionIndex === -1 ? scene.startTransition : scene.transitions[transitionIndex]
-        const seg = transition?.segments[segmentIndex]
-        if (seg?.sounds && seg.sounds.length > 0) playSceneSounds(seg.sounds)
-      },
     })
     scenePlaybackRef.current = scenePlayback
 
@@ -699,10 +733,28 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
 
       if (oneshotAnims.length > 0) {
+        const onOneshotStart = (animId: string) => {
+          playAnimAudio(animId)
+          // Consomme l'étape courante de l'action active : joue le step.sound
+          // au démarrage effectif de l'animation (après wait + trans-out).
+          const steps = activeActionStepsRef.current
+          if (steps) {
+            const idx = actionStepIdxRef.current
+            const step = steps[idx]
+            if (step?.sound?.blob) {
+              playSceneSound(step.sound.blob, step.isSpoken ?? false)
+            }
+            actionStepIdxRef.current = idx + 1
+            if (idx + 1 >= steps.length) {
+              activeActionStepsRef.current = null
+              actionStepIdxRef.current = 0
+            }
+          }
+        }
         const multiPlayback = new MultiAnimationPlayback(restFrames, oneshotAnims, {
           crossfadeFrames: rest?.mesh?.crossfadeFrames ?? 7,
-          onOneshotStart: playAnimAudio,
-          onOverlayStart: playAnimAudio,
+          onOneshotStart,
+          onOverlayStart: onOneshotStart,
         })
         currentMultiPlaybackRef = multiPlayback
         currentGetPositions = () => multiPlayback.getPositions()
@@ -748,13 +800,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       zoneOneshotBody = null
       beginCrossfade(durationMs, easeInNew)
 
-      if (newState === 'segment') {
+      if (newState === 'entering') {
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
       } else if (newState === 'interaction' || newState === 'blend') {
         const rp = scenePlayback.currentRestPoint
-        setupInteractionAnimation(rp?.restAnimationId, rp?.randomAnimationIds ?? [])
+        const animIds = collectRestPointAnimIds(rp)
+        setupInteractionAnimation(rp?.restAnimationId, animIds)
       }
 
+    }
+
+    /** Collecte tous les ids d'animations déclenchables au rest point :
+     *  actions flatmap + zoneAnimationMappings, avec fallback legacy randomAnimationIds. */
+    function collectRestPointAnimIds(rp: SceneRestPoint | null): string[] {
+      if (!rp) return []
+      const set = new Set<string>()
+      for (const a of rp.actions ?? []) for (const s of a.steps) if (s.animationId) set.add(s.animationId)
+      for (const m of rp.zoneAnimationMappings ?? []) if (m.animationId) set.add(m.animationId)
+      for (const id of rp.randomAnimationIds ?? []) set.add(id) // legacy
+      return Array.from(set)
     }
 
     /**
@@ -807,23 +871,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       zoneOneshotBody = null
       beginCrossfade(290, false)
       const rp = scenePlayback.currentRestPoint
-      setupInteractionAnimation(rp?.restAnimationId, rp?.randomAnimationIds ?? [])
+      setupInteractionAnimation(rp?.restAnimationId, collectRestPointAnimIds(rp))
     }
 
     // Initialize based on scene playback initial state
     const initialState = scenePlayback.currentState
-    if (scene.restPoints.length > 0) {
-      if (initialState === 'segment') {
+    if (scene.restPoint) {
+      if (initialState === 'entering') {
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
       } else {
-        const firstRp = scene.restPoints[0]
-        setupInteractionAnimation(firstRp.restAnimationId, firstRp.randomAnimationIds ?? [])
+        const rp = scene.restPoint
+        setupInteractionAnimation(rp.restAnimationId, collectRestPointAnimIds(rp))
       }
     }
 
     let prevSceneState: SceneState = initialState
     lastSegmentAnimId = scenePlayback.currentSegmentAnimationId
-    lastSegmentCrossfadeMs = scenePlayback.currentSegment?.crossfadeMs ?? null
+    lastSegmentCrossfadeMs = null
 
     // --- Zone touch detection (pointer event) ---
     const onPointerDown = (e: PointerEvent) => {
@@ -857,27 +921,36 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     app.ticker.add((delta) => {
       const deltaSeconds = delta / 60
 
+      // Sync pause/play du son d'ambiance avec le toggle ⏵/⏸
+      if (sceneAmbientAudio) {
+        if (playingRef.current && sceneAmbientAudio.paused) {
+          sceneAmbientAudio.play().catch(() => {})
+        } else if (!playingRef.current && !sceneAmbientAudio.paused) {
+          sceneAmbientAudio.pause()
+        }
+      }
+
       if (playingRef.current) {
         scenePlayback.update(deltaSeconds)
         const newState = scenePlayback.currentState
         const newSegAnimId = scenePlayback.currentSegmentAnimationId
-        const segCrossfade = scenePlayback.currentSegment?.crossfadeMs ?? 290
+        const segCrossfade = 290
 
         // State change OR segment→segment animation change within the same transition
         const stateChanged = newState !== prevSceneState
         const segmentBoundary = newState === 'segment'
-          && prevSceneState === 'segment'
+          && prevSceneState === 'entering'
           && newSegAnimId !== lastSegmentAnimId
 
         if (stateChanged || segmentBoundary) {
           // Choose crossfade duration: outgoing segment if we're leaving one,
           // otherwise incoming segment, otherwise default 290ms.
           let durationMs: number
-          if (prevSceneState === 'segment' && (newState === 'interaction' || newState === 'blend')) {
+          if (prevSceneState === 'entering' && (newState === 'interaction' || newState === 'blend')) {
             // Segment → rest point : priorité au fondu d'arrivée propre au rest point
             const arrivalMs = scenePlayback.currentRestPoint?.arrivalCrossfadeMs
             durationMs = arrivalMs ?? lastSegmentCrossfadeMs ?? 290
-          } else if (prevSceneState === 'segment' && lastSegmentCrossfadeMs != null) {
+          } else if (prevSceneState === 'entering' && lastSegmentCrossfadeMs != null) {
             durationMs = lastSegmentCrossfadeMs
           } else if (newState === 'segment') {
             durationMs = segCrossfade
@@ -885,13 +958,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             durationMs = 290
           }
           setSceneState(newState)
-          const easeInNew = prevSceneState === 'segment' && (newState === 'interaction' || newState === 'blend')
+          const easeInNew = prevSceneState === 'entering' && (newState === 'interaction' || newState === 'blend')
           switchAnimation(newState, durationMs, easeInNew)
           prevSceneState = newState
         }
 
         // Track current segment metadata (for next-frame outgoing decision)
-        if (newState === 'segment') {
+        if (newState === 'entering') {
           lastSegmentCrossfadeMs = segCrossfade
           lastSegmentAnimId = newSegAnimId
         } else {
@@ -1159,6 +1232,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const url of bgImageUrls) URL.revokeObjectURL(url)
       for (const audio of animAudioElements.values()) { audio.pause() }
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
+      if (sceneAmbientAudio) { sceneAmbientAudio.pause(); try { URL.revokeObjectURL(sceneAmbientAudio.src) } catch { /* */ } }
       if (mouthOverlay) mouthOverlay.destroy()
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
@@ -1173,44 +1247,77 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
   }, [onClose])
 
-  const handleContinue = useCallback(() => {
-    scenePlaybackRef.current?.advance()
-  }, [])
+  const handleRandomAnimation = useCallback(async () => {
+    const rp = scene.restPoint
+    const actions = rp?.actions ?? []
+    const playable = actions.filter(a =>
+      a.steps.length > 0 &&
+      a.steps.every(s => {
+        const anim = project.animations.find(x => x.id === s.animationId)
+        return anim != null && animationHasFrames(anim)
+      })
+    )
+    if (playable.length === 0) return
+    const action = playable[Math.floor(Math.random() * playable.length)]
 
-  const handleRandomAnimation = useCallback(() => {
-    const rp = scene.restPoints[currentRestIdx]
-    const allIds = rp?.randomAnimationIds ?? []
-    const playableOriginalIndices: number[] = []
-    for (let i = 0; i < allIds.length; i++) {
-      const a = project.animations.find(x => x.id === allIds[i])
-      if (a != null && animationHasFrames(a)) playableOriginalIndices.push(i)
+    // Couper l'audio d'action précédent (sons HTML cumulés + lip-sync mouth)
+    for (const a of animSoundAudiosRef.current) {
+      a.pause()
+      try { URL.revokeObjectURL(a.src) } catch { /* */ }
     }
-    if (playableOriginalIndices.length === 0) return
-    const originalIdx = playableOriginalIndices[Math.floor(Math.random() * playableOriginalIndices.length)]
-    const randomId = allIds[originalIdx]
-    const sounds = rp?.randomAnimationSounds?.[originalIdx] ?? []
-    for (const sound of sounds) {
-      if (!sound.blob) continue
-      const url = URL.createObjectURL(sound.blob)
-      const audio = new Audio(url)
-      animSoundAudiosRef.current.push(audio)
-      audio.play().catch(() => {})
-      audio.onended = () => {
-        URL.revokeObjectURL(url)
-        animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+    animSoundAudiosRef.current = []
+    if (mouthAudioRef.current) {
+      mouthAudioRef.current.cleanup()
+      mouthAudioRef.current = null
+      mouthOpennessRef.current = 0
+    }
+
+    // Son d'action : lancé immédiatement, route lip-sync si isSpoken (et bouche définie)
+    if (action.sound?.blob) {
+      const blob = action.sound.blob
+      const isSpoken = action.isSpoken === true
+      if (isSpoken && project.projectMouth) {
+        try {
+          const player = await loadMouthAudio(blob, {
+            onEnded: () => {
+              mouthOpennessRef.current = 0
+              mouthAudioRef.current?.cleanup()
+              mouthAudioRef.current = null
+            },
+          })
+          mouthAudioRef.current = player
+          await player.play()
+        } catch (err) {
+          console.error('[ScenePlayer] spoken action sound failed', err)
+        }
+      } else {
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        animSoundAudiosRef.current.push(audio)
+        audio.play().catch(() => {})
+        audio.onended = () => {
+          URL.revokeObjectURL(url)
+          animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+        }
       }
     }
+
+    // Marque l'action active : chaque oneshot suivant consomme une étape
+    activeActionStepsRef.current = action.steps
+    actionStepIdxRef.current = 0
+
+    const animIds = action.steps.map(s => s.animationId)
     const sp = scenePlaybackRef.current as unknown as {
       getMultiPlayback?: () => MultiAnimationPlayback | null
       triggerZoneOneshot?: (animId: string) => boolean
     }
     const mp = sp?.getMultiPlayback?.()
-    if (mp) mp.requestOneshot(randomId)
-    else sp?.triggerZoneOneshot?.(randomId)
-  }, [currentRestIdx, scene, project.animations])
+    if (mp) mp.requestSequence(animIds)
+    else sp?.triggerZoneOneshot?.(animIds[0])
+  }, [scene, project.animations, project.projectMouth])
 
   const handleSpeak = useCallback(async () => {
-    const rp = scene.restPoints[currentRestIdx]
+    const rp = scene.restPoint
     const activeIds = rp?.speakSoundIds ?? []
     if (activeIds.length === 0) return
     const randomId = activeIds[Math.floor(Math.random() * activeIds.length)]
@@ -1248,18 +1355,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     speakAudioRef.current = audio
     audio.play().catch(() => {})
     audio.onended = () => { URL.revokeObjectURL(url); speakAudioRef.current = null }
-  }, [currentRestIdx, scene, project.projectMouth])
+  }, [scene, project.projectMouth])
 
   const handleHelp = useCallback(() => {
-    const rp = scene.restPoints[currentRestIdx]
+    const rp = scene.restPoint
     const texts = rp?.helpTexts ?? []
     if (texts.length === 0) return
     setCurrentHelpText(texts[Math.floor(Math.random() * texts.length)])
     setShowHelpBubble(true)
-  }, [currentRestIdx, scene.restPoints])
-
-  // Dismiss help bubble when rest point changes
-  useEffect(() => { setShowHelpBubble(false) }, [currentRestIdx])
+  }, [scene.restPoint])
 
   // Cleanup speak audio on unmount
   useEffect(() => () => {
@@ -1277,8 +1381,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     animSoundAudiosRef.current = []
   }, [])
 
-  const currentRp = scene.restPoints[currentRestIdx]
-  const hasRandomAnims = (currentRp?.randomAnimationIds ?? []).some(id => {
+  const currentRp = scene.restPoint
+  const actionAnimIds = (currentRp?.actions ?? []).flatMap(a => a.steps.map(s => s.animationId))
+  const hasRandomAnims = actionAnimIds.some(id => {
     const a = project.animations.find(a => a.id === id)
     return a != null && (a.mesh?.videoFramesMesh != null || (a.mesh?.walkZoneFrames != null && a.mesh?.walkBodyFrames != null))
   })
@@ -1286,7 +1391,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0
 
   const isInteraction = sceneState === 'interaction'
-  const isLastRestPoint = currentRestIdx >= scene.restPoints.length - 1
 
   return (
     <div className="animation-player scene-player" ref={playerRef}>
@@ -1312,13 +1416,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             </button>
           )}
         </div>
-      )}
-
-      {/* RIGHT side - next arrow */}
-      {isInteraction && !isLastRestPoint && (
-        <button className="scene-player-next-btn" onClick={handleContinue}>
-          &#x276F;
-        </button>
       )}
 
       {/* RIGHT side - help button */}

@@ -182,12 +182,31 @@ interface SceneSoundMetaDoc {
   name: string
 }
 
+interface SceneActionStepDoc {
+  animationId: string
+  sound?: SceneSoundMetaDoc
+  isSpoken?: boolean
+}
+
+interface SceneActionDoc {
+  id: string
+  name: string
+  steps?: SceneActionStepDoc[]
+  /** @deprecated legacy lecture-seule, migré vers `steps`. */
+  animationIds?: string[]
+  sound?: SceneSoundMetaDoc
+  isSpoken?: boolean
+}
+
 interface SceneRestPointDoc {
   id: string
   backgroundX: number
   restAnimationId?: string
+  /** Actions (séquences) déclenchables par le bouton ☆. */
+  actions?: SceneActionDoc[]
+  /** @deprecated legacy lecture-seule, migré vers `actions`. */
   randomAnimationIds?: string[]
-  /** Sounds attached to each random animation entry — index-aligned with randomAnimationIds. */
+  /** @deprecated legacy lecture-seule. */
   randomAnimationSounds?: SceneSoundMetaDoc[][]
   zoneAnimationMappings?: ZoneAnimationMappingDoc[]
   availableAnimationIds?: string[]  // legacy fallback
@@ -225,10 +244,23 @@ interface SceneDoc {
   backgroundHeight?: number
   characterScale: number
   characterY: number
-  restPoints: SceneRestPointDoc[]
-  transitions: SceneTransitionDoc[]
-  startMode: 'rest' | 'transition'
+  /** Nouveau modèle : 1 seul rest point. */
+  restPoint?: SceneRestPointDoc
+  entry?: 'fixed' | 'moving'
+  entryStartX?: number
+  entryDurationMs?: number
+  entryAnimationId?: string
+  entrySound?: SceneSoundMetaDoc
+  ambientSound?: SceneSoundMetaDoc
+  /** @deprecated legacy multi-rest, migré vers `restPoint` (premier élément). */
+  restPoints?: SceneRestPointDoc[]
+  /** @deprecated legacy. */
+  transitions?: SceneTransitionDoc[]
+  /** @deprecated legacy. */
+  startMode?: 'rest' | 'transition'
+  /** @deprecated legacy. */
   startX?: number
+  /** @deprecated legacy. */
   startTransition?: SceneTransitionDoc
   speakSounds?: { id: string; name: string }[]
 }
@@ -330,38 +362,37 @@ function projectRef(id: string) {
 function collectSceneSoundIds(scene: Scene | null | undefined): string[] {
   if (!scene) return []
   const ids = new Set<string>()
-  for (const rp of scene.restPoints) {
+  if (scene.entrySound) ids.add(scene.entrySound.id)
+  if (scene.ambientSound) ids.add(scene.ambientSound.id)
+  const rp = scene.restPoint
+  if (rp) {
+    for (const a of rp.actions ?? []) {
+      if (a.sound) ids.add(a.sound.id)
+      for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
+    }
     for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
   }
-  const collectFromTransition = (t: import('../types/project').SceneTransition | undefined) => {
-    for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) ids.add(s.id)
-  }
-  for (const t of scene.transitions) collectFromTransition(t)
-  collectFromTransition(scene.startTransition)
   return [...ids]
 }
 
 function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
   const scene = project.scene
   if (!scene) return null
-  for (const rp of scene.restPoints) {
-    for (const arr of rp.randomAnimationSounds ?? []) {
-      const found = arr.find(s => s.id === soundId)
-      if (found?.blob) return found.blob
+  if (scene.entrySound?.id === soundId && scene.entrySound.blob) return scene.entrySound.blob
+  if (scene.ambientSound?.id === soundId && scene.ambientSound.blob) return scene.ambientSound.blob
+  const rp = scene.restPoint
+  if (!rp) return null
+  for (const a of rp.actions ?? []) {
+    if (a.sound?.id === soundId && a.sound.blob) return a.sound.blob
+    for (const s of a.steps ?? []) {
+      if (s.sound?.id === soundId && s.sound.blob) return s.sound.blob
     }
   }
-  const fromTransition = (t: import('../types/project').SceneTransition | undefined): Blob | null => {
-    for (const seg of t?.segments ?? []) {
-      const found = seg.sounds?.find(s => s.id === soundId)
-      if (found?.blob) return found.blob
-    }
-    return null
+  for (const arr of rp.randomAnimationSounds ?? []) {
+    const found = arr.find(s => s.id === soundId)
+    if (found?.blob) return found.blob
   }
-  for (const t of scene.transitions) {
-    const b = fromTransition(t)
-    if (b) return b
-  }
-  return fromTransition(scene.startTransition)
+  return null
 }
 
 const STORAGE_CACHE_METADATA = { cacheControl: 'public, max-age=31536000, immutable' }
@@ -781,16 +812,27 @@ function animToDoc(anim: Animation): AnimationDoc {
   }
 }
 
-function transitionToDoc(t: import('../types/project').SceneTransition): SceneTransitionDoc {
+function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRestPointDoc {
   return {
-    waypoints: t.waypoints,
-    segments: t.segments.map(s => ({
-      duration: s.duration,
-      ...(s.animationId != null && { animationId: s.animationId }),
-      ...(s.sounds != null && s.sounds.length > 0 && {
-        sounds: s.sounds.map(snd => ({ id: snd.id, name: snd.name })),
-      }),
-    })),
+    id: rp.id,
+    backgroundX: rp.backgroundX,
+    ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
+    ...(rp.actions != null && rp.actions.length > 0 && {
+      actions: rp.actions.map(a => ({
+        id: a.id,
+        name: a.name,
+        steps: a.steps.map(s => ({
+          animationId: s.animationId,
+          ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name } }),
+          ...(s.isSpoken && { isSpoken: true }),
+        })),
+        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name } }),
+        ...(a.isSpoken && { isSpoken: true }),
+      })),
+    }),
+    ...(rp.zoneAnimationMappings != null && rp.zoneAnimationMappings.length > 0 && { zoneAnimationMappings: rp.zoneAnimationMappings }),
+    ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
+    ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
   }
 }
 
@@ -807,22 +849,13 @@ function sceneToDoc(scene: Scene): SceneDoc {
     })),
     characterScale: scene.characterScale,
     characterY: scene.characterY,
-    restPoints: scene.restPoints.map(rp => ({
-      id: rp.id,
-      backgroundX: rp.backgroundX,
-      ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
-      ...(rp.randomAnimationIds != null && { randomAnimationIds: rp.randomAnimationIds }),
-      ...(rp.randomAnimationSounds != null && rp.randomAnimationSounds.some(arr => arr.length > 0) && {
-        randomAnimationSounds: rp.randomAnimationSounds.map(arr => arr.map(s => ({ id: s.id, name: s.name }))),
-      }),
-      ...(rp.zoneAnimationMappings != null && rp.zoneAnimationMappings.length > 0 && { zoneAnimationMappings: rp.zoneAnimationMappings }),
-      ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
-      ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
-    })),
-    transitions: scene.transitions.map(transitionToDoc),
-    startMode: scene.startMode,
-    ...(scene.startX != null && { startX: scene.startX }),
-    ...(scene.startTransition != null && { startTransition: transitionToDoc(scene.startTransition) }),
+    restPoint: restPointToDoc(scene.restPoint),
+    entry: scene.entry,
+    ...(scene.entryStartX != null && { entryStartX: scene.entryStartX }),
+    ...(scene.entryDurationMs != null && { entryDurationMs: scene.entryDurationMs }),
+    ...(scene.entryAnimationId != null && { entryAnimationId: scene.entryAnimationId }),
+    ...(scene.entrySound != null && { entrySound: { id: scene.entrySound.id, name: scene.entrySound.name } }),
+    ...(scene.ambientSound != null && { ambientSound: { id: scene.ambientSound.id, name: scene.ambientSound.name } }),
     ...(scene.speakSounds.length > 0 && { speakSounds: scene.speakSounds.map(s => ({ id: s.id, name: s.name })) }),
   }
 }
@@ -1165,17 +1198,17 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   // Reconstruct scene if present
   let sceneSoundBlobs: Map<string, Blob | null> = new Map()
   if (projDoc.scene) {
-    // Gather all unique sound IDs from rest points + transitions to download in parallel.
     const ids = new Set<string>()
-    for (const rp of projDoc.scene.restPoints ?? []) {
-      for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
+    if (projDoc.scene.entrySound) ids.add(projDoc.scene.entrySound.id)
+    if (projDoc.scene.ambientSound) ids.add(projDoc.scene.ambientSound.id)
+    const rpDoc = projDoc.scene.restPoint ?? projDoc.scene.restPoints?.[0]
+    if (rpDoc) {
+      for (const a of rpDoc.actions ?? []) {
+        if (a.sound) ids.add(a.sound.id)
+        for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
+      }
+      for (const arr of rpDoc.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
     }
-    const collectSegmentIds = (t: SceneTransitionDoc | undefined) => {
-      for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) ids.add(s.id)
-    }
-    for (const t of projDoc.scene.transitions ?? []) collectSegmentIds(t)
-    collectSegmentIds(projDoc.scene.startTransition)
-
     const idList = [...ids]
     const blobs = await Promise.all(
       idList.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`))
@@ -1186,14 +1219,54 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   const hydrateSounds = (metas: SceneSoundMetaDoc[] | undefined): import('../types/project').SceneSound[] =>
     (metas ?? []).map(m => ({ id: m.id, name: m.name, blob: sceneSoundBlobs.get(m.id) ?? null }))
 
-  const docToTransition = (td: SceneTransitionDoc): import('../types/project').SceneTransition => ({
-    waypoints: td.waypoints ?? [],
-    segments: (td.segments ?? []).map(s => ({
-      duration: s.duration,
-      ...(s.animationId != null && { animationId: s.animationId }),
-      ...(s.sounds != null && s.sounds.length > 0 && { sounds: hydrateSounds(s.sounds) }),
-    })),
-  })
+  /**
+   * Migre un rest point legacy : si `actions` est absent et `randomAnimationIds` présent,
+   * créer une action 1-étape par animation, avec le 1ᵉʳ son legacy comme son d'action.
+   */
+  const docToRestPoint = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
+    let actions = rp.actions?.map(a => {
+      // Migration intra-action : ancien format `animationIds: string[]` → `steps`.
+      const steps = a.steps
+        ? a.steps.map(s => ({
+            animationId: s.animationId,
+            ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, blob: sceneSoundBlobs.get(s.sound.id) ?? null } }),
+            ...(s.isSpoken && { isSpoken: true }),
+          }))
+        : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
+      return {
+        id: a.id,
+        name: a.name,
+        steps,
+        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, blob: sceneSoundBlobs.get(a.sound.id) ?? null } }),
+        ...(a.isSpoken && { isSpoken: true }),
+      }
+    })
+    if (!actions || actions.length === 0) {
+      const legacyIds = rp.randomAnimationIds ?? rp.availableAnimationIds ?? []
+      if (legacyIds.length > 0) {
+        actions = legacyIds.map((animId, i) => {
+          const legacySound = rp.randomAnimationSounds?.[i]?.[0]
+          return {
+            id: crypto.randomUUID(),
+            name: `Action ${i + 1}`,
+            steps: [{ animationId }],
+            ...(legacySound && {
+              sound: { id: legacySound.id, name: legacySound.name, blob: sceneSoundBlobs.get(legacySound.id) ?? null },
+            }),
+          }
+        })
+      }
+    }
+    return {
+      id: rp.id,
+      backgroundX: rp.backgroundX,
+      ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
+      ...(actions && actions.length > 0 && { actions }),
+      ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
+      ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
+      ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
+    }
+  }
 
   let scene: Scene | null = null
   if (projDoc.scene) {
@@ -1201,7 +1274,6 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     const speakSoundBlobs = await Promise.all(
       speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`))
     )
-    // Build background layers (with legacy migration)
     const layerDocs = projDoc.scene.backgroundLayers ?? [
       { hasImage: false, width: 0, height: 0, depthFactor: 0.3 },
       { hasImage: false, width: 0, height: 0, depthFactor: 0.6 },
@@ -1215,28 +1287,35 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       depthFactor: l.depthFactor,
     }))
 
+    // Migration : restPoint = nouveau champ, sinon restPoints[0] (legacy multi-rest).
+    const rpDoc = projDoc.scene.restPoint ?? projDoc.scene.restPoints?.[0]
+    const restPoint = rpDoc
+      ? docToRestPoint(rpDoc)
+      : { id: crypto.randomUUID(), backgroundX: 0 }
+
+    // Migration entry/entryStartX depuis l'ancien startMode
+    let entry: 'fixed' | 'moving' = projDoc.scene.entry ?? 'fixed'
+    let entryStartX = projDoc.scene.entryStartX
+    if (projDoc.scene.entry == null) {
+      if (projDoc.scene.startMode === 'transition' && projDoc.scene.startX != null) {
+        entry = 'moving'
+        entryStartX = projDoc.scene.startX
+      }
+    }
+
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
       backgroundLayers,
       characterScale: projDoc.scene.characterScale,
       characterY: projDoc.scene.characterY,
-      restPoints: (projDoc.scene.restPoints ?? []).map(rp => ({
-        id: rp.id,
-        backgroundX: rp.backgroundX,
-        ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
-        randomAnimationIds: rp.randomAnimationIds ?? rp.availableAnimationIds,
-        ...(rp.randomAnimationSounds != null && {
-          randomAnimationSounds: rp.randomAnimationSounds.map(arr => hydrateSounds(arr)),
-        }),
-        ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
-        ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
-        ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
-      })),
-      transitions: (projDoc.scene.transitions ?? []).map(docToTransition),
-      startMode: projDoc.scene.startMode ?? 'rest',
-      ...(projDoc.scene.startX != null && { startX: projDoc.scene.startX }),
-      ...(projDoc.scene.startTransition != null && { startTransition: docToTransition(projDoc.scene.startTransition) }),
+      restPoint,
+      entry,
+      ...(entryStartX != null && { entryStartX }),
+      ...(projDoc.scene.entryDurationMs != null && { entryDurationMs: projDoc.scene.entryDurationMs }),
+      ...(projDoc.scene.entryAnimationId != null && { entryAnimationId: projDoc.scene.entryAnimationId }),
+      ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, blob: sceneSoundBlobs.get(projDoc.scene.entrySound.id) ?? null } }),
+      ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, blob: sceneSoundBlobs.get(projDoc.scene.ambientSound.id) ?? null } }),
       speakSounds,
       speakSoundBlobs,
     }
@@ -2067,36 +2146,74 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
     const backgroundLayers: SceneBackgroundLayer[] = layerDocs.map(l => ({
       imageBlob: null, videoBlob: null, width: l.width, height: l.height, depthFactor: l.depthFactor,
     }))
-    const docToTransition = (td: SceneTransitionDoc): import('../types/project').SceneTransition => ({
-      waypoints: td.waypoints ?? [],
-      segments: (td.segments ?? []).map(s => ({
-        duration: s.duration,
-        ...(s.animationId != null && { animationId: s.animationId }),
-        ...(s.sounds != null && s.sounds.length > 0 && { sounds: s.sounds.map(m => ({ id: m.id, name: m.name, blob: null })) }),
-      })),
-    })
+
+    const docToRestPointEssentials = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
+      let actions = rp.actions?.map(a => {
+        const steps = a.steps
+          ? a.steps.map(s => ({
+              animationId: s.animationId,
+              ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, blob: null } }),
+              ...(s.isSpoken && { isSpoken: true }),
+            }))
+          : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
+        return {
+          id: a.id,
+          name: a.name,
+          steps,
+          ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, blob: null } }),
+          ...(a.isSpoken && { isSpoken: true }),
+        }
+      })
+      if (!actions || actions.length === 0) {
+        const legacyIds = rp.randomAnimationIds ?? rp.availableAnimationIds ?? []
+        if (legacyIds.length > 0) {
+          actions = legacyIds.map((animId, i) => {
+            const legacySound = rp.randomAnimationSounds?.[i]?.[0]
+            return {
+              id: crypto.randomUUID(),
+              name: `Action ${i + 1}`,
+              steps: [{ animationId }],
+              ...(legacySound && { sound: { id: legacySound.id, name: legacySound.name, blob: null } }),
+            }
+          })
+        }
+      }
+      return {
+        id: rp.id,
+        backgroundX: rp.backgroundX,
+        ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
+        ...(actions && actions.length > 0 && { actions }),
+        ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
+        ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
+        ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
+      }
+    }
+
+    const rpDoc = projDoc.scene.restPoint ?? projDoc.scene.restPoints?.[0]
+    const restPoint = rpDoc ? docToRestPointEssentials(rpDoc) : { id: crypto.randomUUID(), backgroundX: 0 }
+
+    let entry: 'fixed' | 'moving' = projDoc.scene.entry ?? 'fixed'
+    let entryStartX = projDoc.scene.entryStartX
+    if (projDoc.scene.entry == null) {
+      if (projDoc.scene.startMode === 'transition' && projDoc.scene.startX != null) {
+        entry = 'moving'
+        entryStartX = projDoc.scene.startX
+      }
+    }
+
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
       backgroundLayers,
       characterScale: projDoc.scene.characterScale,
       characterY: projDoc.scene.characterY,
-      restPoints: (projDoc.scene.restPoints ?? []).map(rp => ({
-        id: rp.id,
-        backgroundX: rp.backgroundX,
-        ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
-        randomAnimationIds: rp.randomAnimationIds ?? rp.availableAnimationIds,
-        ...(rp.randomAnimationSounds != null && {
-          randomAnimationSounds: rp.randomAnimationSounds.map(arr => arr.map(m => ({ id: m.id, name: m.name, blob: null }))),
-        }),
-        ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
-        ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
-        ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
-      })),
-      transitions: (projDoc.scene.transitions ?? []).map(docToTransition),
-      startMode: projDoc.scene.startMode ?? 'rest',
-      ...(projDoc.scene.startX != null && { startX: projDoc.scene.startX }),
-      ...(projDoc.scene.startTransition != null && { startTransition: docToTransition(projDoc.scene.startTransition) }),
+      restPoint,
+      entry,
+      ...(entryStartX != null && { entryStartX }),
+      ...(projDoc.scene.entryDurationMs != null && { entryDurationMs: projDoc.scene.entryDurationMs }),
+      ...(projDoc.scene.entryAnimationId != null && { entryAnimationId: projDoc.scene.entryAnimationId }),
+      ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, blob: null } }),
+      ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, blob: null } }),
       speakSounds,
       speakSoundBlobs: speakSounds.map(() => null),
     }
@@ -2175,20 +2292,21 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     const speakSoundBlobs = await Promise.all(
       scene.speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`).catch(() => null))
     )
-    // Collect sceneSounds IDs from restPoints + transitions, download in parallel.
+    // Collect sceneSounds IDs (entry + ambient + restPoint actions + legacy random) puis download.
     const soundIds = new Set<string>()
-    for (const rp of scene.restPoints) for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) soundIds.add(s.id)
-    const collectFromTransition = (t?: import('../types/project').SceneTransition) => {
-      for (const seg of t?.segments ?? []) for (const s of seg.sounds ?? []) soundIds.add(s.id)
+    if (scene.entrySound) soundIds.add(scene.entrySound.id)
+    if (scene.ambientSound) soundIds.add(scene.ambientSound.id)
+    const rp = scene.restPoint
+    if (rp) {
+      for (const a of rp.actions ?? []) {
+        if (a.sound) soundIds.add(a.sound.id)
+        for (const s of a.steps ?? []) if (s.sound) soundIds.add(s.sound.id)
+      }
+      for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) soundIds.add(s.id)
     }
-    for (const t of scene.transitions) collectFromTransition(t)
-    collectFromTransition(scene.startTransition)
     const ids = [...soundIds]
     const sceneSoundBlobs = await Promise.all(ids.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`).catch(() => null)))
     const sceneSoundMap = new Map(ids.map((sid, i) => [sid, sceneSoundBlobs[i]]))
-
-    const hydrateSounds = (sounds: import('../types/project').SceneSound[] | undefined): import('../types/project').SceneSound[] =>
-      (sounds ?? []).map(s => ({ ...s, blob: sceneSoundMap.get(s.id) ?? s.blob ?? null }))
 
     scene = {
       ...scene,
@@ -2197,26 +2315,21 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
         imageBlob: l.imageBlob ?? (layerBlobs[i] ?? null),
         videoBlob: l.videoBlob ?? null,
       })),
-      restPoints: scene.restPoints.map(rp => ({
-        ...rp,
-        ...(rp.randomAnimationSounds != null && { randomAnimationSounds: rp.randomAnimationSounds.map(arr => hydrateSounds(arr)) }),
-      })),
-      transitions: scene.transitions.map(t => ({
-        ...t,
-        segments: t.segments.map(seg => ({
-          ...seg,
-          ...(seg.sounds != null && { sounds: hydrateSounds(seg.sounds) }),
-        })),
-      })),
-      ...(scene.startTransition != null && {
-        startTransition: {
-          ...scene.startTransition,
-          segments: scene.startTransition.segments.map(seg => ({
-            ...seg,
-            ...(seg.sounds != null && { sounds: hydrateSounds(seg.sounds) }),
+      ...(scene.entrySound != null && { entrySound: { ...scene.entrySound, blob: sceneSoundMap.get(scene.entrySound.id) ?? scene.entrySound.blob ?? null } }),
+      ...(scene.ambientSound != null && { ambientSound: { ...scene.ambientSound, blob: sceneSoundMap.get(scene.ambientSound.id) ?? scene.ambientSound.blob ?? null } }),
+      restPoint: {
+        ...scene.restPoint,
+        ...(scene.restPoint.actions != null && {
+          actions: scene.restPoint.actions.map(a => ({
+            ...a,
+            ...(a.sound != null && { sound: { ...a.sound, blob: sceneSoundMap.get(a.sound.id) ?? a.sound.blob ?? null } }),
+            steps: a.steps.map(s => ({
+              ...s,
+              ...(s.sound != null && { sound: { ...s.sound, blob: sceneSoundMap.get(s.sound.id) ?? s.sound.blob ?? null } }),
+            })),
           })),
-        },
-      }),
+        }),
+      },
       speakSoundBlobs,
     }
   }

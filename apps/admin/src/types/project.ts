@@ -669,12 +669,38 @@ export interface SceneSound {
   blob: Blob | null;
 }
 
+/**
+ * Une étape d'une action : 1 animation + un son optionnel propre à l'étape (bruitage),
+ * avec un toggle `isSpoken` qui pilote la bouche (lip-sync RMS) le temps du son.
+ */
+export interface SceneActionStep {
+  animationId: string;
+  sound?: SceneSound;
+  isSpoken?: boolean;
+}
+
+/**
+ * Une ACTION = séquence ordonnée d'étapes + 1 son optionnel "action" (typiquement
+ * dialogue) lancé au début, avec son propre toggle `isSpoken`. Le son d'action
+ * et les sons d'étape se superposent.
+ */
+export interface SceneAction {
+  id: string;
+  name: string;
+  steps: SceneActionStep[];
+  sound?: SceneSound;
+  isSpoken?: boolean;
+}
+
 export interface SceneRestPoint {
   id: string;
   backgroundX: number;
   restAnimationId?: string;
+  /** Actions disponibles (séquences) déclenchées par le bouton ☆. */
+  actions?: SceneAction[];
+  /** @deprecated legacy lecture-seule, migré vers `actions` à la lecture. */
   randomAnimationIds?: string[];
-  /** Index-aligned with randomAnimationIds: sounds attached to each random animation entry. */
+  /** @deprecated legacy lecture-seule. */
   randomAnimationSounds?: SceneSound[][];
   zoneAnimationMappings?: ZoneAnimationMapping[];
   speakSoundIds?: string[];
@@ -719,11 +745,20 @@ export interface Scene {
   backgroundLayers: SceneBackgroundLayer[];
   characterScale: number;
   characterY: number;
-  restPoints: SceneRestPoint[];
-  transitions: SceneTransition[];
-  startMode: 'rest' | 'transition';
-  startX?: number;
-  startTransition?: SceneTransition;
+  /** Point de repos unique de la scène (anciennement restPoints[0]). */
+  restPoint: SceneRestPoint;
+  /** Mode d'entrée : 'fixed' = apparition immédiate au restPoint, 'moving' = trajet entryStartX → restPoint.backgroundX. */
+  entry: 'fixed' | 'moving';
+  /** Position X de départ pour entry='moving'. */
+  entryStartX?: number;
+  /** Durée du trajet d'entrée en ms (défaut 1500). */
+  entryDurationMs?: number;
+  /** Animation jouée en boucle pendant le trajet d'entrée. Fallback : idle du rest point. */
+  entryAnimationId?: string;
+  /** Son joué une fois au début de la scène (au démarrage de l'entrée ou à l'apparition immédiate). */
+  entrySound?: SceneSound;
+  /** Son d'ambiance joué en boucle pendant toute la scène (démarre au chargement). */
+  ambientSound?: SceneSound;
   speakSounds: SpeakSound[];
   speakSoundBlobs: (Blob | null)[];
 }
