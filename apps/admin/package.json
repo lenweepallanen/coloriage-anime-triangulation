@@ -13,10 +13,13 @@
   "dependencies": {
     "@techstark/opencv-js": "^4.10.0-release.1",
     "delaunator": "^5.0.1",
+    "esm-potrace-wasm": "^0.4.4",
     "firebase": "^12.10.0",
+    "imagetracerjs": "^1.2.6",
     "jspdf": "^4.2.0",
     "jszip": "^3.10.1",
     "pixi.js": "^7.4.3",
+    "potrace-js": "^0.0.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1"

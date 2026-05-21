@@ -1,41 +1,73 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import JSZip from 'jszip'
+// @ts-expect-error no types
+import { traceCanvas, getSVG } from 'potrace-js/src/index.js'
 
 const TARGET_SIZE = 2000
+const TRACE_SIZE = 1000
 
-async function processImage(img: HTMLImageElement, thr: number, ss: number): Promise<Blob> {
-  const hiSize = TARGET_SIZE * ss
-  const hi = document.createElement('canvas')
-  hi.width = hiSize
-  hi.height = hiSize
-  const hctx = hi.getContext('2d')!
-  hctx.imageSmoothingEnabled = true
-  hctx.imageSmoothingQuality = 'high'
-  hctx.fillStyle = '#fff'
-  hctx.fillRect(0, 0, hiSize, hiSize)
-  hctx.drawImage(img, 0, 0, hiSize, hiSize)
+type Params = {
+  threshold: number
+  turdSize: number
+  alphaMax: number
+  optTolerance: number
+}
 
-  const imageData = hctx.getImageData(0, 0, hiSize, hiSize)
+function thresholdToCanvas(img: HTMLImageElement, thr: number): HTMLCanvasElement {
+  const c = document.createElement('canvas')
+  c.width = TRACE_SIZE
+  c.height = TRACE_SIZE
+  const ctx = c.getContext('2d')!
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, TRACE_SIZE, TRACE_SIZE)
+  ctx.drawImage(img, 0, 0, TRACE_SIZE, TRACE_SIZE)
+  const imageData = ctx.getImageData(0, 0, TRACE_SIZE, TRACE_SIZE)
   const data = imageData.data
   for (let i = 0; i < data.length; i += 4) {
-    const r = data[i], g = data[i + 1], b = data[i + 2]
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
     const v = lum < thr ? 0 : 255
     data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255
   }
-  hctx.putImageData(imageData, 0, 0)
+  ctx.putImageData(imageData, 0, 0)
+  return c
+}
 
-  const out = document.createElement('canvas')
-  out.width = TARGET_SIZE
-  out.height = TARGET_SIZE
-  const octx = out.getContext('2d')!
-  octx.imageSmoothingEnabled = true
-  octx.imageSmoothingQuality = 'high'
-  octx.fillStyle = '#fff'
-  octx.fillRect(0, 0, TARGET_SIZE, TARGET_SIZE)
-  octx.drawImage(hi, 0, 0, TARGET_SIZE, TARGET_SIZE)
+async function vectorize(img: HTMLImageElement, p: Params): Promise<string> {
+  const canvas = thresholdToCanvas(img, p.threshold)
+  const pathList = traceCanvas(canvas, {
+    turnpolicy: 'minority',
+    turdsize: p.turdSize,
+    optcurve: true,
+    alphamax: p.alphaMax,
+    opttolerance: p.optTolerance,
+  })
+  const rawSvg: string = getSVG(pathList, 1)
+  return rawSvg.replace(
+    /<svg[^>]*>/,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TRACE_SIZE} ${TRACE_SIZE}" width="${TRACE_SIZE}" height="${TRACE_SIZE}">`
+  )
+}
 
-  return await new Promise<Blob>(r => out.toBlob(b => r(b!), 'image/jpeg', 0.95))
+async function rasterizeSvg(svg: string, size: number): Promise<Blob> {
+  const blob = new Blob([svg], { type: 'image/svg+xml' })
+  const url = URL.createObjectURL(blob)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    const c = document.createElement('canvas')
+    c.width = size
+    c.height = size
+    const ctx = c.getContext('2d')!
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, size, size)
+    ctx.drawImage(img, 0, 0, size, size)
+    return await new Promise<Blob>(r => c.toBlob(b => r(b!), 'image/png')!)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 async function loadImage(file: File): Promise<HTMLImageElement> {
@@ -61,43 +93,60 @@ function triggerDownload(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
-function outName(srcName: string) {
-  const base = srcName.replace(/\.[^.]+$/, '') || 'coloriage'
-  return `${base}-nb-2000.jpg`
+function baseName(srcName: string) {
+  return srcName.replace(/\.[^.]+$/, '') || 'coloriage'
 }
 
 export default function ColoriageBwPage() {
   const [files, setFiles] = useState<File[]>([])
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [threshold, setThreshold] = useState(100)
-  const [supersample, setSupersample] = useState(2)
+  const [turdSize, setTurdSize] = useState(4)
+  const [alphaMax, setAlphaMax] = useState(1)
+  const [optTolerance, setOptTolerance] = useState(0.2)
   const [processing, setProcessing] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
-  const firstImgRef = useRef<HTMLImageElement | null>(null)
+  const [firstImg, setFirstImg] = useState<HTMLImageElement | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   async function handleSelect(list: FileList | null) {
     const arr = Array.from(list ?? [])
     setFiles(arr)
+    setErrorMsg(null)
     if (arr.length > 0) {
-      const img = await loadImage(arr[0])
-      firstImgRef.current = img
-      await runPreview(threshold, supersample, img)
+      try {
+        const img = await loadImage(arr[0])
+        setFirstImg(img)
+        await runPreview({ threshold, turdSize, alphaMax, optTolerance }, img)
+      } catch (e) {
+        console.error(e)
+        setErrorMsg(`Erreur chargement : ${(e as Error).message}`)
+      }
     } else {
-      firstImgRef.current = null
+      setFirstImg(null)
       setPreviewUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
     }
   }
 
-  async function runPreview(thr: number, ss: number, img: HTMLImageElement | null = firstImgRef.current) {
+  async function runPreview(p: Params, img: HTMLImageElement | null = firstImg) {
     if (!img) return
     setProcessing(true)
+    setErrorMsg(null)
     try {
-      const blob = await processImage(img, thr, ss)
+      const svg = await vectorize(img, p)
+      const blob = new Blob([svg], { type: 'image/svg+xml' })
       const url = URL.createObjectURL(blob)
       setPreviewUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url })
+    } catch (e) {
+      console.error(e)
+      setErrorMsg(`Erreur vectorisation : ${(e as Error).message}`)
     } finally {
       setProcessing(false)
     }
+  }
+
+  function reRunPreview() {
+    void runPreview({ threshold, turdSize, alphaMax, optTolerance })
   }
 
   useEffect(() => {
@@ -108,24 +157,25 @@ export default function ColoriageBwPage() {
     if (files.length === 0) return
     setBatchProgress({ done: 0, total: files.length })
     const zip = new JSZip()
+    const params = { threshold, turdSize, alphaMax, optTolerance }
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
         try {
           const img = await loadImage(file)
-          const blob = await processImage(img, threshold, supersample)
-          zip.file(outName(file.name), blob)
+          const svg = await vectorize(img, params)
+          const png = await rasterizeSvg(svg, TARGET_SIZE)
+          const name = baseName(file.name)
+          zip.file(`${name}-nb.svg`, svg)
+          zip.file(`${name}-nb-2000.png`, png)
         } catch (err) {
           console.error('Batch error on', file.name, err)
         }
         setBatchProgress({ done: i + 1, total: files.length })
       }
-      const zipBlob = await zip.generateAsync({ type: 'blob' }, meta => {
-        setBatchProgress({ done: files.length, total: files.length, ...({} as any) })
-        void meta
-      })
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
       const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
-      triggerDownload(zipBlob, `coloriages-nb-2000-${ts}.zip`)
+      triggerDownload(zipBlob, `coloriages-nb-vector-${ts}.zip`)
     } finally {
       setTimeout(() => setBatchProgress(null), 1500)
     }
@@ -133,10 +183,10 @@ export default function ColoriageBwPage() {
 
   return (
     <div style={{ padding: 'var(--space-6)', maxWidth: 1200, margin: '0 auto' }}>
-      <h1>Couleur → Noir & Blanc (upscale 2000×2000)</h1>
+      <h1>Couleur → Noir & Blanc (vectorisé, SVG + PNG 2000×2000)</h1>
       <p style={{ color: '#9aa3b2' }}>
-        Sélectionnez un ou plusieurs JPG. Le premier fichier sert d'aperçu pour régler le seuil et l'anti-aliasing.
-        À la validation, les mêmes paramètres sont appliqués à tout le lot et exportés dans un .zip.
+        Sélectionnez un ou plusieurs JPG. Le premier fichier sert d'aperçu pour régler le seuil et les paramètres de vectorisation (Potrace).
+        À la validation, le lot est exporté en .zip contenant pour chaque image un .svg vectoriel et un .png 2000×2000 rastérisé depuis le SVG.
       </p>
 
       <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'center', margin: 'var(--space-4) 0', flexWrap: 'wrap' }}>
@@ -153,34 +203,35 @@ export default function ColoriageBwPage() {
         </span>
       </div>
 
-      {firstImgRef.current && (
+      {firstImg && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', margin: 'var(--space-3) 0', maxWidth: 600 }}>
           <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
-            <label style={{ minWidth: 160 }}>Seuil noir : {threshold}</label>
-            <input
-              type="range"
-              min={20}
-              max={200}
-              value={threshold}
+            <label style={{ minWidth: 180 }}>Seuil noir : {threshold}</label>
+            <input type="range" min={20} max={200} value={threshold}
               onChange={e => setThreshold(Number(e.target.value))}
-              onMouseUp={() => runPreview(threshold, supersample)}
-              onTouchEnd={() => runPreview(threshold, supersample)}
-              style={{ flex: 1 }}
-            />
+              onMouseUp={reRunPreview} onTouchEnd={reRunPreview}
+              style={{ flex: 1 }} />
           </div>
           <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
-            <label style={{ minWidth: 160 }}>Anti-aliasing : ×{supersample}</label>
-            <input
-              type="range"
-              min={1}
-              max={4}
-              step={1}
-              value={supersample}
-              onChange={e => setSupersample(Number(e.target.value))}
-              onMouseUp={() => runPreview(threshold, supersample)}
-              onTouchEnd={() => runPreview(threshold, supersample)}
-              style={{ flex: 1 }}
-            />
+            <label style={{ minWidth: 180 }}>Filtre taches (turdSize) : {turdSize}</label>
+            <input type="range" min={0} max={50} value={turdSize}
+              onChange={e => setTurdSize(Number(e.target.value))}
+              onMouseUp={reRunPreview} onTouchEnd={reRunPreview}
+              style={{ flex: 1 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
+            <label style={{ minWidth: 180 }}>Lissage coins (alphaMax) : {alphaMax.toFixed(2)}</label>
+            <input type="range" min={0} max={1.34} step={0.01} value={alphaMax}
+              onChange={e => setAlphaMax(Number(e.target.value))}
+              onMouseUp={reRunPreview} onTouchEnd={reRunPreview}
+              style={{ flex: 1 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
+            <label style={{ minWidth: 180 }}>Simplification (optTolerance) : {optTolerance.toFixed(2)}</label>
+            <input type="range" min={0} max={1} step={0.05} value={optTolerance}
+              onChange={e => setOptTolerance(Number(e.target.value))}
+              onMouseUp={reRunPreview} onTouchEnd={reRunPreview}
+              style={{ flex: 1 }} />
           </div>
           <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center', marginTop: 'var(--space-2)' }}>
             <button
@@ -201,11 +252,12 @@ export default function ColoriageBwPage() {
         </div>
       )}
 
-      {processing && <p>Aperçu en cours…</p>}
+      {processing && <p>Vectorisation en cours…</p>}
+      {errorMsg && <p style={{ color: '#ff6b6b' }}>{errorMsg}</p>}
 
       {previewUrl && (
         <div style={{ marginTop: 'var(--space-4)', border: '1px solid #2d3340', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-          <img src={previewUrl} alt="Aperçu N&B" style={{ display: 'block', width: '100%', height: 'auto' }} />
+          <img src={previewUrl} alt="Aperçu N&B vectorisé" style={{ display: 'block', width: '100%', height: 'auto' }} />
         </div>
       )}
     </div>
