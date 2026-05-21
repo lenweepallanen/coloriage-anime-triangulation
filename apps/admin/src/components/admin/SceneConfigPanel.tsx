@@ -196,6 +196,7 @@ function ActionCard({ action, readyAnimations, onChange, onDelete, onSceneSoundI
     if (!action.sound?.blob) return
     const url = URL.createObjectURL(action.sound.blob)
     const audio = new Audio(url)
+    audio.volume = action.sound.volume ?? 1
     audioRef.current = audio
     setPlayingSound(true)
     audio.play().catch(() => {})
@@ -253,11 +254,11 @@ function ActionCard({ action, readyAnimations, onChange, onDelete, onSceneSoundI
       </div>
 
       {/* Action sound */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, opacity: 0.7 }}>Son d'action :</span>
         {action.sound ? (
           <>
-            <span style={{ fontSize: 12, flex: 1 }}>{action.sound.name}</span>
+            <span style={{ fontSize: 12, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{action.sound.name}</span>
             <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }} title="Pilote la bouche (lip-sync) pendant la lecture">
               <input
                 type="checkbox"
@@ -266,6 +267,21 @@ function ActionCard({ action, readyAnimations, onChange, onDelete, onSceneSoundI
               />
               parlé
             </label>
+            <div style={{ flex: 1 }} />
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={action.sound.volume ?? 1}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                onChange({ sound: { ...action.sound!, volume: v } })
+                if (audioRef.current) audioRef.current.volume = v
+              }}
+              style={{ width: 80 }}
+              title={`Volume : ${Math.round((action.sound.volume ?? 1) * 100)}%`}
+            />
+            <span style={{ fontSize: 11, opacity: 0.7, minWidth: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              {Math.round((action.sound.volume ?? 1) * 100)}%
+            </span>
             <button className="btn-icon btn-sm" onClick={togglePreview} disabled={!action.sound.blob} title={playingSound ? 'Stop' : 'Écouter'}>
               {playingSound ? '⏹' : '▶'}
             </button>
@@ -314,6 +330,7 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
     if (!step.sound?.blob) return
     const url = URL.createObjectURL(step.sound.blob)
     const audio = new Audio(url)
+    audio.volume = step.sound.volume ?? 1
     audioRef.current = audio
     setPlaying(true)
     audio.play().catch(() => {})
@@ -321,11 +338,11 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
   }, [step.sound])
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 28, fontSize: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 28, fontSize: 12, flexWrap: 'wrap' }}>
       <span style={{ opacity: 0.7 }}>son :</span>
       {step.sound ? (
         <>
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.sound.name}</span>
+          <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.sound.name}</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }} title="Pilote la bouche (lip-sync) pendant la lecture">
             <input
               type="checkbox"
@@ -334,6 +351,21 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
             />
             parlé
           </label>
+          <div style={{ flex: 1 }} />
+          <input
+            type="range" min={0} max={1} step={0.05}
+            value={step.sound.volume ?? 1}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value)
+              onChange({ sound: { ...step.sound!, volume: v } })
+              if (audioRef.current) audioRef.current.volume = v
+            }}
+            style={{ width: 70 }}
+            title={`Volume : ${Math.round((step.sound.volume ?? 1) * 100)}%`}
+          />
+          <span style={{ fontSize: 11, opacity: 0.7, minWidth: 30, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+            {Math.round((step.sound.volume ?? 1) * 100)}%
+          </span>
           <button className="btn-icon btn-sm" onClick={togglePreview} disabled={!step.sound.blob} title={playing ? 'Stop' : 'Écouter'}>
             {playing ? '⏹' : '▶'}
           </button>

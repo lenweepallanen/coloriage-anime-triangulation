@@ -15,7 +15,7 @@ import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData }
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import { EyeBlinkOverlay, getEyeBodyMeshData, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
-import { MouthOverlay } from '../../utils/mouthOverlay'
+import { MouthOverlay, computeMouthPolygonFrame0, filterTrianglesOutsideMouth } from '../../utils/mouthOverlay'
 import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
@@ -366,8 +366,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const texture = PIXI.Texture.from(scanCanvas)
     const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
 
-    const indices = new Uint16Array(mesh.triangles.length * 3)
-    mesh.triangles.forEach((tri, i) => {
+    // --- Mouth hole polygon (frame 0, image coords) ---
+    // Calculé une fois, sert à trouer le mesh legacy ET les zone/body meshes
+    // pour que l'overlay mâchoire révèle le fond de scène en transparence.
+    let mouthHolePolygon: Point2D[] | null = null
+    {
+      const mAttachId = project.projectMouth?.attachZoneId ?? 'body'
+      if (project.projectMouth) {
+        const mAttach = getMouthAttachMesh(project, mAttachId)
+        if (mAttach && mAttach.triangles.length > 0) {
+          mouthHolePolygon = computeMouthPolygonFrame0(project.projectMouth, mAttach.points, mAttach.triangles)
+        }
+      }
+    }
+
+    const legacyTriangles = mouthHolePolygon
+      ? filterTrianglesOutsideMouth(allPoints, mesh.triangles, mouthHolePolygon)
+      : mesh.triangles
+    const indices = new Uint16Array(legacyTriangles.length * 3)
+    legacyTriangles.forEach((tri, i) => {
       indices[i * 3] = tri[0]
       indices[i * 3 + 1] = tri[1]
       indices[i * 3 + 2] = tri[2]
@@ -467,6 +484,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         sep, allPoints, mesh.triangles, texture,
         scanCanvas.width, scanCanvas.height, charScale, 0, 0,
         contentAlignment ?? undefined, hfTexture, hflTextures,
+        mouthHolePolygon
+          ? { polygon: mouthHolePolygon, zoneId: project.projectMouth?.attachZoneId ?? 'body' }
+          : null,
       )
       setup.container.visible = false
       characterContainer.addChild(setup.container)
@@ -508,12 +528,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
      * MouthAudioPlayer pour piloter la bouche (lip-sync RMS) ; sinon HTMLAudio simple
      * empilé dans animSoundAudiosRef (cleanup au démontage ou au prochain ☆).
      */
-    const playSceneSound = async (blob: Blob, isSpoken: boolean) => {
+    const playSceneSound = async (blob: Blob, isSpoken: boolean, volume: number = 1) => {
       if (isSpoken && project.projectMouth) {
         mouthAudioRef.current?.cleanup()
         mouthAudioRef.current = null
         try {
           const player = await loadMouthAudio(blob, {
+            volume,
             onEnded: () => {
               mouthOpennessRef.current = 0
               mouthAudioRef.current?.cleanup()
@@ -530,6 +551,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Non parlé (ou pas de bouche définie) : HTMLAudio empilé
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
+      audio.volume = volume
       animSoundAudiosRef.current.push(audio)
       audio.play().catch(() => {})
       audio.onended = () => {
@@ -556,12 +578,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const url = URL.createObjectURL(scene.ambientSound.blob)
       const audio = new Audio(url)
       audio.loop = true
+      audio.volume = scene.ambientSound.volume ?? 1
       audio.play().catch(() => {})
       sceneAmbientAudio = audio
     }
     if (scene.entrySound?.blob) {
       const url = URL.createObjectURL(scene.entrySound.blob)
       const audio = new Audio(url)
+      audio.volume = scene.entrySound.volume ?? 1
       animSoundAudiosRef.current.push(audio)
       audio.play().catch(() => {})
       audio.onended = () => {
@@ -742,7 +766,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             const idx = actionStepIdxRef.current
             const step = steps[idx]
             if (step?.sound?.blob) {
-              playSceneSound(step.sound.blob, step.isSpoken ?? false)
+              playSceneSound(step.sound.blob, step.isSpoken ?? false, step.sound.volume ?? 1)
             }
             actionStepIdxRef.current = idx + 1
             if (idx + 1 >= steps.length) {
@@ -1195,6 +1219,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           triForOutline,
           { body: bodyPositions, limbs: limbPositions },
           mapPoint,
+          mouthHolePolygon
+            ? { polygon: mouthHolePolygon, zoneId: project.projectMouth?.attachZoneId ?? 'body' }
+            : null,
         )
         const activeZoneOutlineMap = activeWalkZoneAnimId ? zoneOutlineByAnim.get(activeWalkZoneAnimId) : null
         if (activeZoneOutlineMap && activeZoneOutlineMap.size > 0) {
@@ -1276,9 +1303,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     if (action.sound?.blob) {
       const blob = action.sound.blob
       const isSpoken = action.isSpoken === true
+      const volume = action.sound.volume ?? 1
       if (isSpoken && project.projectMouth) {
         try {
           const player = await loadMouthAudio(blob, {
+            volume,
             onEnded: () => {
               mouthOpennessRef.current = 0
               mouthAudioRef.current?.cleanup()
@@ -1293,6 +1322,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       } else {
         const url = URL.createObjectURL(blob)
         const audio = new Audio(url)
+        audio.volume = volume
         animSoundAudiosRef.current.push(audio)
         audio.play().catch(() => {})
         audio.onended = () => {

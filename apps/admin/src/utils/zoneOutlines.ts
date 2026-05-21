@@ -14,6 +14,12 @@
 import * as PIXI from 'pixi.js'
 import type { ProjectTriangulation, Point2D } from '../types/project'
 import type { ContentAlignment } from './textureExtractor'
+import { filterTrianglesOutsideMouth } from './mouthOverlay'
+
+export interface MouthHoleForOutline {
+  polygon: Point2D[]
+  zoneId: string
+}
 
 export interface ApplyZoneOutlinesOptions {
   /** Largeur/hauteur de l'image source ayant servi à définir la triangulation. */
@@ -125,7 +131,11 @@ function chaikinSmooth(points: { x: number, y: number }[], iterations: number): 
  *   - tri.bodyPoints (et donc walkBodyFrames) si zoneId === 'body'
  *   - tri.zonePoints[zoneId] (et donc walkZoneFrames[zoneId]) sinon.
  * Renvoie null si pas de donnée. Fallback : premiers indices = contour curviligne. */
-export function getZoneContourIndices(tri: ProjectTriangulation, zoneId: string): number[] | null {
+export function getZoneContourIndices(
+  tri: ProjectTriangulation,
+  zoneId: string,
+  overrideTriangles?: [number, number, number][],
+): number[] | null {
   let pts: Point2D[] | undefined
   let tris: [number, number, number][] | undefined
   if (zoneId === 'body') {
@@ -135,6 +145,7 @@ export function getZoneContourIndices(tri: ProjectTriangulation, zoneId: string)
     pts = tri.zonePoints?.[zoneId]
     tris = tri.zoneTriangles?.[zoneId]
   }
+  if (overrideTriangles) tris = overrideTriangles
   if (pts && tris && pts.length > 0 && tris.length > 0) {
     const idx = extractOuterContourIndices(pts, tris)
     if (idx && idx.length >= 3) return idx
@@ -199,6 +210,7 @@ export function computeZoneOutlinePolylines(
     limbs?: Record<string, Point2D[] | null | undefined> | null,
   },
   mapPoint: (p: Point2D) => { x: number, y: number },
+  mouthHole?: MouthHoleForOutline | null,
 ): ZoneOutlinePolyline[] {
   if (!tri.zones || tri.zones.length === 0) return []
   // Échelle moyenne pour convertir les épaisseurs (en px image) en px cible.
@@ -211,7 +223,13 @@ export function computeZoneOutlinePolylines(
   const sorted = [...tri.zones].sort((u, v) => (u.zOrder ?? 0) - (v.zOrder ?? 0))
   const out: ZoneOutlinePolyline[] = []
   for (const zone of sorted) {
-    const indices = getZoneContourIndices(tri, zone.id)
+    let overrideTris: [number, number, number][] | undefined
+    if (mouthHole && mouthHole.zoneId === zone.id) {
+      const pts = zone.id === 'body' ? tri.bodyPoints : tri.zonePoints?.[zone.id]
+      const tris = zone.id === 'body' ? tri.bodyTriangles : tri.zoneTriangles?.[zone.id]
+      if (pts && tris) overrideTris = filterTrianglesOutsideMouth(pts, tris, mouthHole.polygon)
+    }
+    const indices = getZoneContourIndices(tri, zone.id, overrideTris)
     if (!indices || indices.length < 3) continue
     const src = zone.id === 'body' ? pointsByZone.body : pointsByZone.limbs?.[zone.id]
     if (!src) continue

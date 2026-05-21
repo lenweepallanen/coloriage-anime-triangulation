@@ -667,6 +667,8 @@ export interface SceneSound {
   id: string;
   name: string;
   blob: Blob | null;
+  /** Volume de lecture entre 0 et 1 (défaut 1). */
+  volume?: number;
 }
 
 /**

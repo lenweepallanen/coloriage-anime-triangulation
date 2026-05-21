@@ -30,6 +30,8 @@ export interface MouthAudioPlayer {
   stop: () => void;
   /** RMS lissée [0,1]. Retourne 0 quand rien ne joue. */
   getRMS: () => number;
+  /** Définit le volume de sortie [0,1]. */
+  setVolume: (v: number) => void;
   /** Libère le buffer et déconnecte les nodes (l'AudioContext partagé reste vivant). */
   cleanup: () => void;
   /** Durée totale du buffer en secondes. */
@@ -43,6 +45,8 @@ interface LoadOptions {
   smoothing?: number;
   /** Gain appliqué à la RMS brute avant clamp. Défaut 1.8. */
   gain?: number;
+  /** Volume de sortie [0,1]. Défaut 1. */
+  volume?: number;
   /** Callback de fin de lecture (source onended). */
   onEnded?: () => void;
 }
@@ -86,7 +90,12 @@ export async function loadMouthAudio(
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 256;
   analyser.smoothingTimeConstant = 0;
-  analyser.connect(ctx.destination);
+  // src → analyser → gain → destination. Le GainNode contrôle le volume de sortie sans
+  // affecter l'analyse RMS (qui lit depuis analyser en amont).
+  const gainNode = ctx.createGain();
+  gainNode.gain.value = opts.volume ?? 1;
+  analyser.connect(gainNode);
+  gainNode.connect(ctx.destination);
 
   const buf = new Uint8Array(analyser.fftSize);
   let smoothed = 0;
@@ -123,6 +132,10 @@ export async function loadMouthAudio(
       }
       smoothed = 0;
     },
+    setVolume: (v: number) => {
+      const clamped = Math.max(0, Math.min(1, v))
+      try { gainNode.gain.setValueAtTime(clamped, ctx.currentTime); } catch { gainNode.gain.value = clamped; }
+    },
     getRMS: () => {
       if (!currentSource) return 0;
       analyser.getByteTimeDomainData(buf);
@@ -143,6 +156,7 @@ export async function loadMouthAudio(
         currentSource.disconnect();
         currentSource = null;
       }
+      try { gainNode.disconnect(); } catch { /* ignore */ }
       analyser.disconnect();
     },
     get duration() { return audioBuffer.duration; },

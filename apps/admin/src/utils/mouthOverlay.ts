@@ -4,8 +4,50 @@ import type { MouthDefinition, Point2D } from '../types/project'
 import { flattenClosedBezier } from './bezierUtils'
 import { interpolateInternalPoint } from './barycentricUtils'
 import { computeUVs, type ContentAlignment } from './textureExtractor'
+import { pointInPolygon } from './geometry'
 
 const SAMPLES_PER_SEGMENT = 24
+
+/** Polygone bouche frame 0 en coords image, résolu depuis les ancres barycentriques. */
+export function computeMouthPolygonFrame0(
+  mouth: MouthDefinition,
+  attachPoints: Point2D[],
+  attachTriangles: [number, number, number][],
+): Point2D[] {
+  const refs = mouth.contourBodyAnchors ?? mouth.contourAnchors
+  const resolved = refs.map(r => interpolateInternalPoint(r, attachPoints, attachTriangles))
+  const nodes = mouth.bezierNodes.map((n, i) => {
+    const a = resolved[i]
+    const dx = a.x - n.anchor.x
+    const dy = a.y - n.anchor.y
+    return {
+      anchor: a,
+      handleIn: { x: n.handleIn.x + dx, y: n.handleIn.y + dy },
+      handleOut: { x: n.handleOut.x + dx, y: n.handleOut.y + dy },
+      smooth: n.smooth,
+    }
+  })
+  return flattenClosedBezier(nodes, SAMPLES_PER_SEGMENT)
+}
+
+/** Filtre les triangles dont le centroïde tombe à l'intérieur du polygone bouche.
+ *  Utilisé pour "trouer" un mesh sous la bouche → transparence sous l'overlay. */
+export function filterTrianglesOutsideMouth(
+  points: Point2D[],
+  triangles: [number, number, number][],
+  polygon: Point2D[],
+): [number, number, number][] {
+  if (polygon.length < 3) return triangles
+  const kept: [number, number, number][] = []
+  for (const tri of triangles) {
+    const a = points[tri[0]], b = points[tri[1]], c = points[tri[2]]
+    if (!a || !b || !c) { kept.push(tri); continue }
+    const cx = (a.x + b.x + c.x) / 3
+    const cy = (a.y + b.y + c.y) / 3
+    if (!pointInPolygon({ x: cx, y: cy }, polygon)) kept.push(tri)
+  }
+  return kept
+}
 
 function rotatePoint(p: Point2D, pivot: Point2D, angleRad: number): Point2D {
   const c = Math.cos(angleRad), s = Math.sin(angleRad)

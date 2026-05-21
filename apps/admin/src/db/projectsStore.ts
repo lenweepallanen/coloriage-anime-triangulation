@@ -180,6 +180,7 @@ interface ZoneAnimationMappingDoc {
 interface SceneSoundMetaDoc {
   id: string
   name: string
+  volume?: number
 }
 
 interface SceneActionStepDoc {
@@ -812,6 +813,11 @@ function animToDoc(anim: Animation): AnimationDoc {
   }
 }
 
+/** Helper : meta doc d'un SceneSound (id, name, volume optionnel — pas le blob). */
+function sceneSoundMetaToDoc(s: { id: string; name: string; volume?: number }): SceneSoundMetaDoc {
+  return { id: s.id, name: s.name, ...(s.volume != null && { volume: s.volume }) }
+}
+
 function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRestPointDoc {
   return {
     id: rp.id,
@@ -823,10 +829,10 @@ function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRes
         name: a.name,
         steps: a.steps.map(s => ({
           animationId: s.animationId,
-          ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name } }),
+          ...(s.sound != null && { sound: sceneSoundMetaToDoc(s.sound) }),
           ...(s.isSpoken && { isSpoken: true }),
         })),
-        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name } }),
+        ...(a.sound != null && { sound: sceneSoundMetaToDoc(a.sound) }),
         ...(a.isSpoken && { isSpoken: true }),
       })),
     }),
@@ -854,9 +860,9 @@ function sceneToDoc(scene: Scene): SceneDoc {
     ...(scene.entryStartX != null && { entryStartX: scene.entryStartX }),
     ...(scene.entryDurationMs != null && { entryDurationMs: scene.entryDurationMs }),
     ...(scene.entryAnimationId != null && { entryAnimationId: scene.entryAnimationId }),
-    ...(scene.entrySound != null && { entrySound: { id: scene.entrySound.id, name: scene.entrySound.name } }),
-    ...(scene.ambientSound != null && { ambientSound: { id: scene.ambientSound.id, name: scene.ambientSound.name } }),
-    ...(scene.speakSounds.length > 0 && { speakSounds: scene.speakSounds.map(s => ({ id: s.id, name: s.name })) }),
+    ...(scene.entrySound != null && { entrySound: sceneSoundMetaToDoc(scene.entrySound) }),
+    ...(scene.ambientSound != null && { ambientSound: sceneSoundMetaToDoc(scene.ambientSound) }),
+    ...(scene.speakSounds.length > 0 && { speakSounds: scene.speakSounds.map(s => (sceneSoundMetaToDoc(s))) }),
   }
 }
 
@@ -1217,7 +1223,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   }
 
   const hydrateSounds = (metas: SceneSoundMetaDoc[] | undefined): import('../types/project').SceneSound[] =>
-    (metas ?? []).map(m => ({ id: m.id, name: m.name, blob: sceneSoundBlobs.get(m.id) ?? null }))
+    (metas ?? []).map(m => ({ id: m.id, name: m.name, volume: m.volume, blob: sceneSoundBlobs.get(m.id) ?? null }))
 
   /**
    * Migre un rest point legacy : si `actions` est absent et `randomAnimationIds` présent,
@@ -1229,7 +1235,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       const steps = a.steps
         ? a.steps.map(s => ({
             animationId: s.animationId,
-            ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, blob: sceneSoundBlobs.get(s.sound.id) ?? null } }),
+            ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, blob: sceneSoundBlobs.get(s.sound.id) ?? null } }),
             ...(s.isSpoken && { isSpoken: true }),
           }))
         : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
@@ -1237,7 +1243,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         id: a.id,
         name: a.name,
         steps,
-        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, blob: sceneSoundBlobs.get(a.sound.id) ?? null } }),
+        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, blob: sceneSoundBlobs.get(a.sound.id) ?? null } }),
         ...(a.isSpoken && { isSpoken: true }),
       }
     })
@@ -1251,7 +1257,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
             name: `Action ${i + 1}`,
             steps: [{ animationId }],
             ...(legacySound && {
-              sound: { id: legacySound.id, name: legacySound.name, blob: sceneSoundBlobs.get(legacySound.id) ?? null },
+              sound: { id: legacySound.id, name: legacySound.name, volume: legacySound.volume, blob: sceneSoundBlobs.get(legacySound.id) ?? null },
             }),
           }
         })
@@ -1314,8 +1320,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       ...(entryStartX != null && { entryStartX }),
       ...(projDoc.scene.entryDurationMs != null && { entryDurationMs: projDoc.scene.entryDurationMs }),
       ...(projDoc.scene.entryAnimationId != null && { entryAnimationId: projDoc.scene.entryAnimationId }),
-      ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, blob: sceneSoundBlobs.get(projDoc.scene.entrySound.id) ?? null } }),
-      ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, blob: sceneSoundBlobs.get(projDoc.scene.ambientSound.id) ?? null } }),
+      ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, volume: projDoc.scene.entrySound.volume, blob: sceneSoundBlobs.get(projDoc.scene.entrySound.id) ?? null } }),
+      ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, volume: projDoc.scene.ambientSound.volume, blob: sceneSoundBlobs.get(projDoc.scene.ambientSound.id) ?? null } }),
       speakSounds,
       speakSoundBlobs,
     }
@@ -2152,7 +2158,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
         const steps = a.steps
           ? a.steps.map(s => ({
               animationId: s.animationId,
-              ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, blob: null } }),
+              ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, blob: null } }),
               ...(s.isSpoken && { isSpoken: true }),
             }))
           : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
@@ -2160,7 +2166,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
           id: a.id,
           name: a.name,
           steps,
-          ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, blob: null } }),
+          ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, blob: null } }),
           ...(a.isSpoken && { isSpoken: true }),
         }
       })
@@ -2173,7 +2179,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
               id: crypto.randomUUID(),
               name: `Action ${i + 1}`,
               steps: [{ animationId }],
-              ...(legacySound && { sound: { id: legacySound.id, name: legacySound.name, blob: null } }),
+              ...(legacySound && { sound: { id: legacySound.id, name: legacySound.name, volume: legacySound.volume, blob: null } }),
             }
           })
         }
@@ -2212,8 +2218,8 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       ...(entryStartX != null && { entryStartX }),
       ...(projDoc.scene.entryDurationMs != null && { entryDurationMs: projDoc.scene.entryDurationMs }),
       ...(projDoc.scene.entryAnimationId != null && { entryAnimationId: projDoc.scene.entryAnimationId }),
-      ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, blob: null } }),
-      ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, blob: null } }),
+      ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, volume: projDoc.scene.entrySound.volume, blob: null } }),
+      ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, volume: projDoc.scene.ambientSound.volume, blob: null } }),
       speakSounds,
       speakSoundBlobs: speakSounds.map(() => null),
     }

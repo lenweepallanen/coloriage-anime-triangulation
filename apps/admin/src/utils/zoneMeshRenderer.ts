@@ -10,6 +10,12 @@ import * as PIXI from 'pixi.js'
 import type { Point2D, WalkLimbSeparation } from '../types/project'
 import { computeUVs } from './textureExtractor'
 import type { ContentAlignment } from './textureExtractor'
+import { filterTrianglesOutsideMouth } from './mouthOverlay'
+
+export interface MouthHole {
+  polygon: Point2D[]   // image coords, frame 0
+  zoneId: string       // 'body' or zone id whose mesh to cut
+}
 
 export interface ZoneMeshInfo {
   zoneId: string
@@ -43,6 +49,7 @@ export function buildZoneMeshes(
   contentAlignment?: ContentAlignment,
   hiddenFaceTexture?: PIXI.Texture,
   hiddenFaceLimbTextures?: Record<string, PIXI.Texture>,
+  mouthHole?: MouthHole | null,
 ): ZoneMeshSetup {
   const container = new PIXI.Container()
   container.sortableChildren = true
@@ -63,8 +70,12 @@ export function buildZoneMeshes(
   // Build zone meshes (each zone has its own independent points + triangles)
   for (const zone of separation.zones) {
     const pts = separation.zonePoints[zone.id] || []
-    const tris = separation.zoneTriangles[zone.id] || []
+    let tris = separation.zoneTriangles[zone.id] || []
     if (pts.length === 0 || tris.length === 0) continue
+
+    if (mouthHole && mouthHole.zoneId === zone.id) {
+      tris = filterTrianglesOutsideMouth(pts, tris, mouthHole.polygon)
+    }
 
     const hflTriSet = hflByZone.get(zone.id)
 
@@ -132,9 +143,13 @@ export function buildZoneMeshes(
     }
   }
 
-  const pureBodyTris: [number, number, number][] = []
+  let pureBodyTris: [number, number, number][] = []
   for (let i = 0; i < bodyTris.length; i++) {
     if (!hfTriIdxSet.has(i)) pureBodyTris.push(bodyTris[i])
+  }
+
+  if (mouthHole && mouthHole.zoneId === 'body') {
+    pureBodyTris = filterTrianglesOutsideMouth(bodyPts, pureBodyTris, mouthHole.polygon)
   }
 
   // Pure body mesh (z=0, uses scan texture)

@@ -548,6 +548,7 @@ export default function SceneEditor({ project, onSave }: Props) {
                 sound={scene.entrySound}
                 onImport={handleEntrySoundImport}
                 onDelete={handleEntrySoundDelete}
+                onChange={(partial) => setScene(prev => prev.entrySound ? { ...prev, entrySound: { ...prev.entrySound, ...partial } } : prev)}
               />
             </div>
           </div>
@@ -562,6 +563,7 @@ export default function SceneEditor({ project, onSave }: Props) {
             sound={scene.ambientSound}
             onImport={handleAmbientSoundImport}
             onDelete={handleAmbientSoundDelete}
+            onChange={(partial) => setScene(prev => prev.ambientSound ? { ...prev, ambientSound: { ...prev.ambientSound, ...partial } } : prev)}
           />
         </div>
       )}
@@ -617,10 +619,11 @@ export default function SceneEditor({ project, onSave }: Props) {
 
 // --- Petit composant réutilisable pour un son de scène (import / preview / delete) ---
 
-function SceneSoundRow({ sound, onImport, onDelete }: {
+function SceneSoundRow({ sound, onImport, onDelete, onChange }: {
   sound: SceneSound | undefined
   onImport: (file: File) => void
   onDelete: () => void
+  onChange?: (partial: Partial<SceneSound>) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [playing, setPlaying] = useState(false)
@@ -637,6 +640,7 @@ function SceneSoundRow({ sound, onImport, onDelete }: {
     if (!sound?.blob) return
     const url = URL.createObjectURL(sound.blob)
     const audio = new Audio(url)
+    audio.volume = sound.volume ?? 1
     audioRef.current = audio
     setPlaying(true)
     audio.play().catch(() => {})
@@ -644,9 +648,28 @@ function SceneSoundRow({ sound, onImport, onDelete }: {
   }, [sound])
 
   if (sound) {
+    const volume = sound.volume ?? 1
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sound.name}</span>
+        {onChange && (
+          <>
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={volume}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                onChange({ volume: v })
+                if (audioRef.current) audioRef.current.volume = v
+              }}
+              style={{ width: 90 }}
+              title={`Volume : ${Math.round(volume * 100)}%`}
+            />
+            <span style={{ fontSize: 11, opacity: 0.7, minWidth: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              {Math.round(volume * 100)}%
+            </span>
+          </>
+        )}
         <button className="btn-icon btn-sm" onClick={togglePreview} disabled={!sound.blob} title={playing ? 'Stop' : 'Écouter'}>
           {playing ? '⏹' : '▶'}
         </button>
