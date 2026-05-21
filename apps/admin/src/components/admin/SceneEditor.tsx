@@ -11,6 +11,37 @@ interface Props {
   onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
 }
 
+/** Extrait la frame 0 d'une vidéo en blob URL (PNG) pour usage en CSS background. */
+async function extractVideoFrame0(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const vid = document.createElement('video')
+    vid.preload = 'auto'
+    vid.muted = true
+    vid.src = url
+    const cleanup = () => { URL.revokeObjectURL(url); vid.remove() }
+    vid.onloadeddata = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = vid.videoWidth
+        canvas.height = vid.videoHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { cleanup(); reject(new Error('no ctx')); return }
+        ctx.drawImage(vid, 0, 0)
+        canvas.toBlob((b) => {
+          cleanup()
+          if (!b) { reject(new Error('toBlob null')); return }
+          resolve(URL.createObjectURL(b))
+        }, 'image/png')
+      } catch (err) {
+        cleanup()
+        reject(err)
+      }
+    }
+    vid.onerror = () => { cleanup(); reject(new Error('video load failed')) }
+  })
+}
+
 function createDefaultRestPoint(width: number): SceneRestPoint {
   return {
     id: crypto.randomUUID(),
@@ -81,9 +112,34 @@ export default function SceneEditor({ project, onSave }: Props) {
       urls.push(blob ? URL.createObjectURL(blob) : null)
     }
     setLayerPreviewUrls(urls)
-    setBgImageUrl(urls[2] ?? urls.find(u => u != null) ?? null)
-    return () => { for (const u of urls) if (u) URL.revokeObjectURL(u) }
-  }, [scene.backgroundLayers[0]?.imageBlob, scene.backgroundLayers[0]?.videoBlob, scene.backgroundLayers[1]?.imageBlob, scene.backgroundLayers[2]?.imageBlob]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Fond timeline : extrait frame 0 si vidéo, sinon image directement
+    const frontIdx = scene.backgroundLayers[2]?.videoBlob || scene.backgroundLayers[2]?.imageBlob ? 2
+      : scene.backgroundLayers.findIndex(l => l?.videoBlob || l?.imageBlob)
+    let cancelled = false
+    let extractedUrl: string | null = null
+    const setupBg = async () => {
+      if (frontIdx < 0) { setBgImageUrl(null); return }
+      const layer = scene.backgroundLayers[frontIdx]
+      if (layer.imageBlob) {
+        setBgImageUrl(urls[frontIdx])
+        return
+      }
+      if (layer.videoBlob) {
+        try {
+          extractedUrl = await extractVideoFrame0(layer.videoBlob)
+          if (!cancelled) setBgImageUrl(extractedUrl)
+        } catch {
+          if (!cancelled) setBgImageUrl(null)
+        }
+      }
+    }
+    setupBg()
+    return () => {
+      cancelled = true
+      for (const u of urls) if (u) URL.revokeObjectURL(u)
+      if (extractedUrl) URL.revokeObjectURL(extractedUrl)
+    }
+  }, [scene.backgroundLayers[0]?.imageBlob, scene.backgroundLayers[0]?.videoBlob, scene.backgroundLayers[1]?.imageBlob, scene.backgroundLayers[1]?.videoBlob, scene.backgroundLayers[2]?.imageBlob, scene.backgroundLayers[2]?.videoBlob]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLayerImport = useCallback(async (layerIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
