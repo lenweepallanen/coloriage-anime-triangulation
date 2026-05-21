@@ -65,8 +65,9 @@ export default function ProjectTriangHiddenFaceStep({ project, onSave }: Props) 
 function HiddenFaceEditor({ project, onSave }: Props) {
   const pt = project.projectTriangulation!
 
-  // Zones membres (toutes sauf body)
-  const legZones = useMemo(() => pt.zones.filter(z => z.id !== 'body'), [pt.zones])
+  // Zones membres (toutes sauf body et accessoires — les accessoires sont
+  // rendus comme sprites rigides, pas comme membres déformables).
+  const legZones = useMemo(() => pt.zones.filter(z => z.id !== 'body' && !z.isAccessory), [pt.zones])
 
   // Baselines body + zones (maillages avant fusion des faces cachées). Fallback :
   // pour les projets legacy sans baseline, on retombe sur les meshes actuels (= déjà

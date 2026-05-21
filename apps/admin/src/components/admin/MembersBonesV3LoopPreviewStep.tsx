@@ -14,6 +14,10 @@ import * as PIXI from 'pixi.js'
 import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import {
+  buildPropLayer, updatePropLayer, buildAnchorIndexMap,
+  getAnchorsByZone, getAnchorsByZoneFromCurrent,
+} from '../../utils/propRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
@@ -137,6 +141,17 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation, onSa
         scale, offsetX, offsetY,
       )
       app.stage.addChild(setup.container)
+
+      // Props (accessoires) — utilise l'image projet comme texture source.
+      const propAnchorIndexMap = buildAnchorIndexMap(tri)
+      let propLayer: ReturnType<typeof buildPropLayer> | null = null
+      if (project.props.length > 0) {
+        propLayer = buildPropLayer(
+          project.props, img, imgW, imgH, tri, scale, offsetX, offsetY,
+        )
+        setup.container.addChild(propLayer.container)
+      }
+
       // Une PIXI.Graphics par zone pour les outlines, interleavée par z-order
       // via setup.container.sortableChildren = true (déjà activé).
       const outlineGraphics = new Map<string, PIXI.Graphics>()
@@ -185,6 +200,19 @@ export default function MembersBonesV3LoopPreviewStep({ project, animation, onSa
           const baseZoneId = hfl.zoneId.replace(/^__hfl_/, '')
           const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
+        }
+
+        // Props : recalcul des anchors par zone depuis les positions courantes
+        if (propLayer) {
+          const bodyPos = bodyPb ? bodyPb.pb.getPositions() : null
+          const zonePos: Record<string, Point2D[]> = {}
+          for (const p of playbacks) {
+            if (p.region !== 'body') zonePos[p.region] = p.pb.getPositions()
+          }
+          const anchorsByZone = getAnchorsByZoneFromCurrent(
+            bodyPos, zonePos, propAnchorIndexMap, getAnchorsByZone(tri),
+          )
+          updatePropLayer(propLayer, anchorsByZone, scale, offsetX, offsetY)
         }
 
         // Outlines de zones (une Graphics par zone, interleavée par z-order)

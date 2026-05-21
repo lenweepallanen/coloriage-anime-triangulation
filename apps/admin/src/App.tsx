@@ -8,6 +8,7 @@ import AnimationsSection from './pages/admin/AnimationsSection'
 import SceneSection from './pages/admin/SceneSection'
 import BodyZonesSection from './pages/admin/BodyZonesSection'
 import TriangulationSection from './pages/admin/TriangulationSection'
+import PropsSection from './pages/admin/PropsSection'
 import EyesSection from './pages/admin/EyesSection'
 import MouthSection from './pages/admin/MouthSection'
 import ScanPage from './pages/ScanPage'
@@ -30,6 +31,7 @@ function App() {
             <Route path="zones" element={<BodyZonesSection />} />
             <Route path="scene" element={<SceneSection />} />
             <Route path="triangulation" element={<TriangulationSection />} />
+            <Route path="props" element={<PropsSection />} />
             <Route path="eyes" element={<EyesSection />} />
             <Route path="mouth" element={<MouthSection />} />
           </Route>

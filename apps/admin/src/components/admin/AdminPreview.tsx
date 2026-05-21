@@ -8,6 +8,8 @@ import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
+import { buildPropLayer, updatePropLayer, buildAnchorIndexMap, getAnchorsByZoneAtFrame } from '../../utils/propRenderer'
+import type { PropLayerSetup } from '../../utils/propRenderer'
 
 interface Props {
   project: Project
@@ -202,6 +204,26 @@ export default function AdminPreview({ project, style }: Props) {
       const pixiMesh = new PIXI.Mesh(geometry, material)
       meshContainer.addChild(pixiMesh)
 
+      // Props (accessoires) — calque PIXI sortable au-dessus du mesh.
+      // Texture source = image originale du projet (admin preview).
+      let propLayer: PropLayerSetup | null = null
+      const propAnchorIndexMap = buildAnchorIndexMap(project.projectTriangulation)
+      if (project.props.length > 0) {
+        meshContainer.sortableChildren = true
+        pixiMesh.zIndex = 0
+        propLayer = buildPropLayer(
+          project.props,
+          img,
+          texCanvas.width,
+          texCanvas.height,
+          project.projectTriangulation,
+          scale,
+          offsetX,
+          offsetY,
+        )
+        meshContainer.addChild(propLayer.container)
+      }
+
       // Build oneshot animation data
       const oneshotAnims: OneshotAnimation[] = readyOneshots
         .filter(a => a.mesh?.videoFramesMesh)
@@ -309,6 +331,21 @@ export default function AdminPreview({ project, style }: Props) {
             (verts.data as unknown as Float32Array)[i * 2 + 1] = positions[i].y * scale + offsetY
           }
           verts.update()
+        }
+
+        // Accessoires : repositionnement frame-à-frame.
+        // Extrait anchorsByZone depuis walkBodyFrames/walkZoneFrames de
+        // l'animation walk active, sinon retombe sur les positions statiques.
+        if (propLayer) {
+          const propAnims = isWalkZonePlaying && walkAnim ? walkAnim : restAnim
+          const frame = isWalkZonePlaying ? walkFrameCounter : 0
+          const anchorsByZone = getAnchorsByZoneAtFrame(
+            propAnims ?? null,
+            frame,
+            project.projectTriangulation,
+            propAnchorIndexMap,
+          )
+          updatePropLayer(propLayer, anchorsByZone, scale, offsetX, offsetY)
         }
 
         // Outlines de zones

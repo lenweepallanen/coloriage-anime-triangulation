@@ -362,6 +362,11 @@ export interface SAM2Zone {
   label: string          // libellé custom (renommable par l'admin)
   color: string          // hex for the editor / overlay
   zOrder?: number        // ordre de rendu (0 = derrière, plus grand = devant). Défini dans l'étape maillage.
+  /** Si true : zone traitée comme accessoire rigide (balai, épée…). Le
+   *  masque est soustrait du body comme un membre, mais la zone est exclue
+   *  des étapes maillage/triangulation/animation. Elle est propagée comme
+   *  `Prop` dans `Project.props` (source = 'triangulation'). */
+  isAccessory?: boolean
 }
 
 /** RLE COCO uncompressed mask, JSON-friendly. counts is alternated bg/fg run lengths,
@@ -428,6 +433,24 @@ export interface ProjectTriangulation {
   // 'canny' = Canny + findContours on the reference image (coloring book trace).
   segmentationMode?: 'sam2' | 'canny'
   cannyParams?: CannyParams | null   // only used when segmentationMode === 'canny'
+  /** Seeds (clics admin) par zone membre, en coords image. Permet de
+   *  reprendre l'édition d'une zone après reload : ajouter / retirer un
+   *  seed et relancer le calcul Canny.
+   *  Le body n'a pas de seeds (silhouette auto-détectée). */
+  zoneSeeds?: Record<string, Point2D[]>
+  /** Override sigma (lissage gaussien) par zone (sinon prend `contourSmoothSigma`). */
+  zoneSmoothSigmas?: Record<string, number>
+  /** Override inflate (dilatation Canny) par zone (sinon prend le slider global). */
+  zoneInflates?: Record<string, number>
+  /** Représentation Bézier éditable par zone. Si présent pour une zone, c'est
+   *  cette courbe qui fait foi — le contour Canny est remplacé par la
+   *  Bézier aplatie (`flattenClosedBezier`). Permet l'ajustement manuel. */
+  zoneBeziers?: Record<string, BezierNode[]>
+  /** Contour Canny lissé snapshoté au moment de la conversion en Bézier.
+   *  Sert de **référence** pour le re-fit à N anchors via le slider — on
+   *  resample TOUJOURS depuis ce contour, jamais depuis la Bézier courante,
+   *  afin de retrouver au maximum la forme Canny d'origine. */
+  zoneCannyRefs?: Record<string, Point2D[]>
 
   // Étape 2 : Maillage par zone — placement curviligne (V3) + Delaunay interne
   // Phase 1 : P0 par zone (coords image, snap courbure)
@@ -830,6 +853,47 @@ export interface MouthDefinition {
 
 export const DEFAULT_MOUTH_MAX_OPEN_DEG = 18;
 
+// ─── Accessoires (props) ─────────────────────────────────────────────────
+// Objets rigides liés au perso (balai, platines, épée…) découpés dans
+// l'image de référence et rendus comme sprites PIXI par-dessus la scène.
+
+/** Référence à un anchor de `projectTriangulation.zoneAnchors[zoneId][anchorIndex]`. */
+export interface PropAnchorRef {
+  zoneId: string;
+  anchorIndex: number;
+}
+
+/** Mode d'attachement d'un accessoire :
+ *  - fixed     : position absolue (coords image), aucun anchor.
+ *  - follow-1  : translation pour suivre un anchor.
+ *  - follow-2  : translation + rotation (axe anchorA → anchorB).
+ */
+export type PropAttachment =
+  | { mode: 'fixed' }
+  | { mode: 'follow-1'; ref: PropAnchorRef }
+  | { mode: 'follow-2'; refA: PropAnchorRef; refB: PropAnchorRef };
+
+export interface Prop {
+  id: string;
+  name: string;
+  /** 1+ polygones disjoints (coords image référence). Un balai peut avoir 2 parties (gauche + droite). */
+  contourParts: Point2D[][];
+  attachment: PropAttachment;
+  /** Décalage en pixels image, appliqué après le suivi d'anchor. */
+  offset: Point2D;
+  scale: number;
+  /** Z-order PIXI. < 0 derrière le perso, > 0 devant. */
+  zOrder: number;
+  createdAt: number;
+  /** Origine de l'accessoire :
+   *  - 'manual' : créé via l'onglet Accessoires (Canny click + flood-fill).
+   *  - 'triangulation' : auto-généré depuis une `SAM2Zone.isAccessory`. Le
+   *    contour est resynchronisé à chaque validation des Zones. */
+  source?: 'manual' | 'triangulation';
+  /** Si `source === 'triangulation'`, ID de la zone d'origine. */
+  triangulationZoneId?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -845,6 +909,8 @@ export interface Project {
   projectTriangulation: ProjectTriangulation | null;
   projectEyes: ProjectEyes | null;
   projectMouth: MouthDefinition | null;
+  /** Accessoires rigides niveau projet (balai, platines, etc.). */
+  props: Prop[];
   /** Si true, le projet est accessible côté play (play.<domaine>/p/{id}). Par défaut false. */
   published: boolean;
   /** Timestamp de la première publication (ou re-publication). null tant que jamais publié. */

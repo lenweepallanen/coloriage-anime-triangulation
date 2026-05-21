@@ -11,6 +11,11 @@ import { ScenePlayback } from '../../utils/scenePlayback'
 import type { SceneState } from '../../utils/scenePlayback'
 import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUtils'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import {
+  buildPropLayer, updatePropLayer, buildAnchorIndexMap,
+  getAnchorsByZone, getAnchorsByZoneFromCurrent,
+} from '../../utils/propRenderer'
+import type { PropLayerSetup } from '../../utils/propRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
@@ -404,6 +409,24 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     characterContainer.addChild(pixiMesh)
     // Allow eyeOverlay (zIndex=9999) to render above walk/MB zone meshes added later.
     characterContainer.sortableChildren = true
+
+    // --- Props (accessoires) — calque sprites rigides au-dessus du mesh.
+    // Texture extraite du scan rectifié → l'enfant voit ses couleurs.
+    let propLayer: PropLayerSetup | null = null
+    const propAnchorIndexMap = buildAnchorIndexMap(project.projectTriangulation)
+    if (project.props.length > 0) {
+      propLayer = buildPropLayer(
+        project.props,
+        scanCanvas,
+        scanCanvas.width,
+        scanCanvas.height,
+        project.projectTriangulation,
+        charScale,
+        charOffsetX,
+        charOffsetY,
+      )
+      characterContainer.addChild(propLayer.container)
+    }
 
     // --- Mouth overlay (project-level, optional) ---
     // Le body mesh sert d'ancrage barycentrique. On l'instancie après pixiMesh
@@ -1110,6 +1133,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             }
           }
         }
+      }
+
+      // Accessoires : repositionnement frame-à-frame.
+      if (propLayer) {
+        let anchorsByZone: Record<string, Point2D[]>
+        if (activeWalkZoneAnimId && activeBodyPlayback) {
+          const bodyPos = activeBodyPlayback.getPositions()
+          const zonePos: Record<string, Point2D[]> = {}
+          for (const zp of activeZonePlaybacks ?? []) {
+            zonePos[zp.zoneId] = zp.playback.getPositions()
+          }
+          anchorsByZone = getAnchorsByZoneFromCurrent(
+            bodyPos, zonePos, propAnchorIndexMap,
+            getAnchorsByZone(project.projectTriangulation),
+          )
+        } else {
+          anchorsByZone = getAnchorsByZone(project.projectTriangulation)
+        }
+        updatePropLayer(propLayer, anchorsByZone, charScale, charOffsetX, charOffsetY)
       }
 
       // Update single mesh (for non-walk or legacy fallback)

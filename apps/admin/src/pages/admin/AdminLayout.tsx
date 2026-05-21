@@ -73,6 +73,18 @@ export default function AdminLayout() {
         <NavLink to="triangulation" className={({ isActive }) => `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''}`}>
           Triangulation
         </NavLink>
+        <NavLink
+          to="props"
+          className={({ isActive }) =>
+            `admin-nav-tab ${isActive ? 'admin-nav-tab--active' : ''} ${project.projectTriangulation?.step1Validated ? '' : 'admin-nav-tab--disabled'}`
+          }
+          onClick={e => { if (!project.projectTriangulation?.step1Validated) e.preventDefault() }}
+          title={project.projectTriangulation?.step1Validated
+            ? 'Accessoires (objets rigides liés au perso). Les zones marquées ACC y apparaissent automatiquement.'
+            : 'Validez d’abord l’étape Zones de la Triangulation projet pour gérer les accessoires.'}
+        >
+          Accessoires
+        </NavLink>
       </nav>
 
       <div className="admin-layout-content">

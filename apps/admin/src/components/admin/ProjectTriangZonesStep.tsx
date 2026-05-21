@@ -1,13 +1,31 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Project, SAM2Zone, RLEMask, Point2D, CannyParams } from '../../types/project'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import type { Project, SAM2Zone, RLEMask, Point2D, CannyParams, BezierNode } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { decodeRLEMinusRLEs } from '../../utils/rleMask'
 import { smoothPolygonGaussian, bridgeContourAtLegs } from '../../utils/sam2Contour'
 import { flowMaskToContour, flowCannySegmentZones } from '../../utils/perspectiveCorrection'
 import { rasterizePolygonToMaskRLE } from '../../utils/cannyZoneContours'
+import { syncTriangulationProps } from '../../utils/syncTriangulationProps'
+import { polygonToBezierNodes, flattenClosedBezier, evaluateCubicBezier } from '../../utils/bezierUtils'
+import { fitBezierToClosedPolygon } from '../../utils/bezierFit'
 
 const DEFAULT_CANNY: CannyParams = { lowThreshold: 50, highThreshold: 150, blurSize: 5 }
+/** Sous-échantillonne un polygone à `max` points (stride uniforme en index).
+ *  Indispensable pour le body Canny qui peut avoir 5–10k points → Schneider
+ *  devient impraticable à 60fps sinon. */
+function subsamplePolygon(polygon: Point2D[], max: number): Point2D[] {
+  if (polygon.length <= max) return polygon
+  const stride = polygon.length / max
+  const out: Point2D[] = []
+  for (let i = 0; i < max; i++) out.push(polygon[Math.floor(i * stride)])
+  return out
+}
+
+function dist2(a: Point2D, b: Point2D): number {
+  const dx = a.x - b.x, dy = a.y - b.y
+  return dx * dx + dy * dy
+}
 
 interface Props {
   project: Project
@@ -60,7 +78,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
   const [bridgeThreshold, setBridgeThreshold] = useState<number>(
     () => project.projectTriangulation?.bridgeThreshold ?? 8
   )
-  const [zoneSigmas, setZoneSigmas] = useState<Record<string, number>>({})
+  const [zoneSigmas, setZoneSigmas] = useState<Record<string, number>>(
+    () => project.projectTriangulation?.zoneSmoothSigmas ?? {}
+  )
   const sigmaFor = useCallback((zoneId: string) => zoneSigmas[zoneId] ?? sigma, [zoneSigmas, sigma])
 
   // Canny params
@@ -68,15 +88,62 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     () => project.projectTriangulation?.cannyParams ?? DEFAULT_CANNY
   )
   const [inflate, setInflate] = useState<number>(12)
-  const [zoneInflates, setZoneInflates] = useState<Record<string, number>>({})
+  const [zoneInflates, setZoneInflates] = useState<Record<string, number>>(
+    () => project.projectTriangulation?.zoneInflates ?? {}
+  )
   const inflateFor = useCallback((zoneId: string) => zoneInflates[zoneId] ?? inflate, [zoneInflates, inflate])
 
   // ---- Canny interactive state ----
-  const [legSeeds, setLegSeeds] = useState<Record<string, Point2D[]>>({})
+  const [legSeeds, setLegSeeds] = useState<Record<string, Point2D[]>>(
+    () => project.projectTriangulation?.zoneSeeds ?? {}
+  )
   // One zone can hold several disconnected loops while editing. Inflate must
   // be large enough to merge them into a single loop before validating.
-  const [legLoops, setLegLoops] = useState<Record<string, Point2D[][]>>({})
-  const [bodySilhouette, setBodySilhouette] = useState<Point2D[] | null>(null)
+  // À l'init, on hydrate depuis `tri.contours` pour que les zones lissées
+  // sauvegardées s'affichent immédiatement au reload (sans avoir à recalculer).
+  const [legLoops, setLegLoops] = useState<Record<string, Point2D[][]>>(() => {
+    const saved = project.projectTriangulation?.contours
+    if (!saved) return {}
+    const out: Record<string, Point2D[][]> = {}
+    for (const [zoneId, contour] of Object.entries(saved)) {
+      if (zoneId === 'body' || !contour || contour.length < 3) continue
+      out[zoneId] = [contour.map(p => ({ x: p.x, y: p.y }))]
+    }
+    return out
+  })
+  const [bodySilhouette, setBodySilhouette] = useState<Point2D[] | null>(() => {
+    const body = project.projectTriangulation?.contours?.body
+    return body && body.length >= 3 ? body.map(p => ({ x: p.x, y: p.y })) : null
+  })
+
+  // ─── Bézier edition par zone ────────────────────────────────────
+  // Si `zoneBeziers[zoneId]` existe pour une zone, c'est la courbe Bézier
+  // qui fait foi — le contour rendu et envoyé downstream est la Bézier aplatie.
+  // `bezierEditing[zoneId]` (local, non persisté) active l'édition (anchors +
+  // handles visibles, drag activé).
+  const [zoneBeziers, setZoneBeziers] = useState<Record<string, BezierNode[]>>(
+    () => project.projectTriangulation?.zoneBeziers ?? {}
+  )
+  const [zoneCannyRefs, setZoneCannyRefs] = useState<Record<string, Point2D[]>>(
+    () => project.projectTriangulation?.zoneCannyRefs ?? {}
+  )
+  /** Compte d'anchors en cours de réglage (preview legacy resampling uniforme). */
+  const [bezierPreviewCount, setBezierPreviewCount] = useState<Record<string, number>>({})
+  /** Paramètres du fit Schneider en preview (slider tolérance + seuil coin). */
+  const [bezierFitParams, setBezierFitParams] = useState<Record<string, { tolerance: number; cornerDeg: number }>>({})
+  const [bezierEditing, setBezierEditing] = useState<Record<string, boolean>>({})
+  const draggingBezierRef = useRef<
+    | { zoneId: string; index: number; kind: 'anchor' }
+    | { zoneId: string; index: number; kind: 'handleIn' | 'handleOut'; symmetric: boolean }
+    | { zoneId: string; kind: 'group'; startMouse: Point2D; snapshot: Map<number, { anchor: Point2D; handleIn: Point2D; handleOut: Point2D }> }
+    | null
+  >(null)
+  /** Anchors sélectionnés (multi-sélection). Clés : `${zoneId}:${index}`. */
+  const [selectedAnchors, setSelectedAnchors] = useState<Set<string>>(new Set())
+  /** Rectangle de sélection en cours (coords image). */
+  const [rectSelect, setRectSelect] = useState<{ zoneId: string; start: Point2D; end: Point2D; additive: boolean } | null>(null)
+
+  const anchorKey = (zoneId: string, index: number) => `${zoneId}:${index}`
   const [cannyComputing, setCannyComputing] = useState(false)
   const draggingSeedRef = useRef<{ zoneId: string; index: number } | null>(null)
   const cannyComputeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -92,6 +159,92 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
 
   const { transformRef, screenToImage, fitToCanvas, isPanning, spaceDown } =
     useCanvasInteraction(canvasRef)
+
+  // ─── Cache mémoïsé des previews auto-fit Bézier ───
+  // Le fit Schneider est lourd (récursion + LSQ). Sans cache, il tournait
+  // à chaque frame de rAF → freeze sur le body (5–10k points avant subsample).
+  const bezierFitPreviews = useMemo(() => {
+    const out: Record<string, BezierNode[]> = {}
+    for (const zoneId of zones.map(z => z.id)) {
+      const ref = zoneCannyRefs[zoneId]
+      const fitParams = bezierFitParams[zoneId]
+      if (!fitParams || !ref || ref.length < 3) continue
+      try {
+        out[zoneId] = fitBezierToClosedPolygon(ref, {
+          tolerance: fitParams.tolerance,
+          cornerThresholdDeg: fitParams.cornerDeg,
+          cornerSmoothWindow: 3,
+        })
+      } catch (err) {
+        console.error(`[Bézier fit ${zoneId}]`, err)
+        out[zoneId] = []
+      }
+    }
+    return out
+  }, [zones, zoneCannyRefs, bezierFitParams])
+
+  // ---------- Bézier → legLoops / bodySilhouette sync ----------
+  // Pour chaque zone avec une courbe Bézier, on synchronise son contour rendu
+  // sur la version aplatie. `body` met à jour `bodySilhouette`, les membres
+  // mettent à jour `legLoops[zoneId]`.
+  useEffect(() => {
+    if (Object.keys(zoneBeziers).length === 0) return
+    setLegLoops(prev => {
+      const next = { ...prev }
+      for (const [zoneId, nodes] of Object.entries(zoneBeziers)) {
+        if (zoneId === 'body') continue
+        if (!nodes || nodes.length < 2) continue
+        next[zoneId] = [flattenClosedBezier(nodes, 30)]
+      }
+      return next
+    })
+    const bodyBz = zoneBeziers['body']
+    if (bodyBz && bodyBz.length >= 2) {
+      setBodySilhouette(flattenClosedBezier(bodyBz, 30))
+    }
+  }, [zoneBeziers])
+
+  // ---------- Persistance live (debounced) ----------
+  // À chaque modif des zones / seeds / sliders per-zone, on sauve la
+  // partie "édition" de la triangulation (sans toucher aux masks/contours/
+  // step1Validated). Permet de quitter la page à tout moment sans perdre
+  // le travail en cours et sans devoir cliquer « Sauvegarder ».
+  const firstRunRef = useRef(true)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (firstRunRef.current) { firstRunRef.current = false; return }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      const pt = project.projectTriangulation
+      if (!pt) return
+      const updatedTri = {
+        ...pt,
+        zones,
+        zoneSeeds: { ...legSeeds },
+        zoneSmoothSigmas: { ...zoneSigmas },
+        zoneInflates: { ...zoneInflates },
+        zoneBeziers: { ...zoneBeziers },
+        zoneCannyRefs: { ...zoneCannyRefs },
+        contourSmoothSigma: sigma,
+        bridgeThreshold,
+        segmentationMode: 'canny' as const,
+        cannyParams,
+      }
+      const updated: Project = {
+        ...project,
+        projectTriangulation: updatedTri,
+        // resync les accessoires (au cas où une zone a été marquée ACC ou
+        // renommée) — utilise les contours déjà sauvés
+        props: syncTriangulationProps(project, updatedTri),
+      }
+      // Pas de hint : seul le doc Firestore est mis à jour, pas les blobs.
+      onSave(updated).catch(err => console.warn('[Zones] auto-save failed:', err))
+    }, 600)
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zones, legSeeds, zoneSigmas, zoneInflates, zoneBeziers, zoneCannyRefs, sigma, bridgeThreshold, cannyParams])
 
   // ---------- Load reference image ----------
   const refImageBlob = project.projectTriangulation?.referenceImageBlob ?? null
@@ -135,6 +288,15 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     return () => observer.disconnect()
   }, [])
 
+  // ─── Refs miroirs (état toujours frais dans les closures setTimeout) ───
+  // `recomputeCannyZones` est appelé via setTimeout(150ms) — la closure peut
+  // être périmée si un état clé a changé entre-temps (ex: validation Bézier
+  // body après un drag membre). On lit via ref pour garantir un état frais.
+  const zoneBeziersRef = useRef(zoneBeziers)
+  const legLoopsRef = useRef(legLoops)
+  useEffect(() => { zoneBeziersRef.current = zoneBeziers }, [zoneBeziers])
+  useEffect(() => { legLoopsRef.current = legLoops }, [legLoops])
+
   // ---------- Debounced flood-fill compute ----------
   const cannyParamsKey = `${cannyParams.lowThreshold}|${cannyParams.highThreshold}|${cannyParams.blurSize}`
   const recomputeCannyZones = useCallback(async (seedsSnapshot: Record<string, Point2D[]>) => {
@@ -145,11 +307,29 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     off.width = w; off.height = h
     off.getContext('2d')!.drawImage(img, 0, 0)
     const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
-    const activeZoneIds = memberZoneIds.filter(id => (seedsSnapshot[id]?.length ?? 0) > 0)
+    // État frais (anti-staleness des closures setTimeout 150ms)
+    const curBeziers = zoneBeziersRef.current
+    const curLegLoops = legLoopsRef.current
+    // Skip les zones gérées en Bézier — leur contour fait foi sur la flatten.
+    const activeZoneIds = memberZoneIds.filter(id =>
+      (seedsSnapshot[id]?.length ?? 0) > 0 && !curBeziers[id]
+    )
     setCannyComputing(true)
     try {
       const nextLoops: Record<string, Point2D[][]> = {}
+      // 1) Silhouette : toujours détectée pour permettre le bridge body même
+      //    quand tous les membres sont en Bézier (et donc activeZoneIds vide).
+      //    Skip si le body est lui-même en Bézier (figé manuellement).
       let silhouette: Point2D[] | null = null
+      if (!curBeziers['body']) {
+        const sil = await flowCannySegmentZones(
+          imgData, [],
+          cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
+        )
+        if (sil.silhouette && sil.silhouette.length >= 3) silhouette = sil.silhouette
+      }
+
+      // 2) Pour chaque membre Canny actif : flood-fill.
       for (const zoneId of activeZoneIds) {
         const result = await flowCannySegmentZones(
           imgData,
@@ -159,13 +339,27 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         )
         const loops = (result.zoneContours[zoneId] ?? []).filter(l => l.length >= 3)
         if (loops.length > 0) nextLoops[zoneId] = loops
-        if (!silhouette && result.silhouette) silhouette = result.silhouette
       }
-      setLegLoops(nextLoops)
+      // Préserve les loops Bézier (zones où l'admin a basculé en édition manuelle).
+      setLegLoops(prev => {
+        const merged: Record<string, Point2D[][]> = { ...nextLoops }
+        for (const [zoneId, nodes] of Object.entries(curBeziers)) {
+          if (zoneId === 'body') continue
+          if (nodes && nodes.length >= 2) {
+            merged[zoneId] = prev[zoneId] ?? [flattenClosedBezier(nodes, 30)]
+          }
+        }
+        return merged
+      })
 
-      if (silhouette && silhouette.length >= 3) {
+      // 3) Bridge body : skip si body en Bézier (édition manuelle figée).
+      if (silhouette && silhouette.length >= 3 && !curBeziers['body']) {
         const legContoursForBridge = memberZoneIds
-          .flatMap(id => nextLoops[id] ?? [])
+          .flatMap(id => {
+            const bz = curBeziers[id]
+            if (bz && bz.length >= 2) return [flattenClosedBezier(bz, 30)]
+            return nextLoops[id] ?? curLegLoops[id] ?? []
+          })
           .filter((c): c is Point2D[] => c != null && c.length >= 3)
         if (legContoursForBridge.length === 0) {
           setBodySilhouette(silhouette)
@@ -195,6 +389,15 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     if (cannyComputeTimerRef.current) clearTimeout(cannyComputeTimerRef.current)
     cannyComputeTimerRef.current = setTimeout(() => recomputeCannyZones(seedsSnapshot), 150)
   }, [recomputeCannyZones])
+
+  // Re-bridge body live quand un Bézier membre bouge (drag anchor/handle, valider auto-fit, etc).
+  // Skip si le body est lui-même en Bézier (bridge figé).
+  useEffect(() => {
+    if (!imageReady) return
+    if (zoneBeziers['body']) return
+    scheduleCannyRecompute(legSeeds)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoneBeziers])
 
   useEffect(() => {
     if (!imageReady) return
@@ -266,6 +469,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       }
       const sr = 6 / t.scale
       for (const legId of memberZoneIds) {
+        if (zoneBeziers[legId]) continue // les seeds Canny ne servent plus pour cette zone
         const seeds = legSeeds[legId]
         if (!seeds) continue
         const zone = zones.find(z => z.id === legId)
@@ -280,13 +484,123 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         }
       }
 
+      // ── Bézier overlay (anchors + handles) pour les zones en édition ──
+      for (const legId of zones.map(z => z.id)) {
+        const ref = zoneCannyRefs[legId]
+        const fitParams = bezierFitParams[legId]
+        const zone = zones.find(z => z.id === legId)
+        if (!zone) continue
+
+        // Preview du fit auto Schneider — affichée même sans Bézier matérialisé.
+        if (fitParams && ref && ref.length >= 3) {
+          const previewNodes = bezierFitPreviews[legId] ?? []
+          if (previewNodes.length >= 2) {
+            const previewFlat = flattenClosedBezier(previewNodes, 30)
+            ctx.strokeStyle = '#22d3ee'   // cyan = preview auto-fit
+            ctx.lineWidth = 2.5 / t.scale
+            ctx.setLineDash([4 / t.scale, 4 / t.scale])
+            ctx.beginPath()
+            ctx.moveTo(previewFlat[0].x, previewFlat[0].y)
+            for (let i = 1; i < previewFlat.length; i++) ctx.lineTo(previewFlat[i].x, previewFlat[i].y)
+            ctx.closePath()
+            ctx.stroke()
+            ctx.setLineDash([])
+            const pr = 4 / t.scale
+            for (const pn of previewNodes) {
+              ctx.fillStyle = pn.smooth ? '#22d3ee' : '#f97316'   // corners en orange
+              ctx.strokeStyle = '#fff'
+              ctx.lineWidth = 1.5 / t.scale
+              ctx.beginPath(); ctx.arc(pn.anchor.x, pn.anchor.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+            }
+          }
+        }
+
+        const nodes = zoneBeziers[legId]
+        if (!nodes || nodes.length < 2) continue
+        const editing = bezierEditing[legId]
+        if (!editing) continue // courbe déjà rendue via legLoops (flattened)
+
+        // Handles : lignes anchor↔handle
+        ctx.strokeStyle = '#888'
+        ctx.lineWidth = 1 / t.scale
+        ctx.setLineDash([3 / t.scale, 3 / t.scale])
+        for (const n of nodes) {
+          ctx.beginPath()
+          ctx.moveTo(n.handleIn.x, n.handleIn.y)
+          ctx.lineTo(n.anchor.x, n.anchor.y)
+          ctx.lineTo(n.handleOut.x, n.handleOut.y)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+
+        // Handles : cercles
+        const hr = 4 / t.scale
+        ctx.fillStyle = '#fff'
+        ctx.strokeStyle = '#888'
+        ctx.lineWidth = 1 / t.scale
+        for (const n of nodes) {
+          ctx.beginPath(); ctx.arc(n.handleIn.x, n.handleIn.y, hr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+          ctx.beginPath(); ctx.arc(n.handleOut.x, n.handleOut.y, hr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+        }
+
+        // Anchors : carrés colorés ; jaune si sélectionné.
+        const ar = 6 / t.scale
+        ctx.lineWidth = 2 / t.scale
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i]
+          const sel = selectedAnchors.has(anchorKey(legId, i))
+          ctx.fillStyle = sel ? '#facc15' : zone.color
+          ctx.strokeStyle = sel ? '#facc15' : '#fff'
+          ctx.fillRect(n.anchor.x - ar, n.anchor.y - ar, ar * 2, ar * 2)
+          ctx.lineWidth = (sel ? 3 : 2) / t.scale
+          ctx.strokeRect(n.anchor.x - ar, n.anchor.y - ar, ar * 2, ar * 2)
+        }
+
+        // ── Preview du resampling Canny → Bézier (slider non validé) ──
+        const previewN = bezierPreviewCount[legId]
+        if (previewN != null && previewN !== nodes.length && ref && ref.length >= 3) {
+          const previewNodes = polygonToBezierNodes(ref, Math.max(3, Math.min(128, previewN)))
+          const previewFlat = flattenClosedBezier(previewNodes, 30)
+          ctx.strokeStyle = '#fff'
+          ctx.lineWidth = 2 / t.scale
+          ctx.setLineDash([6 / t.scale, 4 / t.scale])
+          ctx.beginPath()
+          ctx.moveTo(previewFlat[0].x, previewFlat[0].y)
+          for (let i = 1; i < previewFlat.length; i++) ctx.lineTo(previewFlat[i].x, previewFlat[i].y)
+          ctx.closePath()
+          ctx.stroke()
+          ctx.setLineDash([])
+          const pr = 3 / t.scale
+          ctx.fillStyle = '#fff'
+          for (const pn of previewNodes) {
+            ctx.beginPath(); ctx.arc(pn.anchor.x, pn.anchor.y, pr, 0, Math.PI * 2); ctx.fill()
+          }
+        }
+
+      }
+
+      // ── Rectangle de sélection en cours ──
+      if (rectSelect) {
+        const x = Math.min(rectSelect.start.x, rectSelect.end.x)
+        const y = Math.min(rectSelect.start.y, rectSelect.end.y)
+        const w = Math.abs(rectSelect.end.x - rectSelect.start.x)
+        const h = Math.abs(rectSelect.end.y - rectSelect.start.y)
+        ctx.fillStyle = 'rgba(250, 204, 21, 0.15)'
+        ctx.fillRect(x, y, w, h)
+        ctx.strokeStyle = '#facc15'
+        ctx.lineWidth = 1.5 / t.scale
+        ctx.setLineDash([5 / t.scale, 3 / t.scale])
+        ctx.strokeRect(x, y, w, h)
+        ctx.setLineDash([])
+      }
+
       ctx.restore()
       rafId = requestAnimationFrame(draw)
     }
 
     rafId = requestAnimationFrame(draw)
     return () => { running = false; cancelAnimationFrame(rafId) }
-  }, [imageReady, transformRef, zones, bodySilhouette, legLoops, legSeeds, zoneSigmas, sigma, sigmaFor])
+  }, [imageReady, transformRef, zones, bodySilhouette, legLoops, legSeeds, zoneSigmas, sigma, sigmaFor, zoneBeziers, bezierEditing, bezierPreviewCount, bezierFitParams, zoneCannyRefs, selectedAnchors, rectSelect, bezierFitPreviews])
 
   // ---------- Hit test seed ----------
   const hitTestWaypoint = useCallback((p: Point2D): { zoneId: string; index: number } | null => {
@@ -349,24 +663,386 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     })
   }
 
+  // ---------- Bézier multi-selection : Delete / Backspace ----------
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      // Ignore si focus est sur un input/textarea (rename etc.)
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (selectedAnchors.size === 0) return
+      e.preventDefault()
+      // Regroupe par zone : indices à supprimer (en ordre desc pour stabilité)
+      const byZone = new Map<string, number[]>()
+      for (const key of selectedAnchors) {
+        const [zoneId, idxStr] = key.split(':')
+        const arr = byZone.get(zoneId) ?? []
+        arr.push(parseInt(idxStr))
+        byZone.set(zoneId, arr)
+      }
+      setZoneBeziers(prev => {
+        const next = { ...prev }
+        for (const [zoneId, indices] of byZone) {
+          const nodes = next[zoneId]
+          if (!nodes) continue
+          // Empêche de descendre en dessous de 3 anchors (sinon courbe dégénérée).
+          const keep = nodes.filter((_, i) => !indices.includes(i))
+          if (keep.length >= 3) next[zoneId] = keep
+        }
+        return next
+      })
+      setSelectedAnchors(new Set())
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedAnchors])
+
+  // ---------- Bézier helpers ----------
+  async function toggleBezierMode(zoneId: string) {
+    setActiveZoneId(zoneId)
+    const willEdit = !bezierEditing[zoneId]
+    setBezierEditing(prev => ({ ...prev, [zoneId]: willEdit }))
+    if (!willEdit || zoneBeziers[zoneId]) return
+
+    // Source du contour à snapshoter :
+    // - body  → bodySilhouette (déjà subtracté + bridgé)
+    // - autre → legLoops[id][0]
+    let source: Point2D[] | null = zoneId === 'body'
+      ? bodySilhouette
+      : (legLoops[zoneId]?.[0] ?? null)
+
+    // Fallback body : si pas de silhouette en mémoire, on la détecte inline.
+    if (zoneId === 'body' && (!source || source.length < 3) && imageRef.current) {
+      try {
+        const img = imageRef.current
+        const w = img.naturalWidth, h = img.naturalHeight
+        const off = document.createElement('canvas')
+        off.width = w; off.height = h
+        off.getContext('2d')!.drawImage(img, 0, 0)
+        const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
+        const result = await flowCannySegmentZones(
+          imgData, [],
+          cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
+        )
+        if (result.silhouette && result.silhouette.length >= 3) {
+          source = result.silhouette
+          setBodySilhouette(result.silhouette)
+        }
+      } catch (err) {
+        console.error('[Bézier body] silhouette auto-detect failed:', err)
+      }
+    }
+
+    if (source && source.length >= 3) {
+      const sm = smoothPolygonGaussian(source, sigmaFor(zoneId))
+      const sub = subsamplePolygon(sm.map(pt => ({ x: pt.x, y: pt.y })), 600)
+      setZoneCannyRefs(p => ({ ...p, [zoneId]: sub }))
+      setBezierFitParams(p => ({ ...p, [zoneId]: { tolerance: 2, cornerDeg: 60 } }))
+    } else {
+      alert(zoneId === 'body'
+        ? 'Impossible de détecter le contour du body. Cliquez d’abord pour le détecter (Body actif + clic sur le canvas), puis réessayez.'
+        : 'Aucun contour Canny disponible pour cette zone. Placez d’abord des seeds (clics) pour la détecter.')
+      setBezierEditing(prev => ({ ...prev, [zoneId]: false }))
+    }
+  }
+  function clearBezier(zoneId: string) {
+    setZoneBeziers(prev => { const n = { ...prev }; delete n[zoneId]; return n })
+    setZoneCannyRefs(prev => { const n = { ...prev }; delete n[zoneId]; return n })
+    setBezierPreviewCount(prev => { const n = { ...prev }; delete n[zoneId]; return n })
+    setBezierFitParams(prev => { const n = { ...prev }; delete n[zoneId]; return n })
+    setBezierEditing(prev => ({ ...prev, [zoneId]: false }))
+    setLegLoops(prev => { const n = { ...prev }; delete n[zoneId]; return n })
+  }
+
+  /** Refresh le snapshot Canny depuis le contour Canny courant (au cas où
+   *  les seeds / sigma / inflate ont changé depuis le 1er toggle Bézier). */
+  function refreshBezierCannyRef(zoneId: string) {
+    const source = zoneId === 'body' ? bodySilhouette : legLoops[zoneId]?.[0]
+    if (!source || source.length < 3) return
+    const sm = smoothPolygonGaussian(source, sigmaFor(zoneId))
+    const sub = subsamplePolygon(sm.map(pt => ({ x: pt.x, y: pt.y })), 600)
+    setZoneCannyRefs(p => ({ ...p, [zoneId]: sub }))
+  }
+
+  /** Resample N anchors directement sur le contour Canny snapshoté (uniforme). */
+  function validateBezierResample(zoneId: string) {
+    const ref = zoneCannyRefs[zoneId]
+    const target = bezierPreviewCount[zoneId]
+    if (!ref || ref.length < 3 || target == null) return
+    const next = polygonToBezierNodes(ref, Math.max(3, Math.min(128, target)))
+    setZoneBeziers(p => ({ ...p, [zoneId]: next }))
+    setBezierPreviewCount(p => { const n = { ...p }; delete n[zoneId]; return n })
+    setSelectedAnchors(new Set())
+  }
+
+  /** Auto-fit Schneider sur le contour Canny snapshoté.
+   *  Place les anchors là où la courbure varie + détecte les coins durs.
+   *  Si la référence Canny n'existe pas encore, on la calcule inline depuis
+   *  bodySilhouette / legLoops[id][0]. */
+  function validateBezierAutoFit(zoneId: string) {
+    const params = bezierFitParams[zoneId]
+    if (!params) return
+    let ref = zoneCannyRefs[zoneId]
+    if (!ref || ref.length < 3) {
+      const source = zoneId === 'body' ? bodySilhouette : legLoops[zoneId]?.[0]
+      if (!source || source.length < 3) {
+        alert('Aucun contour Canny disponible — détectez d’abord la zone.')
+        return
+      }
+      const smSrc = smoothPolygonGaussian(source, sigmaFor(zoneId))
+      ref = subsamplePolygon(smSrc.map(pt => ({ x: pt.x, y: pt.y })), 600)
+      setZoneCannyRefs(p => ({ ...p, [zoneId]: ref! }))
+    }
+    const next = fitBezierToClosedPolygon(ref, {
+      tolerance: params.tolerance,
+      cornerThresholdDeg: params.cornerDeg,
+      cornerSmoothWindow: 3,
+    })
+    if (next.length < 2) {
+      alert('L’auto-fit n’a produit aucune courbe (réduire le seuil coin, augmenter la tolérance, ou vérifier le contour source).')
+      return
+    }
+    setZoneBeziers(p => ({ ...p, [zoneId]: next }))
+    setBezierFitParams(p => { const n = { ...p }; delete n[zoneId]; return n })
+    setSelectedAnchors(new Set())
+  }
+
+  /** Test si le clic touche un anchor/handle d'une zone Bézier en édition.
+   *  Retourne null si aucune zone est en édition ou aucun hit. */
+  function hitTestBezier(p: Point2D):
+    | { zoneId: string; index: number; kind: 'anchor' | 'handleIn' | 'handleOut' }
+    | null {
+    const r = 10 / transformRef.current.scale
+    const r2 = r * r
+    for (const zoneId of zones.map(z => z.id)) {
+      if (!bezierEditing[zoneId]) continue
+      const nodes = zoneBeziers[zoneId]
+      if (!nodes) continue
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i]
+        if (dist2(p, n.anchor) <= r2) return { zoneId, index: i, kind: 'anchor' }
+        if (dist2(p, n.handleIn) <= r2) return { zoneId, index: i, kind: 'handleIn' }
+        if (dist2(p, n.handleOut) <= r2) return { zoneId, index: i, kind: 'handleOut' }
+      }
+    }
+    return null
+  }
+
+  /** Trouve le segment Bézier d'une zone éditée le plus proche du clic + son t. */
+  function nearestBezierSegment(zoneId: string, p: Point2D, maxDist: number):
+    | { segIndex: number; t: number; point: Point2D; dist: number } | null {
+    const nodes = zoneBeziers[zoneId]
+    if (!nodes || nodes.length < 2) return null
+    let best: { segIndex: number; t: number; point: Point2D; dist: number } | null = null
+    const N = nodes.length
+    for (let i = 0; i < N; i++) {
+      const a = nodes[i], b = nodes[(i + 1) % N]
+      // sample 30 points + take closest
+      for (let s = 0; s <= 30; s++) {
+        const t = s / 30
+        const pt = evaluateCubicBezier(a.anchor, a.handleOut, b.handleIn, b.anchor, t)
+        const d = Math.hypot(pt.x - p.x, pt.y - p.y)
+        if (!best || d < best.dist) best = { segIndex: i, t, point: pt, dist: d }
+      }
+    }
+    return best && best.dist <= maxDist ? best : null
+  }
+
+  function insertBezierAnchor(zoneId: string, segIndex: number, t: number) {
+    setZoneBeziers(prev => {
+      const nodes = prev[zoneId]
+      if (!nodes) return prev
+      const N = nodes.length
+      const a = nodes[segIndex], b = nodes[(segIndex + 1) % N]
+      const pt = evaluateCubicBezier(a.anchor, a.handleOut, b.handleIn, b.anchor, t)
+      // Tangent local : dérivée du Bézier (approx)
+      const eps = 0.01
+      const pt2 = evaluateCubicBezier(a.anchor, a.handleOut, b.handleIn, b.anchor, Math.min(1, t + eps))
+      const tx = (pt2.x - pt.x) / eps, ty = (pt2.y - pt.y) / eps
+      const len = Math.hypot(tx, ty) || 1
+      // Espacement des handles ~ longueur du segment / 4
+      const segLen = Math.hypot(b.anchor.x - a.anchor.x, b.anchor.y - a.anchor.y)
+      const h = segLen / 4
+      const ux = tx / len, uy = ty / len
+      const newNode: BezierNode = {
+        anchor: { x: pt.x, y: pt.y },
+        handleIn:  { x: pt.x - ux * h, y: pt.y - uy * h },
+        handleOut: { x: pt.x + ux * h, y: pt.y + uy * h },
+        smooth: true,
+      }
+      const next = [...nodes]
+      next.splice(segIndex + 1, 0, newNode)
+      return { ...prev, [zoneId]: next }
+    })
+    setSelectedAnchors(new Set())
+  }
+
+  function removeBezierAnchor(zoneId: string, index: number) {
+    setZoneBeziers(prev => {
+      const nodes = prev[zoneId]
+      if (!nodes || nodes.length <= 3) return prev   // garde au moins un triangle
+      const next = nodes.filter((_, i) => i !== index)
+      return { ...prev, [zoneId]: next }
+    })
+    setSelectedAnchors(new Set())
+  }
+
   // ---------- Mouse handlers ----------
   function handleMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return
     if (spaceDown.current || isPanning.current) return
     const imgPos = screenToImage(e.clientX, e.clientY)
+
+    // 1. Priorité : hit-test Bézier (anchor / handle)
+    const bezHit = hitTestBezier(imgPos)
+    if (bezHit) {
+      if (bezHit.kind === 'anchor') {
+        const key = anchorKey(bezHit.zoneId, bezHit.index)
+        // Shift+clic = toggle de la sélection sans drag
+        if (e.shiftKey) {
+          setSelectedAnchors(prev => {
+            const next = new Set(prev)
+            if (next.has(key)) next.delete(key)
+            else next.add(key)
+            return next
+          })
+          return
+        }
+        // Si l'anchor est dans la sélection multi → drag groupé
+        if (selectedAnchors.has(key) && selectedAnchors.size > 1) {
+          const nodes = zoneBeziers[bezHit.zoneId]
+          if (nodes) {
+            const snapshot = new Map<number, { anchor: Point2D; handleIn: Point2D; handleOut: Point2D }>()
+            for (const k of selectedAnchors) {
+              const [zid, idxStr] = k.split(':')
+              if (zid !== bezHit.zoneId) continue
+              const idx = parseInt(idxStr)
+              const n = nodes[idx]
+              if (!n) continue
+              snapshot.set(idx, {
+                anchor: { ...n.anchor },
+                handleIn: { ...n.handleIn },
+                handleOut: { ...n.handleOut },
+              })
+            }
+            draggingBezierRef.current = { zoneId: bezHit.zoneId, kind: 'group', startMouse: imgPos, snapshot }
+            return
+          }
+        }
+        // Clic simple sur un anchor non sélectionné → drag single, sélection écrasée par cet anchor
+        setSelectedAnchors(new Set([key]))
+        draggingBezierRef.current = { zoneId: bezHit.zoneId, index: bezHit.index, kind: 'anchor' }
+      } else {
+        draggingBezierRef.current = {
+          zoneId: bezHit.zoneId, index: bezHit.index, kind: bezHit.kind,
+          symmetric: !e.altKey,
+        }
+      }
+      return
+    }
+
+    // 2. Si la zone active est en édition Bézier (membre OU body)
+    if (bezierEditing[activeZoneId]) {
+      // Clic sur la courbe : insertion d'anchor
+      const onCurve = nearestBezierSegment(activeZoneId, imgPos, 14 / transformRef.current.scale)
+      if (onCurve) {
+        insertBezierAnchor(activeZoneId, onCurve.segIndex, onCurve.t)
+        return
+      }
+      // Sinon : démarre une sélection rectangle. Shift = additif, sinon écrase la sélection.
+      if (!e.shiftKey) setSelectedAnchors(new Set())
+      setRectSelect({ zoneId: activeZoneId, start: imgPos, end: imgPos, additive: e.shiftKey })
+      return
+    }
+
+    // 3. Fallback : hit-test seed Canny
     const hit = hitTestWaypoint(imgPos)
     if (hit) {
       draggingSeedRef.current = hit
       return
     }
     if (activeZoneId === 'body') {
-      handleCannyBodyClick()
+      // Ne pas écraser un body Bézier validé : si zoneBeziers['body'] existe
+      // mais qu'on n'est pas en édition Bézier, on ignore le clic.
+      if (!zoneBeziers['body']) handleCannyBodyClick()
     } else if (memberZoneIds.includes(activeZoneId)) {
       addLegSeed(activeZoneId, imgPos)
     }
   }
 
   function handleMouseMove(e: React.MouseEvent) {
+    // Rectangle de sélection en cours ?
+    if (rectSelect) {
+      const imgPos = screenToImage(e.clientX, e.clientY)
+      setRectSelect(r => r ? { ...r, end: imgPos } : null)
+      return
+    }
+    // Drag Bézier ?
+    const bz = draggingBezierRef.current
+    if (bz) {
+      const imgPos = screenToImage(e.clientX, e.clientY)
+      // Group drag : applique le delta à tous les anchors du snapshot
+      if (bz.kind === 'group') {
+        const dx = imgPos.x - bz.startMouse.x
+        const dy = imgPos.y - bz.startMouse.y
+        setZoneBeziers(prev => {
+          const nodes = prev[bz.zoneId]
+          if (!nodes) return prev
+          const next = nodes.map((n, i) => {
+            const snap = bz.snapshot.get(i)
+            if (!snap) return n
+            return {
+              ...n,
+              anchor: { x: snap.anchor.x + dx, y: snap.anchor.y + dy },
+              handleIn: { x: snap.handleIn.x + dx, y: snap.handleIn.y + dy },
+              handleOut: { x: snap.handleOut.x + dx, y: snap.handleOut.y + dy },
+            }
+          })
+          return { ...prev, [bz.zoneId]: next }
+        })
+        return
+      }
+      setZoneBeziers(prev => {
+        const nodes = prev[bz.zoneId]
+        if (!nodes) return prev
+        const next = nodes.map((n, i) => {
+          if (i !== bz.index) return n
+          if (bz.kind === 'anchor') {
+            const dx = imgPos.x - n.anchor.x
+            const dy = imgPos.y - n.anchor.y
+            return {
+              ...n,
+              anchor: { x: imgPos.x, y: imgPos.y },
+              handleIn:  { x: n.handleIn.x + dx, y: n.handleIn.y + dy },
+              handleOut: { x: n.handleOut.x + dx, y: n.handleOut.y + dy },
+            }
+          }
+          if (bz.kind === 'handleOut') {
+            if (bz.symmetric && n.smooth) {
+              return {
+                ...n,
+                handleOut: { x: imgPos.x, y: imgPos.y },
+                handleIn:  { x: 2 * n.anchor.x - imgPos.x, y: 2 * n.anchor.y - imgPos.y },
+              }
+            }
+            return { ...n, handleOut: { x: imgPos.x, y: imgPos.y }, smooth: !bz.symmetric ? false : n.smooth }
+          }
+          // handleIn
+          if (bz.symmetric && n.smooth) {
+            return {
+              ...n,
+              handleIn: { x: imgPos.x, y: imgPos.y },
+              handleOut: { x: 2 * n.anchor.x - imgPos.x, y: 2 * n.anchor.y - imgPos.y },
+            }
+          }
+          return { ...n, handleIn: { x: imgPos.x, y: imgPos.y }, smooth: !bz.symmetric ? false : n.smooth }
+        })
+        return { ...prev, [bz.zoneId]: next }
+      })
+      return
+    }
+
+    // Drag seed Canny
     const dragSeed = draggingSeedRef.current
     if (!dragSeed) return
     const imgPos = screenToImage(e.clientX, e.clientY)
@@ -381,14 +1057,52 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
 
   function handleMouseUp() {
     draggingSeedRef.current = null
+    draggingBezierRef.current = null
+    // Finalise la sélection rectangle
+    if (rectSelect) {
+      const minX = Math.min(rectSelect.start.x, rectSelect.end.x)
+      const maxX = Math.max(rectSelect.start.x, rectSelect.end.x)
+      const minY = Math.min(rectSelect.start.y, rectSelect.end.y)
+      const maxY = Math.max(rectSelect.start.y, rectSelect.end.y)
+      const nodes = zoneBeziers[rectSelect.zoneId]
+      const hit = new Set<string>()
+      if (nodes) {
+        for (let i = 0; i < nodes.length; i++) {
+          const p = nodes[i].anchor
+          if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
+            hit.add(anchorKey(rectSelect.zoneId, i))
+          }
+        }
+      }
+      // Click bref (rectangle dégénéré) sans Shift = clear sans rien sélectionner.
+      const degenerate = (maxX - minX) < 2 && (maxY - minY) < 2
+      if (!degenerate) {
+        setSelectedAnchors(prev => {
+          if (rectSelect.additive) {
+            const next = new Set(prev)
+            for (const k of hit) next.add(k)
+            return next
+          }
+          return hit
+        })
+      }
+      setRectSelect(null)
+    }
   }
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
     if (spaceDown.current || isPanning.current) return
     const imgPos = screenToImage(e.clientX, e.clientY)
+    // Bézier : clic droit sur un anchor = suppression
+    const bezHit = hitTestBezier(imgPos)
+    if (bezHit && bezHit.kind === 'anchor') {
+      removeBezierAnchor(bezHit.zoneId, bezHit.index)
+      return
+    }
     if (activeZoneId === 'body') {
-      setBodySilhouette(null)
+      // Préserve un body Bézier validé (sinon perte de tout le travail manuel).
+      if (!zoneBeziers['body']) setBodySilhouette(null)
       return
     }
     const hit = hitTestWaypoint(imgPos)
@@ -458,33 +1172,44 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         step3Validated: false,
       }
 
+      const updatedTri = {
+        ...pt,
+        zones,
+        prompts: [],
+        masksRLE: finalized.masks,
+        maskWidth: finalized.dims.w,
+        maskHeight: finalized.dims.h,
+        contours: finalized.contours,
+        contourSmoothSigma: sigma,
+        bridgeThreshold,
+        segmentationMode: 'canny' as const,
+        cannyParams,
+        // Persiste les seeds + overrides + courbes Bézier pour reprise d'édition
+        zoneSeeds: { ...legSeeds },
+        zoneSmoothSigmas: { ...zoneSigmas },
+        zoneInflates: { ...zoneInflates },
+        zoneBeziers: { ...zoneBeziers },
+        zoneCannyRefs: { ...zoneCannyRefs },
+        step1Validated: true,
+        // Invalidate downstream steps
+        zoneContourCount: {}, zoneContourPoints: {}, zoneContourValidated: {},
+        step2Validated: false,
+        zonePoints: {},
+        zoneTriangles: {},
+        zoneDensity: {},
+        bodyPoints: [],
+        bodyTriangles: [],
+        step3Validated: false,
+        hiddenFaceZones: [],
+        hiddenFaceLimbZones: [],
+      }
+
+      // Resync les accessoires (zones isAccessory → Project.props) avec les
+      // nouveaux contours lissés. Les props manuels sont préservés.
       const updated: Project = {
         ...project,
-        projectTriangulation: {
-          ...pt,
-          zones,
-          prompts: [],
-          masksRLE: finalized.masks,
-          maskWidth: finalized.dims.w,
-          maskHeight: finalized.dims.h,
-          contours: finalized.contours,
-          contourSmoothSigma: sigma,
-          bridgeThreshold,
-          segmentationMode: 'canny',
-          cannyParams,
-          step1Validated: true,
-          // Invalidate downstream steps
-          zoneContourCount: {}, zoneContourPoints: {}, zoneContourValidated: {},
-          step2Validated: false,
-          zonePoints: {},
-          zoneTriangles: {},
-          zoneDensity: {},
-          bodyPoints: [],
-          bodyTriangles: [],
-          step3Validated: false,
-          hiddenFaceZones: [],
-          hiddenFaceLimbZones: [],
-        },
+        projectTriangulation: updatedTri,
+        props: syncTriangulationProps(project, updatedTri),
       }
 
       await onSave(updated, ['triangulationMasks', 'triangulationContours'])
@@ -556,11 +1281,59 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
               </button>
               {!isBody && (
                 <button
+                  onClick={() => setZones(zs => zs.map(x => x.id === z.id ? { ...x, isAccessory: !x.isAccessory } : x))}
+                  title={z.isAccessory
+                    ? 'Accessoire (rigide). Exclu du maillage/animation. Cliquer pour repasser en membre normal.'
+                    : 'Marquer comme accessoire (objet rigide : balai, épée, platines…). Exclu du maillage et de l’animation.'}
+                  style={{
+                    border: `2px solid ${z.isAccessory ? z.color : '#94a3b8'}`,
+                    background: z.isAccessory ? z.color : 'transparent',
+                    color: z.isAccessory ? '#fff' : '#94a3b8',
+                    cursor: 'pointer', fontSize: '0.7rem', padding: '2px 6px',
+                    borderRadius: 4, fontWeight: 'bold',
+                  }}
+                >ACC</button>
+              )}
+              <button
+                onClick={() => toggleBezierMode(z.id)}
+                title={bezierEditing[z.id]
+                  ? 'Quitter l’édition Bézier (la courbe reste appliquée).'
+                  : zoneBeziers[z.id]
+                    ? 'Reprendre l’édition Bézier (anchors + handles).'
+                    : isBody
+                      ? 'Convertir le body en Bézier éditable. Le bridge auto sera désactivé une fois validé.'
+                      : 'Convertir le contour en courbe Bézier éditable manuellement.'}
+                style={{
+                  border: `2px solid ${zoneBeziers[z.id] ? z.color : '#94a3b8'}`,
+                  background: bezierEditing[z.id] ? z.color : (zoneBeziers[z.id] ? `${z.color}33` : 'transparent'),
+                  color: bezierEditing[z.id] ? '#fff' : (zoneBeziers[z.id] ? z.color : '#94a3b8'),
+                  cursor: 'pointer', fontSize: '0.7rem', padding: '2px 6px',
+                  borderRadius: 4, fontWeight: 'bold',
+                }}
+              >📐 BÉZIER</button>
+              {zoneBeziers[z.id] && (
+                <button
+                  onClick={() => { if (confirm(`Réinitialiser la courbe Bézier de "${z.label}"${isBody ? ' (le bridge auto sera ré-activé)' : ' (retour au contour Canny)'} ?`)) clearBezier(z.id) }}
+                  title={isBody
+                    ? 'Supprimer la courbe Bézier body et réactiver le bridge auto'
+                    : 'Supprimer la courbe Bézier et reprendre le contour Canny'}
+                  style={{
+                    border: 'none', background: 'transparent', color: '#94a3b8',
+                    cursor: 'pointer', fontSize: '0.85rem', padding: '0 2px',
+                  }}
+                >↺</button>
+              )}
+              {!isBody && (
+                <button
                   onClick={() => {
                     if (!confirm(`Supprimer la zone "${z.label}" ?`)) return
                     setZones(zs => zs.filter(x => x.id !== z.id))
                     setLegSeeds(prev => { const n = { ...prev }; delete n[z.id]; return n })
                     setLegLoops(prev => { const n = { ...prev }; delete n[z.id]; return n })
+                    setZoneBeziers(prev => { const n = { ...prev }; delete n[z.id]; return n })
+                    setZoneCannyRefs(prev => { const n = { ...prev }; delete n[z.id]; return n })
+                    setBezierPreviewCount(prev => { const n = { ...prev }; delete n[z.id]; return n })
+                    setBezierEditing(prev => { const n = { ...prev }; delete n[z.id]; return n })
                     if (activeZoneId === z.id) setActiveZoneId('body')
                   }}
                   title="Supprimer ce membre"
@@ -597,7 +1370,11 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       {/* Actions */}
       <div className="triangulation-toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
         <span className="toolbar-info">
-          {cannyComputing ? 'Calcul flood-fill...' : computing ? 'Calcul silhouette...' : 'Clic Body = silhouette, clic Membre = ajouter une région (clics multiples = union)'}
+          {bezierEditing[activeZoneId]
+            ? `Bézier : drag anchor/handle · Alt+drag handle = asymétrique · clic courbe = ajouter · clic droit anchor = supprimer · drag vide = sélection rectangle · Shift+clic = multi · Suppr/Backspace = supprimer sélection${selectedAnchors.size > 0 ? `  (${selectedAnchors.size} sélectionné${selectedAnchors.size > 1 ? 's' : ''})` : ''}`
+            : cannyComputing ? 'Calcul flood-fill...'
+            : computing ? 'Calcul silhouette...'
+            : 'Clic Body = silhouette, clic Membre = ajouter une région (clics multiples = union)'}
         </span>
 
         <button
@@ -719,6 +1496,113 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
                   >↺</button>
                 )}
               </label>
+            )
+          })()}
+          {/* Bézier : auto-fit Schneider (tolérance + seuil coin) + uniforme (anchors) */}
+          {(() => {
+            const activeZone = zones.find(z => z.id === activeZoneId)
+            if (!activeZone) return null
+            const nodes = zoneBeziers[activeZoneId]
+            const editing = bezierEditing[activeZoneId]
+            // Affiche les sliders si on a une courbe ou si on est en train d'en créer une.
+            if (!nodes && !editing) return null
+            const hasRef = (zoneCannyRefs[activeZoneId]?.length ?? 0) >= 3
+            const current = nodes?.length ?? 0
+
+            // Slider auto-fit Schneider
+            const fit = bezierFitParams[activeZoneId]
+            const fitTol = fit?.tolerance ?? 2
+            const fitCorner = fit?.cornerDeg ?? 60
+            const fitDirty = fit != null
+
+            // Slider uniforme legacy
+            const preview = bezierPreviewCount[activeZoneId]
+            const uniformValue = preview ?? current
+            const uniformDirty = preview != null && preview !== current
+
+            return (
+              <>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.85rem', flexWrap: 'wrap' }}
+                  title="Auto-fit Schneider : place les anchors là où la courbure change. Slider tolérance px = fidélité (petit = précis, beaucoup d'anchors). Slider seuil coin = vertex au-delà duquel un anchor devient un coin (smooth=false).">
+                  <span style={{ color: activeZone.color, fontWeight: 'bold' }}>🎯 Auto-fit {activeZone.label} :</span>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    Tol
+                    <input
+                      type="range" min={0.5} max={10} step={0.1}
+                      value={fitTol}
+                      disabled={!hasRef}
+                      onChange={e => setBezierFitParams(p => ({ ...p, [activeZoneId]: { tolerance: parseFloat(e.target.value), cornerDeg: fitCorner } }))}
+                      style={{ width: 90 }}
+                    />
+                    <span style={{ minWidth: 30 }}>{fitTol.toFixed(1)} px</span>
+                  </label>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    Coin
+                    <input
+                      type="range" min={10} max={150} step={5}
+                      value={fitCorner}
+                      disabled={!hasRef}
+                      onChange={e => setBezierFitParams(p => ({ ...p, [activeZoneId]: { tolerance: fitTol, cornerDeg: parseFloat(e.target.value) } }))}
+                      style={{ width: 90 }}
+                    />
+                    <span style={{ minWidth: 28 }}>{fitCorner}°</span>
+                  </label>
+                  {fitDirty && (
+                    <button
+                      className="btn-primary btn-sm"
+                      onClick={() => validateBezierAutoFit(activeZoneId)}
+                      title="Appliquer le fit auto"
+                    >Valider</button>
+                  )}
+                  {fitDirty && (
+                    <button
+                      className="btn-ghost btn-sm"
+                      onClick={() => setBezierFitParams(p => { const n = { ...p }; delete n[activeZoneId]; return n })}
+                      title="Annuler le preview"
+                    >✕</button>
+                  )}
+                  {!nodes && (
+                    <button
+                      className="btn-ghost btn-sm"
+                      onClick={() => refreshBezierCannyRef(activeZoneId)}
+                      title="Re-snapshoter la référence Canny depuis le contour actuel"
+                    >Snapshot</button>
+                  )}
+                  {!nodes && !hasRef && (
+                    <span style={{ color: '#f59e0b', fontSize: '0.8rem' }}>(pas de référence — Snapshot)</span>
+                  )}
+                </span>
+                {nodes && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}
+                  title="Resampling uniforme arc-length à N anchors. Plus simple que l'auto-fit mais ne respecte pas les coins ni la courbure locale.">
+                  <span style={{ color: activeZone.color, fontWeight: 'bold' }}>📐 Uniforme :</span>
+                  <input
+                    type="range" min={4} max={128} step={1}
+                    value={uniformValue}
+                    disabled={!hasRef}
+                    onChange={e => setBezierPreviewCount(p => ({ ...p, [activeZoneId]: parseInt(e.target.value) }))}
+                    style={{ width: 120 }}
+                  />
+                  <span style={{ minWidth: 28, textAlign: 'center' }}>
+                    {uniformDirty ? `${preview} (→${current})` : current}
+                  </span>
+                  {uniformDirty && (
+                    <button className="btn-primary btn-sm" onClick={() => validateBezierResample(activeZoneId)}>Valider</button>
+                  )}
+                  {uniformDirty && (
+                    <button className="btn-ghost btn-sm" onClick={() => setBezierPreviewCount(p => { const n = { ...p }; delete n[activeZoneId]; return n })}>✕</button>
+                  )}
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => refreshBezierCannyRef(activeZoneId)}
+                    title="Re-snapshoter la référence Canny"
+                  >Snapshot</button>
+                  {!hasRef && (
+                    <span style={{ color: '#f59e0b', fontSize: '0.8rem' }}>(pas de référence Canny — cliquer Snapshot)</span>
+                  )}
+                </span>
+                )}
+              </>
             )
           })()}
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}

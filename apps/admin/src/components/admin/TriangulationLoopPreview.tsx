@@ -11,6 +11,10 @@ import * as PIXI from 'pixi.js'
 import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
+import {
+  buildPropLayer, updatePropLayer, buildAnchorIndexMap,
+  getAnchorsByZone, getAnchorsByZoneFromCurrent,
+} from '../../utils/propRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
@@ -175,6 +179,16 @@ export default function TriangulationLoopPreview({
       if (effectiveMode === 'textured') app.stage.addChild(setup.container)
       setupRef.current = setup
 
+      // Props (accessoires) — texture extraite de l'image projet.
+      const propAnchorIndexMap = buildAnchorIndexMap(tri)
+      let propLayer: ReturnType<typeof buildPropLayer> | null = null
+      if (project.props.length > 0 && effectiveMode === 'textured') {
+        propLayer = buildPropLayer(
+          project.props, img, imgW, imgH, tri, scale, offsetX, offsetY,
+        )
+        setup.container.addChild(propLayer.container)
+      }
+
       const overlay = new PIXI.Graphics()
       app.stage.addChild(overlay)
 
@@ -236,6 +250,19 @@ export default function TriangulationLoopPreview({
           hfl.pixiMesh.visible = vis[baseZoneId] !== false
           const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
+        }
+
+        // Props : repositionnement frame-à-frame
+        if (propLayer) {
+          const bodyPos = bodyPb ? bodyPb.pb.getPositions() : null
+          const zonePos: Record<string, Point2D[]> = {}
+          for (const p of playbacks) {
+            if (p.region !== 'body') zonePos[p.region] = p.pb.getPositions()
+          }
+          const anchorsByZone = getAnchorsByZoneFromCurrent(
+            bodyPos, zonePos, propAnchorIndexMap, getAnchorsByZone(tri),
+          )
+          updatePropLayer(propLayer, anchorsByZone, scale, offsetX, offsetY)
         }
 
         // Overlay : triangulation + bones
