@@ -7,7 +7,7 @@ import {
 } from 'firebase/storage'
 import { db, storage } from './firebase'
 import { logAudit } from './audit'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation, Prop, PropAttachment } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -279,12 +279,6 @@ interface ProjectTriangulationDoc {
   contourSmoothSigma: number
   bridgeThreshold: number
   step1Validated: boolean
-  // Seeds Canny par zone (clic admin) + overrides per-zone — pour reprise édition
-  zoneSeeds?: Record<string, Point2D[]>
-  zoneSmoothSigmas?: Record<string, number>
-  zoneInflates?: Record<string, number>
-  zoneBeziers?: Record<string, import('../types/project').BezierNode[]>
-  zoneCannyRefs?: Record<string, Point2D[]>
   // Step 2 — nouvelles sous-phases curvilignes (V3)
   zoneOrigins?: Record<string, Point2D>
   zoneOriginsValidated?: Record<string, boolean>
@@ -339,7 +333,6 @@ interface ProjectDoc {
   projectTriangulation?: ProjectTriangulationDoc | null
   projectEyes?: Project['projectEyes']
   projectMouth?: Project['projectMouth']
-  props?: PropDoc[]
   published?: boolean
   publishedAt?: number | null
   bookId?: string | null
@@ -568,58 +561,6 @@ function limbSeparationFromDoc(doc: Record<string, unknown> | null | undefined):
   return result
 }
 
-// --- Prop (accessoires) serialization ---
-//
-// Firestore n'accepte pas les arrays imbriqués → `contourParts` (Point2D[][])
-// est encodé comme `[{ points: Point2D[] }, ...]`.
-
-interface PropPartDoc { points: { x: number; y: number }[] }
-
-interface PropDoc {
-  id: string
-  name: string
-  parts: PropPartDoc[]
-  attachment: PropAttachment   // structure plate, JSON-serializable telle quelle
-  offsetX: number
-  offsetY: number
-  scale: number
-  zOrder: number
-  createdAt: number
-  source?: 'manual' | 'triangulation'
-  triangulationZoneId?: string
-}
-
-function propToDoc(p: Prop): PropDoc {
-  return {
-    id: p.id,
-    name: p.name,
-    parts: p.contourParts.map(part => ({ points: part.map(pt => ({ x: pt.x, y: pt.y })) })),
-    attachment: p.attachment,
-    offsetX: p.offset.x,
-    offsetY: p.offset.y,
-    scale: p.scale,
-    zOrder: p.zOrder,
-    createdAt: p.createdAt,
-    ...(p.source != null && { source: p.source }),
-    ...(p.triangulationZoneId != null && { triangulationZoneId: p.triangulationZoneId }),
-  }
-}
-
-function propFromDoc(d: PropDoc): Prop {
-  return {
-    id: d.id,
-    name: d.name,
-    contourParts: (d.parts ?? []).map(part => (part.points ?? []).map(pt => ({ x: pt.x, y: pt.y }))),
-    attachment: d.attachment ?? { mode: 'fixed' },
-    offset: { x: d.offsetX ?? 0, y: d.offsetY ?? 0 },
-    scale: d.scale ?? 1,
-    zOrder: d.zOrder ?? 1,
-    createdAt: d.createdAt ?? Date.now(),
-    source: d.source ?? 'manual',
-    triangulationZoneId: d.triangulationZoneId,
-  }
-}
-
 // --- Project Triangulation serialization ---
 
 function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulationDoc {
@@ -638,11 +579,6 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     contourSmoothSigma: tri.contourSmoothSigma ?? 3,
     bridgeThreshold: tri.bridgeThreshold ?? 8,
     step1Validated: tri.step1Validated ?? false,
-    ...(tri.zoneSeeds != null && { zoneSeeds: tri.zoneSeeds }),
-    ...(tri.zoneSmoothSigmas != null && { zoneSmoothSigmas: tri.zoneSmoothSigmas }),
-    ...(tri.zoneInflates != null && { zoneInflates: tri.zoneInflates }),
-    ...(tri.zoneBeziers != null && { zoneBeziers: tri.zoneBeziers }),
-    ...(tri.zoneCannyRefs != null && { zoneCannyRefs: tri.zoneCannyRefs }),
     // Curvilinear V3 fields
     ...(tri.zoneOrigins != null && { zoneOrigins: tri.zoneOrigins }),
     ...(tri.zoneOriginsValidated != null && { zoneOriginsValidated: tri.zoneOriginsValidated }),
@@ -698,11 +634,6 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     contourSmoothSigma: doc.contourSmoothSigma ?? 3,
     bridgeThreshold: doc.bridgeThreshold ?? 8,
     step1Validated: doc.step1Validated ?? false,
-    zoneSeeds: doc.zoneSeeds,
-    zoneSmoothSigmas: doc.zoneSmoothSigmas,
-    zoneInflates: doc.zoneInflates,
-    zoneBeziers: doc.zoneBeziers,
-    zoneCannyRefs: doc.zoneCannyRefs,
     zoneOrigins: doc.zoneOrigins,
     zoneOriginsValidated: doc.zoneOriginsValidated,
     zoneAnchors: doc.zoneAnchors,
@@ -951,7 +882,6 @@ function toDoc(project: Project): ProjectDoc {
     ...(project.projectTriangulation != null && { projectTriangulation: projectTriangulationToDoc(project.projectTriangulation) }),
     ...(project.projectEyes != null && { projectEyes: project.projectEyes }),
     ...(project.projectMouth != null && { projectMouth: project.projectMouth }),
-    ...(project.props.length > 0 && { props: project.props.map(propToDoc) }),
     published: project.published === true,
     publishedAt: project.publishedAt ?? null,
     bookId: project.bookId ?? null,
@@ -1431,7 +1361,6 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     projectTriangulation,
     projectEyes: projDoc.projectEyes ?? null,
     projectMouth: projDoc.projectMouth ?? null,
-    props: (projDoc.props ?? []).map(propFromDoc),
     published: projDoc.published === true,
     publishedAt: projDoc.publishedAt ?? null,
     bookId: projDoc.bookId ?? null,
@@ -1492,7 +1421,6 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
-    props: [],
     published: false,
     publishedAt: null,
     bookId: null,
@@ -1549,7 +1477,6 @@ export async function createProject(name: string): Promise<Project> {
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
-    props: [],
     published: false,
     publishedAt: null,
     bookId: null,
@@ -1606,7 +1533,6 @@ export async function getAllProjects(): Promise<Project[]> {
         projectTriangulation: null,
         projectEyes: null,
         projectMouth: null,
-        props: [],
         published: false,
         publishedAt: null,
         bookId: null,
@@ -1648,7 +1574,6 @@ export async function getAllProjects(): Promise<Project[]> {
       projectTriangulation: null,
       projectEyes: projDoc.projectEyes ?? null,
       projectMouth: projDoc.projectMouth ?? null,
-      props: (projDoc.props ?? []).map(propFromDoc),
       published: projDoc.published === true,
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
@@ -2121,7 +2046,6 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
       projectTriangulation: null,
       projectEyes: projDoc.projectEyes ?? null,
       projectMouth: projDoc.projectMouth ?? null,
-      props: (projDoc.props ?? []).map(propFromDoc),
       published: projDoc.published === true,
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
@@ -2321,7 +2245,6 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
     projectTriangulation,
     projectEyes: projDoc.projectEyes ?? null,
     projectMouth: projDoc.projectMouth ?? null,
-    props: (projDoc.props ?? []).map(propFromDoc),
     published: projDoc.published === true,
     publishedAt: projDoc.publishedAt ?? null,
     bookId: projDoc.bookId ?? null,

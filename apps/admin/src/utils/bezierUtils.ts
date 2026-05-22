@@ -115,64 +115,6 @@ export function splitCubicBezier(
   }
 }
 
-// ─── Polygon → BezierNode[] (Catmull-Rom seeding) ─────────────────────
-
-/**
- * Convertit un polygone fermé en `BezierNode[]` lissé.
- *
- * 1. Ré-échantillonne le polygone à `targetAnchors` points équidistants en
- *    arc-length.
- * 2. Pour chaque anchor i, calcule les handles tangents par formule
- *    Catmull-Rom-uniform → cubic Bezier :
- *      handleOut[i] = anchor[i] + (anchor[i+1] - anchor[i-1]) / 6
- *      handleIn[i]  = anchor[i] - (anchor[i+1] - anchor[i-1]) / 6
- *    (handles symétriques → courbe C1 continue, `smooth = true`).
- *
- * Utile pour transformer un contour Canny en courbe Bézier éditable.
- */
-export function polygonToBezierNodes(polygon: Point2D[], targetAnchors = 16): BezierNode[] {
-  if (polygon.length < 3) return []
-  // 1. arc-length cumulés
-  const n = polygon.length
-  const arc: number[] = [0]
-  let total = 0
-  for (let i = 0; i < n; i++) {
-    const a = polygon[i], b = polygon[(i + 1) % n]
-    total += Math.hypot(b.x - a.x, b.y - a.y)
-    arc.push(total)
-  }
-  if (total === 0) return []
-
-  // 2. resample à targetAnchors points équidistants
-  const anchors: Point2D[] = []
-  for (let i = 0; i < targetAnchors; i++) {
-    const t = (i / targetAnchors) * total
-    let j = 0
-    while (j < n && arc[j + 1] < t) j++
-    const segT = (t - arc[j]) / Math.max(1e-9, arc[j + 1] - arc[j])
-    const a = polygon[j % n], b = polygon[(j + 1) % n]
-    anchors.push({ x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT })
-  }
-
-  // 3. handles Catmull-Rom
-  const N = anchors.length
-  const out: BezierNode[] = []
-  for (let i = 0; i < N; i++) {
-    const prev = anchors[(i - 1 + N) % N]
-    const next = anchors[(i + 1) % N]
-    const a = anchors[i]
-    const dx = (next.x - prev.x) / 6
-    const dy = (next.y - prev.y) / 6
-    out.push({
-      anchor: { x: a.x, y: a.y },
-      handleIn:  { x: a.x - dx, y: a.y - dy },
-      handleOut: { x: a.x + dx, y: a.y + dy },
-      smooth: true,
-    })
-  }
-  return out
-}
-
 // ─── Polygon expansion (offset outward) ───────────────────────────────
 
 /**

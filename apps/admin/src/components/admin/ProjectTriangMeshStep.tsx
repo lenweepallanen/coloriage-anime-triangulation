@@ -40,12 +40,9 @@ interface Props {
 export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const tri = project.projectTriangulation
 
-  // ─── Zone list (always include 'body', EXCLUDE accessories) ──────
-  // Les zones marquées `isAccessory` sont gérées comme sprites rigides via
-  // `Project.props` — elles n'ont pas de maillage, ni d'anchors/subdivision,
-  // ni d'animation. Elles restent dans `tri.zones` pour la soustraction body.
+  // ─── Zone list (always include 'body') ────────────────────────────
   const allZones = useMemo<SAM2Zone[]>(() => {
-    const zones = (tri?.zones ?? []).filter(z => !z.isAccessory)
+    const zones = tri?.zones ?? []
     if (!zones.find(z => z.id === 'body')) {
       return [...zones, { id: 'body', label: 'Corps', color: '#888888' }]
     }
@@ -444,18 +441,11 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       let triResult = triangulateZone(cPts, allInternal, cPts)
 
       if (z.id === 'body') {
-        // Filter auto triangles touching leg zones OR accessory zones.
-        // Pour les pattes : contour reconstruit depuis le mesh (zoneStage >= 4).
-        // Pour les accessoires : contour lissé direct depuis `tri.contours`.
+        // Filter auto triangles touching leg zones (manual triangles are admin-defined and never filtered)
         const legContours = allZones
           .filter(lz => lz.id !== 'body' && zoneStage(lz.id) >= 4)
           .map(lz => buildClosedContour(lz.id))
           .filter((c): c is Point2D[] => !!c && c.length >= 3)
-        const accessoryContours = (tri?.zones ?? [])
-          .filter(zn => zn.isAccessory)
-          .map(zn => tri?.contours?.[zn.id])
-          .filter((c): c is Point2D[] => !!c && c.length >= 3)
-        legContours.push(...accessoryContours)
         const filteredTris = legContours.length > 0
           ? triResult.triangles.filter(([a, b, c]) => {
               const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
