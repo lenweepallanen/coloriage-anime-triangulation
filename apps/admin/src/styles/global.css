@@ -3194,32 +3194,68 @@ code {
   z-index: 110;
 }
 
-.scene-player-random-anim-btn,
-.scene-player-speak-btn {
-  padding: 14px 20px;
-  font-size: 1em;
-  border-radius: 16px;
+.scene-player-action-btn {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.85);
   color: #333;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 1.4em;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(8px);
-  min-width: 120px;
-  text-align: center;
-  transition: background var(--transition), transform var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background var(--transition), transform var(--transition), opacity 200ms ease;
 }
 
-.scene-player-random-anim-btn:hover,
-.scene-player-speak-btn:hover {
+.scene-player-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.scene-player-action-btn:not(:disabled):hover {
   background: rgba(255, 255, 255, 1);
   transform: translateY(-1px);
 }
 
-.scene-player-random-anim-btn:active,
-.scene-player-speak-btn:active {
+.scene-player-action-btn:not(:disabled):active {
   transform: scale(0.95);
+}
+
+.action-btn-label {
+  position: relative;
+  z-index: 1;
+  line-height: 1;
+  user-select: none;
+}
+
+.action-btn-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.action-btn-ring-track {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.08);
+  stroke-width: 4;
+}
+
+.action-btn-ring-progress {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-width: 6;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 80ms linear;
 }
 
 /* RIGHT side — next arrow (vertically centered) */
@@ -3258,25 +3294,35 @@ code {
   position: absolute;
   right: 24px;
   bottom: 24px;
-  width: 48px;
-  height: 48px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.5);
-  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
   color: white;
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
   cursor: pointer;
   z-index: 110;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   backdrop-filter: blur(8px);
-  transition: background var(--transition);
+  transition: background var(--transition), opacity 200ms ease;
 }
 
-.scene-player-help-btn:hover {
-  background: rgba(0, 0, 0, 0.6);
+.scene-player-help-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.scene-player-help-btn:not(:disabled):hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.scene-player-help-btn .action-btn-ring-track {
+  stroke: rgba(255, 255, 255, 0.15);
 }
 
 /* Help speech bubble */

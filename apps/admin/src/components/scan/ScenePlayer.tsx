@@ -121,6 +121,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [sceneState, setSceneState] = useState<SceneState>('interaction')
   const [showHelpBubble, setShowHelpBubble] = useState(false)
   const [currentHelpText, setCurrentHelpText] = useState('')
+  // Bouton actif (animation/son en cours). Tous les autres boutons sont désactivés.
+  const [activeBtn, setActiveBtn] = useState<string | null>(null)
+  const [btnProgress, setBtnProgress] = useState(0)
+  const btnRafRef = useRef<number | null>(null)
+  const startBtnTimer = useCallback((id: string, durationMs: number) => {
+    if (btnRafRef.current) cancelAnimationFrame(btnRafRef.current)
+    if (durationMs <= 0) { setActiveBtn(null); setBtnProgress(0); return }
+    setActiveBtn(id)
+    setBtnProgress(0)
+    const start = performance.now()
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - start) / durationMs)
+      setBtnProgress(t)
+      if (t >= 1) { setActiveBtn(null); btnRafRef.current = null; return }
+      btnRafRef.current = requestAnimationFrame(tick)
+    }
+    btnRafRef.current = requestAnimationFrame(tick)
+  }, [])
+  useEffect(() => () => { if (btnRafRef.current) cancelAnimationFrame(btnRafRef.current) }, [])
   const speakAudioRef = useRef<HTMLAudioElement | null>(null)
   // Active overlapping audio instances for attached scene animation sounds.
   const animSoundAudiosRef = useRef<HTMLAudioElement[]>([])
@@ -1308,18 +1327,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
   }, [onClose])
 
-  const handleRandomAnimation = useCallback(async () => {
+  const handleActionByIndex = useCallback(async (actionIndex: number) => {
     const rp = scene.restPoint
     const actions = rp?.actions ?? []
-    const playable = actions.filter(a =>
-      a.steps.length > 0 &&
-      a.steps.every(s => {
-        const anim = project.animations.find(x => x.id === s.animationId)
-        return anim != null && animationHasFrames(anim)
-      })
-    )
-    if (playable.length === 0) return
-    const action = playable[Math.floor(Math.random() * playable.length)]
+    const action = actions[actionIndex]
+    if (!action || action.steps.length === 0) return
+    const playable = action.steps.every(s => {
+      const anim = project.animations.find(x => x.id === s.animationId)
+      return anim != null && animationHasFrames(anim)
+    })
+    if (!playable) return
 
     // Couper l'audio d'action précédent (sons HTML cumulés + lip-sync mouth)
     for (const a of animSoundAudiosRef.current) {
@@ -1378,7 +1395,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const mp = sp?.getMultiPlayback?.()
     if (mp) mp.requestSequence(animIds)
     else sp?.triggerZoneOneshot?.(animIds[0])
-  }, [scene, project.animations, project.projectMouth])
+
+    // Durée totale = somme des frames des steps / 24 fps
+    const totalFrames = action.steps.reduce((acc, s) => {
+      const anim = project.animations.find(x => x.id === s.animationId)
+      const n = anim?.mesh?.videoFramesMesh?.length
+        ?? anim?.mesh?.walkBodyFrames?.length
+        ?? 0
+      return acc + n
+    }, 0)
+    startBtnTimer(`action-${actionIndex}`, (totalFrames / 24) * 1000)
+  }, [scene, project.animations, project.projectMouth, startBtnTimer])
 
   const handleSpeak = useCallback(async () => {
     const rp = scene.restPoint
@@ -1400,10 +1427,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             mouthOpennessRef.current = 0
             mouthAudioRef.current?.cleanup()
             mouthAudioRef.current = null
+            setActiveBtn(null)
           },
         })
         mouthAudioRef.current = player
         await player.play()
+        const dur = (player as unknown as { duration?: number }).duration
+        startBtnTimer('speak', (typeof dur === 'number' && dur > 0 ? dur : 2) * 1000)
       } catch (err) {
         console.error('[ScenePlayer] speak audio failed', err)
       }
@@ -1418,8 +1448,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const audio = new Audio(url)
     speakAudioRef.current = audio
     audio.play().catch(() => {})
-    audio.onended = () => { URL.revokeObjectURL(url); speakAudioRef.current = null }
-  }, [scene, project.projectMouth])
+    audio.onloadedmetadata = () => {
+      const dur = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 2
+      startBtnTimer('speak', dur * 1000)
+    }
+    audio.onended = () => { URL.revokeObjectURL(url); speakAudioRef.current = null; setActiveBtn(null) }
+  }, [scene, project.projectMouth, startBtnTimer])
 
   const handleHelp = useCallback(() => {
     const rp = scene.restPoint
@@ -1427,7 +1461,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     if (texts.length === 0) return
     setCurrentHelpText(texts[Math.floor(Math.random() * texts.length)])
     setShowHelpBubble(true)
-  }, [scene.restPoint])
+    startBtnTimer('help', 4000)
+  }, [scene.restPoint, startBtnTimer])
 
   // Cleanup speak audio on unmount
   useEffect(() => () => {
@@ -1446,15 +1481,39 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   }, [])
 
   const currentRp = scene.restPoint
-  const actionAnimIds = (currentRp?.actions ?? []).flatMap(a => a.steps.map(s => s.animationId))
-  const hasRandomAnims = actionAnimIds.some(id => {
-    const a = project.animations.find(a => a.id === id)
-    return a != null && (a.mesh?.videoFramesMesh != null || (a.mesh?.walkZoneFrames != null && a.mesh?.walkBodyFrames != null))
+  const rpActions = currentRp?.actions ?? []
+  const actionButtons = Array.from({ length: 3 }, (_, i) => {
+    const a = rpActions[i]
+    const enabled = !!a && a.steps.length > 0 && a.steps.every(s => {
+      const anim = project.animations.find(x => x.id === s.animationId)
+      return anim != null && (anim.mesh?.videoFramesMesh != null || (anim.mesh?.walkZoneFrames != null && anim.mesh?.walkBodyFrames != null))
+    })
+    return { index: i, label: a?.name ?? `Action ${i + 1}`, enabled }
   })
   const hasSpeakSounds = (currentRp?.speakSoundIds ?? []).length > 0
   const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0
 
   const isInteraction = sceneState === 'interaction'
+  const buttonsVisible = sceneState !== 'entering'
+  const anyActive = activeBtn != null
+  const RING_R = 46
+  const RING_C = 2 * Math.PI * RING_R
+  function Ring({ progress, active }: { progress: number; active: boolean }) {
+    return (
+      <svg className="action-btn-ring" viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="50" cy="50" r={RING_R} className="action-btn-ring-track" />
+        {active && (
+          <circle
+            cx="50" cy="50" r={RING_R}
+            className="action-btn-ring-progress"
+            strokeDasharray={RING_C}
+            strokeDashoffset={RING_C * (1 - progress)}
+            transform="rotate(-90 50 50)"
+          />
+        )}
+      </svg>
+    )
+  }
 
   return (
     <div className="animation-player scene-player" ref={playerRef}>
@@ -1466,25 +1525,55 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         <LongPressCloseButton onComplete={handleExitFullscreen} />
       )}
 
-      {/* LEFT side buttons */}
-      {isInteraction && (hasRandomAnims || hasSpeakSounds) && (
-        <div className="scene-player-left-buttons">
-          {hasRandomAnims && (
-            <button className="scene-player-random-anim-btn" onClick={handleRandomAnimation}>
-              Animation
+      {/* LEFT side buttons — toujours montés, fade pendant l'entrée */}
+      <div
+        className="scene-player-left-buttons"
+        style={{
+          opacity: buttonsVisible ? 1 : 0,
+          pointerEvents: isInteraction && !anyActive ? 'auto' : 'none',
+          transition: 'opacity 400ms ease',
+        }}
+      >
+        {actionButtons.map(b => {
+          const id = `action-${b.index}`
+          const isActive = activeBtn === id
+          return (
+            <button
+              key={b.index}
+              className="scene-player-action-btn"
+              onClick={() => handleActionByIndex(b.index)}
+              disabled={!b.enabled || anyActive}
+              aria-label={b.label}
+            >
+              <Ring progress={isActive ? btnProgress : 0} active={isActive} />
+              <span className="action-btn-label">{b.index + 1}</span>
             </button>
-          )}
-          {hasSpeakSounds && (
-            <button className="scene-player-speak-btn" onClick={handleSpeak}>
-              Parler
-            </button>
-          )}
-        </div>
-      )}
+          )
+        })}
+        {hasSpeakSounds && (
+          <button
+            className="scene-player-action-btn scene-player-action-btn--speak"
+            onClick={handleSpeak}
+            disabled={anyActive}
+            aria-label="Parler"
+          >
+            <Ring progress={activeBtn === 'speak' ? btnProgress : 0} active={activeBtn === 'speak'} />
+            <span className="action-btn-label">💬</span>
+          </button>
+        )}
+      </div>
 
       {/* RIGHT side - help button */}
       {hasHelpTexts && (
-        <button className="scene-player-help-btn" onClick={handleHelp}>?</button>
+        <button
+          className="scene-player-help-btn"
+          onClick={handleHelp}
+          disabled={anyActive}
+          style={{ opacity: buttonsVisible ? 1 : 0, transition: 'opacity 400ms ease' }}
+        >
+          <Ring progress={activeBtn === 'help' ? btnProgress : 0} active={activeBtn === 'help'} />
+          <span className="action-btn-label">?</span>
+        </button>
       )}
 
       {/* Help speech bubble */}

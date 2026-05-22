@@ -27,30 +27,19 @@ export default function SceneConfigPanel({
   onSceneSoundDeleted,
 }: Props) {
   const readyAnimations = animations.filter(a => animationHasFrames(a))
-  const actions = rp.actions ?? []
+  const existing = rp.actions ?? []
+  const actions: SceneAction[] = Array.from({ length: 3 }, (_, i) => existing[i] ?? {
+    id: crypto.randomUUID(),
+    name: `Action ${i + 1}`,
+    steps: [],
+  })
 
   const updateActions = (next: SceneAction[]) => {
-    onRestPointChange({ ...rp, actions: next.length > 0 ? next : undefined })
-  }
-
-  const handleAddAction = () => {
-    const newAction: SceneAction = {
-      id: crypto.randomUUID(),
-      name: `Action ${actions.length + 1}`,
-      steps: [],
-    }
-    updateActions([...actions, newAction])
+    onRestPointChange({ ...rp, actions: next })
   }
 
   const handleUpdateAction = (idx: number, partial: Partial<SceneAction>) => {
     updateActions(actions.map((a, i) => i === idx ? { ...a, ...partial } : a))
-  }
-
-  const handleDeleteAction = (idx: number) => {
-    const a = actions[idx]
-    if (a?.sound) onSceneSoundDeleted(a.sound.id)
-    for (const s of a?.steps ?? []) if (s.sound) onSceneSoundDeleted(s.sound.id)
-    updateActions(actions.filter((_, i) => i !== idx))
   }
 
   return (
@@ -77,7 +66,7 @@ export default function SceneConfigPanel({
       </div>
 
       <div className="scene-config-panel-field">
-        <label>Actions (bouton ☆)</label>
+        <label>Actions (3 boutons)</label>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {actions.map((action, idx) => (
             <ActionCard
@@ -85,17 +74,10 @@ export default function SceneConfigPanel({
               action={action}
               readyAnimations={readyAnimations}
               onChange={(partial) => handleUpdateAction(idx, partial)}
-              onDelete={() => handleDeleteAction(idx)}
               onSceneSoundImported={onSceneSoundImported}
               onSceneSoundDeleted={onSceneSoundDeleted}
             />
           ))}
-          <button className="btn-sm btn-secondary" onClick={handleAddAction}>
-            + Nouvelle action
-          </button>
-          {actions.length === 0 && (
-            <span className="scene-config-panel-empty">Aucune action — clique sur "+ Nouvelle action" pour ajouter une séquence d'animations déclenchée par le bouton ☆.</span>
-          )}
         </div>
       </div>
 
@@ -133,11 +115,10 @@ export default function SceneConfigPanel({
 
 // --- Action card (séquence ordonnée + son unique) ---
 
-function ActionCard({ action, readyAnimations, onChange, onDelete, onSceneSoundImported, onSceneSoundDeleted }: {
+function ActionCard({ action, readyAnimations, onChange, onSceneSoundImported, onSceneSoundDeleted }: {
   action: SceneAction
   readyAnimations: Animation[]
   onChange: (partial: Partial<SceneAction>) => void
-  onDelete: () => void
   onSceneSoundImported: (soundId: string) => void
   onSceneSoundDeleted: (soundId: string) => void
 }) {
@@ -213,7 +194,6 @@ function ActionCard({ action, readyAnimations, onChange, onDelete, onSceneSoundI
           placeholder="Nom de l'action"
           style={{ flex: 1 }}
         />
-        <button className="btn-icon btn-sm btn-danger" onClick={onDelete} title="Supprimer l'action">&times;</button>
       </div>
 
       {/* Steps */}
