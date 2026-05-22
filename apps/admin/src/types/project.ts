@@ -428,6 +428,24 @@ export interface ProjectTriangulation {
   // 'canny' = Canny + findContours on the reference image (coloring book trace).
   segmentationMode?: 'sam2' | 'canny'
   cannyParams?: CannyParams | null   // only used when segmentationMode === 'canny'
+  /** Seeds (clics admin) par zone membre, en coords image. Permet de
+   *  reprendre l'édition d'une zone après reload : ajouter / retirer un
+   *  seed et relancer le calcul Canny.
+   *  Le body n'a pas de seeds (silhouette auto-détectée). */
+  zoneSeeds?: Record<string, Point2D[]>
+  /** Override sigma (lissage gaussien) par zone (sinon prend `contourSmoothSigma`). */
+  zoneSmoothSigmas?: Record<string, number>
+  /** Override inflate (dilatation Canny) par zone (sinon prend le slider global). */
+  zoneInflates?: Record<string, number>
+  /** Représentation Bézier éditable par zone. Si présent pour une zone, c'est
+   *  cette courbe qui fait foi — le contour Canny est remplacé par la
+   *  Bézier aplatie (`flattenClosedBezier`). Permet l'ajustement manuel. */
+  zoneBeziers?: Record<string, BezierNode[]>
+  /** Contour Canny lissé snapshoté au moment de la conversion en Bézier.
+   *  Sert de **référence** pour le re-fit à N anchors via le slider — on
+   *  resample TOUJOURS depuis ce contour, jamais depuis la Bézier courante,
+   *  afin de retrouver au maximum la forme Canny d'origine. */
+  zoneCannyRefs?: Record<string, Point2D[]>
 
   // Étape 2 : Maillage par zone — placement curviligne (V3) + Delaunay interne
   // Phase 1 : P0 par zone (coords image, snap courbure)

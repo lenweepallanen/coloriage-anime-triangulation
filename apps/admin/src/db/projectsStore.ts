@@ -279,6 +279,12 @@ interface ProjectTriangulationDoc {
   contourSmoothSigma: number
   bridgeThreshold: number
   step1Validated: boolean
+  // Seeds Canny par zone (clic admin) + overrides per-zone — pour reprise édition
+  zoneSeeds?: Record<string, Point2D[]>
+  zoneSmoothSigmas?: Record<string, number>
+  zoneInflates?: Record<string, number>
+  zoneBeziers?: Record<string, import('../types/project').BezierNode[]>
+  zoneCannyRefs?: Record<string, Point2D[]>
   // Step 2 — nouvelles sous-phases curvilignes (V3)
   zoneOrigins?: Record<string, Point2D>
   zoneOriginsValidated?: Record<string, boolean>
@@ -579,6 +585,11 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     contourSmoothSigma: tri.contourSmoothSigma ?? 3,
     bridgeThreshold: tri.bridgeThreshold ?? 8,
     step1Validated: tri.step1Validated ?? false,
+    ...(tri.zoneSeeds != null && { zoneSeeds: tri.zoneSeeds }),
+    ...(tri.zoneSmoothSigmas != null && { zoneSmoothSigmas: tri.zoneSmoothSigmas }),
+    ...(tri.zoneInflates != null && { zoneInflates: tri.zoneInflates }),
+    ...(tri.zoneBeziers != null && { zoneBeziers: tri.zoneBeziers }),
+    ...(tri.zoneCannyRefs != null && { zoneCannyRefs: tri.zoneCannyRefs }),
     // Curvilinear V3 fields
     ...(tri.zoneOrigins != null && { zoneOrigins: tri.zoneOrigins }),
     ...(tri.zoneOriginsValidated != null && { zoneOriginsValidated: tri.zoneOriginsValidated }),
@@ -634,6 +645,11 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     contourSmoothSigma: doc.contourSmoothSigma ?? 3,
     bridgeThreshold: doc.bridgeThreshold ?? 8,
     step1Validated: doc.step1Validated ?? false,
+    zoneSeeds: doc.zoneSeeds,
+    zoneSmoothSigmas: doc.zoneSmoothSigmas,
+    zoneInflates: doc.zoneInflates,
+    zoneBeziers: doc.zoneBeziers,
+    zoneCannyRefs: doc.zoneCannyRefs,
     zoneOrigins: doc.zoneOrigins,
     zoneOriginsValidated: doc.zoneOriginsValidated,
     zoneAnchors: doc.zoneAnchors,
@@ -1421,7 +1437,6 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
-    published: false,
     publishedAt: null,
     bookId: null,
     bookOrder: data.createdAt,
@@ -1478,7 +1493,6 @@ export async function createProject(name: string): Promise<Project> {
     projectEyes: null,
     projectMouth: null,
     published: false,
-    publishedAt: null,
     bookId: null,
     bookOrder: Date.now(),
     thumbnailBlob: null,
@@ -1535,7 +1549,6 @@ export async function getAllProjects(): Promise<Project[]> {
         projectMouth: null,
         published: false,
         publishedAt: null,
-        bookId: null,
         bookOrder: legacy.createdAt,
         thumbnailBlob: null,
       }
@@ -1577,7 +1590,6 @@ export async function getAllProjects(): Promise<Project[]> {
       published: projDoc.published === true,
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
-      bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
       thumbnailBlob: null,
     }
   })
@@ -2050,7 +2062,6 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
       bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
-      thumbnailBlob: null,
     }
   })
   return list.sort((a, b) => (a.bookOrder ?? 0) - (b.bookOrder ?? 0))
