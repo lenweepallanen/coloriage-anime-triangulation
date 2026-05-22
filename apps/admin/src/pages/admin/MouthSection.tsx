@@ -9,7 +9,7 @@ import {
   type Project,
 } from '../../types/project'
 import { findContainingAnchorTriangle, interpolateInternalPoint } from '../../utils/barycentricUtils'
-import { flattenClosedBezier } from '../../utils/bezierUtils'
+import { flattenClosedBezier, nearestOnCubicBezier } from '../../utils/bezierUtils'
 import { getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import MouthPixiPreview from '../../components/admin/MouthPixiPreview'
@@ -352,9 +352,34 @@ export default function MouthSection() {
       if (hit) { dragRef.current = hit; return }
       const newNode: BezierNode = {
         anchor: { ...p },
-        handleIn: { x: p.x - 20, y: p.y },
-        handleOut: { x: p.x + 20, y: p.y },
+        handleIn: { ...p },
+        handleOut: { ...p },
         smooth: false,
+      }
+      const s = transformRef.current.scale
+      const maxDist = 10 / s
+      let bestSeg = -1
+      let bestDist = Infinity
+      let bestPoint: Point2D = p
+      for (let i = 0; i < draft.nodes.length; i++) {
+        const curr = draft.nodes[i]
+        const next = draft.nodes[(i + 1) % draft.nodes.length]
+        const r = nearestOnCubicBezier(curr.anchor, curr.handleOut, next.handleIn, next.anchor, p)
+        if (r.dist < bestDist) { bestDist = r.dist; bestSeg = i; bestPoint = r.point }
+      }
+      if (draft.nodes.length >= 2 && bestSeg >= 0 && bestDist <= maxDist) {
+        const insertAt = bestSeg + 1
+        const inserted: BezierNode = {
+          anchor: { ...bestPoint },
+          handleIn: { ...bestPoint },
+          handleOut: { ...bestPoint },
+          smooth: false,
+        }
+        setDraft(d => ({
+          ...d,
+          nodes: [...d.nodes.slice(0, insertAt), inserted, ...d.nodes.slice(insertAt)],
+        }))
+        return
       }
       setDraft(d => ({ ...d, nodes: [...d.nodes, newNode] }))
       return
@@ -417,7 +442,7 @@ export default function MouthSection() {
             handleOut: { x: n.anchor.x + tx, y: n.anchor.y + ty },
           }
         }
-        return { ...n, smooth: false }
+        return { ...n, smooth: false, handleIn: { ...n.anchor }, handleOut: { ...n.anchor } }
       }),
     }))
   }

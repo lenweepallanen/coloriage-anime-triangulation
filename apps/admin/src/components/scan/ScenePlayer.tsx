@@ -13,9 +13,9 @@ import { buildTriangleZoneMap, detectTouchedZone } from '../../utils/bodyZoneUti
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
-import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
+import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan, imageToScanPixel } from '../../utils/hiddenFaceTexture'
 import { EyeBlinkOverlay, getEyeBodyMeshData, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
-import { MouthOverlay, computeMouthPolygonFrame0, filterTrianglesOutsideMouth } from '../../utils/mouthOverlay'
+import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
 import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
@@ -362,13 +362,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       hfTexture = PIXI.Texture.from(hfCanvasForOutline)
     }
 
-    // Outlines : tracées en overlay PIXI dans le ticker, pas bakées.
-    const texture = PIXI.Texture.from(scanCanvas)
-    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
-
-    // --- Mouth hole polygon (frame 0, image coords) ---
-    // Calculé une fois, sert à trouer le mesh legacy ET les zone/body meshes
-    // pour que l'overlay mâchoire révèle le fond de scène en transparence.
+    // --- Mouth polygon (frame 0, image coords) ---
     let mouthHolePolygon: Point2D[] | null = null
     {
       const mAttachId = project.projectMouth?.attachZoneId ?? 'body'
@@ -380,9 +374,52 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
     }
 
-    const legacyTriangles = mouthHolePolygon
-      ? filterTrianglesOutsideMouth(allPoints, mesh.triangles, mouthHolePolygon)
-      : mesh.triangles
+    // Approche 2 textures : tête-sans-mâchoire (alpha effacée dans le polygone)
+    // + mâchoire-seule (alpha gardée seulement dans le polygone). Plus de trou
+    // dans la géométrie : les bords s'alignent au pixel près par construction.
+    let bodyTexCanvas: HTMLCanvasElement = scanCanvas
+    let jawTexCanvas: HTMLCanvasElement | null = null
+    if (mouthHolePolygon && mouthHolePolygon.length >= 3) {
+      const scanW = scanCanvas.width
+      const scanH = scanCanvas.height
+      const scanPoly = mouthHolePolygon.map(p =>
+        imageToScanPixel(p, scanW, scanH, scanW, scanH, contentAlignment ?? undefined)
+      )
+      const tracePath = (ctx: CanvasRenderingContext2D) => {
+        ctx.beginPath()
+        ctx.moveTo(scanPoly[0].x, scanPoly[0].y)
+        for (let i = 1; i < scanPoly.length; i++) ctx.lineTo(scanPoly[i].x, scanPoly[i].y)
+        ctx.closePath()
+      }
+      // Tête : copie + efface l'intérieur du polygone
+      const headCanvas = document.createElement('canvas')
+      headCanvas.width = scanW
+      headCanvas.height = scanH
+      const hctx = headCanvas.getContext('2d')!
+      hctx.drawImage(scanCanvas, 0, 0)
+      hctx.globalCompositeOperation = 'destination-out'
+      tracePath(hctx)
+      hctx.fill()
+      hctx.globalCompositeOperation = 'source-over'
+      bodyTexCanvas = headCanvas
+      // Mâchoire : copie + garde uniquement l'intérieur du polygone
+      const jawCanvas = document.createElement('canvas')
+      jawCanvas.width = scanW
+      jawCanvas.height = scanH
+      const jctx = jawCanvas.getContext('2d')!
+      jctx.drawImage(scanCanvas, 0, 0)
+      jctx.globalCompositeOperation = 'destination-in'
+      tracePath(jctx)
+      jctx.fill()
+      jctx.globalCompositeOperation = 'source-over'
+      jawTexCanvas = jawCanvas
+    }
+
+    // Outlines : tracées en overlay PIXI dans le ticker, pas bakées.
+    const texture = PIXI.Texture.from(bodyTexCanvas)
+    const uvs = computeUVs(allPoints, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
+
+    const legacyTriangles = mesh.triangles
     const indices = new Uint16Array(legacyTriangles.length * 3)
     legacyTriangles.forEach((tri, i) => {
       indices[i * 3] = tri[0]
@@ -421,7 +458,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           characterContainer,
           mouthAttach.points,
           mouthAttach.triangles,
-          texture,
+          jawTexCanvas ? PIXI.Texture.from(jawTexCanvas) : texture,
           scanCanvas.width,
           scanCanvas.height,
           contentAlignment ?? undefined,
@@ -484,9 +521,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         sep, allPoints, mesh.triangles, texture,
         scanCanvas.width, scanCanvas.height, charScale, 0, 0,
         contentAlignment ?? undefined, hfTexture, hflTextures,
-        mouthHolePolygon
-          ? { polygon: mouthHolePolygon, zoneId: project.projectMouth?.attachZoneId ?? 'body' }
-          : null,
       )
       setup.container.visible = false
       characterContainer.addChild(setup.container)
