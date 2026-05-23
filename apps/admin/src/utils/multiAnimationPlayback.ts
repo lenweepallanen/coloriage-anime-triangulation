@@ -276,6 +276,37 @@ export class MultiAnimationPlayback {
     return this.oneshotNames.get(this.activeOneshotId) ?? null
   }
 
+  /**
+   * Pour un consommateur externe (ex: openness mâchoire) qui doit lire une
+   * valeur par-frame indexée sur l'animation actuellement en lecture.
+   * Renvoie l'id de l'animation active (rest si null) et son frame courant.
+   * Pendant une transition, on retourne l'animation cible (trans-out → oneshot,
+   * trans-in → rest) pour éviter les sauts de mâchoire au début/fin d'oneshot.
+   */
+  getActiveFrameRef(): { animId: string | null; frame: number; overlayAnimId: string | null; overlayFrame: number } {
+    let animId: string | null = null
+    let frame = 0
+    switch (this._state) {
+      case 'rest':
+      case 'wait':
+      case 'trans-in':
+        animId = null
+        frame = this.restPlayback.currentFrame
+        break
+      case 'trans-out':
+      case 'oneshot':
+        animId = this.activeOneshotId
+        frame = Math.max(0, Math.floor(this.oneshotCursor))
+        break
+    }
+    return {
+      animId,
+      frame,
+      overlayAnimId: this.activeOverlayId,
+      overlayFrame: Math.max(0, Math.floor(this.overlayCursor)),
+    }
+  }
+
   set speed(v: number) {
     this._speed = v
     this.restPlayback.speed = v

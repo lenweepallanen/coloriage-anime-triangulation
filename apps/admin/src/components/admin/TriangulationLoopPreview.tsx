@@ -13,6 +13,10 @@ import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
+import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
+import { interpolateInternalPoint } from '../../utils/barycentricUtils'
+import { MouthOverlay, computeMouthPolygonFrame0, computeMouthPolygonDeformed } from '../../utils/mouthOverlay'
+import { getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 
 interface Props {
   project: Project
@@ -139,8 +143,44 @@ export default function TriangulationLoopPreview({
       const texCanvas = document.createElement('canvas')
       texCanvas.width = imgW; texCanvas.height = imgH
       texCanvas.getContext('2d')!.drawImage(img, 0, 0)
-      // Outlines : tracées en overlay PIXI dans le ticker, pas bakées.
-      const texture = PIXI.Texture.from(texCanvas)
+
+      // ── Bouche : 2 textures séparées (tête sans bouche + bouche seule) ──
+      // Évite la superposition mâchoire fixe / mâchoire animée par MouthOverlay.
+      let mouthPolyImage: Point2D[] | null = null
+      const mouth = project.projectMouth
+      if (mouth) {
+        const mAttach = getMouthAttachMesh(project, mouth.attachZoneId)
+        if (mAttach && mAttach.triangles.length > 0) {
+          mouthPolyImage = computeMouthPolygonFrame0(mouth, mAttach.points, mAttach.triangles)
+        }
+      }
+      let bodyTexCanvas: HTMLCanvasElement = texCanvas
+      let jawTexture: PIXI.Texture | null = null
+      if (mouthPolyImage && mouthPolyImage.length >= 3) {
+        const tracePath = (ctx: CanvasRenderingContext2D) => {
+          ctx.beginPath()
+          ctx.moveTo(mouthPolyImage![0].x, mouthPolyImage![0].y)
+          for (let i = 1; i < mouthPolyImage!.length; i++) ctx.lineTo(mouthPolyImage![i].x, mouthPolyImage![i].y)
+          ctx.closePath()
+        }
+        const headCanvas = document.createElement('canvas')
+        headCanvas.width = imgW; headCanvas.height = imgH
+        const hctx = headCanvas.getContext('2d')!
+        hctx.drawImage(img, 0, 0)
+        hctx.globalCompositeOperation = 'destination-out'
+        tracePath(hctx); hctx.fill()
+        hctx.globalCompositeOperation = 'source-over'
+        bodyTexCanvas = headCanvas
+        const jawCanvas = document.createElement('canvas')
+        jawCanvas.width = imgW; jawCanvas.height = imgH
+        const jctx = jawCanvas.getContext('2d')!
+        jctx.drawImage(img, 0, 0)
+        jctx.globalCompositeOperation = 'destination-in'
+        tracePath(jctx); jctx.fill()
+        jctx.globalCompositeOperation = 'source-over'
+        jawTexture = PIXI.Texture.from(jawCanvas)
+      }
+      const texture = PIXI.Texture.from(bodyTexCanvas)
 
       const rect = container.getBoundingClientRect()
       const viewW = Math.max(rect.width, 100)
@@ -191,6 +231,30 @@ export default function TriangulationLoopPreview({
         }
       }
 
+      // Graphics pour le stroke du contour bouche (suit la rotation jaw).
+      const mouthOutlineGfx = new PIXI.Graphics()
+      mouthOutlineGfx.zIndex = 9999  // au-dessus du MouthOverlay (zIndex 9998)
+      setup.container.addChild(mouthOutlineGfx)
+
+      // MouthOverlay : zone bouche Bézier rotatée par cotrackerJawOpennessFrames.
+      // Utilise jawTexture (bouche seule) — la tête utilise bodyTexCanvas (sans bouche).
+      let mouthOverlay: MouthOverlay | null = null
+      if (mouth && effectiveMode === 'textured' && jawTexture) {
+        const attachZoneId = mouth.attachZoneId ?? 'body'
+        const attachPts0 = attachZoneId === 'body'
+          ? tri.bodyPoints
+          : (tri.zonePoints?.[attachZoneId] ?? null)
+        const attachTris0 = attachZoneId === 'body'
+          ? tri.bodyTriangles
+          : (tri.zoneTriangles?.[attachZoneId] ?? null)
+        if (attachPts0 && attachTris0 && attachPts0.length > 0) {
+          mouthOverlay = new MouthOverlay(
+            mouth, setup.container, attachPts0, attachTris0,
+            jawTexture, imgW, imgH, null,
+          )
+        }
+      }
+
       // Bone frames (cotracker), in VIDEO coords — converted to image coords for drawing.
       const skeleton = mesh?.cotrackerSkeleton ?? null
       const bodyJointFrames = preferSmoothed
@@ -236,6 +300,45 @@ export default function TriangulationLoopPreview({
           hfl.pixiMesh.visible = vis[baseZoneId] !== false
           const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
+        }
+
+        // MouthOverlay : rotation pilotée par cotrackerJawOpennessFrames
+        mouthOutlineGfx.clear()
+        if (mouthOverlay) {
+          const attachZoneId = project.projectMouth?.attachZoneId ?? 'body'
+          let bodyPositions: Point2D[] | null = null
+          let attachTris: [number, number, number][] | null = null
+          if (attachZoneId === 'body' && bodyPb) {
+            bodyPositions = bodyPb.pb.getPositions()
+            attachTris = tri?.bodyTriangles ?? null
+          } else {
+            const zp = playbacks.find(p => p.region === attachZoneId)
+            if (zp) {
+              bodyPositions = zp.pb.getPositions()
+              attachTris = tri?.zoneTriangles?.[attachZoneId] ?? null
+            }
+          }
+          const jawFrames = mesh?.cotrackerJawOpennessFrames
+          const fr = bodyPb?.pb.currentFrame ?? 0
+          const openness = jawFrames && jawFrames.length > 0
+            ? (jawFrames[Math.min(fr, jawFrames.length - 1)] ?? 0)
+            : 0
+          mouthOverlay.update(bodyPositions, scale, offsetX, offsetY, openness)
+          // Stroke noir autour du polygone bouche déformé + rotaté
+          const mouthDef = project.projectMouth
+          if (mouthDef && bodyPositions && attachTris) {
+            const poly = computeMouthPolygonDeformed(mouthDef, bodyPositions, attachTris, openness)
+            if (poly.length >= 3) {
+              mouthOutlineGfx.lineStyle(2, 0x000000, 1)
+              const s0 = { x: poly[0].x * scale + offsetX, y: poly[0].y * scale + offsetY }
+              mouthOutlineGfx.moveTo(s0.x, s0.y)
+              for (let i = 1; i < poly.length; i++) {
+                const si = { x: poly[i].x * scale + offsetX, y: poly[i].y * scale + offsetY }
+                mouthOutlineGfx.lineTo(si.x, si.y)
+              }
+              mouthOutlineGfx.lineTo(s0.x, s0.y)
+            }
+          }
         }
 
         // Overlay : triangulation + bones
@@ -297,6 +400,44 @@ export default function TriangulationLoopPreview({
             }
             overlay.endFill()
           }
+          // Jaw bone (rose) : pivot bouche résolu sur le mesh DÉFORMÉ (par frame),
+          // tail = barycentre cotracker en vidéo coords.
+          if (skeleton.jaw && skeleton.jaw.tailRef.pointIds.length > 0 && project.projectMouth) {
+            const hingeRef = project.projectMouth.hingeBodyAnchor ?? project.projectMouth.hingeAnchor
+            const attachZoneId = project.projectMouth.attachZoneId ?? 'body'
+            // Mesh déformé courant : body ou zone
+            let deformedPts: Point2D[] | null = null
+            let deformedTris: [number, number, number][] | null = null
+            if (attachZoneId === 'body') {
+              if (bodyPb) {
+                deformedPts = bodyPb.pb.getPositions()
+                deformedTris = tri?.bodyTriangles ?? null
+              }
+            } else {
+              const zp = playbacks.find(p => p.region === attachZoneId)
+              if (zp) {
+                deformedPts = zp.pb.getPositions()
+                deformedTris = tri?.zoneTriangles?.[attachZoneId] ?? null
+              }
+            }
+            if (hingeRef && deformedPts && deformedTris) {
+              const pivotImg = interpolateInternalPoint(hingeRef, deformedPts, deformedTris)
+              const pivotScreen = { x: pivotImg.x * scale + offsetX, y: pivotImg.y * scale + offsetY }
+              const cotrackerFrames = mesh?.cotrackerFrames
+              const tailVid = cotrackerFrames ? resolveEndpointFrame(skeleton.jaw.tailRef, cotrackerFrames, f) : null
+              if (tailVid) {
+                const tailScreen = toScreen(tailVid.x, tailVid.y)
+                overlay.lineStyle(3, 0xff66cc, 0.95)
+                overlay.moveTo(pivotScreen.x, pivotScreen.y).lineTo(tailScreen.x, tailScreen.y)
+                overlay.lineStyle(0)
+                overlay.beginFill(0xff66cc)
+                overlay.drawCircle(pivotScreen.x, pivotScreen.y, 5)
+                overlay.drawCircle(tailScreen.x, tailScreen.y, 5)
+                overlay.endFill()
+              }
+            }
+          }
+
           // Legs
           if (legBoneFrames) {
             overlay.lineStyle(3, 0xfb923c, 0.95)
@@ -336,10 +477,14 @@ export default function TriangulationLoopPreview({
           for (const p of playbacks) {
             if (p.region !== 'body') limbPositions[p.region] = p.pb.getPositions()
           }
+          const mouthHole = mouthPolyImage && mouthPolyImage.length >= 3 && project.projectMouth
+            ? { polygon: mouthPolyImage, zoneId: project.projectMouth.attachZoneId ?? 'body' }
+            : null
           const polylines = computeZoneOutlinePolylines(
             tri,
             { body: bodyPositions, limbs: limbPositions },
             (pt) => ({ x: pt.x * scale + offsetX, y: pt.y * scale + offsetY }),
+            mouthHole,
           )
           drawZoneOutlinesPixi(outlineGraphics, polylines, (zoneId) => vis[zoneId] !== false)
         }

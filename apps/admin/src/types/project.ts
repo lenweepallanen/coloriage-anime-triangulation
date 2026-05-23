@@ -244,6 +244,9 @@ export interface MeshData {
   // Étape "LBS" : paramètres du solver de skinning
   cotrackerLBSParams?: CoTrackerLBSParams;
   cotrackerLBSValidated?: boolean;
+  // Jaw bone : openness ∈ [0,1] par frame, pilote la rotation de projectMouth.
+  // null si l'animation n'a pas de jaw bone.
+  cotrackerJawOpennessFrames?: number[] | null;
 
   // ─── Marche (animation type 'marche') ──────────────────────────────────
   // Étape 1 : héritage depuis une animation parente cotracker-bones (snapshot)
@@ -563,9 +566,26 @@ export interface CoTrackerLegBone {
   kneeMode?: ElbowMode;  // défaut 'rest'
 }
 
+/** Bone "machoire" optionnel : pilote l'angle d'ouverture de la zone bouche Bézier
+ *  (project.projectMouth) à partir d'UN point cotracker tracké à la pointe de la
+ *  mâchoire. Pas de LBS — produit un openness ∈ [0,1] par frame combiné avec la
+ *  parole via max(openness_parole, openness_jaw). */
+export interface CoTrackerJawBone {
+  id: string;
+  name: string;
+  /** Barycentre N-aire de cotracker points qui définit la pointe de la mâchoire. */
+  tailRef: CoTrackerEndpointRef;
+  /** Vecteur unitaire pivot→tail au repos (frame 0, image coords). Sert de
+   *  référence "bouche fermée" pour le calcul de l'angle relatif. */
+  restDirImage: Point2D;
+  /** Override optionnel du maxOpenAngleDeg de projectMouth. */
+  maxOpenAngleDegOverride?: number | null;
+}
+
 export interface CoTrackerSkeleton {
   bodyChain: CoTrackerBodyJoint[];
   legs: CoTrackerLegBone[];
+  jaw?: CoTrackerJawBone | null;
 }
 
 export type CoTrackerLBSMode = 'lbs-arap' | 'lbs-contour-arap';

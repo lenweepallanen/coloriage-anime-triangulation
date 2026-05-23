@@ -55,6 +55,35 @@ function rotatePoint(p: Point2D, pivot: Point2D, angleRad: number): Point2D {
   return { x: pivot.x + dx * c - dy * s, y: pivot.y + dx * s + dy * c }
 }
 
+/** Polygone bouche à la frame courante : ancres résolues sur les positions
+ *  déformées + rotation rigide autour de la charnière. En coords image. */
+export function computeMouthPolygonDeformed(
+  mouth: MouthDefinition,
+  bodyPositions: Point2D[],
+  attachTriangles: [number, number, number][],
+  openness: number,
+): Point2D[] {
+  const refs = mouth.contourBodyAnchors ?? mouth.contourAnchors
+  const resolved = refs.map(r => interpolateInternalPoint(r, bodyPositions, attachTriangles))
+  const nodes = mouth.bezierNodes.map((n, i) => {
+    const a = resolved[i]
+    const dx = a.x - n.anchor.x
+    const dy = a.y - n.anchor.y
+    return {
+      anchor: a,
+      handleIn: { x: n.handleIn.x + dx, y: n.handleIn.y + dy },
+      handleOut: { x: n.handleOut.x + dx, y: n.handleOut.y + dy },
+      smooth: n.smooth,
+    }
+  })
+  const flat = flattenClosedBezier(nodes, SAMPLES_PER_SEGMENT)
+  const hingeRef = mouth.hingeBodyAnchor ?? mouth.hingeAnchor
+  const hinge = interpolateInternalPoint(hingeRef, bodyPositions, attachTriangles)
+  const angle = (openness * mouth.maxOpenAngleDeg * mouth.rotationSign * Math.PI) / 180
+  if (Math.abs(angle) < 1e-4) return flat
+  return flat.map(p => rotatePoint(p, hinge, angle))
+}
+
 /**
  * Mâchoire basse animée — rendue au-dessus du body mesh.
  *

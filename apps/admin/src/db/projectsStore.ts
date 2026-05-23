@@ -109,6 +109,7 @@ interface MeshDoc {
   cotrackerBoneSmoothingValidated?: boolean
   cotrackerLBSParams?: import('../types/project').CoTrackerLBSParams
   cotrackerLBSValidated?: boolean
+  cotrackerJawOpennessFrames?: number[] | null
   // Marche
   marcheParentAnimationId?: string | null
   marcheSkeleton?: import('../types/project').CoTrackerSkeleton | null
@@ -800,6 +801,7 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     ...(mesh.cotrackerBoneSmoothingValidated != null && { cotrackerBoneSmoothingValidated: mesh.cotrackerBoneSmoothingValidated }),
     ...(mesh.cotrackerLBSParams != null && { cotrackerLBSParams: mesh.cotrackerLBSParams }),
     ...(mesh.cotrackerLBSValidated != null && { cotrackerLBSValidated: mesh.cotrackerLBSValidated }),
+    ...(mesh.cotrackerJawOpennessFrames != null && { cotrackerJawOpennessFrames: mesh.cotrackerJawOpennessFrames }),
     // Marche (animation type 'marche')
     ...(mesh.marcheParentAnimationId != null && { marcheParentAnimationId: mesh.marcheParentAnimationId }),
     ...(mesh.marcheSkeleton != null && { marcheSkeleton: mesh.marcheSkeleton }),
@@ -1044,6 +1046,7 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     cotrackerBoneSmoothingValidated: d.cotrackerBoneSmoothingValidated,
     cotrackerLBSParams: d.cotrackerLBSParams,
     cotrackerLBSValidated: d.cotrackerLBSValidated,
+    cotrackerJawOpennessFrames: d.cotrackerJawOpennessFrames ?? null,
     // Marche
     marcheParentAnimationId: d.marcheParentAnimationId,
     marcheSkeleton: d.marcheSkeleton,

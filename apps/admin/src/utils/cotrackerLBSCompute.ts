@@ -13,6 +13,7 @@
 import type {
   Project, Animation, Point2D, CoTrackerLBSParams,
 } from '../types/project'
+import { computeJawOpennessFrames } from './cotrackerJawCompute'
 import {
   resolveCoTrackerBodyChain,
   computeCoTrackerLegRestPose,
@@ -211,6 +212,7 @@ export interface LBSComputeResult {
   walkZoneFrames: Record<string, Point2D[][]>
   cotrackerBodyJointFrames: Point2D[][]
   cotrackerLegBoneFrames: Record<string, { chain: Point2D[][] }>
+  cotrackerJawOpennessFrames: number[] | null
 }
 
 /** Override bone frames already resolved in image coords (no cotrackerFrames needed). */
@@ -492,5 +494,47 @@ export async function runCoTrackerLBSCompute(
     }
   }
 
-  return { walkBodyFrames, walkZoneFrames, cotrackerBodyJointFrames, cotrackerLegBoneFrames }
+  // ── Jaw bone openness (rotation de la zone bouche Bézier) ─────────
+  let cotrackerJawOpennessFrames: number[] | null = null
+  const jaw = skeleton.jaw
+  const mouth = project.projectMouth
+  if (jaw && mouth && !override && ctFrames) {
+    const hingeRef = mouth.hingeBodyAnchor ?? mouth.hingeAnchor
+    const attachZoneId = mouth.attachZoneId ?? 'body'
+    // Mesh déformé par frame (coords image) pour la zone d'attache de la bouche.
+    const attachDeformedFrames: Point2D[][] =
+      attachZoneId === 'body' ? walkBodyFrames : (walkZoneFrames[attachZoneId] ?? [])
+    const attachTriangles: [number, number, number][] =
+      attachZoneId === 'body'
+        ? tri.bodyTriangles
+        : (tri.zoneTriangles[attachZoneId] ?? [])
+    if (hingeRef && attachDeformedFrames.length > 0 && attachTriangles.length > 0) {
+      // Dimensions image : utilise originalImageBlob si disponible (cohérent avec
+      // MouthSection / MouthPixiPreview), sinon maskWidth.
+      let jawImgW = imgW
+      let jawImgH = imgH
+      if (project.originalImageBlob) {
+        try {
+          const bmp = await createImageBitmap(project.originalImageBlob)
+          jawImgW = bmp.width
+          jawImgH = bmp.height
+          bmp.close?.()
+        } catch { /* fallback to maskWidth */ }
+      }
+      cotrackerJawOpennessFrames = computeJawOpennessFrames({
+        jaw,
+        cotrackerFrames: ctFrames,
+        videoSize: { width: vidW, height: vidH },
+        imageSize: { width: jawImgW, height: jawImgH },
+        attachDeformedFrames,
+        attachTriangles,
+        hingeAnchor: hingeRef,
+        scalingMaxDeg: mouth.maxOpenAngleDeg,
+        capMaxDeg: jaw.maxOpenAngleDegOverride ?? undefined,
+        rotationSign: mouth.rotationSign,
+      })
+    }
+  }
+
+  return { walkBodyFrames, walkZoneFrames, cotrackerBodyJointFrames, cotrackerLegBoneFrames, cotrackerJawOpennessFrames }
 }

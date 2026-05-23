@@ -264,6 +264,10 @@ Refonte majeure : V3 supprime la duplication de topologie entre `projectTriangul
 - Body et pattes partagent la même topologie que les hidden faces → alignement naturel au rendu.
 - V2 reste disponible en parallèle pour projets legacy ; pas de migration automatique.
 
+### Bone "machoire" (cotracker-bones)
+
+Une animation `cotracker-bones` peut optionnellement définir un **bone machoire unique** (`CoTrackerJawBone` dans `cotrackerSkeleton.jaw`) qui pilote l'angle d'ouverture de la zone bouche Bézier (`project.projectMouth`) à partir d'**un seul point cotracker** placé à la pointe de la mâchoire. Pas de LBS — le bone produit un `cotrackerJawOpennessFrames[]` (openness ∈ [0,1] par frame) calculé à partir de l'écart angulaire entre la direction de référence `restDirImage` (capturée à frame 0) et la direction `pivot→tail` courante, normalisé par `maxOpenAngleDeg` puis clampé. Le pivot réutilise `projectMouth.hingeAnchor` (barycentrique sur `bodyPoints`). Au playback, l'`openness` final = `max(openness_parole_RMS, openness_jaw)`, ce qui permet de cumuler parole et animations type rugissement/cri/atchoum. Calculé dans `runCoTrackerLBSCompute` (étape LBS) via `utils/cotrackerJawCompute.ts`. Le pipeline marche strip le champ `jaw` du snapshot hérité (pas de point cotracker pour le piloter).
+
 ### Pipeline marche (3 étapes — squelette hérité d'une animation CoTracker + gait procédural)
 
 Animation procédurale qui **hérite la topologie** de `projectTriangulation` (comme V3) **et le squelette** (`CoTrackerSkeleton`) d'une animation parente `cotracker-bones` validée. Pas de vidéo propre, pas de tracking : les positions du squelette sont calculées frame par frame via les sliders `WalkParams`. Sortie : `walkBodyFrames` + `walkZoneFrames` consommés par `zoneMeshRenderer` exactement comme V3.

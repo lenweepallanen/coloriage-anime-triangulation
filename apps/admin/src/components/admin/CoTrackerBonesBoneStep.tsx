@@ -19,6 +19,8 @@ import type {
 import type { UploadHint } from '../../db/projectsStore'
 import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
 import { solveElbowIK, getElbowParams } from '../../utils/boneSolver'
+import { interpolateInternalPoint } from '../../utils/barycentricUtils'
+import { getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 
 interface Props {
   project: Project
@@ -34,12 +36,17 @@ const LEGACY_ZONE_LABELS: Record<string, string> = {
 type PickTarget =
   | { kind: 'body-joint'; index: number }
   | { kind: 'leg-joint'; zoneId: string; jointIndex: number } // 0 = hip, last = foot
+  | { kind: 'jaw-tail' }
 
 type Mode =
   | { kind: 'idle' }
   | { kind: 'place-chain' }
   | { kind: 'place-leg-chain'; zoneId: string }
   | { kind: 'assign-bary' }
+  | { kind: 'place-jaw-tail' }
+
+const JAW_TAIL_COLOR = '#ff66cc'
+const JAW_BONE_COLOR = '#ff66cc'
 
 const JOINT_HIT_R = 12       // video px
 const TRACKER_HIT_R = 14
@@ -77,7 +84,40 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [videoDims, setVideoDims] = useState<{ w: number; h: number; duration: number } | null>(null)
   const [frame, setFrame] = useState(0)
+  const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null)
   const fps = 24
+
+  // Charge les dimensions de l'image originale (mêmes coords que bodyPoints).
+  useEffect(() => {
+    if (!project.originalImageBlob) return
+    const url = URL.createObjectURL(project.originalImageBlob)
+    const img = new Image()
+    img.onload = () => {
+      setImageDims({ w: img.naturalWidth, h: img.naturalHeight })
+      URL.revokeObjectURL(url)
+    }
+    img.src = url
+    return () => URL.revokeObjectURL(url)
+  }, [project.originalImageBlob])
+
+  // Pivot bouche en coords vidéo. Utilise la MÊME résolution que MouthSection
+  // via `getMouthAttachMesh(project, attachZoneId)` — supporte attachZoneId !== 'body'.
+  // Les bodyPoints/zonePoints sont en coords IMAGE ORIGINALE (naturalWidth/Height).
+  const jawPivotVideo = useMemo<Point2D | null>(() => {
+    const mouth = project.projectMouth
+    if (!mouth) return null
+    const attachMesh = getMouthAttachMesh(project, mouth.attachZoneId)
+    if (!attachMesh) return null
+    const ref = mouth.hingeBodyAnchor ?? mouth.hingeAnchor
+    if (!ref) return null
+    const pivotImg = interpolateInternalPoint(ref, attachMesh.points, attachMesh.triangles)
+    if (!videoDims) return null
+    // Priorité : dimensions image originale > maskWidth > videoDims (no-op).
+    const tri = project.projectTriangulation
+    const imgW = imageDims?.w || tri?.maskWidth || videoDims.w
+    const imgH = imageDims?.h || tri?.maskHeight || videoDims.h
+    return { x: pivotImg.x * (videoDims.w / imgW), y: pivotImg.y * (videoDims.h / imgH) }
+  }, [project, videoDims, imageDims])
 
   useEffect(() => {
     if (!animation.videoBlob) return
@@ -203,6 +243,34 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
         if (isPicked) { ctx.strokeStyle = '#fde047'; ctx.lineWidth = 2; ctx.stroke() }
       })
 
+      // Jaw bone (pivot mouth → tail barycentre cotracker)
+      if (skeleton.jaw && jawPivotVideo) {
+        const jaw = skeleton.jaw
+        const tailV = jaw.tailRef.pointIds.length > 0
+          ? resolveEndpointFrame(jaw.tailRef, cotrackerFrames, frame)
+          : null
+        const isPicked = pick?.kind === 'jaw-tail'
+        if (tailV) {
+          ctx.strokeStyle = JAW_BONE_COLOR
+          ctx.lineWidth = 3
+          ctx.beginPath()
+          ctx.moveTo(jawPivotVideo.x, jawPivotVideo.y)
+          ctx.lineTo(tailV.x, tailV.y)
+          ctx.stroke()
+          ctx.fillStyle = JAW_BONE_COLOR
+          ctx.beginPath(); ctx.arc(jawPivotVideo.x, jawPivotVideo.y, 5, 0, Math.PI * 2); ctx.fill()
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1
+          ctx.beginPath(); ctx.arc(jawPivotVideo.x, jawPivotVideo.y, 5, 0, Math.PI * 2); ctx.stroke()
+          ctx.fillStyle = JAW_TAIL_COLOR
+          ctx.beginPath(); ctx.arc(tailV.x, tailV.y, isPicked ? 8 : 6, 0, Math.PI * 2); ctx.fill()
+          ctx.strokeStyle = isPicked ? '#fde047' : '#fff'; ctx.lineWidth = isPicked ? 2 : 1
+          ctx.beginPath(); ctx.arc(tailV.x, tailV.y, isPicked ? 8 : 6, 0, Math.PI * 2); ctx.stroke()
+        } else {
+          ctx.fillStyle = JAW_BONE_COLOR + '88'
+          ctx.beginPath(); ctx.arc(jawPivotVideo.x, jawPivotVideo.y, 5, 0, Math.PI * 2); ctx.fill()
+        }
+      }
+
       // Legs
       for (const leg of skeleton.legs) {
         const refs = legChainRefs(leg)
@@ -234,7 +302,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     const tick = () => { render(); raf = requestAnimationFrame(tick) }
     tick()
     return () => cancelAnimationFrame(raf)
-  }, [points, skeleton, cotrackerFrames, frame, videoDims, pick, drafts])
+  }, [points, skeleton, cotrackerFrames, frame, videoDims, pick, drafts, jawPivotVideo])
 
   // ── Canvas click handler ──
   function canvasToVideo(e: React.MouseEvent<HTMLCanvasElement>): Point2D {
@@ -419,6 +487,29 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     if (!cotrackerFrames) return
     const p = canvasToVideo(e)
 
+    if (mode.kind === 'place-jaw-tail') {
+      const nearestIds = nearestTrackerIds(p)
+      if (nearestIds.length === 0) {
+        setError('Aucun point cotracker proche : cliquez sur un point existant.')
+        return
+      }
+      setError(null)
+      const newRef = makeEndpointRef(nearestIds)
+      setSkeleton(sk => ({
+        ...sk,
+        jaw: {
+          id: sk.jaw?.id ?? crypto.randomUUID(),
+          name: sk.jaw?.name ?? 'Machoire',
+          tailRef: newRef,
+          restDirImage: sk.jaw?.restDirImage ?? { x: 1, y: 0 },
+          maxOpenAngleDegOverride: sk.jaw?.maxOpenAngleDegOverride ?? null,
+        },
+      }))
+      setPick({ kind: 'jaw-tail' })
+      setMode({ kind: 'idle' })
+      return
+    }
+
     if (mode.kind === 'place-chain') {
       const nearestIds = nearestTrackerIds(p)
       const id = crypto.randomUUID()
@@ -503,6 +594,13 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
 
     // idle : hit-test joints to select
     let best: { d2: number; target: PickTarget } | null = null
+    if (skeleton.jaw && skeleton.jaw.tailRef.pointIds.length > 0) {
+      const tail = resolveEndpointFrame(skeleton.jaw.tailRef, cotrackerFrames, frame)
+      if (tail) {
+        const d2 = (tail.x - p.x) ** 2 + (tail.y - p.y) ** 2
+        if (d2 < JOINT_HIT_R * JOINT_HIT_R) best = { d2, target: { kind: 'jaw-tail' } }
+      }
+    }
     skeleton.bodyChain.forEach((j, i) => {
       const pos = endpointPos(j.ref, jointKey(j))
       if (!pos) return
@@ -541,6 +639,11 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
         const newChain = sk.bodyChain.slice()
         newChain[pick.index] = { ...j, ref: makeEndpointRef(newIds) }
         return { ...sk, bodyChain: newChain }
+      }
+      if (pick.kind === 'jaw-tail') {
+        if (!sk.jaw) return sk
+        const newIds = toggleId(sk.jaw.tailRef.pointIds, pointId)
+        return { ...sk, jaw: { ...sk.jaw, tailRef: makeEndpointRef(newIds) } }
       }
       const legIdx = sk.legs.findIndex(l => l.zoneId === pick.zoneId)
       if (legIdx < 0) return sk
@@ -669,17 +772,47 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
         }
       }
     }
+    // ── Jaw bone : si défini, recompute restDirImage depuis tailRef ──
+    let finalSkeleton: CoTrackerSkeleton = skeleton
+    if (skeleton.jaw) {
+      if (skeleton.jaw.tailRef.pointIds.length === 0) {
+        setError('Mâchoire : tail sans barycentre (cliquer sur un cotracker via "Définir tail")'); return
+      }
+      if (!jawPivotVideo || !project.projectMouth || !project.projectTriangulation || !cotrackerFrames) {
+        setError('Mâchoire : pivot bouche ou tracking introuvable'); return
+      }
+      const tailVid = resolveEndpointFrame(skeleton.jaw.tailRef, cotrackerFrames, 0)
+      if (!tailVid) { setError('Mâchoire : impossible de résoudre la position tail à frame 0'); return }
+      const tri = project.projectTriangulation
+      const imgW = imageDims?.w || tri.maskWidth || videoDims?.w || 1
+      const imgH = imageDims?.h || tri.maskHeight || videoDims?.h || 1
+      const vidW = videoDims?.w || imgW
+      const vidH = videoDims?.h || imgH
+      const attachMesh = getMouthAttachMesh(project, project.projectMouth.attachZoneId)
+      if (!attachMesh) { setError('Mâchoire : zone d\'attache bouche introuvable'); return }
+      const ref = project.projectMouth.hingeBodyAnchor ?? project.projectMouth.hingeAnchor
+      const pivotImg = interpolateInternalPoint(ref, attachMesh.points, attachMesh.triangles)
+      const tailImg = { x: tailVid.x * (imgW / vidW), y: tailVid.y * (imgH / vidH) }
+      const dx = tailImg.x - pivotImg.x, dy = tailImg.y - pivotImg.y
+      const n = Math.hypot(dx, dy) || 1
+      finalSkeleton = {
+        ...skeleton,
+        jaw: { ...skeleton.jaw, restDirImage: { x: dx / n, y: dy / n } },
+      }
+    }
+
     const updatedAnim: Animation = {
       ...animation,
       mesh: {
         ...(mesh ?? {} as any),
-        cotrackerSkeleton: skeleton,
+        cotrackerSkeleton: finalSkeleton,
         cotrackerBonesValidated: true,
         cotrackerBoneSmoothingValidated: false,
         walkBodyFrames: null,
         walkBodyFramesSmoothed: null,
         walkZoneFrames: null,
         walkZoneFramesSmoothed: null,
+        cotrackerJawOpennessFrames: null,
       },
     }
     await onSave({ ...project, animations: project.animations.map(a => a.id === animation.id ? updatedAnim : a) })
@@ -699,16 +832,19 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
   const pickLabel = pick
     ? pick.kind === 'body-joint'
       ? `Joint "${skeleton.bodyChain[pick.index]?.name ?? '?'}"`
-      : (() => {
-          const leg = skeleton.legs.find(l => l.zoneId === pick.zoneId)
-          return leg ? `${zoneLabelOf(pick.zoneId)} — ${legJointLabel(leg, pick.jointIndex)}` : pick.zoneId
-        })()
+      : pick.kind === 'jaw-tail'
+        ? 'Mâchoire — tail'
+        : (() => {
+            const leg = skeleton.legs.find(l => l.zoneId === pick.zoneId)
+            return leg ? `${zoneLabelOf(pick.zoneId)} — ${legJointLabel(leg, pick.jointIndex)}` : pick.zoneId
+          })()
     : null
 
   const modeBanner = (() => {
     if (mode.kind === 'place-chain') return 'Cliquez successivement sur le canvas pour poser les joints de la body chain (barycentre = tracker le plus proche). Terminez quand vous avez fini.'
     if (mode.kind === 'place-leg-chain') return `Cliquez successivement pour poser hip, joints intermédiaires (genou, …) et foot de ${zoneLabelOf(mode.zoneId)}. Le 1er clic = hip, le dernier avant terminer = foot. Terminez quand vous avez fini.`
     if (mode.kind === 'assign-bary') return `Cliquez les points trackers pour les ajouter/retirer du barycentre — ${pickLabel}`
+    if (mode.kind === 'place-jaw-tail') return 'Cliquez sur le canvas (frame 0) pour placer la pointe de la mâchoire. Drag pour ajuster ensuite.'
     return null
   })()
 
@@ -898,6 +1034,8 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
                   let ref: CoTrackerEndpointRef | undefined
                   if (pick.kind === 'body-joint') {
                     ref = skeleton.bodyChain[pick.index]?.ref
+                  } else if (pick.kind === 'jaw-tail') {
+                    ref = skeleton.jaw?.tailRef
                   } else {
                     const leg = skeleton.legs.find(l => l.zoneId === pick.zoneId)
                     if (leg) ref = legChainRefs(leg)[pick.jointIndex]
@@ -928,6 +1066,17 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
               <p style={{ fontSize: 11, opacity: 0.7 }}>Cliquez un joint ou un endpoint pour le sélectionner.</p>
             )}
           </section>
+          <JawSection
+            project={project}
+            skeleton={skeleton}
+            jawPivotVideo={jawPivotVideo}
+            mode={mode}
+            onStartPlace={() => { setPick(null); setMode({ kind: 'place-jaw-tail' }) }}
+            onCancelPlace={() => setMode({ kind: 'idle' })}
+            onPickJaw={() => setPick({ kind: 'jaw-tail' })}
+            onRemove={() => { setSkeleton(sk => ({ ...sk, jaw: null })); setPick(null); setMode({ kind: 'idle' }) }}
+            onChangeMaxOverride={(v) => setSkeleton(sk => sk.jaw ? { ...sk, jaw: { ...sk.jaw, maxOpenAngleDegOverride: v } } : sk)}
+          />
           <div style={{ marginTop: 12 }}>
             <button className="btn-primary" onClick={handleValidate}>Valider le squelette</button>
             {mesh?.cotrackerBonesValidated && <p style={{ color: '#22c55e', fontSize: 12 }}>✓ Squelette validé</p>}
@@ -943,9 +1092,100 @@ function toggleId(list: string[], id: string): string[] {
   return list.includes(id) ? list.filter(x => x !== id) : [...list, id]
 }
 
+interface JawSectionProps {
+  project: Project
+  skeleton: CoTrackerSkeleton
+  jawPivotVideo: Point2D | null
+  mode: Mode
+  onStartPlace: () => void
+  onCancelPlace: () => void
+  onPickJaw: () => void
+  onRemove: () => void
+  onChangeMaxOverride: (v: number | null) => void
+}
+
+function JawSection({
+  project, skeleton, jawPivotVideo, mode,
+  onStartPlace, onCancelPlace, onPickJaw, onRemove, onChangeMaxOverride,
+}: JawSectionProps) {
+  const mouth = project.projectMouth
+  const jaw = skeleton.jaw ?? null
+  const isPlacing = mode.kind === 'place-jaw-tail'
+
+  if (!mouth) {
+    return (
+      <section style={{ marginTop: 16, padding: 10, border: '1px solid #333', borderRadius: 6 }}>
+        <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Mâchoire (optionnel)</h4>
+        <p style={{ fontSize: 11, opacity: 0.7, margin: 0 }}>
+          Définir d'abord la zone bouche (section Bouche) pour activer cette option.
+        </p>
+      </section>
+    )
+  }
+
+  if (!jawPivotVideo) {
+    return (
+      <section style={{ marginTop: 16, padding: 10, border: '1px solid #333', borderRadius: 6 }}>
+        <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Mâchoire (optionnel)</h4>
+        <p style={{ fontSize: 11, opacity: 0.7, margin: 0 }}>
+          Triangulation projet incomplète : impossible de résoudre le pivot bouche.
+        </p>
+      </section>
+    )
+  }
+
+  const count = jaw?.tailRef.pointIds.length ?? 0
+
+  return (
+    <section style={{ marginTop: 16, padding: 10, border: '1px solid #333', borderRadius: 6 }}>
+      <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Mâchoire (optionnel)</h4>
+      <p style={{ fontSize: 11, opacity: 0.7, margin: '0 0 8px' }}>
+        Cliquez "Définir tail" puis sur un cotracker du canvas (snap auto au plus proche).
+        Le tail peut être un barycentre de plusieurs cotrackers (panneau "Barycentre" ci-dessus
+        après sélection du tail).
+      </p>
+      {!jaw && !isPlacing && (
+        <button className="btn-secondary btn-sm" onClick={onStartPlace}>+ Définir tail</button>
+      )}
+      {isPlacing && (
+        <button className="btn-ghost btn-sm" onClick={onCancelPlace}>Annuler placement</button>
+      )}
+      {jaw && !isPlacing && (
+        <>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button className="btn-secondary btn-sm" onClick={onStartPlace}>Redéfinir tail</button>
+            <button className="btn-ghost btn-sm" onClick={onPickJaw}>Sélectionner tail</button>
+          </div>
+          <p style={{ fontSize: 10, opacity: 0.7, margin: '6px 0' }}>
+            Tail = barycentre de {count} cotracker{count > 1 ? 's' : ''}.
+            {count === 0 && ' — vide, à redéfinir.'}
+          </p>
+          <label style={{ display: 'block', fontSize: 11, marginTop: 6 }}>
+            Angle max (degrés, override) :{' '}
+            <input
+              type="number"
+              value={jaw.maxOpenAngleDegOverride ?? ''}
+              placeholder={`${mouth.maxOpenAngleDeg}`}
+              onChange={(e) => {
+                const v = e.target.value.trim()
+                onChangeMaxOverride(v === '' ? null : Number(v))
+              }}
+              style={{ width: 60, marginLeft: 4 }}
+            />
+          </label>
+          <button className="btn-danger btn-sm" style={{ marginTop: 8 }} onClick={onRemove}>
+            Supprimer mâchoire
+          </button>
+        </>
+      )}
+    </section>
+  )
+}
+
 function isPointInCurrentEndpoint(pointId: string, pick: PickTarget | null, sk: CoTrackerSkeleton): boolean {
   if (!pick) return false
   if (pick.kind === 'body-joint') return sk.bodyChain[pick.index]?.ref.pointIds.includes(pointId) ?? false
+  if (pick.kind === 'jaw-tail') return sk.jaw?.tailRef.pointIds.includes(pointId) ?? false
   const leg = sk.legs.find(l => l.zoneId === pick.zoneId)
   if (!leg) return false
   const refs = [leg.hip, ...(leg.joints ?? []), leg.foot]

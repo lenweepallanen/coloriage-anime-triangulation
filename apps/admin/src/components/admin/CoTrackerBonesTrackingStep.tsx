@@ -242,6 +242,7 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
           walkBodyFramesSmoothed: null,
           walkZoneFrames: null,
           walkZoneFramesSmoothed: null,
+          cotrackerJawOpennessFrames: null,
         },
       }
       await onSave(

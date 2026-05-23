@@ -840,10 +840,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const playback = new LoopPlayback(restFrames, { crossfadeFrames: rest?.mesh?.crossfadeFrames ?? 7 })
         currentGetPositions = () => playback.getPositions()
         currentAdvance = (delta) => playback.advance(delta)
+        currentRestPlayback = playback
       }
     }
 
     let currentMultiPlaybackRef: MultiAnimationPlayback | null = null
+    let currentRestPlayback: LoopPlayback | null = null
     let lastSegmentCrossfadeMs: number | null = null
     let lastSegmentAnimId: string | undefined = undefined
 
@@ -1206,8 +1208,38 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           }
         }
         const rms = mouthAudioRef.current ? mouthAudioRef.current.getRMS() : 0
-        mouthOpennessRef.current = rms
-        mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, rms)
+        // Jaw bone openness : lit cotrackerJawOpennessFrames de l'animation active.
+        let jawOpenness = 0
+        const mpb = currentMultiPlaybackRef
+        if (mpb) {
+          const ref = mpb.getActiveFrameRef()
+          const mainAnim = ref.animId
+            ? animMap.current.get(ref.animId)
+            : (restAnim ? animMap.current.get(restAnim.id) : null)
+          const mainFrames = mainAnim?.mesh?.cotrackerJawOpennessFrames
+          if (mainFrames && mainFrames.length > 0) {
+            const idx = Math.min(ref.frame, mainFrames.length - 1)
+            jawOpenness = Math.max(jawOpenness, mainFrames[idx] ?? 0)
+          }
+          if (ref.overlayAnimId) {
+            const ov = animMap.current.get(ref.overlayAnimId)
+            const ovFrames = ov?.mesh?.cotrackerJawOpennessFrames
+            if (ovFrames && ovFrames.length > 0) {
+              const idx = Math.min(ref.overlayFrame, ovFrames.length - 1)
+              jawOpenness = Math.max(jawOpenness, ovFrames[idx] ?? 0)
+            }
+          }
+        } else if (currentRestPlayback) {
+          // Rest seul (pas de MultiAnimationPlayback) → lecture indexée sur LoopPlayback.currentFrame
+          const restJaw = restAnim?.mesh?.cotrackerJawOpennessFrames
+          if (restJaw && restJaw.length > 0) {
+            const idx = Math.min(currentRestPlayback.currentFrame, restJaw.length - 1)
+            jawOpenness = restJaw[idx] ?? 0
+          }
+        }
+        const openness = Math.max(rms, jawOpenness)
+        mouthOpennessRef.current = openness
+        mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, openness)
       }
 
       // Parallax scrolling: each layer scrolls at depthFactor × front speed.

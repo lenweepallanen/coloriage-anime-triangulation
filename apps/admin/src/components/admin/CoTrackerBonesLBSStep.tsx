@@ -109,6 +109,7 @@ export default function CoTrackerBonesLBSStep({ project, animation, onSave }: Pr
           walkZoneFrames: result.walkZoneFrames,
           cotrackerBodyJointFrames: result.cotrackerBodyJointFrames,
           cotrackerLegBoneFrames: result.cotrackerLegBoneFrames,
+          cotrackerJawOpennessFrames: result.cotrackerJawOpennessFrames,
           // Invalidate downstream
           walkBodyFramesSmoothed: null,
           walkZoneFramesSmoothed: null,
