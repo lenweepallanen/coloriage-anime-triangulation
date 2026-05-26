@@ -1443,7 +1443,14 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
             value={cannyParams.lowThreshold}
             onChange={e => setCannyParams(p => ({ ...p, lowThreshold: parseInt(e.target.value) }))}
             style={{ width: 100 }} />
-          <span style={{ minWidth: 28, textAlign: 'center' }}>{cannyParams.lowThreshold}</span>
+          <input type="number" min={0} step={1}
+            value={cannyParams.lowThreshold}
+            onChange={e => {
+              const v = parseInt(e.target.value)
+              if (Number.isFinite(v) && v >= 0) setCannyParams(p => ({ ...p, lowThreshold: v }))
+            }}
+            style={{ width: 60 }}
+            title="Valeur libre — tape n'importe quel entier ≥ 0" />
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}>
           Canny high:
@@ -1451,20 +1458,27 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
             value={cannyParams.highThreshold}
             onChange={e => setCannyParams(p => ({ ...p, highThreshold: parseInt(e.target.value) }))}
             style={{ width: 100 }} />
-          <span style={{ minWidth: 28, textAlign: 'center' }}>{cannyParams.highThreshold}</span>
+          <input type="number" min={0} step={1}
+            value={cannyParams.highThreshold}
+            onChange={e => {
+              const v = parseInt(e.target.value)
+              if (Number.isFinite(v) && v >= 0) setCannyParams(p => ({ ...p, highThreshold: v }))
+            }}
+            style={{ width: 60 }}
+            title="Valeur libre — tape n'importe quel entier ≥ 0" />
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}>
           Blur:
-          <select
+          <input type="number" min={1} step={2}
             value={cannyParams.blurSize}
-            onChange={e => setCannyParams(p => ({ ...p, blurSize: parseInt(e.target.value) }))}
-          >
-            <option value={3}>3</option>
-            <option value={5}>5</option>
-            <option value={7}>7</option>
-            <option value={9}>9</option>
-            <option value={11}>11</option>
-          </select>
+            onChange={e => {
+              let v = parseInt(e.target.value)
+              if (!Number.isFinite(v) || v < 1) return
+              if (v % 2 === 0) v += 1
+              setCannyParams(p => ({ ...p, blurSize: v }))
+            }}
+            style={{ width: 60 }}
+            title="Noyau gaussien — entier impair ≥ 1 (les valeurs paires sont auto-corrigées au supérieur)" />
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}
           title="Dilatation globale appliquée par défaut à chaque zone. Engulfe le trait noir et, si deux dilatations se touchent, elles fusionnent automatiquement.">
