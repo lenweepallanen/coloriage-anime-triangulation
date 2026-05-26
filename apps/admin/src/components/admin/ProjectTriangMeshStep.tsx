@@ -20,7 +20,7 @@ import { triangulateZone, generateInternalPoints, triangulateHiddenFace, triangu
 import type { HiddenFaceZone, HiddenFaceLimbZone } from '../../types/project'
 import { pointInPolygon } from '../../utils/geometry'
 import { detectCurvatureExtrema } from '../../utils/curvatureScaleSpace'
-import { reorderContourFromOrigin, subdivideContour, computeArcLengths } from '../../utils/curvilinearContour'
+import { reorderContourFromOrigin, subdivideContour, computeArcLengths, extractPathBetweenAnchors, computeSubdivisionForFrame } from '../../utils/curvilinearContour'
 
 type ZoneSubPhase = 'p0' | 'anchors' | 'subdivision' | 'triangulation' | 'adjust'
 
@@ -62,6 +62,10 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   const [zoneSubdivisionParams, setZoneSubdivisionParams] = useState<Record<string, CurvilinearParam[]>>(() => tri?.zoneSubdivisionParams ?? {})
   const [zoneSubdivisionPoints, setZoneSubdivisionPoints] = useState<Record<string, Point2D[]>>(() => tri?.zoneSubdivisionPoints ?? {})
   const [zoneSubdivisionValidated, setZoneSubdivisionValidated] = useState<Record<string, boolean>>(() => tri?.zoneSubdivisionValidated ?? {})
+  // Manual subdivision points (added by user via shift+click on contour, after the auto subdivision)
+  // Positions are stored DIRECTLY (snapped to mesh polyline), params (segIdx, t) are for ordering only.
+  const [zoneManualSubdivisionParams, setZoneManualSubdivisionParams] = useState<Record<string, CurvilinearParam[]>>(() => tri?.zoneManualSubdivisionParams ?? {})
+  const [zoneManualSubdivisionPoints, setZoneManualSubdivisionPoints] = useState<Record<string, Point2D[]>>(() => tri?.zoneManualSubdivisionPoints ?? {})
   // Pixel-adjust freeze flag (persisted) — when true, useEffect ne recalcule plus les subdivisions
   const [zonePixelAdjusted, setZonePixelAdjusted] = useState<Record<string, boolean>>(() => tri?.zonePixelAdjusted ?? {})
   // Per-zone, per-segment subdivision counts (segIdx → N)
@@ -111,6 +115,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     zoneAnchors: Record<string, Point2D[]>
     zoneSubdivisionPoints: Record<string, Point2D[]>
     zoneSubdivisionParams: Record<string, CurvilinearParam[]>
+    zoneManualSubdivisionParams: Record<string, CurvilinearParam[]>
+    zoneManualSubdivisionPoints: Record<string, Point2D[]>
     zonePixelAdjusted: Record<string, boolean>
   }
   const HISTORY_LIMIT = 50
@@ -127,6 +133,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         zoneAnchors: structuredClone(zoneAnchors),
         zoneSubdivisionPoints: structuredClone(zoneSubdivisionPoints),
         zoneSubdivisionParams: structuredClone(zoneSubdivisionParams),
+        zoneManualSubdivisionParams: structuredClone(zoneManualSubdivisionParams),
+        zoneManualSubdivisionPoints: structuredClone(zoneManualSubdivisionPoints),
         zonePixelAdjusted: { ...zonePixelAdjusted },
       }
       const next = [...prev, snap]
@@ -147,6 +155,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       setZoneAnchors(snap.zoneAnchors)
       setZoneSubdivisionPoints(snap.zoneSubdivisionPoints)
       setZoneSubdivisionParams(snap.zoneSubdivisionParams)
+      setZoneManualSubdivisionParams(snap.zoneManualSubdivisionParams)
+      setZoneManualSubdivisionPoints(snap.zoneManualSubdivisionPoints)
       setZonePixelAdjusted(snap.zonePixelAdjusted)
       return prev.slice(0, -1)
     })
@@ -238,6 +248,100 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     return best
   }
 
+  /** Snap a click to the closest polyline edge of the mesh contour and derive (segIdx, t) for ordering. */
+  function snapToPolyline(zoneId: string, imgPt: Point2D): { pos: Point2D; param: CurvilinearParam; dist: number } | null {
+    const anchors = zoneAnchors[zoneId]
+    if (!anchors || anchors.length === 0) return null
+    const subParams = zoneSubdivisionParams[zoneId] ?? []
+    const subPoints = zoneSubdivisionPoints[zoneId] ?? []
+    const n = anchors.length
+    // Group auto+manual subdivisions by segment, sorted by t (same convention as buildClosedContour)
+    const bySegment: { t: number; pt: Point2D }[][] = Array.from({ length: n }, () => [])
+    for (let i = 0; i < subParams.length; i++) {
+      const p = subParams[i]; const pt = subPoints[i]
+      if (!pt || p.segmentIndex < 0 || p.segmentIndex >= n) continue
+      bySegment[p.segmentIndex].push({ t: p.t, pt })
+    }
+    for (const arr of bySegment) arr.sort((a, b) => a.t - b.t)
+    // Build polyline + per-vertex metadata (which anchor segment it belongs to + its t)
+    const polyline: Point2D[] = []
+    const polyMeta: { segIdx: number; t: number }[] = []
+    for (let i = 0; i < n; i++) {
+      polyline.push(anchors[i])
+      polyMeta.push({ segIdx: i, t: 0 })
+      for (const sp of bySegment[i]) {
+        polyline.push(sp.pt)
+        polyMeta.push({ segIdx: i, t: sp.t })
+      }
+    }
+    // Find closest polyline edge
+    let bestDist = Infinity, bestProj: Point2D = { x: 0, y: 0 }, bestEdge = -1, bestEdgeT = 0
+    for (let i = 0; i < polyline.length; i++) {
+      const a = polyline[i]; const b = polyline[(i + 1) % polyline.length]
+      const dx = b.x - a.x, dy = b.y - a.y
+      const len2 = dx * dx + dy * dy
+      const et = len2 > 0 ? Math.max(0, Math.min(1, ((imgPt.x - a.x) * dx + (imgPt.y - a.y) * dy) / len2)) : 0
+      const px = a.x + et * dx, py = a.y + et * dy
+      const d = Math.hypot(px - imgPt.x, py - imgPt.y)
+      if (d < bestDist) { bestDist = d; bestProj = { x: px, y: py }; bestEdge = i; bestEdgeT = et }
+    }
+    if (bestEdge < 0) return null
+    // Determine (segIdx, t) by interpolating between the two adjacent contour vertices' params
+    const startMeta = polyMeta[bestEdge]
+    const endMeta = polyMeta[(bestEdge + 1) % polyline.length]
+    const segIdx = startMeta.segIdx
+    const tStart = startMeta.t
+    // If next vertex is in the same segment, use its t; otherwise it's the next anchor → t=1 in the start segment
+    const tEnd = endMeta.segIdx === segIdx ? endMeta.t : 1
+    const t = Math.min(0.999, Math.max(0.001, tStart + bestEdgeT * (tEnd - tStart)))
+    return { pos: bestProj, param: { segmentIndex: segIdx, t }, dist: bestDist }
+  }
+
+  /** Minimum distance from a point to the edges of a closed polygon. */
+  function distPointToPolygon(p: Point2D, poly: Point2D[]): number {
+    if (poly.length < 2) return Infinity
+    let best = Infinity
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i]
+      const b = poly[(i + 1) % poly.length]
+      const dx = b.x - a.x, dy = b.y - a.y
+      const len2 = dx * dx + dy * dy
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0
+      const px = a.x + t * dx, py = a.y + t * dy
+      const d = Math.hypot(px - p.x, py - p.y)
+      if (d < best) best = d
+    }
+    return best
+  }
+
+  /** Project a click onto the smoothed reference contour and return its (segmentIndex, t) + snap distance. */
+  function paramFromClick(zoneId: string, imgPt: Point2D): (CurvilinearParam & { dist: number }) | null {
+    const anchors = zoneAnchors[zoneId]
+    const refContour = getRefContour(zoneId)
+    const p0 = zoneOrigins[zoneId]
+    if (!anchors?.length || !refContour || !p0) return null
+    const ordered = reorderContourFromOrigin(refContour, p0)
+    const n = anchors.length
+    let bestSeg = -1, bestT = 0, bestDist2 = Infinity
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n
+      const path = extractPathBetweenAnchors(ordered, anchors[i], anchors[j])
+      if (path.length < 2) continue
+      const arcs = computeArcLengths(path)
+      const total = arcs[arcs.length - 1] || 1
+      for (let k = 0; k < path.length; k++) {
+        const d = (path[k].x - imgPt.x) ** 2 + (path[k].y - imgPt.y) ** 2
+        if (d < bestDist2) {
+          bestDist2 = d
+          bestSeg = i
+          bestT = Math.min(0.99, Math.max(0.01, arcs[k] / total))
+        }
+      }
+    }
+    if (bestSeg < 0) return null
+    return { segmentIndex: bestSeg, t: bestT, dist: Math.sqrt(bestDist2) }
+  }
+
   /** Build the closed contour as [P0, subdiv_seg0, anchor_1, subdiv_seg1, ..., anchor_N, subdiv_segN]. */
   function buildClosedContour(zoneId: string): Point2D[] | null {
     const anchors = zoneAnchors[zoneId]
@@ -245,19 +349,20 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     const subPoints = zoneSubdivisionPoints[zoneId]
     if (!anchors || anchors.length === 0 || !subParams || !subPoints) return null
     const n = anchors.length
-    // Group subdivision points by segmentIndex
-    const bySegment: Point2D[][] = Array.from({ length: n }, () => [])
+    // Group subdivision points by segmentIndex, keeping (t, point) so we can sort by t within each segment
+    const bySegment: { t: number; pt: Point2D }[][] = Array.from({ length: n }, () => [])
     for (let i = 0; i < subParams.length; i++) {
       const p = subParams[i]
       const pt = subPoints[i]
       if (!pt) continue
-      if (p.segmentIndex >= 0 && p.segmentIndex < n) bySegment[p.segmentIndex].push(pt)
+      if (p.segmentIndex >= 0 && p.segmentIndex < n) bySegment[p.segmentIndex].push({ t: p.t, pt })
     }
+    for (const arr of bySegment) arr.sort((a, b) => a.t - b.t)
     // Assemble : anchor_i then subdivisions of segment_i (which leads to anchor_{i+1})
     const out: Point2D[] = []
     for (let i = 0; i < n; i++) {
       out.push(anchors[i])
-      for (const sp of bySegment[i]) out.push(sp)
+      for (const sp of bySegment[i]) out.push(sp.pt)
     }
     return out
   }
@@ -412,11 +517,24 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       // Use reordered contour from P0 for stable arc-length parametrization
       const ordered = reorderContourFromOrigin(refContour, p0)
       const { points, params } = subdivideContour(ordered, anchors, counts)
-      setZoneSubdivisionPoints(prev => ({ ...prev, [zoneId]: points }))
-      setZoneSubdivisionParams(prev => ({ ...prev, [zoneId]: params }))
+      // Append manual subdivision points — positions are stored directly (snapped to polyline at click time)
+      const rawManualParams = zoneManualSubdivisionParams[zoneId] ?? []
+      const rawManualPts = zoneManualSubdivisionPoints[zoneId] ?? []
+      const validManualParams: CurvilinearParam[] = []
+      const validManualPts: Point2D[] = []
+      for (let i = 0; i < rawManualParams.length; i++) {
+        const p = rawManualParams[i]
+        const pt = rawManualPts[i]
+        if (!pt) continue
+        if (p.segmentIndex < 0 || p.segmentIndex >= anchors.length) continue
+        validManualParams.push(p)
+        validManualPts.push(pt)
+      }
+      setZoneSubdivisionPoints(prev => ({ ...prev, [zoneId]: [...points, ...validManualPts] }))
+      setZoneSubdivisionParams(prev => ({ ...prev, [zoneId]: [...params, ...validManualParams] }))
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoneAnchors, zoneSegmentCounts])
+  }, [zoneAnchors, zoneSegmentCounts, zoneManualSubdivisionParams, zoneManualSubdivisionPoints])
 
   // ─── Compute zone meshes (sub-phase 4 only) ───────────────────────
 
@@ -441,9 +559,11 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       let triResult = triangulateZone(cPts, allInternal, cPts)
 
       if (z.id === 'body') {
-        // Filter auto triangles touching leg zones (manual triangles are admin-defined and never filtered)
+        // Filter auto triangles touching leg zones — but only legs whose z-order is STRICTLY ABOVE body's.
+        // Legs behind/equal to body (z-order ≤ body) are occluded by the body, so we keep the body intact there.
+        const bodyZ = zoneZOrder['body'] ?? 0
         const legContours = allZones
-          .filter(lz => lz.id !== 'body' && zoneStage(lz.id) >= 4)
+          .filter(lz => lz.id !== 'body' && zoneStage(lz.id) >= 4 && (zoneZOrder[lz.id] ?? 0) > bodyZ)
           .map(lz => buildClosedContour(lz.id))
           .filter((c): c is Point2D[] => !!c && c.length >= 3)
         const filteredTris = legContours.length > 0
@@ -490,7 +610,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allZones, zoneAnchors, zoneSubdivisionPoints, zoneSubdivisionValidated,
-    zoneDensity, manualPoints, manualTriangles, autoFrozen, imageLoaded,
+    zoneDensity, manualPoints, manualTriangles, autoFrozen, imageLoaded, zoneZOrder,
   ])
 
   // ─── Draw ─────────────────────────────────────────────────────────
@@ -628,20 +748,41 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             ctx.lineWidth = 1.2 / t.scale
             ctx.beginPath(); ctx.arc(p.x, p.y, pr * 0.85, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
           } else {
-            ctx.fillStyle = hexToRgba(color, 0.5)
-            ctx.beginPath(); ctx.arc(p.x, p.y, pr * 0.55, 0, Math.PI * 2); ctx.fill()
+            // Phase triangulation : losange orange bien visible, contour blanc
+            const dr = pr * 1.15
+            ctx.fillStyle = '#fb923c'
+            ctx.strokeStyle = '#fff'
+            ctx.lineWidth = 1.4 / t.scale
+            ctx.beginPath()
+            ctx.moveTo(p.x, p.y - dr)
+            ctx.lineTo(p.x + dr, p.y)
+            ctx.lineTo(p.x, p.y + dr)
+            ctx.lineTo(p.x - dr, p.y)
+            ctx.closePath()
+            ctx.fill()
+            ctx.stroke()
           }
         }
 
-        // Anchors (P0 = index 0, in red)
+        // Anchors (P0 = index 0, in red disc ; autres = triangle bien visible couleur zone)
         for (let i = 0; i < anchors.length; i++) {
           const a = anchors[i]
           if (i === 0) {
             ctx.fillStyle = '#ef4444'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / t.scale
-            ctx.beginPath(); ctx.arc(a.x, a.y, pr * 1.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+            ctx.beginPath(); ctx.arc(a.x, a.y, pr * 1.4, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
           } else {
-            ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / t.scale
-            ctx.beginPath(); ctx.arc(a.x, a.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+            // Triangle équilatéral pointant vers le haut, plus gros que les ronds
+            const tr = pr * 1.6
+            ctx.fillStyle = color
+            ctx.strokeStyle = '#fff'
+            ctx.lineWidth = 1.8 / t.scale
+            ctx.beginPath()
+            ctx.moveTo(a.x, a.y - tr)
+            ctx.lineTo(a.x + tr * 0.866, a.y + tr * 0.5)
+            ctx.lineTo(a.x - tr * 0.866, a.y + tr * 0.5)
+            ctx.closePath()
+            ctx.fill()
+            ctx.stroke()
           }
         }
 
@@ -746,6 +887,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         setZoneAnchorsValidated(prev => ({ ...prev, [activeZoneId]: false }))
         setZoneSubdivisionParams(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
         setZoneSubdivisionPoints(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
+        setZoneManualSubdivisionParams(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
+        setZoneManualSubdivisionPoints(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
         setZoneSubdivisionValidated(prev => ({ ...prev, [activeZoneId]: false }))
         setZoneSegmentCounts(prev => { const cp = { ...prev }; delete cp[activeZoneId]; return cp })
         return
@@ -771,10 +914,33 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         return
       }
 
-      // ── Subdivision sub-phase : click on segment to highlight ──
+      // ── Subdivision sub-phase : shift+click = add manual point, click = highlight segment ──
       if (phase === 'subdivision') {
         const anchors = zoneAnchors[activeZoneId] ?? []
         if (anchors.length < 2) return
+        if (e.shiftKey) {
+          const snap = snapToPolyline(activeZoneId, imgPt)
+          if (!snap) return
+          setZoneManualSubdivisionParams(prev => ({
+            ...prev,
+            [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.param],
+          }))
+          setZoneManualSubdivisionPoints(prev => ({
+            ...prev,
+            [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.pos],
+          }))
+          if (zonePixelAdjusted[activeZoneId]) {
+            setZoneSubdivisionParams(prev => ({
+              ...prev,
+              [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.param],
+            }))
+            setZoneSubdivisionPoints(prev => ({
+              ...prev,
+              [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.pos],
+            }))
+          }
+          return
+        }
         // Find segment whose midpoint is closest to imgPt
         let bestSeg = -1, bestDist = Infinity
         for (let i = 0; i < anchors.length; i++) {
@@ -839,8 +1005,24 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           return
         }
 
-        // ─── Body + triangulation : Move mode = drag manual points only ───
+        // ─── Body + triangulation : Move mode = drag any point (contour anchors, subdivisions, manual internals) ───
         if (activeZoneId === 'body' && bodyEditMode === 'move') {
+          const anchors = zoneAnchors[activeZoneId] ?? []
+          for (let i = 0; i < anchors.length; i++) {
+            if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+              pushHistory()
+              setDragTarget({ zoneId: activeZoneId, type: 'anchor', idx: i })
+              return
+            }
+          }
+          const subs = zoneSubdivisionPoints[activeZoneId] ?? []
+          for (let i = 0; i < subs.length; i++) {
+            if (Math.hypot(subs[i].x - imgPt.x, subs[i].y - imgPt.y) < hitR) {
+              pushHistory()
+              setDragTarget({ zoneId: activeZoneId, type: 'subdivision', idx: i })
+              return
+            }
+          }
           for (let i = manual.length - 1; i >= 0; i--) {
             if (Math.hypot(manual[i].x - imgPt.x, manual[i].y - imgPt.y) < hitR) {
               pushHistory()
@@ -855,7 +1037,17 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         const anchors = zoneAnchors[activeZoneId] ?? []
         for (let i = 0; i < anchors.length; i++) {
           if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
+            pushHistory()
             setDragTarget({ zoneId: activeZoneId, type: 'anchor', idx: i })
+            return
+          }
+        }
+        // Try drag subdivision (free pixel)
+        const subs = zoneSubdivisionPoints[activeZoneId] ?? []
+        for (let i = 0; i < subs.length; i++) {
+          if (Math.hypot(subs[i].x - imgPt.x, subs[i].y - imgPt.y) < hitR) {
+            pushHistory()
+            setDragTarget({ zoneId: activeZoneId, type: 'subdivision', idx: i })
             return
           }
         }
@@ -884,6 +1076,32 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               }
             }
           }
+        }
+        // If click is close to a mesh contour edge → snap to polyline & add a manual subdivision point
+        const contourSnapPx = 30 / transformRef.current.scale
+        const snap = snapToPolyline(activeZoneId, imgPt)
+        if (snap && snap.dist < contourSnapPx) {
+          pushHistory()
+          setZoneManualSubdivisionParams(prev => ({
+            ...prev,
+            [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.param],
+          }))
+          setZoneManualSubdivisionPoints(prev => ({
+            ...prev,
+            [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.pos],
+          }))
+          // When auto recompute is frozen, push directly into the merged arrays too
+          if (zonePixelAdjusted[activeZoneId]) {
+            setZoneSubdivisionParams(prev => ({
+              ...prev,
+              [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.param],
+            }))
+            setZoneSubdivisionPoints(prev => ({
+              ...prev,
+              [activeZoneId]: [...(prev[activeZoneId] ?? []), snap.pos],
+            }))
+          }
+          return
         }
         // Otherwise add point if inside the zone contour
         if (pointInPolygon(imgPt, closedContour)) {
@@ -915,9 +1133,10 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     if (!dragTarget) return
     const imgPt = screenToImage(e.clientX, e.clientY)
     if (dragTarget.type === 'anchor') {
-      const isAdjust = activeSubPhase[dragTarget.zoneId] === 'adjust'
+      const phase = getActiveSubPhase(dragTarget.zoneId)
+      const isFreeDrag = phase === 'adjust' || phase === 'triangulation'
       let pos: Point2D = imgPt
-      if (!isAdjust) {
+      if (!isFreeDrag) {
         const candidates = getTopExtrema(dragTarget.zoneId, 50)
         pos = snapToExtremum(imgPt, candidates, 0) ?? imgPt
       } else {
@@ -945,12 +1164,15 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   }
 
   function handleMouseUp() {
-    if (dragTarget?.type === 'anchor' && activeSubPhase[dragTarget.zoneId] !== 'adjust') {
-      // Re-sort anchors after drag (skipped in pixel-adjust mode to preserve indexing)
-      const zoneId = dragTarget.zoneId
-      const anchors = zoneAnchors[zoneId] ?? []
-      const sorted = sortAnchorsByArcLength(anchors, zoneId)
-      setZoneAnchors(prev => ({ ...prev, [zoneId]: sorted }))
+    if (dragTarget?.type === 'anchor') {
+      const phase = getActiveSubPhase(dragTarget.zoneId)
+      // Re-sort anchors only in the anchors-edit phase. Triangulation/adjust preserve indexing.
+      if (phase !== 'adjust' && phase !== 'triangulation') {
+        const zoneId = dragTarget.zoneId
+        const anchors = zoneAnchors[zoneId] ?? []
+        const sorted = sortAnchorsByArcLength(anchors, zoneId)
+        setZoneAnchors(prev => ({ ...prev, [zoneId]: sorted }))
+      }
     }
     setDragTarget(null)
   }
@@ -961,6 +1183,52 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     const imgPt = screenToImage(e.clientX, e.clientY)
     const hitR = HIT_RADIUS / transformRef.current.scale
     const phase = getActiveSubPhase(activeZoneId)
+
+    // ── Subdivision / Triangulation : right-click to remove a manual subdivision point ──
+    if (phase === 'subdivision' || phase === 'triangulation') {
+      const manualPts = zoneManualSubdivisionPoints[activeZoneId] ?? []
+      if (manualPts.length === 0) {
+        if (phase === 'triangulation') {
+          // fall through to other triangulation right-click handlers
+        } else return
+      } else {
+        let hit = -1, bestD = hitR
+        for (let i = 0; i < manualPts.length; i++) {
+          const d = Math.hypot(manualPts[i].x - imgPt.x, manualPts[i].y - imgPt.y)
+          if (d < bestD) { bestD = d; hit = i }
+        }
+        if (hit >= 0) {
+          setZoneManualSubdivisionParams(prev => {
+            const arr = [...(prev[activeZoneId] ?? [])]
+            arr.splice(hit, 1)
+            return { ...prev, [activeZoneId]: arr }
+          })
+          setZoneManualSubdivisionPoints(prev => {
+            const arr = [...(prev[activeZoneId] ?? [])]
+            arr.splice(hit, 1)
+            return { ...prev, [activeZoneId]: arr }
+          })
+          // When auto recompute is frozen, also splice the merged arrays at the correct index
+          if (zonePixelAdjusted[activeZoneId]) {
+            const manualLen = manualPts.length
+            setZoneSubdivisionParams(prev => {
+              const arr = [...(prev[activeZoneId] ?? [])]
+              const autoLen = arr.length - manualLen
+              if (autoLen >= 0 && autoLen + hit < arr.length) arr.splice(autoLen + hit, 1)
+              return { ...prev, [activeZoneId]: arr }
+            })
+            setZoneSubdivisionPoints(prev => {
+              const arr = [...(prev[activeZoneId] ?? [])]
+              const autoLen = arr.length - manualLen
+              if (autoLen >= 0 && autoLen + hit < arr.length) arr.splice(autoLen + hit, 1)
+              return { ...prev, [activeZoneId]: arr }
+            })
+          }
+          return
+        }
+        if (phase === 'subdivision') return
+      }
+    }
 
     // ── Anchors : right-click to remove (cannot remove P0=[0]) ──
     if (phase === 'anchors') {
@@ -1301,6 +1569,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           zoneAnchorsValidated: { ...zoneAnchorsValidated },
           zoneSubdivisionPoints: { ...zoneSubdivisionPoints },
           zoneSubdivisionParams: { ...zoneSubdivisionParams },
+          zoneManualSubdivisionParams: { ...zoneManualSubdivisionParams },
+          zoneManualSubdivisionPoints: { ...zoneManualSubdivisionPoints },
           zoneSubdivisionValidated: { ...zoneSubdivisionValidated },
           zonePixelAdjusted: { ...zonePixelAdjusted },
           zoneContourLength: newZoneContourLength,
@@ -1425,10 +1695,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               : activePhase === 'anchors'
                 ? 'Clic = ajouter anchor (snap courbure). Drag = déplacer (snap). Clic droit = supprimer (P0 protégé).'
                 : activePhase === 'subdivision'
-                  ? 'Clic sur un segment pour le surligner. Utilisez les +/- pour ajouter/retirer des points.'
-                  : activePhase === 'adjust'
-                    ? 'Ajustement pixel : drag anchor/subdivision = libre (pas de snap, pas de recalcul curviligne). Clic droit sur subdivision = supprimer. Les points internes ne sont pas modifiables ici.'
-                    : 'Drag anchor (P0/rouge inclus) = repositionner (snap courbure, subdivisions recalculées). Clic = ajouter point interne. Clic droit = supprimer.'}
+                  ? 'Clic sur un segment pour le surligner. Utilisez les +/- pour ajouter/retirer des points. Shift+clic sur contour = point manuel. Clic droit = supprimer manuel.'
+                  : 'Drag anchor/subdivision/interne = repositionner librement (pas de snap, recalcul curviligne figé). Clic près du contour = subdivision manuelle snappée. Clic à l\'intérieur = point interne. Clic droit = supprimer.'}
         </div>
       </div>
 
@@ -1491,7 +1759,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               </div>
               {isActive && (
                 <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
-                  {(['p0', 'anchors', 'subdivision', 'triangulation', 'adjust'] as const).map((sp, i) => {
+                  {(['p0', 'anchors', 'subdivision', 'triangulation'] as const).map((sp, i) => {
                     const isCurrent = subPhase === sp
                     const isReached = stage > i
                     return (
@@ -1618,6 +1886,15 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             >
               ← Rééditer anchors
             </button>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6, lineHeight: 1.4 }}>
+              Shift+clic sur le contour : ajouter un point de subdivision manuel.<br />
+              Clic droit sur un point manuel : le supprimer.
+              {activeZoneId && (zoneManualSubdivisionParams[activeZoneId]?.length ?? 0) > 0 && (
+                <div style={{ marginTop: 4, color: '#cbd5e1' }}>
+                  {zoneManualSubdivisionParams[activeZoneId]!.length} point(s) manuel(s)
+                </div>
+              )}
+            </div>
             <button className="btn-primary" onClick={handleValidateSubdivision} style={{ width: '100%' }}>
               Valider Subdivision
             </button>
@@ -1707,36 +1984,9 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
             <button
               className="btn-ghost"
               onClick={() => handleResetSubPhase(activeZoneId, 'subdivision')}
-              style={{ width: '100%', fontSize: 12, marginBottom: 6 }}
+              style={{ width: '100%', fontSize: 12 }}
             >
               ← Rééditer subdivision
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={() => setSubPhase(activeZoneId, 'adjust')}
-              style={{ width: '100%', fontSize: 12 }}
-            >
-              → Ajustement pixel
-            </button>
-          </div>
-        )}
-
-        {activeZoneId && activePhase === 'adjust' && (
-          <div style={{ padding: '10px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, marginBottom: 12, border: '1px solid rgba(34,197,94,0.4)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e' }} />
-              <span style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>Ajustement pixel : {activeLabel}</span>
-            </div>
-            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 10, lineHeight: 1.4 }}>
-              Drag libre des anchors (P0 inclus) et des subdivisions pour matcher la texture au pixel près.
-              Aucun snap, aucun recalcul curviligne. Les positions sont figées.
-            </div>
-            <button
-              className="btn-ghost"
-              onClick={() => setSubPhase(activeZoneId, 'triangulation')}
-              style={{ width: '100%', fontSize: 12 }}
-            >
-              ← Retour Triangulation
             </button>
           </div>
         )}

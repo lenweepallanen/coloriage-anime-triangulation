@@ -459,7 +459,9 @@ export interface ProjectTriangulation {
   zoneAnchorsValidated?: Record<string, boolean>              // zoneId → anchors validés
   // Phase 3 : Subdivision par zone (params curvilignes + points générés)
   zoneSubdivisionPoints?: Record<string, Point2D[]>           // zoneId → points subdivision
-  zoneSubdivisionParams?: Record<string, CurvilinearParam[]>  // zoneId → params curvilignes
+  zoneSubdivisionParams?: Record<string, CurvilinearParam[]>  // zoneId → params curvilignes (auto + manuels mergés)
+  zoneManualSubdivisionParams?: Record<string, CurvilinearParam[]>  // zoneId → params curvilignes des points manuels ajoutés après auto
+  zoneManualSubdivisionPoints?: Record<string, Point2D[]>            // zoneId → positions snappées sur la polyligne maillage (parallèle à params)
   zoneSubdivisionValidated?: Record<string, boolean>          // zoneId → subdivision validée
   zonePixelAdjusted?: Record<string, boolean>                 // zoneId → ajustement pixel actif (gèle le recalcul curviligne)
   // Phase 4 : Delaunay interne + layout

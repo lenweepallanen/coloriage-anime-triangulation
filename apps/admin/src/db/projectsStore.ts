@@ -293,6 +293,8 @@ interface ProjectTriangulationDoc {
   zoneAnchorsValidated?: Record<string, boolean>
   zoneSubdivisionPoints?: Record<string, Point2D[]>
   zoneSubdivisionParams?: Record<string, CurvilinearParam[]>
+  zoneManualSubdivisionParams?: Record<string, CurvilinearParam[]>
+  zoneManualSubdivisionPoints?: Record<string, Point2D[]>
   zoneSubdivisionValidated?: Record<string, boolean>
   zonePixelAdjusted?: Record<string, boolean>
   zoneContourLength?: Record<string, number>
@@ -598,6 +600,8 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     ...(tri.zoneAnchorsValidated != null && { zoneAnchorsValidated: tri.zoneAnchorsValidated }),
     ...(tri.zoneSubdivisionPoints != null && { zoneSubdivisionPoints: tri.zoneSubdivisionPoints }),
     ...(tri.zoneSubdivisionParams != null && { zoneSubdivisionParams: tri.zoneSubdivisionParams }),
+    ...(tri.zoneManualSubdivisionParams != null && { zoneManualSubdivisionParams: tri.zoneManualSubdivisionParams }),
+    ...(tri.zoneManualSubdivisionPoints != null && { zoneManualSubdivisionPoints: tri.zoneManualSubdivisionPoints }),
     ...(tri.zoneSubdivisionValidated != null && { zoneSubdivisionValidated: tri.zoneSubdivisionValidated }),
     ...(tri.zonePixelAdjusted != null && { zonePixelAdjusted: tri.zonePixelAdjusted }),
     ...(tri.zoneContourLength != null && { zoneContourLength: tri.zoneContourLength }),
@@ -657,6 +661,8 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     zoneAnchorsValidated: doc.zoneAnchorsValidated,
     zoneSubdivisionPoints: doc.zoneSubdivisionPoints,
     zoneSubdivisionParams: doc.zoneSubdivisionParams,
+    zoneManualSubdivisionParams: doc.zoneManualSubdivisionParams,
+    zoneManualSubdivisionPoints: doc.zoneManualSubdivisionPoints,
     zoneSubdivisionValidated: doc.zoneSubdivisionValidated,
     zonePixelAdjusted: doc.zonePixelAdjusted,
     zoneContourLength: doc.zoneContourLength,
@@ -1046,7 +1052,11 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     cotrackerBoneSmoothingValidated: d.cotrackerBoneSmoothingValidated,
     cotrackerLBSParams: d.cotrackerLBSParams,
     cotrackerLBSValidated: d.cotrackerLBSValidated,
-    cotrackerJawOpennessFrames: d.cotrackerJawOpennessFrames ?? null,
+    cotrackerJawOpennessFrames: (() => {
+      const v = d.cotrackerJawOpennessFrames
+      console.log('[Firebase load] cotrackerJawOpennessFrames raw:', v == null ? v : `array(${v.length})`, 'cotrackerLBSValidated:', d.cotrackerLBSValidated, 'cotrackerSkeleton.jaw:', (d as any).cotrackerSkeleton?.jaw ? 'yes' : 'no')
+      return v ?? null
+    })(),
     // Marche
     marcheParentAnimationId: d.marcheParentAnimationId,
     marcheSkeleton: d.marcheSkeleton,
