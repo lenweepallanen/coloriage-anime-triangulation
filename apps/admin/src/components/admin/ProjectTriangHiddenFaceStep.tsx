@@ -240,8 +240,9 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
   // ─── Image loading ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!project.originalImageBlob) return
-    const url = URL.createObjectURL(project.originalImageBlob)
+    const blob = project.originalImageBlob ?? project.projectTriangulation?.referenceImageBlob
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
     const img = new Image()
     img.onload = () => {
       imageRef.current = img
@@ -265,7 +266,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       ro?.disconnect()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.originalImageBlob])
+  }, [project.originalImageBlob, project.projectTriangulation?.referenceImageBlob])
 
   // ─── Draw ──────────────────────────────────────────────────────────
 
