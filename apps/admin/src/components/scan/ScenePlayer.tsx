@@ -1208,37 +1208,71 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           }
         }
         const rms = mouthAudioRef.current ? mouthAudioRef.current.getRMS() : 0
-        // Jaw bone openness : lit cotrackerJawOpennessFrames de l'animation active.
-        let jawOpenness = 0
+        // Construit la liste des (animation, frame) qui pilotent le rendu courant.
         const mpb = currentMultiPlaybackRef
+        const activeFrames: Array<{ animId: string; frame: number }> = []
         if (mpb) {
           const ref = mpb.getActiveFrameRef()
-          const mainAnim = ref.animId
-            ? animMap.current.get(ref.animId)
-            : (restAnim ? animMap.current.get(restAnim.id) : null)
-          const mainFrames = mainAnim?.mesh?.cotrackerJawOpennessFrames
-          if (mainFrames && mainFrames.length > 0) {
-            const idx = Math.min(ref.frame, mainFrames.length - 1)
-            jawOpenness = Math.max(jawOpenness, mainFrames[idx] ?? 0)
+          const mainId = ref.animId ?? restAnim?.id
+          if (mainId) activeFrames.push({ animId: mainId, frame: ref.frame })
+          if (ref.overlayAnimId) activeFrames.push({ animId: ref.overlayAnimId, frame: ref.overlayFrame })
+        }
+        if (activeWalkZoneAnimId && activeBodyPlayback && 'currentFrame' in activeBodyPlayback) {
+          activeFrames.push({ animId: activeWalkZoneAnimId, frame: activeBodyPlayback.currentFrame })
+        } else if (!mpb && restAnim) {
+          if (currentRestPlayback) {
+            activeFrames.push({ animId: restAnim.id, frame: currentRestPlayback.currentFrame })
+          } else if (activeBodyPlayback && 'currentFrame' in activeBodyPlayback) {
+            activeFrames.push({ animId: restAnim.id, frame: activeBodyPlayback.currentFrame })
           }
-          if (ref.overlayAnimId) {
-            const ov = animMap.current.get(ref.overlayAnimId)
-            const ovFrames = ov?.mesh?.cotrackerJawOpennessFrames
-            if (ovFrames && ovFrames.length > 0) {
-              const idx = Math.min(ref.overlayFrame, ovFrames.length - 1)
-              jawOpenness = Math.max(jawOpenness, ovFrames[idx] ?? 0)
-            }
-          }
-        } else if (currentRestPlayback) {
-          // Rest seul (pas de MultiAnimationPlayback) → lecture indexée sur LoopPlayback.currentFrame
-          const restJaw = restAnim?.mesh?.cotrackerJawOpennessFrames
-          if (restJaw && restJaw.length > 0) {
-            const idx = Math.min(currentRestPlayback.currentFrame, restJaw.length - 1)
-            jawOpenness = restJaw[idx] ?? 0
+        }
+        // Jaw = max des cotrackerJawOpennessFrames de toutes les anims actives.
+        let jawOpenness = 0
+        for (const { animId, frame } of activeFrames) {
+          const frames = animMap.current.get(animId)?.mesh?.cotrackerJawOpennessFrames
+          if (frames && frames.length > 0) {
+            jawOpenness = Math.max(jawOpenness, frames[Math.min(frame, frames.length - 1)] ?? 0)
           }
         }
         const openness = Math.max(rms, jawOpenness)
         mouthOpennessRef.current = openness
+        // DEBUG JAW
+        if ((globalThis as any).__jawDbg !== false) {
+          const _w = globalThis as any
+          _w.__jawDbgCount = (_w.__jawDbgCount ?? 0) + 1
+          if (_w.__jawDbgCount % 60 === 1) {
+            const allAnims = project.animations.map(a => ({
+              id: a.id.slice(0, 8),
+              name: a.name,
+              type: a.type,
+              hasJaw: !!a.mesh?.cotrackerJawOpennessFrames,
+              jawLen: a.mesh?.cotrackerJawOpennessFrames?.length ?? 0,
+              hasJawBone: !!(a.mesh as any)?.cotrackerSkeleton?.jaw,
+              lbsValidated: !!(a.mesh as any)?.cotrackerLBSValidated,
+            }))
+            const activeDbg = activeFrames.map(({ animId, frame }) => {
+              const a = animMap.current.get(animId)
+              const jf = a?.mesh?.cotrackerJawOpennessFrames
+              return {
+                id: animId.slice(0, 8),
+                name: a?.name,
+                type: a?.type,
+                frame,
+                jawLen: jf?.length ?? 0,
+                jawValAtFrame: jf && jf.length > 0 ? jf[Math.min(frame, jf.length - 1)] : null,
+              }
+            })
+            console.log('[JAW]',
+              'rest=', restAnim?.id?.slice(0, 8), restAnim?.type,
+              'mpb=', !!mpb,
+              'walkZone=', activeWalkZoneAnimId?.slice(0, 8) ?? null,
+              'jawOpenness=', jawOpenness, 'rms=', rms,
+              'mouthOnProj=', !!project.projectMouth,
+              'activeFrames=', JSON.stringify(activeDbg),
+              'allAnims=', JSON.stringify(allAnims),
+            )
+          }
+        }
         mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, openness)
       }
 

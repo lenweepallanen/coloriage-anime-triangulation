@@ -48,4 +48,9 @@ export class OncePlayback {
   }
 
   get isFinished(): boolean { return this._finished }
+
+  get currentFrame(): number {
+    if (this.frames.length === 0) return 0
+    return Math.min(Math.floor(this.cursor), this.frames.length - 1)
+  }
 }
