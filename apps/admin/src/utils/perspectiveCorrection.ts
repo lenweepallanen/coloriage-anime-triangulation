@@ -233,6 +233,7 @@ export async function flowCannySegmentZones(
   highThreshold = 150,
   blurSize = 5,
   inflate = 12,
+  closingKernel = 0,
 ): Promise<{
   silhouette: { x: number; y: number }[] | null
   zoneContours: Record<string, { x: number; y: number }[][]>
@@ -246,6 +247,7 @@ export async function flowCannySegmentZones(
     highThreshold,
     blurSize,
     inflate,
+    closingKernel,
   }, 'canny-segment-zones-result')
   return {
     silhouette: result.silhouette ?? null,

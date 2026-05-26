@@ -87,6 +87,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     () => project.projectTriangulation?.cannyParams ?? DEFAULT_CANNY
   )
   const [inflate, setInflate] = useState<number>(12)
+  const [closingKernel, setClosingKernel] = useState<number>(0)
   const [zoneInflates, setZoneInflates] = useState<Record<string, number>>(
     () => project.projectTriangulation?.zoneInflates ?? {}
   )
@@ -321,6 +322,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         const sil = await flowCannySegmentZones(
           imgData, [],
           cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
+          undefined, closingKernel,
         )
         if (sil.silhouette && sil.silhouette.length >= 3) silhouette = sil.silhouette
       }
@@ -331,7 +333,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
           imgData,
           [{ id: zoneId, waypoints: seedsSnapshot[zoneId].map(p => ({ x: p.x, y: p.y })) }],
           cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
-          inflateFor(zoneId),
+          inflateFor(zoneId), closingKernel,
         )
         const loops = (result.zoneContours[zoneId] ?? []).filter(l => l.length >= 3)
         if (loops.length > 0) nextLoops[zoneId] = loops
@@ -379,7 +381,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       setCannyComputing(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, inflateFor, bridgeThreshold, memberZoneIds.join('|')])
+  }, [cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, inflateFor, bridgeThreshold, closingKernel, memberZoneIds.join('|')])
 
   const scheduleCannyRecompute = useCallback((seedsSnapshot: Record<string, Point2D[]>) => {
     if (cannyComputeTimerRef.current) clearTimeout(cannyComputeTimerRef.current)
@@ -399,7 +401,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     if (!imageReady) return
     scheduleCannyRecompute(legSeeds)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageReady, cannyParamsKey, inflate, JSON.stringify(zoneInflates), bridgeThreshold])
+  }, [imageReady, cannyParamsKey, inflate, JSON.stringify(zoneInflates), bridgeThreshold, closingKernel])
 
   // ---------- Draw loop ----------
   useEffect(() => {
@@ -626,6 +628,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
       const result = await flowCannySegmentZones(
         imgData, [], cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
+        undefined, closingKernel,
       )
       if (result.silhouette && result.silhouette.length >= 3) {
         setBodySilhouette(result.silhouette)
@@ -719,6 +722,7 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         const result = await flowCannySegmentZones(
           imgData, [],
           cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
+          undefined, closingKernel,
         )
         if (result.silhouette && result.silhouette.length >= 3) {
           source = result.silhouette
@@ -1488,6 +1492,21 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
             onChange={e => setInflate(parseInt(e.target.value))}
             style={{ width: 100 }} />
           <span style={{ minWidth: 28, textAlign: 'center' }}>{inflate}</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}
+          title="Fermeture morphologique (MORPH_CLOSE) appliquée au trait Canny avant le flood-fill. Comble les micro-trous du contour pour que le remplissage ne s'échappe pas par les brèches. 0 = désactivé. Augmenter (3, 5, 7, 9...) si la silhouette fuit ou si un clic remplit tout le coloriage.">
+          Fermeture trait:
+          <input type="range" min={0} max={31} step={1}
+            value={closingKernel}
+            onChange={e => setClosingKernel(parseInt(e.target.value))}
+            style={{ width: 100 }} />
+          <input type="number" min={0} step={1}
+            value={closingKernel}
+            onChange={e => {
+              const v = parseInt(e.target.value)
+              if (Number.isFinite(v) && v >= 0) setClosingKernel(v)
+            }}
+            style={{ width: 60 }} />
         </label>
         {(() => {
           const activeZone = zones.find(z => z.id === activeZoneId)

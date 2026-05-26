@@ -1294,8 +1294,9 @@ function offsetPolygon(points, dist) {
   return out;
 }
 
-function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds, inflate) {
+function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds, inflate, closingKernel) {
   if (inflate == null) inflate = 12;
+  if (closingKernel == null) closingKernel = 0;
   var w = imgData.width, h = imgData.height;
   var src = new cv.Mat(h, w, cv.CV_8UC4);
   src.data.set(new Uint8Array(imgData.data));
@@ -1339,6 +1340,16 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
     // contour so it sits on the real black trace, not the inflated barrier.
     lightKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     cv.dilate(edges, lightBarrier, lightKernel, new cv.Point(-1, -1), 1);
+
+    // Optional morphological closing — fills micro-gaps in the Canny trace
+    // before flood-fill so the silhouette doesn't leak through hair-thin breaks.
+    if (closingKernel > 0) {
+      var ck = closingKernel % 2 === 1 ? closingKernel : closingKernel + 1;
+      var closingK = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(ck, ck));
+      cv.morphologyEx(barrier, barrier, cv.MORPH_CLOSE, closingK);
+      cv.morphologyEx(lightBarrier, lightBarrier, cv.MORPH_CLOSE, closingK);
+      closingK.delete();
+    }
 
     // Silhouette contour (tight) : floodFill on light barrier.
     lightBarrier.copyTo(silFilled);
@@ -2087,7 +2098,8 @@ self.onmessage = async function(e) {
       var blur = e.data.blurSize || 5;
       var seeds = e.data.seeds || [];
       var inflate = e.data.inflate;
-      var result = segmentZonesCanny(imageData, low, high, blur, seeds, inflate);
+      var closingKernel = e.data.closingKernel;
+      var result = segmentZonesCanny(imageData, low, high, blur, seeds, inflate, closingKernel);
       self.postMessage({
         type: 'canny-segment-zones-result',
         silhouette: result.silhouette,
