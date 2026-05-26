@@ -1296,8 +1296,44 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       return
     }
 
-    // ── Triangulation : delete manual internal (body + legs, unified) ──
+    // ── Triangulation : delete any subdivision point (auto or manual) — freeze recompute ──
     if (phase === 'triangulation') {
+      const subs = zoneSubdivisionPoints[activeZoneId] ?? []
+      for (let i = subs.length - 1; i >= 0; i--) {
+        const p = subs[i]
+        if (p && Math.hypot(p.x - imgPt.x, p.y - imgPt.y) < hitR) {
+          pushHistory()
+          const manualLen = (zoneManualSubdivisionPoints[activeZoneId] ?? []).length
+          const autoLen = subs.length - manualLen
+          // If the hit was within the manual range, also remove it from the manual arrays
+          if (i >= autoLen) {
+            const mi = i - autoLen
+            setZoneManualSubdivisionParams(prev => {
+              const arr = [...(prev[activeZoneId] ?? [])]
+              arr.splice(mi, 1)
+              return { ...prev, [activeZoneId]: arr }
+            })
+            setZoneManualSubdivisionPoints(prev => {
+              const arr = [...(prev[activeZoneId] ?? [])]
+              arr.splice(mi, 1)
+              return { ...prev, [activeZoneId]: arr }
+            })
+          }
+          setZoneSubdivisionPoints(prev => {
+            const arr = [...(prev[activeZoneId] ?? [])]
+            arr.splice(i, 1)
+            return { ...prev, [activeZoneId]: arr }
+          })
+          setZoneSubdivisionParams(prev => {
+            const arr = [...(prev[activeZoneId] ?? [])]
+            arr.splice(i, 1)
+            return { ...prev, [activeZoneId]: arr }
+          })
+          setZonePixelAdjusted(prev => ({ ...prev, [activeZoneId]: true }))
+          setManualTriangles(prev => ({ ...prev, [activeZoneId]: [] }))
+          return
+        }
+      }
       const manual = manualPoints[activeZoneId] ?? []
       for (let i = manual.length - 1; i >= 0; i--) {
         const p = manual[i]
