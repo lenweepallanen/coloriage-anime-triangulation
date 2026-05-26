@@ -70,6 +70,29 @@ async function rasterizeSvg(svg: string, size: number): Promise<Blob> {
   }
 }
 
+async function composeColorWithVector(colorImg: HTMLImageElement, svg: string, size: number): Promise<Blob> {
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const ctx = c.getContext('2d')!
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(colorImg, 0, 0, size, size)
+
+  const transparentSvg = svg.replace(/fill="#?[fF]{3,6}"/g, 'fill="none"')
+  const blob = new Blob([transparentSvg], { type: 'image/svg+xml' })
+  const url = URL.createObjectURL(blob)
+  try {
+    const overlay = new Image()
+    overlay.src = url
+    await overlay.decode()
+    ctx.drawImage(overlay, 0, 0, size, size)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+  return await new Promise<Blob>(r => c.toBlob(b => r(b!), 'image/png')!)
+}
+
 async function loadImage(file: File): Promise<HTMLImageElement> {
   const url = URL.createObjectURL(file)
   try {
@@ -106,29 +129,42 @@ export default function ColoriageBwPage() {
   const [optTolerance, setOptTolerance] = useState(0.2)
   const [processing, setProcessing] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
-  const [firstImg, setFirstImg] = useState<HTMLImageElement | null>(null)
+  const [currentImg, setCurrentImg] = useState<HTMLImageElement | null>(null)
+  const [currentIndex, setCurrentIndex] = useState(0)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   async function handleSelect(list: FileList | null) {
     const arr = Array.from(list ?? [])
     setFiles(arr)
+    setCurrentIndex(0)
     setErrorMsg(null)
     if (arr.length > 0) {
-      try {
-        const img = await loadImage(arr[0])
-        setFirstImg(img)
-        await runPreview({ threshold, turdSize, alphaMax, optTolerance }, img)
-      } catch (e) {
-        console.error(e)
-        setErrorMsg(`Erreur chargement : ${(e as Error).message}`)
-      }
+      await loadAtIndex(arr, 0)
     } else {
-      setFirstImg(null)
+      setCurrentImg(null)
       setPreviewUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
     }
   }
 
-  async function runPreview(p: Params, img: HTMLImageElement | null = firstImg) {
+  async function loadAtIndex(arr: File[], idx: number) {
+    try {
+      const img = await loadImage(arr[idx])
+      setCurrentImg(img)
+      await runPreview({ threshold, turdSize, alphaMax, optTolerance }, img)
+    } catch (e) {
+      console.error(e)
+      setErrorMsg(`Erreur chargement : ${(e as Error).message}`)
+    }
+  }
+
+  async function goToIndex(idx: number) {
+    if (files.length === 0) return
+    const clamped = (idx + files.length) % files.length
+    setCurrentIndex(clamped)
+    await loadAtIndex(files, clamped)
+  }
+
+  async function runPreview(p: Params, img: HTMLImageElement | null = currentImg) {
     if (!img) return
     setProcessing(true)
     setErrorMsg(null)
@@ -165,9 +201,11 @@ export default function ColoriageBwPage() {
           const img = await loadImage(file)
           const svg = await vectorize(img, params)
           const png = await rasterizeSvg(svg, TARGET_SIZE)
+          const colorPng = await composeColorWithVector(img, svg, TARGET_SIZE)
           const name = baseName(file.name)
           zip.file(`${name}-nb.svg`, svg)
           zip.file(`${name}-nb-2000.png`, png)
+          zip.file(`${name}-couleur-2000.png`, colorPng)
         } catch (err) {
           console.error('Batch error on', file.name, err)
         }
@@ -199,11 +237,18 @@ export default function ColoriageBwPage() {
         <span style={{ color: '#9aa3b2' }}>
           {files.length === 0
             ? 'Aucun fichier'
-            : `${files.length} fichier${files.length > 1 ? 's' : ''} — aperçu : ${files[0].name}`}
+            : `${files.length} fichier${files.length > 1 ? 's' : ''} — aperçu : ${files[currentIndex]?.name}`}
         </span>
+        {files.length > 1 && (
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+            <button className="btn-secondary btn-sm" onClick={() => goToIndex(currentIndex - 1)} disabled={processing}>← Précédent</button>
+            <span style={{ color: '#9aa3b2' }}>{currentIndex + 1} / {files.length}</span>
+            <button className="btn-secondary btn-sm" onClick={() => goToIndex(currentIndex + 1)} disabled={processing}>Suivant →</button>
+          </div>
+        )}
       </div>
 
-      {firstImg && (
+      {currentImg && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', margin: 'var(--space-3) 0', maxWidth: 600 }}>
           <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
             <label style={{ minWidth: 180 }}>Seuil noir : {threshold}</label>
