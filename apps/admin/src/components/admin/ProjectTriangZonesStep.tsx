@@ -1462,6 +1462,8 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
             <option value={3}>3</option>
             <option value={5}>5</option>
             <option value={7}>7</option>
+            <option value={9}>9</option>
+            <option value={11}>11</option>
           </select>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem' }}
