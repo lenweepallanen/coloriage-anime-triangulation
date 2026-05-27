@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { animationHasFrames, type Project, type Scene, type SceneRestPoint, type SceneBackgroundLayer, type SceneSound, type SceneWalkTrapezoid } from '../../types/project'
+import { animationHasFrames, type Project, type Scene, type SceneRestPoint, type SceneBackground, type SceneForeground, type SceneSound, type SceneWalkTrapezoid } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import SceneTimeline, { type TimelineSelection } from './SceneTimeline'
 import SceneConfigPanel from './SceneConfigPanel'
@@ -55,11 +55,8 @@ function createDefaultScene(): Scene {
   return {
     id: crypto.randomUUID(),
     name: 'Scène principale',
-    backgroundLayers: [
-      { imageBlob: null, videoBlob: null, width: 0, height: 0, depthFactor: 0.3 },
-      { imageBlob: null, videoBlob: null, width: 0, height: 0, depthFactor: 0.6 },
-      { imageBlob: null, videoBlob: null, width: 0, height: 0, depthFactor: 1.0 },
-    ],
+    background: null,
+    foreground: null,
     characterScale: 1.0,
     characterY: 0,
     restPoint: createDefaultRestPoint(0),
@@ -76,7 +73,8 @@ export default function SceneEditor({ project, onSave }: Props) {
   const [previewing, setPreviewing] = useState(false)
   const [previewCanvas, setPreviewCanvas] = useState<HTMLCanvasElement | null>(null)
   const [bgImageUrl, setBgImageUrl] = useState<string | null>(null)
-  const [layerPreviewUrls, setLayerPreviewUrls] = useState<(string | null)[]>([null, null, null])
+  const [backgroundPreviewUrl, setBackgroundPreviewUrl] = useState<string | null>(null)
+  const [foregroundPreviewUrl, setForegroundPreviewUrl] = useState<string | null>(null)
   const [layersExpanded, setLayersExpanded] = useState(true)
   const previewProjectRef = useRef<Project | null>(null)
 
@@ -101,34 +99,29 @@ export default function SceneEditor({ project, onSave }: Props) {
     }
   }, [project.originalImageBlob])
 
-  const hasMedia = (l: SceneBackgroundLayer) => l.imageBlob != null || l.videoBlob != null
-  const frontLayer = hasMedia(scene.backgroundLayers[2])
-    ? scene.backgroundLayers[2]
-    : (scene.backgroundLayers.find(hasMedia) ?? scene.backgroundLayers[2])
+  const bg = scene.background
+  const fg = scene.foreground
+  const hasBackground = !!(bg && (bg.imageBlob || bg.videoBlob))
+  const hasForeground = !!(fg && (fg.imageBlob || fg.videoBlob))
+  // Référence de dimensions pour le rendu / la zone de marche / la timeline.
+  const refDims = { width: bg?.width ?? 0, height: bg?.height ?? 0 }
 
+  // Preview URLs (revoke à la sortie).
   useEffect(() => {
-    const urls: (string | null)[] = []
-    for (let i = 0; i < 3; i++) {
-      const l = scene.backgroundLayers[i]
-      const blob = l?.videoBlob ?? l?.imageBlob ?? null
-      urls.push(blob ? URL.createObjectURL(blob) : null)
-    }
-    setLayerPreviewUrls(urls)
-    // Fond timeline : extrait frame 0 si vidéo, sinon image directement
-    const frontIdx = scene.backgroundLayers[2]?.videoBlob || scene.backgroundLayers[2]?.imageBlob ? 2
-      : scene.backgroundLayers.findIndex(l => l?.videoBlob || l?.imageBlob)
+    const bgBlob = bg?.videoBlob ?? bg?.imageBlob ?? null
+    const fgBlob = fg?.videoBlob ?? fg?.imageBlob ?? null
+    const bgUrl = bgBlob ? URL.createObjectURL(bgBlob) : null
+    const fgUrl = fgBlob ? URL.createObjectURL(fgBlob) : null
+    setBackgroundPreviewUrl(bgUrl)
+    setForegroundPreviewUrl(fgUrl)
     let cancelled = false
     let extractedUrl: string | null = null
     const setupBg = async () => {
-      if (frontIdx < 0) { setBgImageUrl(null); return }
-      const layer = scene.backgroundLayers[frontIdx]
-      if (layer.imageBlob) {
-        setBgImageUrl(urls[frontIdx])
-        return
-      }
-      if (layer.videoBlob) {
+      if (!bgBlob) { setBgImageUrl(null); return }
+      if (bg?.imageBlob) { setBgImageUrl(bgUrl); return }
+      if (bg?.videoBlob) {
         try {
-          extractedUrl = await extractVideoFrame0(layer.videoBlob)
+          extractedUrl = await extractVideoFrame0(bg.videoBlob)
           if (!cancelled) setBgImageUrl(extractedUrl)
         } catch {
           if (!cancelled) setBgImageUrl(null)
@@ -138,12 +131,13 @@ export default function SceneEditor({ project, onSave }: Props) {
     setupBg()
     return () => {
       cancelled = true
-      for (const u of urls) if (u) URL.revokeObjectURL(u)
+      if (bgUrl) URL.revokeObjectURL(bgUrl)
+      if (fgUrl) URL.revokeObjectURL(fgUrl)
       if (extractedUrl) URL.revokeObjectURL(extractedUrl)
     }
-  }, [scene.backgroundLayers[0]?.imageBlob, scene.backgroundLayers[0]?.videoBlob, scene.backgroundLayers[1]?.imageBlob, scene.backgroundLayers[1]?.videoBlob, scene.backgroundLayers[2]?.imageBlob, scene.backgroundLayers[2]?.videoBlob]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bg?.imageBlob, bg?.videoBlob, fg?.imageBlob, fg?.videoBlob]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleLayerImport = useCallback(async (layerIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBackgroundImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     const blob = file as Blob
@@ -162,36 +156,71 @@ export default function SceneEditor({ project, onSave }: Props) {
         img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
       }
     })
-    const newLayers = [...scene.backgroundLayers]
-    newLayers[layerIndex] = {
+    URL.revokeObjectURL(url)
+    const newBackground: SceneBackground = {
       imageBlob: isVideo ? null : blob,
       videoBlob: isVideo ? blob : null,
       width, height,
-      depthFactor: newLayers[layerIndex].depthFactor,
     }
-    const updated: Scene = { ...scene, backgroundLayers: newLayers }
-    // Initialise restPoint à 50% si pas encore défini
-    if (!updated.restPoint || updated.restPoint.backgroundX === 0) {
-      updated.restPoint = createDefaultRestPoint(width)
-    }
-    setScene(updated)
-    URL.revokeObjectURL(url)
-  }, [scene])
-
-  const handleLayerDepthChange = useCallback((layerIndex: number, depthFactor: number) => {
     setScene(prev => {
-      const newLayers = [...prev.backgroundLayers]
-      newLayers[layerIndex] = { ...newLayers[layerIndex], depthFactor }
-      return { ...prev, backgroundLayers: newLayers }
+      const updated: Scene = { ...prev, background: newBackground }
+      if (!updated.restPoint || updated.restPoint.backgroundX === 0) {
+        updated.restPoint = createDefaultRestPoint(width)
+      }
+      return updated
     })
   }, [])
 
-  const handleLayerRemove = useCallback((layerIndex: number) => {
-    setScene(prev => {
-      const newLayers = [...prev.backgroundLayers]
-      newLayers[layerIndex] = { imageBlob: null, videoBlob: null, width: 0, height: 0, depthFactor: newLayers[layerIndex].depthFactor }
-      return { ...prev, backgroundLayers: newLayers }
+  const handleBackgroundRemove = useCallback(() => {
+    setScene(prev => ({ ...prev, background: null }))
+  }, [])
+
+  const handleForegroundImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const blob = file as Blob
+    const isVideo = file.type.startsWith('video/')
+    const url = URL.createObjectURL(blob)
+    const { width, height } = await new Promise<{ width: number; height: number }>((resolve) => {
+      if (isVideo) {
+        const vid = document.createElement('video')
+        vid.preload = 'metadata'
+        vid.muted = true
+        vid.src = url
+        vid.onloadedmetadata = () => resolve({ width: vid.videoWidth, height: vid.videoHeight })
+      } else {
+        const img = new Image()
+        img.src = url
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+      }
     })
+    URL.revokeObjectURL(url)
+    const newForeground: SceneForeground = {
+      imageBlob: isVideo ? null : blob,
+      videoBlob: isVideo ? blob : null,
+      width, height,
+      // Défaut chroma key noir pour vidéo (cas le plus fréquent), pas de chroma pour PNG.
+      chromaKeyColor: isVideo ? '#000000' : null,
+      chromaKeyThreshold: isVideo ? 0.1 : undefined,
+      chromaKeySmoothness: isVideo ? 0.12 : undefined,
+    }
+    setScene(prev => ({ ...prev, foreground: newForeground }))
+  }, [])
+
+  const handleForegroundRemove = useCallback(() => {
+    setScene(prev => ({ ...prev, foreground: null }))
+  }, [])
+
+  const handleForegroundChromaColor = useCallback((color: string | null) => {
+    setScene(prev => prev.foreground ? { ...prev, foreground: { ...prev.foreground, chromaKeyColor: color } } : prev)
+  }, [])
+
+  const handleForegroundChromaThreshold = useCallback((threshold: number) => {
+    setScene(prev => prev.foreground ? { ...prev, foreground: { ...prev.foreground, chromaKeyThreshold: threshold } } : prev)
+  }, [])
+
+  const handleForegroundChromaSmoothness = useCallback((smoothness: number) => {
+    setScene(prev => prev.foreground ? { ...prev, foreground: { ...prev.foreground, chromaKeySmoothness: smoothness } } : prev)
   }, [])
 
   const handleMoveRestPoint = useCallback((backgroundX: number) => {
@@ -209,7 +238,6 @@ export default function SceneEditor({ project, onSave }: Props) {
   const handleEntryModeChange = useCallback((mode: 'fixed' | 'moving') => {
     setScene(prev => {
       if (mode === 'moving' && prev.entryStartX == null) {
-        const w = prev.backgroundLayers[2].width || prev.backgroundLayers.find(hasMedia)?.width || 1000
         return {
           ...prev,
           entry: mode,
@@ -299,15 +327,12 @@ export default function SceneEditor({ project, onSave }: Props) {
     setSaving(true)
     try {
       const hints: UploadHint[] = [...pendingSpeakHintsRef.current]
-      for (let i = 0; i < 3; i++) {
-        const cur = scene.backgroundLayers[i]
-        const old = project.scene?.backgroundLayers[i]
-        const curBlob = cur?.videoBlob ?? cur?.imageBlob ?? null
-        const oldBlob = old?.videoBlob ?? old?.imageBlob ?? null
-        if (curBlob && curBlob !== oldBlob) {
-          hints.push(`sceneBackgroundLayer${i}` as UploadHint)
-        }
-      }
+      const curBgBlob = scene.background?.videoBlob ?? scene.background?.imageBlob ?? null
+      const oldBgBlob = project.scene?.background?.videoBlob ?? project.scene?.background?.imageBlob ?? null
+      if (curBgBlob && curBgBlob !== oldBgBlob) hints.push('sceneBackground')
+      const curFgBlob = scene.foreground?.videoBlob ?? scene.foreground?.imageBlob ?? null
+      const oldFgBlob = project.scene?.foreground?.videoBlob ?? project.scene?.foreground?.imageBlob ?? null
+      if (curFgBlob && curFgBlob !== oldFgBlob) hints.push('sceneForeground')
       const updatedProject: Project = { ...project, scene }
       await onSave(updatedProject, hints.length > 0 ? hints : undefined)
       pendingSpeakHintsRef.current = []
@@ -355,7 +380,7 @@ export default function SceneEditor({ project, onSave }: Props) {
     previewProjectRef.current = null
   }, [])
 
-  const hasScene = scene.backgroundLayers.some(hasMedia)
+  const hasScene = hasBackground
   const canPreview = hasScene && project.originalImageBlob != null
     && project.animations.some(animationHasFrames)
 
@@ -383,8 +408,8 @@ export default function SceneEditor({ project, onSave }: Props) {
       <div className="scene-editor-toolbar">
         <div className="scene-layers-section">
           <div className="scene-layers-header">
-            <span className="scene-layers-title">Backgrounds parallax</span>
-            {scene.backgroundLayers.some(hasMedia) && (
+            <span className="scene-layers-title">Plans de la scène</span>
+            {hasBackground && (
               <button className="btn-ghost btn-sm" onClick={() => setLayersExpanded(p => !p)}>
                 {layersExpanded ? 'Masquer' : 'Afficher'}
               </button>
@@ -394,66 +419,111 @@ export default function SceneEditor({ project, onSave }: Props) {
           {layersExpanded && (
             <div className="scene-layers-content">
               <div className="scene-layers-list">
-                {(['Arrière-plan', 'Milieu', 'Premier plan'] as const).map((label, i) => {
-                  const layer = scene.backgroundLayers[i]
-                  const url = layerPreviewUrls[i]
-                  const has = hasMedia(layer)
-                  const accept = i === 0
-                    ? 'image/png,image/jpeg,image/webp,video/mp4,video/webm'
-                    : 'image/png,image/jpeg,image/webp'
-                  return (
-                    <div key={i} className="scene-layer-row">
-                      <div className="scene-layer-row-top">
-                        <span className="scene-layer-label">{label}{i === 0 ? ' (image ou vidéo)' : ''}</span>
-                        <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
-                          {has ? 'Changer' : 'Importer'}
+                {/* Arrière-plan (image ou vidéo) */}
+                <div className="scene-layer-row">
+                  <div className="scene-layer-row-top">
+                    <span className="scene-layer-label">Arrière-plan (image ou vidéo)</span>
+                    <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+                      {hasBackground ? 'Changer' : 'Importer'}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,video/mp4,video/webm"
+                        style={{ display: 'none' }}
+                        onChange={handleBackgroundImport}
+                      />
+                    </label>
+                    {hasBackground && bg && (
+                      <>
+                        <span className="scene-editor-dimensions">
+                          {bg.width}×{bg.height}{bg.videoBlob ? ' (vidéo)' : ''}
+                        </span>
+                        <button className="btn-icon btn-sm btn-danger" onClick={handleBackgroundRemove} title="Supprimer">&times;</button>
+                      </>
+                    )}
+                  </div>
+                  {hasBackground && backgroundPreviewUrl && bg && (
+                    bg.videoBlob
+                      ? <video src={backgroundPreviewUrl} className="scene-layer-thumb" muted loop autoPlay playsInline />
+                      : <img src={backgroundPreviewUrl} alt="Arrière-plan" className="scene-layer-thumb" />
+                  )}
+                </div>
+
+                {/* Avant-plan (PNG transparent OU vidéo avec chroma key, devant le personnage) */}
+                <div className="scene-layer-row">
+                  <div className="scene-layer-row-top">
+                    <span className="scene-layer-label">Avant-plan (PNG transparent ou vidéo, devant le personnage)</span>
+                    <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+                      {hasForeground ? 'Changer' : 'Importer'}
+                      <input
+                        type="file"
+                        accept="image/png,image/webp,video/mp4,video/webm"
+                        style={{ display: 'none' }}
+                        onChange={handleForegroundImport}
+                      />
+                    </label>
+                    {hasForeground && fg && (
+                      <>
+                        <span className="scene-editor-dimensions">
+                          {fg.width}×{fg.height}{fg.videoBlob ? ' (vidéo)' : ''}
+                          {hasBackground && bg && (fg.width !== bg.width || fg.height !== bg.height) && (
+                            <span style={{ color: 'var(--color-danger)', marginLeft: 8 }} title="Doit matcher l'arrière-plan">⚠ dimensions ≠ arrière-plan</span>
+                          )}
+                        </span>
+                        <button className="btn-icon btn-sm btn-danger" onClick={handleForegroundRemove} title="Supprimer">&times;</button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Chroma key (vidéo uniquement) */}
+                  {hasForeground && fg?.videoBlob && (
+                    <div className="scene-layer-row-top" style={{ marginTop: 8, gap: 12 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                          type="checkbox"
+                          checked={fg.chromaKeyColor != null}
+                          onChange={(e) => handleForegroundChromaColor(e.target.checked ? (fg.chromaKeyColor ?? '#000000') : null)}
+                        />
+                        Rendre une couleur transparente
+                      </label>
+                      {fg.chromaKeyColor != null && (
+                        <>
                           <input
-                            type="file"
-                            accept={accept}
-                            style={{ display: 'none' }}
-                            onChange={(e) => handleLayerImport(i, e)}
+                            type="color"
+                            value={fg.chromaKeyColor}
+                            onChange={(e) => handleForegroundChromaColor(e.target.value)}
+                            title="Couleur du fond à rendre transparent"
+                            style={{ width: 36, height: 28, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
                           />
-                        </label>
-                        {has && (
-                          <>
-                            <span className="scene-editor-dimensions">
-                              {layer.width}×{layer.height}{layer.videoBlob ? ' (vidéo)' : ''}
-                            </span>
-                            <label className="scene-editor-depth-label">
-                              Vitesse
-                              <input
-                                type="range" min={0} max={1} step={0.05}
-                                value={layer.depthFactor}
-                                onChange={(e) => handleLayerDepthChange(i, parseFloat(e.target.value))}
-                              />
-                              <span>{layer.depthFactor.toFixed(2)}</span>
-                            </label>
-                            <button className="btn-icon btn-sm btn-danger" onClick={() => handleLayerRemove(i)} title="Supprimer">&times;</button>
-                          </>
-                        )}
-                      </div>
-                      {has && url && (
-                        layer.videoBlob
-                          ? <video src={url} className="scene-layer-thumb" muted loop autoPlay playsInline />
-                          : <img src={url} alt={label} className="scene-layer-thumb" />
+                          <label className="scene-editor-depth-label">
+                            Tolérance
+                            <input
+                              type="range" min={0} max={1} step={0.01}
+                              value={fg.chromaKeyThreshold ?? 0.1}
+                              onChange={(e) => handleForegroundChromaThreshold(parseFloat(e.target.value))}
+                            />
+                            <span>{(fg.chromaKeyThreshold ?? 0.1).toFixed(2)}</span>
+                          </label>
+                          <label className="scene-editor-depth-label">
+                            Adoucissement
+                            <input
+                              type="range" min={0} max={0.5} step={0.01}
+                              value={fg.chromaKeySmoothness ?? 0.12}
+                              onChange={(e) => handleForegroundChromaSmoothness(parseFloat(e.target.value))}
+                            />
+                            <span>{(fg.chromaKeySmoothness ?? 0.12).toFixed(2)}</span>
+                          </label>
+                        </>
                       )}
                     </div>
-                  )
-                })}
-              </div>
+                  )}
 
-              {scene.backgroundLayers.some(hasMedia) && (
-                <div className="scene-layers-stacked-preview">
-                  {[0, 1, 2].map(i => {
-                    const url = layerPreviewUrls[i]
-                    const layer = scene.backgroundLayers[i]
-                    if (!url) return null
-                    return layer.videoBlob
-                      ? <video key={i} src={url} className="scene-layers-stacked-img" muted loop autoPlay playsInline />
-                      : <img key={i} src={url} alt="" className="scene-layers-stacked-img" />
-                  })}
+                  {hasForeground && foregroundPreviewUrl && fg && (
+                    fg.videoBlob
+                      ? <video src={foregroundPreviewUrl} className="scene-layer-thumb" muted loop autoPlay playsInline />
+                      : <img src={foregroundPreviewUrl} alt="Avant-plan" className="scene-layer-thumb" />
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>
@@ -481,8 +551,8 @@ export default function SceneEditor({ project, onSave }: Props) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input
                   type="range"
-                  min={-Math.round(frontLayer.height / 2)}
-                  max={Math.round(frontLayer.height / 2)}
+                  min={-Math.round(refDims.height / 2)}
+                  max={Math.round(refDims.height / 2)}
                   step={1}
                   value={scene.characterY}
                   onChange={(e) => setScene(prev => ({ ...prev, characterY: parseInt(e.target.value) }))}
@@ -589,8 +659,8 @@ export default function SceneEditor({ project, onSave }: Props) {
             scene={scene}
             animations={project.animations}
             backgroundUrl={bgImageUrl}
-            layerWidth={frontLayer.width}
-            layerHeight={frontLayer.height}
+            layerWidth={refDims.width}
+            layerHeight={refDims.height}
             onChange={(trap: SceneWalkTrapezoid | null) => setScene(prev => ({ ...prev, walkTrapezoid: trap }))}
           />
         </div>
@@ -612,8 +682,8 @@ export default function SceneEditor({ project, onSave }: Props) {
       {hasScene && (
         <SceneTimeline
           backgroundImageUrl={bgImageUrl}
-          backgroundWidth={frontLayer.width}
-          backgroundHeight={frontLayer.height}
+          backgroundWidth={refDims.width}
+          backgroundHeight={refDims.height}
           restPointX={scene.restPoint.backgroundX}
           entry={scene.entry}
           entryStartX={scene.entryStartX}

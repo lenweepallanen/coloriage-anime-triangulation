@@ -6,7 +6,7 @@ import AnimationCardList, { SHARED_GEOMETRY_FIELDS, copySharedGeometry } from '.
 import PipelineEditor from '../../components/admin/PipelineEditor'
 import PreviewModal from '../../components/admin/PreviewModal'
 
-const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound', 'sceneBackgroundLayer0', 'sceneBackgroundLayer1', 'sceneBackgroundLayer2'])
+const PROJECT_LEVEL_HINTS = new Set(['image', 'backgroundVideo', 'ambientSound', 'sceneBackground', 'sceneForeground'])
 
 export default function AnimationsSection() {
   const { project, save, canPreview } = useAdminContext()

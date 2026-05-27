@@ -140,11 +140,7 @@ export class ScenePlayback {
   }
 
   private getBgWidth(): number {
-    let w = 0
-    for (const l of this.scene.backgroundLayers) {
-      if (l.imageBlob && l.width > w) w = l.width
-    }
-    return w
+    return this.scene.background?.width ?? 0
   }
 
   /** No-op kept for backwards compatibility with callers (was used to advance multi-rest). */

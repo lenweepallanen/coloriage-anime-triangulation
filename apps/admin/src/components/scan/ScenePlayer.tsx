@@ -231,98 +231,174 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     const bgContainer = new PIXI.Container()
     const characterContainer = new PIXI.Container()
+    const foregroundContainer = new PIXI.Container()
+    // Ordre z : arrière-plan → personnage (+ overlays) → avant-plan → HUD (DOM).
     app.stage.addChild(bgContainer)
     app.stage.addChild(characterContainer)
+    app.stage.addChild(foregroundContainer)
 
-    const bgSprites: (PIXI.Sprite | null)[] = [null, null, null]
-    const bgImageUrls: string[] = []
-    // Pick the highest-index layer that actually has an image; fall back to viewport dims
-    // so the scene still renders (character only) when no background layers are imported.
-    let frontLayer = scene.backgroundLayers[2]
-    for (let i = 2; i >= 0; i--) {
-      const l = scene.backgroundLayers[i]
-      if ((l?.imageBlob || l?.videoBlob) && l.height > 0) { frontLayer = l; break }
-    }
-    const bgScale = ((frontLayer.imageBlob || frontLayer.videoBlob) && frontLayer.height > 0)
-      ? viewH / frontLayer.height
+    const bg = scene.background
+    const fg = scene.foreground
+    const bgScale = (bg && (bg.imageBlob || bg.videoBlob) && bg.height > 0)
+      ? viewH / bg.height
       : 1
 
-    // Pre-create 3 containers to guarantee z-order
-    const layerContainers = [new PIXI.Container(), new PIXI.Container(), new PIXI.Container()]
-    for (const lc of layerContainers) bgContainer.addChild(lc)
-
+    let backgroundSprite: PIXI.Sprite | null = null
+    let foregroundSprite: PIXI.Sprite | null = null
+    const bgImageUrls: string[] = []
     const bgVideoElements: HTMLVideoElement[] = []
-    for (let li = 0; li < 3; li++) {
-      const layer = scene.backgroundLayers[li]
-      const layerIndex = li
-      if (layer.videoBlob) {
-        const url = URL.createObjectURL(layer.videoBlob)
-        bgImageUrls.push(url)
-        const vid = document.createElement('video')
-        // iOS Safari : muted + playsInline DOIVENT être définis avant src,
-        // sinon l'autoplay est bloqué et la texture PIXI reste blanche.
-        vid.muted = true
-        vid.defaultMuted = true
-        vid.loop = true
-        vid.autoplay = true
-        vid.playsInline = true
-        vid.setAttribute('muted', '')
-        vid.setAttribute('playsinline', '')
-        vid.setAttribute('webkit-playsinline', '')
-        vid.setAttribute('autoplay', '')
-        vid.setAttribute('loop', '')
-        vid.crossOrigin = 'anonymous'
-        vid.src = url
-        // iOS exige que la <video> soit dans le DOM pour décoder. On l'ajoute en
-        // caché — PIXI lira les frames via la même balise.
-        vid.style.position = 'absolute'
-        vid.style.width = '1px'
-        vid.style.height = '1px'
-        vid.style.opacity = '0'
-        vid.style.pointerEvents = 'none'
-        document.body.appendChild(vid)
-        bgVideoElements.push(vid)
-        const tryPlay = () => vid.play().catch(() => { /* retry on user gesture */ })
-        tryPlay()
-        // iOS bloque l'autoplay tant qu'il n'y a pas un geste utilisateur. On retente
-        // au premier touch/pointer/click n'importe où, en phase capture pour passer
-        // avant les handlers de la page.
-        const onGesture = () => {
-          tryPlay()
-          document.removeEventListener('pointerdown', onGesture, true)
-          document.removeEventListener('touchstart', onGesture, true)
-          document.removeEventListener('click', onGesture, true)
-        }
-        document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
-        document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
-        document.addEventListener('click', onGesture, { passive: true, capture: true })
-        const bgTexture = PIXI.Texture.from(vid)
-        const sprite = new PIXI.Sprite(bgTexture)
-        const layerScale = viewH / layer.height
-        sprite.width = layer.width * layerScale
-        sprite.height = viewH
-        layerContainers[layerIndex].addChild(sprite)
-        bgSprites[layerIndex] = sprite
-      } else if (layer.imageBlob) {
-        const url = URL.createObjectURL(layer.imageBlob)
-        bgImageUrls.push(url)
-        const bgImg = new Image()
-        bgImg.src = url
-        bgImg.onload = () => {
-          const bgCanvas = document.createElement('canvas')
-          bgCanvas.width = bgImg.naturalWidth
-          bgCanvas.height = bgImg.naturalHeight
-          const bgCtx = bgCanvas.getContext('2d')!
-          bgCtx.drawImage(bgImg, 0, 0)
 
-          const bgTexture = PIXI.Texture.from(bgCanvas)
-          const sprite = new PIXI.Sprite(bgTexture)
-          const layerScale = viewH / layer.height
-          sprite.width = layer.width * layerScale
-          sprite.height = viewH
-          layerContainers[layerIndex].addChild(sprite)
-          bgSprites[layerIndex] = sprite
+    if (bg?.videoBlob) {
+      const url = URL.createObjectURL(bg.videoBlob)
+      bgImageUrls.push(url)
+      const vid = document.createElement('video')
+      vid.muted = true
+      vid.defaultMuted = true
+      vid.loop = true
+      vid.autoplay = true
+      vid.playsInline = true
+      vid.setAttribute('muted', '')
+      vid.setAttribute('playsinline', '')
+      vid.setAttribute('webkit-playsinline', '')
+      vid.setAttribute('autoplay', '')
+      vid.setAttribute('loop', '')
+      vid.crossOrigin = 'anonymous'
+      vid.src = url
+      vid.style.position = 'absolute'
+      vid.style.width = '1px'
+      vid.style.height = '1px'
+      vid.style.opacity = '0'
+      vid.style.pointerEvents = 'none'
+      document.body.appendChild(vid)
+      bgVideoElements.push(vid)
+      const tryPlay = () => vid.play().catch(() => {})
+      tryPlay()
+      const onGesture = () => {
+        tryPlay()
+        document.removeEventListener('pointerdown', onGesture, true)
+        document.removeEventListener('touchstart', onGesture, true)
+        document.removeEventListener('click', onGesture, true)
+      }
+      document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
+      document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
+      document.addEventListener('click', onGesture, { passive: true, capture: true })
+      const tex = PIXI.Texture.from(vid)
+      const sprite = new PIXI.Sprite(tex)
+      sprite.width = bg.width * bgScale
+      sprite.height = viewH
+      bgContainer.addChild(sprite)
+      backgroundSprite = sprite
+    } else if (bg?.imageBlob) {
+      const url = URL.createObjectURL(bg.imageBlob)
+      bgImageUrls.push(url)
+      const img = new Image()
+      img.src = url
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        canvas.getContext('2d')!.drawImage(img, 0, 0)
+        const tex = PIXI.Texture.from(canvas)
+        const sprite = new PIXI.Sprite(tex)
+        sprite.width = bg.width * bgScale
+        sprite.height = viewH
+        bgContainer.addChild(sprite)
+        backgroundSprite = sprite
+      }
+    }
+
+    // Filtre chroma key partagé image/vidéo :
+    //  - smoothstep entre threshold et threshold+smoothness → bord progressif
+    //  - érosion 1 pixel (min des 4 voisins) → tire le bord vers l'intérieur, supprime l'aliasing
+    //  - despill (unmultiply puis remultiply) → enlève la teinte clé résiduelle dans la bande de transition,
+    //    élimine le liseré sombre quand la clé est noire
+    const buildChromaKeyFilter = (hex: string, threshold: number, smoothness: number): PIXI.Filter => {
+      const r = parseInt(hex.slice(1, 3), 16) / 255
+      const g = parseInt(hex.slice(3, 5), 16) / 255
+      const b = parseInt(hex.slice(5, 7), 16) / 255
+      const fragment = `
+        precision mediump float;
+        varying vec2 vTextureCoord;
+        uniform sampler2D uSampler;
+        uniform vec3 uKey;
+        uniform float uThreshold;
+        uniform float uSmoothness;
+        void main(void) {
+          vec4 c = texture2D(uSampler, vTextureCoord);
+          float d = distance(c.rgb, uKey);
+          float a = smoothstep(uThreshold, uThreshold + max(uSmoothness, 0.001), d);
+          gl_FragColor = vec4(c.rgb * a, c.a * a);
         }
+      `
+      return new PIXI.Filter(undefined, fragment, {
+        uKey: [r, g, b],
+        uThreshold: threshold,
+        uSmoothness: smoothness,
+      })
+    }
+
+    if (fg?.videoBlob) {
+      const url = URL.createObjectURL(fg.videoBlob)
+      bgImageUrls.push(url)
+      const vid = document.createElement('video')
+      vid.muted = true
+      vid.defaultMuted = true
+      vid.loop = true
+      vid.autoplay = true
+      vid.playsInline = true
+      vid.setAttribute('muted', '')
+      vid.setAttribute('playsinline', '')
+      vid.setAttribute('webkit-playsinline', '')
+      vid.setAttribute('autoplay', '')
+      vid.setAttribute('loop', '')
+      vid.crossOrigin = 'anonymous'
+      vid.src = url
+      vid.style.position = 'absolute'
+      vid.style.width = '1px'
+      vid.style.height = '1px'
+      vid.style.opacity = '0'
+      vid.style.pointerEvents = 'none'
+      document.body.appendChild(vid)
+      bgVideoElements.push(vid)
+      const tryPlay = () => vid.play().catch(() => {})
+      tryPlay()
+      const onGesture = () => {
+        tryPlay()
+        document.removeEventListener('pointerdown', onGesture, true)
+        document.removeEventListener('touchstart', onGesture, true)
+        document.removeEventListener('click', onGesture, true)
+      }
+      document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
+      document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
+      document.addEventListener('click', onGesture, { passive: true, capture: true })
+      const tex = PIXI.Texture.from(vid)
+      const sprite = new PIXI.Sprite(tex)
+      sprite.width = fg.width * bgScale
+      sprite.height = fg.height * bgScale
+      if (fg.chromaKeyColor) {
+        sprite.filters = [buildChromaKeyFilter(fg.chromaKeyColor, fg.chromaKeyThreshold ?? 0.1, fg.chromaKeySmoothness ?? 0.12)]
+      }
+      foregroundContainer.addChild(sprite)
+      foregroundSprite = sprite
+    } else if (fg?.imageBlob) {
+      const url = URL.createObjectURL(fg.imageBlob)
+      bgImageUrls.push(url)
+      const img = new Image()
+      img.src = url
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        canvas.getContext('2d')!.drawImage(img, 0, 0)
+        const tex = PIXI.Texture.from(canvas)
+        const sprite = new PIXI.Sprite(tex)
+        sprite.width = fg.width * bgScale
+        sprite.height = fg.height * bgScale
+        if (fg.chromaKeyColor) {
+          sprite.filters = [buildChromaKeyFilter(fg.chromaKeyColor, fg.chromaKeyThreshold ?? 0.1, fg.chromaKeySmoothness ?? 0.12)]
+        }
+        foregroundContainer.addChild(sprite)
+        foregroundSprite = sprite
       }
     }
 
@@ -1344,14 +1420,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, openness)
       }
 
-      // Parallax scrolling: each layer scrolls at depthFactor × front speed.
-      // The offset is relative to the front layer's scroll, applied directly in screen pixels.
-      const frontOffsetPx = scenePlayback.backgroundOffsetX * bgScale
-      for (let li = 0; li < 3; li++) {
-        const sprite = bgSprites[li]
-        if (!sprite) continue
-        sprite.x = -frontOffsetPx * scene.backgroundLayers[li].depthFactor
-      }
+      // Scroll synchrone arrière-plan + avant-plan (mêmes dimensions, suivent le perso 1:1).
+      const offsetPx = scenePlayback.backgroundOffsetX * bgScale
+      if (backgroundSprite) backgroundSprite.x = -offsetPx
+      if (foregroundSprite) foregroundSprite.x = -offsetPx
 
       // Outlines de zones
       outlineOverlay.clear()

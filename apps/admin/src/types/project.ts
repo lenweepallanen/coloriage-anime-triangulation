@@ -773,12 +773,31 @@ export interface SceneTransition {
   segments: SceneSegment[];
 }
 
-export interface SceneBackgroundLayer {
+/** Arrière-plan de la scène. Image ou vidéo (en boucle). */
+export interface SceneBackground {
   imageBlob: Blob | null;
   videoBlob: Blob | null;
   width: number;
   height: number;
-  depthFactor: number;
+}
+
+/** Avant-plan superposé devant le personnage. PNG transparent statique OU vidéo
+ *  (avec chroma key au rendu : la couleur uniforme du fond est rendue transparente).
+ *  Doit avoir les mêmes dimensions que l'arrière-plan pour s'aligner. */
+export interface SceneForeground {
+  imageBlob: Blob | null;
+  videoBlob: Blob | null;
+  width: number;
+  height: number;
+  /** Couleur (hex "#rrggbb") rendue transparente par chroma key. Null = pas de chroma
+   *  (PNG transparent natif ou vidéo sans suppression). Défaut "#000000" pour vidéo. */
+  chromaKeyColor?: string | null;
+  /** Tolérance chroma key [0..1]. 0 = match strict de la couleur, 1 = tout pixel rendu transparent.
+   *  Défaut 0.1. */
+  chromaKeyThreshold?: number;
+  /** Largeur de la bande de transition douce [0..0.5]. Plus élevé = bord plus flou et progressif.
+   *  Défaut 0.12. Indépendant du threshold pour pouvoir corriger les liserés sans toucher la sélection. */
+  chromaKeySmoothness?: number;
 }
 
 export interface SceneWalkTrapezoid {
@@ -812,7 +831,8 @@ export interface SceneWalkTrapezoid {
 export interface Scene {
   id: string;
   name: string;
-  backgroundLayers: SceneBackgroundLayer[];
+  background: SceneBackground | null;
+  foreground: SceneForeground | null;
   characterScale: number;
   characterY: number;
   /** Point de repos unique de la scène (anciennement restPoints[0]). */

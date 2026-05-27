@@ -208,16 +208,21 @@ Si `project.ambientSoundBlob` et `project.ambientSoundEnabled` : un `HTMLAudioEl
 
 ## ScenePlayer — Rendu scène avec parallax + zones corporelles
 
-### Parallax 3 couches
+### Plans de scène (background + foreground)
 
-Le background de scène est composé de 3 layers (`scene.backgroundLayers[0..2]`) rendus dans 3 containers PIXI ordonnés (back-to-front) :
-- Layer 0 (arrière-plan) : `depthFactor` par défaut 0.3
-- Layer 1 (milieu) : `depthFactor` par défaut 0.6
-- Layer 2 (premier plan) : `depthFactor` 1.0 (comportement identique à l'ancien background unique)
+Deux plans, rendus dans cet ordre z : **arrière-plan → personnage (+ overlays) → avant-plan → HUD (DOM)** :
+- `scene.background` : image ou vidéo (en boucle), derrière le perso. Sprite dans `bgContainer`.
+- `scene.foreground` : PNG transparent, devant le perso (donne l'impression que le perso passe derrière des fougères, branches, etc.). Sprite dans `foregroundContainer`.
 
-Formule : `sprite.x = -frontOffsetPx * depthFactor` — les couches arrière défilent plus lentement.
+Les deux plans **partagent les mêmes dimensions** et défilent **1:1 avec la position du perso** (la "caméra" cadre le perso quand le fond est plus large que l'écran) :
 
-Le `bgScale` est basé sur la hauteur du layer 2 (premier plan). Le `backgroundOffsetX` de `ScenePlayback` est en pixels du front layer.
+```ts
+const offsetPx = scenePlayback.backgroundOffsetX * bgScale
+backgroundSprite.x = -offsetPx
+foregroundSprite.x = -offsetPx
+```
+
+Le `bgScale = viewH / background.height` ; les deux sprites sont scalés par `bgScale`. Le `backgroundOffsetX` de `ScenePlayback` est en pixels image du background.
 
 ### Détection zones corporelles
 

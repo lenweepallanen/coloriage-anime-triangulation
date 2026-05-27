@@ -60,9 +60,8 @@ Chaque `AnimationDoc` :
 projects/{projectId}/originalImage                              → Blob image (niveau projet)
 projects/{projectId}/backgroundVideo                            → Blob vidéo fond (niveau projet)
 projects/{projectId}/ambientSound                               → Blob son d'ambiance (niveau projet)
-projects/{projectId}/sceneBackgroundLayer0                      → Arrière-plan scène (parallax)
-projects/{projectId}/sceneBackgroundLayer1                      → Milieu scène (parallax)
-projects/{projectId}/sceneBackgroundLayer2                      → Premier plan scène (parallax)
+projects/{projectId}/sceneBackground                            → Arrière-plan scène (image ou vidéo, fond fixe)
+projects/{projectId}/sceneForeground                            → Avant-plan scène (PNG transparent, devant le personnage)
 projects/{projectId}/animations/{animId}/video                  → Blob vidéo animation
 projects/{projectId}/animations/{animId}/contourOriginKeyframes.json
 projects/{projectId}/animations/{animId}/contourOriginFrames.json
@@ -92,7 +91,7 @@ scans/{scanId}/scanImage                                        → Blob image r
 
 ```typescript
 UploadHint = 'image' | 'backgroundVideo' | 'ambientSound'
-  | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
+  | 'sceneBackground' | 'sceneForeground'
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string } | { deleteSpeakSoundId: string }
 

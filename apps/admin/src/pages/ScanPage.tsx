@@ -420,7 +420,7 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
       )}
 
       {stage === 'animation' && processor.rectifiedCanvas && (
-        project.scene && project.scene.backgroundLayers.some(l => l.imageBlob || l.videoBlob) && project.scene.restPoint != null
+        project.scene && !!project.scene.background && (project.scene.background.imageBlob != null || project.scene.background.videoBlob != null) && project.scene.restPoint != null
           ? <ScenePlayer
               project={project}
               scanCanvas={processor.rectifiedCanvas}

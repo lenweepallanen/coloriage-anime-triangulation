@@ -7,7 +7,7 @@ import {
 } from 'firebase/storage'
 import { db, storage } from './firebase'
 import { logAudit } from './audit'
-import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackgroundLayer, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
+import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackground, SceneForeground, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
 // Firestore doesn't support nested arrays, so triangles are stored as objects
@@ -228,6 +228,24 @@ interface SceneTransitionDoc {
   segments: SceneSegmentDoc[]
 }
 
+interface SceneBackgroundDoc {
+  hasImage: boolean
+  hasVideo: boolean
+  width: number
+  height: number
+}
+
+interface SceneForegroundDoc {
+  hasImage: boolean
+  hasVideo?: boolean
+  width: number
+  height: number
+  chromaKeyColor?: string | null
+  chromaKeyThreshold?: number
+  chromaKeySmoothness?: number
+}
+
+/** @deprecated legacy parallax 3-layer model */
 interface SceneBackgroundLayerDoc {
   hasImage: boolean
   hasVideo?: boolean
@@ -239,6 +257,9 @@ interface SceneBackgroundLayerDoc {
 interface SceneDoc {
   id: string
   name: string
+  background?: SceneBackgroundDoc | null
+  foreground?: SceneForegroundDoc | null
+  /** @deprecated legacy 3-layer parallax. */
   backgroundLayers?: SceneBackgroundLayerDoc[]
   // Legacy fields (migration)
   hasBackgroundImage?: boolean
@@ -877,13 +898,21 @@ function sceneToDoc(scene: Scene): SceneDoc {
   return {
     id: scene.id,
     name: scene.name,
-    backgroundLayers: scene.backgroundLayers.map(l => ({
-      hasImage: l.imageBlob != null,
-      hasVideo: l.videoBlob != null,
-      width: l.width,
-      height: l.height,
-      depthFactor: l.depthFactor,
-    })),
+    background: scene.background ? {
+      hasImage: scene.background.imageBlob != null,
+      hasVideo: scene.background.videoBlob != null,
+      width: scene.background.width,
+      height: scene.background.height,
+    } : null,
+    foreground: scene.foreground ? {
+      hasImage: scene.foreground.imageBlob != null,
+      hasVideo: scene.foreground.videoBlob != null,
+      width: scene.foreground.width,
+      height: scene.foreground.height,
+      ...(scene.foreground.chromaKeyColor != null && { chromaKeyColor: scene.foreground.chromaKeyColor }),
+      ...(scene.foreground.chromaKeyThreshold != null && { chromaKeyThreshold: scene.foreground.chromaKeyThreshold }),
+      ...(scene.foreground.chromaKeySmoothness != null && { chromaKeySmoothness: scene.foreground.chromaKeySmoothness }),
+    } : null,
     characterScale: scene.characterScale,
     characterY: scene.characterY,
     restPoint: restPointToDoc(scene.restPoint),
@@ -1188,20 +1217,24 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     projDoc.hasThumbnail ? downloadBlob(`projects/${id}/thumbnail`) : Promise.resolve(null),
   ])
 
-  // Download scene background layer blobs
-  let sceneLayerBlobs: (Blob | null)[] = [null, null, null]
+  // Download scene background + foreground blobs.
+  // Fallback de migration legacy : si le nouveau chemin `sceneBackground` est vide alors
+  // que le doc annonce du contenu, on retombe sur les anciens `sceneBackgroundLayer0/1/2`.
+  let sceneBackgroundBlob: Blob | null = null
+  let sceneForegroundBlob: Blob | null = null
   if (projDoc.scene) {
-    if (projDoc.scene.backgroundLayers) {
-      // New format: 3 layers
-      sceneLayerBlobs = await Promise.all(
-        projDoc.scene.backgroundLayers.map((l, i) =>
-          (l.hasImage || l.hasVideo) ? downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`) : Promise.resolve(null)
-        )
-      )
-    } else if (projDoc.scene.hasBackgroundImage) {
-      // Legacy format: single background → layer 2
-      const legacyBlob = await downloadBlob(`projects/${id}/sceneBackground`)
-      sceneLayerBlobs = [null, null, legacyBlob]
+    const hasNewBackground = !!projDoc.scene.background && (projDoc.scene.background.hasImage || projDoc.scene.background.hasVideo)
+    if (hasNewBackground || projDoc.scene.backgroundLayers || projDoc.scene.hasBackgroundImage) {
+      sceneBackgroundBlob = await downloadBlob(`projects/${id}/sceneBackground`)
+      if (!sceneBackgroundBlob) {
+        // Fallback chemins legacy (projet migré sans re-upload du blob)
+        for (let i = 0; i < 3 && !sceneBackgroundBlob; i++) {
+          sceneBackgroundBlob = await downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`).catch(() => null)
+        }
+      }
+    }
+    if (projDoc.scene.foreground?.hasImage || projDoc.scene.foreground?.hasVideo) {
+      sceneForegroundBlob = await downloadBlob(`projects/${id}/sceneForeground`)
     }
   }
 
@@ -1320,18 +1353,45 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     const speakSoundBlobs = await Promise.all(
       speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`))
     )
-    const layerDocs = projDoc.scene.backgroundLayers ?? [
-      { hasImage: false, width: 0, height: 0, depthFactor: 0.3 },
-      { hasImage: false, width: 0, height: 0, depthFactor: 0.6 },
-      { hasImage: projDoc.scene.hasBackgroundImage ?? false, width: projDoc.scene.backgroundWidth ?? 0, height: projDoc.scene.backgroundHeight ?? 0, depthFactor: 1.0 },
-    ]
-    const backgroundLayers: SceneBackgroundLayer[] = layerDocs.map((l, i) => ({
-      imageBlob: l.hasVideo ? null : (sceneLayerBlobs[i] ?? null),
-      videoBlob: l.hasVideo ? (sceneLayerBlobs[i] ?? null) : null,
-      width: l.width,
-      height: l.height,
-      depthFactor: l.depthFactor,
-    }))
+    let background: SceneBackground | null = null
+    if (projDoc.scene.background) {
+      background = {
+        imageBlob: projDoc.scene.background.hasVideo ? null : sceneBackgroundBlob,
+        videoBlob: projDoc.scene.background.hasVideo ? sceneBackgroundBlob : null,
+        width: projDoc.scene.background.width,
+        height: projDoc.scene.background.height,
+      }
+    } else if (projDoc.scene.backgroundLayers) {
+      // Legacy migration : promouvoir le premier layer avec media en arrière-plan unique.
+      const legacy = projDoc.scene.backgroundLayers.find(l => l.hasImage || l.hasVideo)
+      if (legacy) {
+        background = {
+          imageBlob: legacy.hasVideo ? null : sceneBackgroundBlob,
+          videoBlob: legacy.hasVideo ? sceneBackgroundBlob : null,
+          width: legacy.width,
+          height: legacy.height,
+        }
+      }
+    } else if (projDoc.scene.hasBackgroundImage) {
+      background = {
+        imageBlob: sceneBackgroundBlob,
+        videoBlob: null,
+        width: projDoc.scene.backgroundWidth ?? 0,
+        height: projDoc.scene.backgroundHeight ?? 0,
+      }
+    }
+    const fgDoc = projDoc.scene.foreground
+    const foreground: SceneForeground | null = (fgDoc?.hasImage || fgDoc?.hasVideo)
+      ? {
+          imageBlob: fgDoc.hasVideo ? null : sceneForegroundBlob,
+          videoBlob: fgDoc.hasVideo ? sceneForegroundBlob : null,
+          width: fgDoc.width,
+          height: fgDoc.height,
+          chromaKeyColor: fgDoc.chromaKeyColor ?? null,
+          chromaKeyThreshold: fgDoc.chromaKeyThreshold,
+          chromaKeySmoothness: fgDoc.chromaKeySmoothness,
+        }
+      : null
 
     // Migration : restPoint = nouveau champ, sinon restPoints[0] (legacy multi-rest).
     const rpDoc = projDoc.scene.restPoint ?? projDoc.scene.restPoints?.[0]
@@ -1352,7 +1412,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
-      backgroundLayers,
+      background,
+      foreground,
       characterScale: projDoc.scene.characterScale,
       characterY: projDoc.scene.characterY,
       restPoint,
@@ -1640,7 +1701,7 @@ export type AnimationUploadField =
 
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound' | 'thumbnail'
-  | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
+  | 'sceneBackground' | 'sceneForeground'
   | 'triangulationReferenceImage' | 'triangulationMasks' | 'triangulationContours'
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string }
@@ -1710,15 +1771,22 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
         uploadBlob(`projects/${id}/triangulation/contours.json`, blob)
           .then(() => console.log('[Storage] Triangulation contours uploaded'))
       )
-    } else if (typeof hint === 'string' && hint.startsWith('sceneBackgroundLayer') && project.scene) {
-      const layerIdx = parseInt(hint.slice(-1))
-      const layer = project.scene.backgroundLayers[layerIdx]
-      const blob = layer?.videoBlob ?? layer?.imageBlob
+    } else if (hint === 'sceneBackground' && project.scene?.background) {
+      const blob = project.scene.background.videoBlob ?? project.scene.background.imageBlob
       if (blob) {
-        console.log(`[Storage] Uploading scene background layer ${layerIdx} for:`, id)
+        console.log(`[Storage] Uploading scene background for:`, id)
         uploads.push(
-          uploadBlob(`projects/${id}/sceneBackgroundLayer${layerIdx}`, blob)
-            .then(() => console.log(`[Storage] Scene background layer ${layerIdx} uploaded`))
+          uploadBlob(`projects/${id}/sceneBackground`, blob)
+            .then(() => console.log(`[Storage] Scene background uploaded`))
+        )
+      }
+    } else if (hint === 'sceneForeground' && project.scene?.foreground) {
+      const blob = project.scene.foreground.videoBlob ?? project.scene.foreground.imageBlob
+      if (blob) {
+        console.log(`[Storage] Uploading scene foreground for:`, id)
+        uploads.push(
+          uploadBlob(`projects/${id}/sceneForeground`, blob)
+            .then(() => console.log(`[Storage] Scene foreground uploaded`))
         )
       }
     } else if (typeof hint === 'object' && 'speakSoundId' in hint) {
@@ -1875,6 +1943,7 @@ export async function deleteProject(id: string): Promise<void> {
     `projects/${id}/backgroundVideo`,
     `projects/${id}/ambientSound`,
     `projects/${id}/sceneBackground`,
+    `projects/${id}/sceneForeground`,
     `projects/${id}/sceneBackgroundLayer0`,
     `projects/${id}/sceneBackgroundLayer1`,
     `projects/${id}/sceneBackgroundLayer2`,
@@ -2003,10 +2072,11 @@ export async function duplicateProject(sourceId: string, overrides?: DuplicatePr
   if (duplicate.projectTriangulation?.referenceImageBlob) hints.push('triangulationReferenceImage')
   if (duplicate.projectTriangulation?.masksRLE) hints.push('triangulationMasks')
   if (duplicate.projectTriangulation?.contours) hints.push('triangulationContours')
-  if (duplicate.scene) {
-    duplicate.scene.backgroundLayers.forEach((l, i) => {
-      if (l.imageBlob || l.videoBlob) hints.push(`sceneBackgroundLayer${i}` as UploadHint)
-    })
+  if (duplicate.scene?.background && (duplicate.scene.background.imageBlob || duplicate.scene.background.videoBlob)) {
+    hints.push('sceneBackground')
+  }
+  if (duplicate.scene?.foreground && (duplicate.scene.foreground.imageBlob || duplicate.scene.foreground.videoBlob)) {
+    hints.push('sceneForeground')
   }
   for (const sound of duplicate.scene?.speakSounds ?? []) {
     hints.push({ speakSoundId: sound.id })
@@ -2183,14 +2253,28 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
   let scene: Scene | null = null
   if (projDoc.scene) {
     const speakSounds = projDoc.scene.speakSounds ?? []
-    const layerDocs = projDoc.scene.backgroundLayers ?? [
-      { hasImage: false, width: 0, height: 0, depthFactor: 0.3 },
-      { hasImage: false, width: 0, height: 0, depthFactor: 0.6 },
-      { hasImage: projDoc.scene.hasBackgroundImage ?? false, width: projDoc.scene.backgroundWidth ?? 0, height: projDoc.scene.backgroundHeight ?? 0, depthFactor: 1.0 },
-    ]
-    const backgroundLayers: SceneBackgroundLayer[] = layerDocs.map(l => ({
-      imageBlob: null, videoBlob: null, width: l.width, height: l.height, depthFactor: l.depthFactor,
-    }))
+    // Métadonnées seules (blobs hydratés plus tard via hydrateProjectAssets)
+    let background: SceneBackground | null = null
+    if (projDoc.scene.background) {
+      background = { imageBlob: null, videoBlob: null, width: projDoc.scene.background.width, height: projDoc.scene.background.height }
+    } else if (projDoc.scene.backgroundLayers) {
+      const legacy = projDoc.scene.backgroundLayers.find(l => l.hasImage || l.hasVideo)
+      if (legacy) background = { imageBlob: null, videoBlob: null, width: legacy.width, height: legacy.height }
+    } else if (projDoc.scene.hasBackgroundImage) {
+      background = { imageBlob: null, videoBlob: null, width: projDoc.scene.backgroundWidth ?? 0, height: projDoc.scene.backgroundHeight ?? 0 }
+    }
+    const fgDocE = projDoc.scene.foreground
+    const foreground: SceneForeground | null = (fgDocE?.hasImage || fgDocE?.hasVideo)
+      ? {
+          imageBlob: null,
+          videoBlob: null,
+          width: fgDocE.width,
+          height: fgDocE.height,
+          chromaKeyColor: fgDocE.chromaKeyColor ?? null,
+          chromaKeyThreshold: fgDocE.chromaKeyThreshold,
+          chromaKeySmoothness: fgDocE.chromaKeySmoothness,
+        }
+      : null
 
     const docToRestPointEssentials = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
       let actions = rp.actions?.map(a => {
@@ -2249,7 +2333,8 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
-      backgroundLayers,
+      background,
+      foreground,
       characterScale: projDoc.scene.characterScale,
       characterY: projDoc.scene.characterY,
       restPoint,
@@ -2329,15 +2414,27 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     })
   )
 
-  // Scene background layers + speak sounds + scene sounds
+  // Scene background + foreground + speak sounds + scene sounds
   let scene = project.scene
   if (scene) {
-    const layerBlobs = await Promise.all(
-      scene.backgroundLayers.map((l, i) =>
-        (l.imageBlob || l.videoBlob) ? Promise.resolve(l.imageBlob ?? l.videoBlob)
-          : downloadBlob(`projects/${id}/sceneBackgroundLayer${i}`).catch(() => null)
-      )
-    )
+    const bgDoc = projDoc?.scene?.background ?? null
+    const bgHasVideo = bgDoc?.hasVideo === true
+    const bgHasImage = bgDoc?.hasImage === true
+    const fgDocDef = projDoc?.scene?.foreground ?? null
+    const fgHasVideo = fgDocDef?.hasVideo === true
+    const fgHasImage = fgDocDef?.hasImage === true
+    const [backgroundBlob, foregroundBlob] = await Promise.all([
+      scene.background && (bgHasVideo || bgHasImage)
+        ? ((scene.background.imageBlob || scene.background.videoBlob)
+            ? Promise.resolve(scene.background.imageBlob ?? scene.background.videoBlob)
+            : downloadBlob(`projects/${id}/sceneBackground`).catch(() => null))
+        : Promise.resolve(null),
+      scene.foreground && (fgHasImage || fgHasVideo)
+        ? ((scene.foreground.imageBlob || scene.foreground.videoBlob)
+            ? Promise.resolve(scene.foreground.imageBlob ?? scene.foreground.videoBlob)
+            : downloadBlob(`projects/${id}/sceneForeground`).catch(() => null))
+        : Promise.resolve(null),
+    ])
     const speakSoundBlobs = await Promise.all(
       scene.speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`).catch(() => null))
     )
@@ -2359,11 +2456,20 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
 
     scene = {
       ...scene,
-      backgroundLayers: scene.backgroundLayers.map((l, i) => ({
-        ...l,
-        imageBlob: l.imageBlob ?? (layerBlobs[i] ?? null),
-        videoBlob: l.videoBlob ?? null,
-      })),
+      background: scene.background
+        ? {
+            ...scene.background,
+            imageBlob: scene.background.imageBlob ?? (bgHasVideo ? null : backgroundBlob),
+            videoBlob: scene.background.videoBlob ?? (bgHasVideo ? backgroundBlob : null),
+          }
+        : null,
+      foreground: scene.foreground
+        ? {
+            ...scene.foreground,
+            imageBlob: scene.foreground.imageBlob ?? (fgHasVideo ? null : foregroundBlob),
+            videoBlob: scene.foreground.videoBlob ?? (fgHasVideo ? foregroundBlob : null),
+          }
+        : null,
       ...(scene.entrySound != null && { entrySound: { ...scene.entrySound, blob: sceneSoundMap.get(scene.entrySound.id) ?? scene.entrySound.blob ?? null } }),
       ...(scene.ambientSound != null && { ambientSound: { ...scene.ambientSound, blob: sceneSoundMap.get(scene.ambientSound.id) ?? scene.ambientSound.blob ?? null } }),
       restPoint: {

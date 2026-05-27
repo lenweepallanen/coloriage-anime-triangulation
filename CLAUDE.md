@@ -403,7 +403,7 @@ Section dédiée dans `AdminLayout` (onglet "Triangulation"), indépendante du p
 src/
 ├── main.tsx                    Point d'entrée
 ├── App.tsx                     Router
-├── types/project.ts            Types (Point2D, Animation, BodyZone, SceneBackgroundLayer, ProjectStepView, MeshData, Project, Scan)
+├── types/project.ts            Types (Point2D, Animation, BodyZone, SceneBackground, SceneForeground, ProjectStepView, MeshData, Project, Scan)
 ├── db/
 │   ├── firebase.ts             Init Firebase
 │   ├── projectsStore.ts        CRUD projets (Firestore + Storage)
@@ -651,16 +651,23 @@ Sam2Skeleton {
   legs: Sam2LegBone[]                    // 0-4 pattes
 }
 
-SceneBackgroundLayer {
+SceneBackground {
   imageBlob: Blob | null
+  videoBlob: Blob | null              // image OU vidéo (en boucle)
   width: number
   height: number
-  depthFactor: number                // 0.0–1.0, vitesse défilement (0.3=arrière, 0.6=milieu, 1.0=premier plan)
+}
+
+SceneForeground {
+  imageBlob: Blob | null              // PNG (transparence) ; même dimensions que l'arrière-plan
+  width: number
+  height: number
 }
 
 Scene {
   id, name
-  backgroundLayers: SceneBackgroundLayer[]  // Toujours 3 : [arrière-plan, milieu, premier plan]
+  background: SceneBackground | null  // Fond (image ou vidéo) derrière le personnage
+  foreground: SceneForeground | null  // PNG transparent superposé devant le personnage (devant le perso, derrière le HUD)
   characterScale: number
   characterY: number
   restPoints: SceneRestPoint[]
@@ -712,9 +719,8 @@ Trois espaces de coordonnées coexistent :
   - `projects/{id}/originalImage` — blob image (niveau projet)
   - `projects/{id}/backgroundVideo` — vidéo fond (niveau projet)
   - `projects/{id}/ambientSound` — son d'ambiance (niveau projet)
-  - `projects/{id}/sceneBackgroundLayer0` — arrière-plan scène
-  - `projects/{id}/sceneBackgroundLayer1` — milieu scène
-  - `projects/{id}/sceneBackgroundLayer2` — premier plan scène
+  - `projects/{id}/sceneBackground` — arrière-plan scène (image ou vidéo, derrière le perso)
+  - `projects/{id}/sceneForeground` — avant-plan scène (PNG transparent, devant le perso)
   - `projects/{id}/animations/{animId}/video` — vidéo animation
   - `projects/{id}/animations/{animId}/contourOriginKeyframes.json`
   - `projects/{id}/animations/{animId}/contourOriginFrames.json`
@@ -736,7 +742,7 @@ Les projets existants (sans `animations` au root, avec `mesh`/`hasVideo` directe
 
 ```typescript
 UploadHint = 'image' | 'backgroundVideo' | 'ambientSound'
-  | 'sceneBackgroundLayer0' | 'sceneBackgroundLayer1' | 'sceneBackgroundLayer2'
+  | 'sceneBackground' | 'sceneForeground'
   | { animationId: string; field: AnimationUploadField }
   | { speakSoundId: string } | { deleteSpeakSoundId: string }
 StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
