@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { animationHasFrames, type Project, type Scene, type SceneRestPoint, type SceneBackgroundLayer, type SceneSound } from '../../types/project'
+import { animationHasFrames, type Project, type Scene, type SceneRestPoint, type SceneBackgroundLayer, type SceneSound, type SceneWalkTrapezoid } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import SceneTimeline, { type TimelineSelection } from './SceneTimeline'
 import SceneConfigPanel from './SceneConfigPanel'
+import SceneWalkZoneEditor from './SceneWalkZoneEditor'
+import CharacterOriginEditor from './CharacterOriginEditor'
 import ScenePlayer from '../scan/ScenePlayer'
 import { PreviewModalShell } from './PreviewModal'
 
@@ -489,6 +491,30 @@ export default function SceneEditor({ project, onSave }: Props) {
                 <span className="scene-editor-value">{scene.characterY}px</span>
               </div>
             </div>
+            <div className="scene-editor-field">
+              <label>Orientation du coloriage</label>
+              <div className="scene-config-panel-type-toggle">
+                <button
+                  className={`btn-sm ${(scene.characterFacing ?? 'right') === 'left' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setScene(prev => ({ ...prev, characterFacing: 'left' }))}
+                  title="Le coloriage est dessiné tourné vers la gauche"
+                >← Gauche</button>
+                <button
+                  className={`btn-sm ${(scene.characterFacing ?? 'right') === 'right' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setScene(prev => ({ ...prev, characterFacing: 'right' }))}
+                  title="Le coloriage est dessiné tourné vers la droite"
+                >Droite →</button>
+              </div>
+            </div>
+            <div className="scene-editor-field" style={{ gridColumn: '1 / -1' }}>
+              <label>Origine (clic en marche libre cible ce point)</label>
+              <CharacterOriginEditor
+                imageUrl={charImageUrl}
+                originU={scene.characterOriginU ?? 0.5}
+                originV={scene.characterOriginV ?? 1.0}
+                onChange={(u, v) => setScene(prev => ({ ...prev, characterOriginU: u, characterOriginV: v }))}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -552,6 +578,21 @@ export default function SceneEditor({ project, onSave }: Props) {
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Section Marche libre — carte dédiée */}
+      {hasScene && (
+        <div className="scene-editor-section-card">
+          <h4 className="scene-editor-section-title">Zone de marche</h4>
+          <SceneWalkZoneEditor
+            scene={scene}
+            animations={project.animations}
+            backgroundUrl={bgImageUrl}
+            layerWidth={frontLayer.width}
+            layerHeight={frontLayer.height}
+            onChange={(trap: SceneWalkTrapezoid | null) => setScene(prev => ({ ...prev, walkTrapezoid: trap }))}
+          />
         </div>
       )}
 

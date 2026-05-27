@@ -781,6 +781,34 @@ export interface SceneBackgroundLayer {
   depthFactor: number;
 }
 
+export interface SceneWalkTrapezoid {
+  /** 4 coins en coords du layer front (premier plan), ordre topLeft, topRight, bottomRight, bottomLeft.
+   *  Top = "arrière" (loin caméra, scale min), Bottom = "avant" (proche caméra, scale max). */
+  topLeft: Point2D;
+  topRight: Point2D;
+  bottomRight: Point2D;
+  bottomLeft: Point2D;
+  /** Multiplicateur de `Scene.characterScale` au sommet du trapèze (loin). */
+  scaleAtTop: number;
+  /** Multiplicateur de `Scene.characterScale` au bas du trapèze (proche). */
+  scaleAtBottom: number;
+  /** Inclinaison max en degrés appliquée quand la marche est oblique (±). */
+  tiltDegMax: number;
+  /** Skew vertical max (cisaillement) appliqué quand la marche est oblique (±). */
+  skewYMax: number;
+  /** Id d'une `Animation` de type 'marche' du projet à jouer en boucle pendant le déplacement. */
+  walkAnimationId: string;
+  /** Vitesse en pixels (coords background front) par seconde. */
+  walkSpeedPxPerSec: number;
+  /** Frame de démarrage du cycle de marche (le perso commence le pas à cette frame).
+   *  Défaut 0 ; un offset permet d'aligner le départ sur une frame "pas naturel". */
+  walkStartFrame?: number;
+  /** Angle (degrés depuis l'horizontale) au-delà duquel le trajet est considéré trop pentu.
+   *  Dans ce cas, on emprunte un trajet horizontal-edge→téléport→horizontal-edge au lieu
+   *  d'un diagonale qui ferait glisser le perso. Défaut 20°. */
+  walkSteepAngleThresholdDeg?: number;
+}
+
 export interface Scene {
   id: string;
   name: string;
@@ -789,6 +817,15 @@ export interface Scene {
   characterY: number;
   /** Point de repos unique de la scène (anciennement restPoints[0]). */
   restPoint: SceneRestPoint;
+  /** Zone autorisée de marche + perspective 2.5D. Si null, pas de marche libre. */
+  walkTrapezoid?: SceneWalkTrapezoid | null;
+  /** Orientation du coloriage tel qu'il est dessiné. 'right' = par défaut (personnage tourné vers la droite),
+   *  'left' = personnage dessiné tourné vers la gauche → le rendu applique un flip horizontal de base. */
+  characterFacing?: 'right' | 'left';
+  /** Origine du personnage normalisée dans l'image du coloriage (0..1).
+   *  Le clic en marche libre vise cette origine. Défaut : (0.5, 1.0) = milieu-bas (pieds). */
+  characterOriginU?: number;
+  characterOriginV?: number;
   /** Mode d'entrée : 'fixed' = apparition immédiate au restPoint, 'moving' = trajet entryStartX → restPoint.backgroundX. */
   entry: 'fixed' | 'moving';
   /** Position X de départ pour entry='moving'. */

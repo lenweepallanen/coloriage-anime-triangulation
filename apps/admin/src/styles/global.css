@@ -540,6 +540,34 @@ code {
   color: var(--color-primary);
 }
 
+.admin-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-base);
+}
+.admin-breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-secondary, #666);
+  text-decoration: none;
+  transition: color var(--transition);
+}
+.admin-breadcrumb-link:hover {
+  color: var(--color-primary);
+}
+.admin-breadcrumb-current {
+  color: var(--color-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+.admin-breadcrumb-current:hover {
+  color: var(--color-primary);
+}
+.admin-breadcrumb-sep {
+  color: #aaa;
+}
+
 .admin-layout-header-right {
   display: flex;
   align-items: center;

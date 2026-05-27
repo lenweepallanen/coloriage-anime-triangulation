@@ -101,18 +101,50 @@ function generateInternalPoints(
     if (p.y > maxY) maxY = p.y
   }
 
-  const spacing = Math.max(width, height) / (density * 3 + 5)
-  const minDistSq = (spacing * 0.4) ** 2
+  // Compute centroid for adaptive spacing
+  let cx = 0, cy = 0
+  for (const p of contourPoints) { cx += p.x; cy += p.y }
+  cx /= contourPoints.length
+  cy /= contourPoints.length
+
+  // Max distance from centroid to any contour point
+  let maxDistFromCentroid = 0
+  for (const p of contourPoints) {
+    const d = Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2)
+    if (d > maxDistFromCentroid) maxDistFromCentroid = d
+  }
+  if (maxDistFromCentroid < 1) maxDistFromCentroid = 1
+
+  const baseSpacing = Math.max(width, height) / (density * 3 + 5)
+  // Use a finer grid to generate candidates, then filter with adaptive Poisson-disk
+  const fineSpacing = baseSpacing * 0.5
   const points: Point2D[] = []
 
-  for (let y = minY + spacing / 2; y < maxY; y += spacing) {
-    for (let x = minX + spacing / 2; x < maxX; x += spacing) {
+  for (let y = minY + fineSpacing / 2; y < maxY; y += fineSpacing) {
+    for (let x = minX + fineSpacing / 2; x < maxX; x += fineSpacing) {
       const p = { x, y }
       if (!pointInPolygon(p, contourPoints)) continue
 
+      // Adaptive spacing: denser near periphery (far from centroid), sparser at center
+      const distToCentroid = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+      const flexibility = distToCentroid / maxDistFromCentroid // 0=center, 1=edge
+      // Near edge: spacing = 50% of base. At center: spacing = 100% of base.
+      const localSpacing = baseSpacing * (0.5 + 0.5 * (1 - flexibility))
+      const localMinDistSq = (localSpacing * 0.4) ** 2
+
+      // Check distance to contour points
       let tooClose = false
       for (const cp of contourPoints) {
-        if (distanceSq(p, cp) < minDistSq) {
+        if (distanceSq(p, cp) < localMinDistSq) {
+          tooClose = true
+          break
+        }
+      }
+      if (tooClose) continue
+
+      // Poisson-disk: check distance to already-accepted internal points
+      for (const ep of points) {
+        if (distanceSq(p, ep) < localMinDistSq) {
           tooClose = true
           break
         }

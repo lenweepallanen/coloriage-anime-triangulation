@@ -327,21 +327,29 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
 
     const charFitScale = viewH / scanCanvas.height
-    const charScale = charFitScale * scene.characterScale
-    const charW = scanCanvas.width * charScale
-    const charH = scanCanvas.height * charScale
-    const charOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
+    const baseCharScale = charFitScale * scene.characterScale
+    // charScale, charW, charH, charOffsetY peuvent varier par frame (marche libre :
+    // perspective scale + déplacement vertical sur le trapèze).
+    let charScale = baseCharScale
+    let charW = scanCanvas.width * charScale
+    let charH = scanCanvas.height * charScale
+    const baseCharOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
+    let charOffsetY = baseCharOffsetY
+    // Origine du personnage (U,V) ∈ [0,1] dans l'image du coloriage. Le clic en marche
+    // libre vise ce point ; pivot des transforms (rotation/skew/flip) = ce point.
+    const originU = scene.characterOriginU ?? 0.5
+    const originV = scene.characterOriginV ?? 1.0
+    /** Y de l'origine au rest, en coords background front (utilisé comme initial currentY). */
+    const baselineOriginBgY = (baseCharOffsetY + originV * scanCanvas.height * baseCharScale) / bgScale
 
     // Character X offset: computed dynamically each frame from scenePlayback.currentX.
-    // Positions the character at its backgroundX on the background image,
-    // accounting for background scroll offset. When background is wide enough to scroll,
-    // the character appears centered. When it can't scroll (image not wide enough),
-    // the character moves across the fixed background — giving the impression of movement.
+    // L'origine du personnage (U×W) doit se trouver à (currentX - bgOffset) * bgScale en X.
+    // → charOffsetX = (currentX - bgOffset)*bgScale - originU * charW
     function computeCharOffsetX(sp: ScenePlayback): number {
-      return sp.currentX * bgScale - sp.backgroundOffsetX * bgScale - charW / 2
+      return sp.currentX * bgScale - sp.backgroundOffsetX * bgScale - originU * charW
     }
     // Initial value — will be updated once scenePlayback is created
-    let charOffsetX = (viewW - charW) / 2
+    let charOffsetX = (viewW - charW) / 2 - (originU - 0.5) * charW
 
     // Hidden face texture
     // LaMa mode: use the inpainted "scan without legs" for hidden face zones only
@@ -652,6 +660,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       scene,
       viewportWidth: viewW / bgScale,
       viewportHeight: viewH / bgScale,
+      initialFeetBgY: baselineOriginBgY,
+      // Largeur du personnage à scale=1 (sans perspective) en coords background.
+      characterBaseWidthBg: (scanCanvas.width * baseCharScale) / bgScale,
+      characterOriginU: originU,
     })
     scenePlaybackRef.current = scenePlayback
 
@@ -879,8 +891,22 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       zoneOneshotBody = null
       beginCrossfade(durationMs, easeInNew)
 
-      if (newState === 'entering') {
+      if (newState === 'entering' || newState === 'walking') {
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
+        // Démarrage du cycle de marche à la frame "pas naturel" choisie par l'admin.
+        if (newState === 'walking' && scene.walkTrapezoid) {
+          const startFrame = scene.walkTrapezoid.walkStartFrame ?? 0
+          if (startFrame > 0) {
+            if (activeBodyPlayback && 'seekFrame' in activeBodyPlayback) {
+              (activeBodyPlayback as LoopPlayback).seekFrame(startFrame)
+            }
+            if (activeZonePlaybacks) {
+              for (const zp of activeZonePlaybacks) {
+                if ('seekFrame' in zp.playback) (zp.playback as LoopPlayback).seekFrame(startFrame)
+              }
+            }
+          }
+        }
       } else if (newState === 'interaction' || newState === 'blend') {
         const rp = scenePlayback.currentRestPoint
         const animIds = collectRestPointAnimIds(rp)
@@ -968,9 +994,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     lastSegmentAnimId = scenePlayback.currentSegmentAnimationId
     lastSegmentCrossfadeMs = null
 
-    // --- Zone touch detection (pointer event) ---
+    // --- Pointer interactions (zones tactiles + clic pour marche libre) ---
     const onPointerDown = (e: PointerEvent) => {
+      // Marche en cours : on ignore complètement les clics jusqu'à l'arrivée.
+      if (scenePlayback.currentState === 'walking') return
       if (scenePlayback.currentState !== 'interaction') return
+
+      // Tente d'abord un hit sur une zone corporelle (oneshot via mapping)
       const img = screenToImage(e.offsetX, e.offsetY)
       const zoneId = detectTouchedZone(
         { x: img.x, y: img.y },
@@ -978,14 +1008,24 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         mesh.triangles,
         triangleZoneMap,
       )
-      if (!zoneId) return
-      const rp = scenePlayback.currentRestPoint
-      const mapping = rp?.zoneAnimationMappings?.find(m => m.zoneId === zoneId)
-      if (!mapping) return
-      if (currentMultiPlaybackRef) {
-        currentMultiPlaybackRef.requestOneshot(mapping.animationId)
-      } else {
-        triggerZoneOneshot(mapping.animationId)
+      if (zoneId) {
+        const rp = scenePlayback.currentRestPoint
+        const mapping = rp?.zoneAnimationMappings?.find(m => m.zoneId === zoneId)
+        if (mapping) {
+          if (currentMultiPlaybackRef) {
+            currentMultiPlaybackRef.requestOneshot(mapping.animationId)
+          } else {
+            triggerZoneOneshot(mapping.animationId)
+          }
+          return
+        }
+      }
+
+      // Pas de zone touchée : tente une marche libre si la scène a un trapèze
+      if (scene.walkTrapezoid) {
+        const bgX = e.offsetX / bgScale + scenePlayback.backgroundOffsetX
+        const bgY = e.offsetY / bgScale
+        scenePlayback.requestWalkTo(bgX, bgY)
       }
     }
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -1033,6 +1073,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             durationMs = lastSegmentCrossfadeMs
           } else if (newState === 'segment') {
             durationMs = segCrossfade
+          } else if (newState === 'walking') {
+            // Transition courte vers la marche : on évite de blender le rest pose avec
+            // les premières frames du cycle, ce qui rend le départ du pas naturel.
+            durationMs = 120
           } else {
             durationMs = 290
           }
@@ -1098,8 +1142,32 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         positions = currentGetPositions()
       }
 
-      // Update character X position based on current scene position
+      // Update character X/Y/scale based on current scene position (perspective during walk).
+      // Si un trapèze de marche est défini, le personnage est positionné via currentX/Y
+      // (snappé dans le trap dès l'init) — la perspective s'applique aussi au repos.
+      // Sinon, layout standard (centré vertical + characterY).
+      const walkScaleMul = scenePlayback.walkScaleMul
+      charScale = baseCharScale * walkScaleMul
+      charW = scanCanvas.width * charScale
+      charH = scanCanvas.height * charScale
+      if (scene.walkTrapezoid) {
+        // currentY = position bg de l'ORIGINE → charOffsetY tel que originV*charH + charOffsetY = currentY*bgScale
+        charOffsetY = scenePlayback.currentY * bgScale - originV * charH
+      } else {
+        charOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
+      }
       charOffsetX = computeCharOffsetX(scenePlayback)
+
+      // Transforms pivot-aware sur characterContainer : flip + rotation + skew autour de l'origine.
+      const pivotX = charOffsetX + originU * charW
+      const pivotY = charOffsetY + originV * charH
+      characterContainer.pivot.set(pivotX, pivotY)
+      characterContainer.position.set(pivotX, pivotY)
+      characterContainer.rotation = scenePlayback.walkTiltRad
+      characterContainer.skew.y = scenePlayback.walkSkewY
+      characterContainer.scale.x = scenePlayback.walkFlipX
+      characterContainer.scale.y = 1
+      characterContainer.alpha = scenePlayback.walkAlpha
       latestPositions = positions
 
       // Vertex-position crossfade for zone-based meshes (topologie partagée).
@@ -1560,8 +1628,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0
 
   const isInteraction = sceneState === 'interaction'
+  const isWalking = sceneState === 'walking'
   const buttonsVisible = sceneState !== 'entering'
-  const anyActive = activeBtn != null
+  // Boutons grisés + non cliquables pendant la marche libre.
+  const anyActive = activeBtn != null || isWalking
   const RING_R = 46
   const RING_C = 2 * Math.PI * RING_R
   function Ring({ progress, active }: { progress: number; active: boolean }) {

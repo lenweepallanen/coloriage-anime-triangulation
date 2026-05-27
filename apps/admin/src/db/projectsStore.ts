@@ -254,6 +254,13 @@ interface SceneDoc {
   entryAnimationId?: string
   entrySound?: SceneSoundMetaDoc
   ambientSound?: SceneSoundMetaDoc
+  /** Zone de marche libre + perspective 2.5D. */
+  walkTrapezoid?: import('../types/project').SceneWalkTrapezoid | null
+  /** Orientation native du coloriage (toggle admin). */
+  characterFacing?: 'right' | 'left'
+  /** Origine du personnage normalisée (0..1). */
+  characterOriginU?: number
+  characterOriginV?: number
   /** @deprecated legacy multi-rest, migré vers `restPoint` (premier élément). */
   restPoints?: SceneRestPointDoc[]
   /** @deprecated legacy. */
@@ -886,6 +893,10 @@ function sceneToDoc(scene: Scene): SceneDoc {
     ...(scene.entryAnimationId != null && { entryAnimationId: scene.entryAnimationId }),
     ...(scene.entrySound != null && { entrySound: sceneSoundMetaToDoc(scene.entrySound) }),
     ...(scene.ambientSound != null && { ambientSound: sceneSoundMetaToDoc(scene.ambientSound) }),
+    ...(scene.walkTrapezoid != null && { walkTrapezoid: scene.walkTrapezoid }),
+    ...(scene.characterFacing != null && { characterFacing: scene.characterFacing }),
+    ...(scene.characterOriginU != null && { characterOriginU: scene.characterOriginU }),
+    ...(scene.characterOriginV != null && { characterOriginV: scene.characterOriginV }),
     ...(scene.speakSounds.length > 0 && { speakSounds: scene.speakSounds.map(s => (sceneSoundMetaToDoc(s))) }),
   }
 }
@@ -1351,6 +1362,10 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       ...(projDoc.scene.entryAnimationId != null && { entryAnimationId: projDoc.scene.entryAnimationId }),
       ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, volume: projDoc.scene.entrySound.volume, blob: sceneSoundBlobs.get(projDoc.scene.entrySound.id) ?? null } }),
       ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, volume: projDoc.scene.ambientSound.volume, blob: sceneSoundBlobs.get(projDoc.scene.ambientSound.id) ?? null } }),
+      ...(projDoc.scene.walkTrapezoid != null && { walkTrapezoid: projDoc.scene.walkTrapezoid }),
+      ...(projDoc.scene.characterFacing != null && { characterFacing: projDoc.scene.characterFacing }),
+      ...(projDoc.scene.characterOriginU != null && { characterOriginU: projDoc.scene.characterOriginU }),
+      ...(projDoc.scene.characterOriginV != null && { characterOriginV: projDoc.scene.characterOriginV }),
       speakSounds,
       speakSoundBlobs,
     }
@@ -2244,6 +2259,10 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       ...(projDoc.scene.entryAnimationId != null && { entryAnimationId: projDoc.scene.entryAnimationId }),
       ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, volume: projDoc.scene.entrySound.volume, blob: null } }),
       ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, volume: projDoc.scene.ambientSound.volume, blob: null } }),
+      ...(projDoc.scene.walkTrapezoid != null && { walkTrapezoid: projDoc.scene.walkTrapezoid }),
+      ...(projDoc.scene.characterFacing != null && { characterFacing: projDoc.scene.characterFacing }),
+      ...(projDoc.scene.characterOriginU != null && { characterOriginU: projDoc.scene.characterOriginU }),
+      ...(projDoc.scene.characterOriginV != null && { characterOriginV: projDoc.scene.characterOriginV }),
       speakSounds,
       speakSoundBlobs: speakSounds.map(() => null),
     }
