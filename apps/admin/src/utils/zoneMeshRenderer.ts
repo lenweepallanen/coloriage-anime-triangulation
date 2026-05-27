@@ -84,13 +84,17 @@ export function buildZoneMeshes(
         container.addChild(info.pixiMesh)
       }
 
-      // Extension part (slightly behind visible part)
+      // Extension part : rendue JUSTE EN DESSOUS de sa propre zone (zOrder - 0.5).
+      // Conséquence : l'extension est cachée par sa zone-mère ET par toute zone de zOrder
+      // supérieur (body, autre membre…). Elle n'est révélée que si toutes les zones qui la
+      // couvrent en 2D bougent (animation). Permet le cas membre-cache-membre (tête couvre aile)
+      // sans hardcoder le hider.
       if (extTris.length > 0) {
         const limbTex = hiddenFaceLimbTextures?.[zone.id] ?? texture
         const extInfo = buildMesh(
           `__hfl_${zone.id}`, pts, extTris,
           limbTex, imageWidth, imageHeight, scale, offsetX, offsetY,
-          zone.zOrder + 0.5, contentAlignment,
+          zone.zOrder - 0.5, contentAlignment,
         )
         hiddenFaceLimbMeshes.push(extInfo)
         container.addChild(extInfo.pixiMesh)

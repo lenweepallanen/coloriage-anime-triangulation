@@ -558,19 +558,22 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       const allInternal = [...autoInternal, ...manual]
       let triResult = triangulateZone(cPts, allInternal, cPts)
 
-      if (z.id === 'body') {
-        // Filter auto triangles touching leg zones — but only legs whose z-order is STRICTLY ABOVE body's.
-        // Legs behind/equal to body (z-order ≤ body) are occluded by the body, so we keep the body intact there.
-        const bodyZ = zoneZOrder['body'] ?? 0
-        const legContours = allZones
-          .filter(lz => lz.id !== 'body' && zoneStage(lz.id) >= 4 && (zoneZOrder[lz.id] ?? 0) > bodyZ)
-          .map(lz => buildClosedContour(lz.id))
+      // Trouage généralisé : toute zone est trouée par les zones de z-order STRICTEMENT supérieur.
+      // Pour body, ça reproduit l'ancien comportement (body troué par les pattes z > body).
+      // Pour les membres, ça permet à un membre de z-order plus haut (ex : tête) de creuser un
+      // trou dans un membre de z-order plus bas (ex : aile), ce qui débloque les faces cachées
+      // membre→membre dans la même UX que body→membre.
+      {
+        const currentZ = zoneZOrder[z.id] ?? 0
+        const higherContours = allZones
+          .filter(other => other.id !== z.id && zoneStage(other.id) >= 4 && (zoneZOrder[other.id] ?? 0) > currentZ)
+          .map(other => buildClosedContour(other.id))
           .filter((c): c is Point2D[] => !!c && c.length >= 3)
-        const filteredTris = legContours.length > 0
+        const filteredTris = higherContours.length > 0
           ? triResult.triangles.filter(([a, b, c]) => {
               const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
-              return !legContours.some(legC =>
-                pointInPolygon(pa, legC) || pointInPolygon(pb, legC) || pointInPolygon(pc, legC)
+              return !higherContours.some(hc =>
+                pointInPolygon(pa, hc) || pointInPolygon(pb, hc) || pointInPolygon(pc, hc)
               )
             })
           : triResult.triangles
@@ -805,8 +808,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           }
         }
 
-        // ─── Body + triangulation : manual triangle overlay (mode Relier) ───
-        if (activeZoneId === 'body' && phase === 'triangulation') {
+        // ─── Triangulation : manual triangle overlay (mode Relier) ───
+        if (phase === 'triangulation') {
           const u = buildUnifiedPoints(activeZoneId)
           const mtris = manualTriangles[activeZoneId] ?? []
           if (u) {
@@ -982,8 +985,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
         if (!closedContour) return
         const manual = manualPoints[activeZoneId] ?? []
 
-        // ─── Body + triangulation : Relier mode = pick 3 points → manual triangle ───
-        if (activeZoneId === 'body' && bodyEditMode === 'connect') {
+        // ─── Triangulation : Relier mode = pick 3 points → manual triangle ───
+        if (bodyEditMode === 'connect') {
           const idx = hitTestUnified(imgPt, activeZoneId, hitR)
           if (idx < 0) return
           pushHistory()
@@ -1005,8 +1008,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           return
         }
 
-        // ─── Body + triangulation : Move mode = drag any point (contour anchors, subdivisions, manual internals) ───
-        if (activeZoneId === 'body' && bodyEditMode === 'move') {
+        // ─── Triangulation : Move mode = drag any point (contour anchors, subdivisions, manual internals) ───
+        if (bodyEditMode === 'move') {
           const anchors = zoneAnchors[activeZoneId] ?? []
           for (let i = 0; i < anchors.length; i++) {
             if (Math.hypot(anchors[i].x - imgPt.x, anchors[i].y - imgPt.y) < hitR) {
@@ -1244,8 +1247,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       return
     }
 
-    // ── Triangulation : in body+connect mode, right-click deletes a manual triangle ──
-    if (phase === 'triangulation' && activeZoneId === 'body' && bodyEditMode === 'connect') {
+    // ── Triangulation : in connect mode, right-click deletes a manual triangle ──
+    if (phase === 'triangulation' && bodyEditMode === 'connect') {
       const u = buildUnifiedPoints(activeZoneId)
       const mtris = manualTriangles[activeZoneId] ?? []
       if (u) {
@@ -1965,7 +1968,7 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
               style={{ width: '100%', marginBottom: 10 }}
             />
 
-            {activeZoneId === 'body' && (
+            {activeZoneId && (
               <div style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>Mode édition</div>
                 <div style={{ display: 'flex', gap: 4 }}>
