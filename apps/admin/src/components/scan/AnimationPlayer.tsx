@@ -409,6 +409,12 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       let hflTextures: Record<string, PIXI.Texture> | undefined
       if (zoneSep.hiddenFaceLimbZones && zoneSep.hiddenFaceLimbZones.length > 0) {
         hflTextures = {}
+        const allExtByLimb = new Map<string, Set<number>>()
+        for (const hfl of zoneSep.hiddenFaceLimbZones) {
+          const set = allExtByLimb.get(hfl.limbZoneId) ?? new Set<number>()
+          for (const ti of hfl.zoneTriangleIndices) set.add(ti)
+          allExtByLimb.set(hfl.limbZoneId, set)
+        }
         for (const hfl of zoneSep.hiddenFaceLimbZones) {
           const zonePts = zoneSep.zonePoints[hfl.limbZoneId]
           const zoneTris = zoneSep.zoneTriangles[hfl.limbZoneId]
@@ -417,8 +423,11 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           hflCanvas.width = scanCanvas.width
           hflCanvas.height = scanCanvas.height
           hflCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
-          flowExtrudeLimbOnScan(hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
-          hflTextures[hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
+          flowExtrudeLimbOnScan(
+            hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height,
+            contentAlignment ?? undefined, allExtByLimb.get(hfl.limbZoneId),
+          )
+          hflTextures[hfl.id ?? hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
         }
       }
 
@@ -608,7 +617,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           // Update hidden face limb meshes (same zoneFrames, same zonePoints)
           if (zoneMeshSetup.hiddenFaceLimbMeshes) {
             for (const hflm of zoneMeshSetup.hiddenFaceLimbMeshes) {
-              const zoneId = hflm.zoneId.replace('__hfl_', '')
+              const zoneId = hflm.zoneId
               const zoneFrame = walkZoneFrames[zoneId]?.[walkFrameCounter]
               if (zoneFrame) {
                 updateZoneMeshVertices(hflm, zoneFrame, scale, offsetX, offsetY)

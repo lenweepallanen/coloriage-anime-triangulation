@@ -9,8 +9,8 @@
  * - "body" (Face cachee body): body area hidden behind a limb → inpainted body texture
  * - "limb" (Face cachee jambe): limb extension hidden behind body → extruded limb texture
  *
- * Body mode: selects 2 body boundary vertices (A,B), bridge points, Delaunay → bodyTriangles
- * Limb mode: selects 2 zone boundary vertices (A,B), bridge points, Delaunay → zoneTriangles
+ * Body mode: 1 HFZ par limb-hider. Selects 2 body boundary vertices (A,B), bridge points, Delaunay → bodyTriangles
+ * Limb mode: N HFL par membre (keyed by HFL id). Selects 2 zone boundary vertices (A,B), bridge points, Delaunay → zoneTriangles
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
@@ -43,6 +43,11 @@ interface HiddenFaceLimbState {
   generated: boolean
 }
 
+interface HiddenFaceLimbEntry extends HiddenFaceLimbState {
+  id: string
+  limbZoneId: string
+}
+
 interface Props {
   project: Project
   onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
@@ -61,24 +66,74 @@ export default function ProjectTriangHiddenFaceStep({ project, onSave }: Props) 
   return <HiddenFaceEditor project={project} onSave={onSave} />
 }
 
-/** Inner component rendered only when step2 is validated. */
+/** Reconstruit le mesh "vierge" en retirant les triangles de face cachée + les points
+ *  orphelins. Les fusions HFL/HFZ n'ajoutent que des points/triangles en fin de tableau,
+ *  donc retirer ces triangles et compacter restitue exactement le mesh d'avant fusion,
+ *  en préservant les indices des points d'origine (utilisés par les triangles visibles). */
+function stripHiddenGeometry(
+  points: Point2D[],
+  triangles: [number, number, number][],
+  hiddenTriIndices: number[],
+): { points: Point2D[]; triangles: [number, number, number][] } {
+  if (hiddenTriIndices.length === 0) return { points, triangles }
+  const removeSet = new Set(hiddenTriIndices)
+  const kept = triangles.filter((_, i) => !removeSet.has(i))
+  const used = new Set<number>()
+  for (const [a, b, c] of kept) { used.add(a); used.add(b); used.add(c) }
+  const usedArr = [...used].sort((a, b) => a - b)
+  const remap = new Map<number, number>()
+  const newPts: Point2D[] = []
+  for (const old of usedArr) { remap.set(old, newPts.length); newPts.push(points[old]) }
+  const newTris = kept.map(([a, b, c]) =>
+    [remap.get(a)!, remap.get(b)!, remap.get(c)!] as [number, number, number])
+  return { points: newPts, triangles: newTris }
+}
+
 function HiddenFaceEditor({ project, onSave }: Props) {
   const pt = project.projectTriangulation!
 
-  // Zones membres (toutes sauf body)
   const legZones = useMemo(() => pt.zones.filter(z => z.id !== 'body'), [pt.zones])
 
-  // Baselines body + zones (maillages avant fusion des faces cachées). Fallback :
-  // pour les projets legacy sans baseline, on retombe sur les meshes actuels (= déjà
-  // pollués si step3 était validé) → reset équivaut à no-op (comportement historique).
-  const bodyBaselinePoints = pt.bodyPointsBaseline ?? pt.bodyPoints
-  const bodyBaselineTriangles = pt.bodyTrianglesBaseline ?? pt.bodyTriangles
-  const zoneBaselinePoints = pt.zonePointsBaseline ?? pt.zonePoints
-  const zoneBaselineTriangles = pt.zoneTrianglesBaseline ?? pt.zoneTriangles
+  // Baseline = mesh vierge avant fusion des faces cachées. Si la baseline persistée est
+  // absente (projet legacy), on la reconstruit en retirant la géométrie des HFL/HFZ du
+  // mesh fusionné courant. Indispensable pour pouvoir revenir au mesh initial à la suppression.
+  const bodyBaselinePoints = useMemo(() => {
+    if (pt.bodyPointsBaseline && pt.bodyTrianglesBaseline) return pt.bodyPointsBaseline
+    const idx = (pt.hiddenFaceZones ?? []).flatMap(h => h.bodyTriangleIndices)
+    return stripHiddenGeometry(pt.bodyPoints, pt.bodyTriangles, idx).points
+  }, [pt.bodyPointsBaseline, pt.bodyTrianglesBaseline, pt.bodyPoints, pt.bodyTriangles, pt.hiddenFaceZones])
+  const bodyBaselineTriangles = useMemo(() => {
+    if (pt.bodyPointsBaseline && pt.bodyTrianglesBaseline) return pt.bodyTrianglesBaseline
+    const idx = (pt.hiddenFaceZones ?? []).flatMap(h => h.bodyTriangleIndices)
+    return stripHiddenGeometry(pt.bodyPoints, pt.bodyTriangles, idx).triangles
+  }, [pt.bodyPointsBaseline, pt.bodyTrianglesBaseline, pt.bodyPoints, pt.bodyTriangles, pt.hiddenFaceZones])
+  const zoneBaselinePoints = useMemo(() => {
+    const out: Record<string, Point2D[]> = {}
+    for (const z of legZones) {
+      if (pt.zonePointsBaseline?.[z.id] && pt.zoneTrianglesBaseline?.[z.id]) {
+        out[z.id] = pt.zonePointsBaseline[z.id]
+      } else {
+        const idx = (pt.hiddenFaceLimbZones ?? []).filter(h => h.limbZoneId === z.id).flatMap(h => h.zoneTriangleIndices)
+        out[z.id] = stripHiddenGeometry(pt.zonePoints[z.id] ?? [], pt.zoneTriangles[z.id] ?? [], idx).points
+      }
+    }
+    return out
+  }, [legZones, pt.zonePointsBaseline, pt.zoneTrianglesBaseline, pt.zonePoints, pt.zoneTriangles, pt.hiddenFaceLimbZones])
+  const zoneBaselineTriangles = useMemo(() => {
+    const out: Record<string, [number, number, number][]> = {}
+    for (const z of legZones) {
+      if (pt.zonePointsBaseline?.[z.id] && pt.zoneTrianglesBaseline?.[z.id]) {
+        out[z.id] = pt.zoneTrianglesBaseline[z.id]
+      } else {
+        const idx = (pt.hiddenFaceLimbZones ?? []).filter(h => h.limbZoneId === z.id).flatMap(h => h.zoneTriangleIndices)
+        out[z.id] = stripHiddenGeometry(pt.zonePoints[z.id] ?? [], pt.zoneTriangles[z.id] ?? [], idx).triangles
+      }
+    }
+    return out
+  }, [legZones, pt.zonePointsBaseline, pt.zoneTrianglesBaseline, pt.zonePoints, pt.zoneTriangles, pt.hiddenFaceLimbZones])
 
   const [mode, setMode] = useState<HiddenFaceMode>('body')
 
-  // ─── Body mode state ───────────────────────────────────────────────
   const [hiddenFaces, setHiddenFaces] = useState<Record<string, HiddenFaceState>>(() => {
     const init: Record<string, HiddenFaceState> = {}
     for (const hfz of pt.hiddenFaceZones) {
@@ -92,14 +147,14 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     }
     return init
   })
-  const [workBodyPoints, setWorkBodyPoints] = useState<Point2D[]>(() => [...pt.bodyPoints])
-  const [workBodyTriangles, setWorkBodyTriangles] = useState<[number, number, number][]>(() => [...pt.bodyTriangles])
 
-  // ─── Limb mode state ───────────────────────────────────────────────
-  const [limbHiddenFaces, setLimbHiddenFaces] = useState<Record<string, HiddenFaceLimbState>>(() => {
-    const init: Record<string, HiddenFaceLimbState> = {}
+  const [limbHiddenFaces, setLimbHiddenFaces] = useState<Record<string, HiddenFaceLimbEntry>>(() => {
+    const init: Record<string, HiddenFaceLimbEntry> = {}
     for (const hfl of pt.hiddenFaceLimbZones) {
-      init[hfl.limbZoneId] = {
+      const id = hfl.id ?? crypto.randomUUID()
+      init[id] = {
+        id,
+        limbZoneId: hfl.limbZoneId,
         zoneVertexA: hfl.zoneVertexA,
         zoneVertexB: hfl.zoneVertexB,
         bridgePoints: [...hfl.bridgePoints],
@@ -109,37 +164,66 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     }
     return init
   })
-  const [workZonePoints, setWorkZonePoints] = useState<Record<string, Point2D[]>>(() => {
-    const init: Record<string, Point2D[]> = {}
-    for (const zone of legZones) {
-      init[zone.id] = [...(pt.zonePoints[zone.id] ?? [])]
-    }
-    return init
-  })
-  const [workZoneTriangles, setWorkZoneTriangles] = useState<Record<string, [number, number, number][]>>(() => {
-    const init: Record<string, [number, number, number][]> = {}
-    for (const zone of legZones) {
-      init[zone.id] = [...(pt.zoneTriangles[zone.id] ?? [])]
-    }
-    return init
-  })
 
-  // ─── Common state ──────────────────────────────────────────────────
+  // Work meshes dérivés : baseline + replay de toutes les faces cachées générées.
+  // Reconstruction systématique → supprimer une face cachée restitue le mesh vierge.
+  const rebuilt = useMemo(() => {
+    let bodyPts: Point2D[] = [...bodyBaselinePoints]
+    let bodyTris: [number, number, number][] = [...bodyBaselineTriangles]
+    const hfzTriIdx: Record<string, number[]> = {}
+    for (const [limbId, hf] of Object.entries(hiddenFaces)) {
+      if (!hf.generated || hf.vertexA === null || hf.vertexB === null) { hfzTriIdx[limbId] = []; continue }
+      try {
+        const r = triangulateHiddenFace(bodyPts, bodyTris, hf.vertexA, hf.vertexB, hf.bridgePoints)
+        bodyPts = r.updatedBodyPoints; bodyTris = r.updatedBodyTriangles
+        hfzTriIdx[limbId] = r.hiddenFaceTriangleIndices
+      } catch { hfzTriIdx[limbId] = [] }
+    }
+
+    const zonePts: Record<string, Point2D[]> = {}
+    const zoneTris: Record<string, [number, number, number][]> = {}
+    for (const z of legZones) {
+      zonePts[z.id] = [...(zoneBaselinePoints[z.id] ?? [])]
+      zoneTris[z.id] = [...(zoneBaselineTriangles[z.id] ?? [])]
+    }
+    const hflTriIdx: Record<string, number[]> = {}
+    const byZone: Record<string, HiddenFaceLimbEntry[]> = {}
+    for (const e of Object.values(limbHiddenFaces)) { (byZone[e.limbZoneId] ??= []).push(e) }
+    for (const [zid, entries] of Object.entries(byZone)) {
+      entries.sort((a, b) => a.id.localeCompare(b.id))
+      for (const e of entries) {
+        if (!e.generated || e.zoneVertexA === null || e.zoneVertexB === null) { hflTriIdx[e.id] = []; continue }
+        if (!zonePts[zid]) { hflTriIdx[e.id] = []; continue }
+        try {
+          const r = triangulateHiddenFaceLimb(zonePts[zid], zoneTris[zid], e.zoneVertexA, e.zoneVertexB, e.bridgePoints)
+          zonePts[zid] = r.updatedZonePoints; zoneTris[zid] = r.updatedZoneTriangles
+          hflTriIdx[e.id] = r.hiddenFaceLimbTriangleIndices
+        } catch { hflTriIdx[e.id] = [] }
+      }
+    }
+    return { bodyPts, bodyTris, zonePts, zoneTris, hfzTriIdx, hflTriIdx }
+  }, [hiddenFaces, limbHiddenFaces, bodyBaselinePoints, bodyBaselineTriangles, zoneBaselinePoints, zoneBaselineTriangles, legZones])
+
+  const workBodyPoints = rebuilt.bodyPts
+  const workBodyTriangles = rebuilt.bodyTris
+  const workZonePoints = rebuilt.zonePts
+  const workZoneTriangles = rebuilt.zoneTris
+
   const [activeLimbId, setActiveLimbId] = useState<string | null>(null)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [imageLoaded, setImageLoaded] = useState(false)
 
-  // ─── Undo history ─────────────────────────────────────────────────
+  // En mode limb : limbZoneId associé à l'entrée HFL active.
+  const activeLimbZoneId: string | null = mode === 'limb' && activeLimbId
+    ? (limbHiddenFaces[activeLimbId]?.limbZoneId ?? null)
+    : (mode === 'body' ? activeLimbId : null)
+
   type HFSnapshot = {
     mode: HiddenFaceMode
     activeLimbId: string | null
     hiddenFaces: Record<string, HiddenFaceState>
-    workBodyPoints: Point2D[]
-    workBodyTriangles: [number, number, number][]
-    limbHiddenFaces: Record<string, HiddenFaceLimbState>
-    workZonePoints: Record<string, Point2D[]>
-    workZoneTriangles: Record<string, [number, number, number][]>
+    limbHiddenFaces: Record<string, HiddenFaceLimbEntry>
   }
   const HISTORY_LIMIT = 50
   const [history, setHistory] = useState<HFSnapshot[]>([])
@@ -149,17 +233,13 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         mode,
         activeLimbId,
         hiddenFaces: structuredClone(hiddenFaces),
-        workBodyPoints: workBodyPoints.map(p => ({ ...p })),
-        workBodyTriangles: workBodyTriangles.map(t => [...t] as [number, number, number]),
         limbHiddenFaces: structuredClone(limbHiddenFaces),
-        workZonePoints: structuredClone(workZonePoints),
-        workZoneTriangles: structuredClone(workZoneTriangles),
       }
       const next = [...prev, snap]
       if (next.length > HISTORY_LIMIT) next.shift()
       return next
     })
-  }, [mode, activeLimbId, hiddenFaces, workBodyPoints, workBodyTriangles, limbHiddenFaces, workZonePoints, workZoneTriangles])
+  }, [mode, activeLimbId, hiddenFaces, limbHiddenFaces])
   const undo = useCallback(() => {
     setHistory(prev => {
       if (prev.length === 0) return prev
@@ -167,11 +247,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       setMode(s.mode)
       setActiveLimbId(s.activeLimbId)
       setHiddenFaces(s.hiddenFaces)
-      setWorkBodyPoints(s.workBodyPoints)
-      setWorkBodyTriangles(s.workBodyTriangles)
       setLimbHiddenFaces(s.limbHiddenFaces)
-      setWorkZonePoints(s.workZonePoints)
-      setWorkZoneTriangles(s.workZoneTriangles)
       return prev.slice(0, -1)
     })
   }, [])
@@ -192,8 +268,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
   const imageRef = useRef<HTMLImageElement | null>(null)
   const animFrameRef = useRef<number>(0)
 
-  // ─── Derived state ─────────────────────────────────────────────────
-
   const activeBodyHF = (mode === 'body' && activeLimbId) ? hiddenFaces[activeLimbId] : null
   const bodyEditPhase: EditPhase = !activeBodyHF ? 'select-a'
     : activeBodyHF.vertexA === null ? 'select-a'
@@ -210,7 +284,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
   const editPhase = mode === 'body' ? bodyEditPhase : limbEditPhase
 
-  // Body boundary edges
   const bodyBoundaryEdges = useMemo(() => findBoundaryEdges(workBodyTriangles), [workBodyTriangles])
   const bodyBoundaryVertexSet = useMemo(() => {
     const set = new Set<number>()
@@ -218,8 +291,7 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     return set
   }, [bodyBoundaryEdges])
 
-  // Limb boundary edges (for active limb)
-  const activeLimbTriangles: [number, number, number][] = (activeLimbId ? workZoneTriangles[activeLimbId] : null) ?? []
+  const activeLimbTriangles: [number, number, number][] = (activeLimbZoneId ? workZoneTriangles[activeLimbZoneId] : null) ?? []
   const limbBoundaryEdges = useMemo(() => findBoundaryEdges(activeLimbTriangles), [activeLimbTriangles])
   const limbBoundaryVertexSet = useMemo(() => {
     const set = new Set<number>()
@@ -227,7 +299,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     return set
   }, [limbBoundaryEdges])
 
-  // Boundary path preview
   const boundaryPath = useMemo(() => {
     if (mode === 'body') {
       if (!activeBodyHF || activeBodyHF.vertexA === null || activeBodyHF.vertexB === null) return null
@@ -238,7 +309,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     }
   }, [mode, activeBodyHF, activeLimbHF, bodyBoundaryEdges, limbBoundaryEdges])
 
-  // ─── Image loading ─────────────────────────────────────────────────
   useEffect(() => {
     const blob = project.originalImageBlob ?? project.projectTriangulation?.referenceImageBlob
     if (!blob) return
@@ -267,8 +337,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.originalImageBlob, project.projectTriangulation?.referenceImageBlob])
-
-  // ─── Draw ──────────────────────────────────────────────────────────
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -304,11 +372,10 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     animFrameRef.current = requestAnimationFrame(draw)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, workBodyPoints, workBodyTriangles, hiddenFaces, workZonePoints, workZoneTriangles,
-      limbHiddenFaces, activeLimbId, editPhase, boundaryPath, bodyBoundaryVertexSet,
+      limbHiddenFaces, activeLimbId, activeLimbZoneId, editPhase, boundaryPath, bodyBoundaryVertexSet,
       limbBoundaryVertexSet, transformRef, imageLoaded])
 
   function drawBodyMode(ctx: CanvasRenderingContext2D, t: { scale: number }, pr: number) {
-    // Body wireframe — bleu translucide pour visualiser les zones manquantes à combler
     ctx.fillStyle = 'rgba(59, 130, 246, 0.12)'
     ctx.strokeStyle = 'rgba(59, 130, 246, 0.55)'
     ctx.lineWidth = 0.8 / t.scale
@@ -320,13 +387,12 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       ctx.closePath(); ctx.fill(); ctx.stroke()
     }
 
-    // Draw hidden face triangles for all limbs (selected = bleu translucide, autres = couleur zone)
     for (const zone of legZones) {
       const hf = hiddenFaces[zone.id]
       if (!hf || hf.bodyTriangleIndices.length === 0) continue
       const isActive = zone.id === activeLimbId
       if (isActive) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'   // bleu translucide
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'
         ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
         ctx.lineWidth = 1.5 / t.scale
       } else {
@@ -346,12 +412,10 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       }
     }
 
-    // Draw active editing state
     if (activeLimbId && activeBodyHF) {
       const zone = legZones.find(z => z.id === activeLimbId)
       const color = zone?.color ?? '#f59e0b'
 
-      // Boundary vertices (during select-a / select-b)
       if (bodyEditPhase === 'select-a' || bodyEditPhase === 'select-b') {
         for (const idx of bodyBoundaryVertexSet) {
           const p = workBodyPoints[idx]
@@ -365,7 +429,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         }
       }
 
-      // Vertex A marker
       if (activeBodyHF.vertexA !== null) {
         const pa = workBodyPoints[activeBodyHF.vertexA]
         if (pa) {
@@ -375,7 +438,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         }
       }
 
-      // Vertex B marker
       if (activeBodyHF.vertexB !== null) {
         const pb = workBodyPoints[activeBodyHF.vertexB]
         if (pb) {
@@ -385,7 +447,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         }
       }
 
-      // Bridge points + boundary path
       drawBridgePoints(ctx, t, pr, activeBodyHF.bridgePoints, color,
         activeBodyHF.vertexA !== null ? workBodyPoints[activeBodyHF.vertexA] : null,
         activeBodyHF.vertexB !== null ? workBodyPoints[activeBodyHF.vertexB] : null)
@@ -397,12 +458,11 @@ function HiddenFaceEditor({ project, onSave }: Props) {
   }
 
   function drawLimbMode(ctx: CanvasRenderingContext2D, t: { scale: number }, pr: number) {
-    if (!activeLimbId) return
+    if (!activeLimbZoneId) return
 
-    const pts = workZonePoints[activeLimbId] ?? []
-    const tris = workZoneTriangles[activeLimbId] ?? []
+    const pts = workZonePoints[activeLimbZoneId] ?? []
+    const tris = workZoneTriangles[activeLimbZoneId] ?? []
 
-    // Draw zone triangles (faded)
     ctx.fillStyle = 'rgba(136,136,136,0.08)'
     ctx.strokeStyle = 'rgba(136,136,136,0.2)'
     ctx.lineWidth = 0.5 / t.scale
@@ -414,13 +474,15 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       ctx.closePath(); ctx.fill(); ctx.stroke()
     }
 
-    // Draw extension triangles — bleu translucide (zone active)
-    const hfl = limbHiddenFaces[activeLimbId]
-    if (hfl && hfl.zoneTriangleIndices.length > 0) {
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'
-      ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
-      ctx.lineWidth = 1.5 / t.scale
-      for (const ti of hfl.zoneTriangleIndices) {
+    // Draw inactive HFL entries on the same zone in faded grey (contours only)
+    for (const entry of Object.values(limbHiddenFaces)) {
+      if (entry.limbZoneId !== activeLimbZoneId) continue
+      if (entry.id === activeLimbId) continue
+      if (entry.zoneTriangleIndices.length === 0) continue
+      ctx.fillStyle = 'rgba(200,200,200,0.1)'
+      ctx.strokeStyle = 'rgba(200,200,200,0.5)'
+      ctx.lineWidth = 0.8 / t.scale
+      for (const ti of entry.zoneTriangleIndices) {
         const tri = tris[ti]
         if (!tri) continue
         const [a, b, c] = tri
@@ -432,12 +494,27 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       }
     }
 
-    // Draw editing state
+    // Active HFL in blue
+    if (activeLimbHF && activeLimbHF.zoneTriangleIndices.length > 0) {
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
+      ctx.lineWidth = 1.5 / t.scale
+      for (const ti of activeLimbHF.zoneTriangleIndices) {
+        const tri = tris[ti]
+        if (!tri) continue
+        const [a, b, c] = tri
+        const pa = pts[a], pb = pts[b], pc = pts[c]
+        if (!pa || !pb || !pc) continue
+        ctx.beginPath()
+        ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.lineTo(pc.x, pc.y)
+        ctx.closePath(); ctx.fill(); ctx.stroke()
+      }
+    }
+
     if (activeLimbHF) {
-      const zone = legZones.find(z => z.id === activeLimbId)
+      const zone = legZones.find(z => z.id === activeLimbZoneId)
       const color = zone?.color ?? '#f59e0b'
 
-      // Boundary vertices
       if (limbEditPhase === 'select-a' || limbEditPhase === 'select-b') {
         for (const idx of limbBoundaryVertexSet) {
           const p = pts[idx]
@@ -451,7 +528,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         }
       }
 
-      // Vertex A marker
       if (activeLimbHF.zoneVertexA !== null) {
         const pa = pts[activeLimbHF.zoneVertexA]
         if (pa) {
@@ -461,7 +537,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         }
       }
 
-      // Vertex B marker
       if (activeLimbHF.zoneVertexB !== null) {
         const pb = pts[activeLimbHF.zoneVertexB]
         if (pb) {
@@ -471,7 +546,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         }
       }
 
-      // Bridge points + boundary path
       drawBridgePoints(ctx, t, pr, activeLimbHF.bridgePoints, color,
         activeLimbHF.zoneVertexA !== null ? pts[activeLimbHF.zoneVertexA] : null,
         activeLimbHF.zoneVertexB !== null ? pts[activeLimbHF.zoneVertexB] : null)
@@ -521,8 +595,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     return () => cancelAnimationFrame(animFrameRef.current)
   }, [draw])
 
-  // ─── Hit test helpers ──────────────────────────────────────────────
-
   function hitTestBoundaryVertex(imgPt: Point2D, hitR: number): number {
     if (mode === 'body') {
       let best = -1, bestDist = hitR
@@ -534,8 +606,8 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       }
       return best
     } else {
-      if (!activeLimbId) return -1
-      const pts = workZonePoints[activeLimbId] ?? []
+      if (!activeLimbZoneId) return -1
+      const pts = workZonePoints[activeLimbZoneId] ?? []
       let best = -1, bestDist = hitR
       for (const idx of limbBoundaryVertexSet) {
         const p = pts[idx]
@@ -558,27 +630,10 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     return best
   }
 
-  // ─── Toggle hidden face per zone ───────────────────────────────────
-
   function toggleBodyHiddenFace(limbId: string) {
     pushHistory()
     if (hiddenFaces[limbId]) {
-      const hf = hiddenFaces[limbId]
-      if (hf.generated && hf.bodyTriangleIndices.length > 0) {
-        // Reset body to base state (before any hidden face merges) — depuis baseline.
-        setWorkBodyPoints([...bodyBaselinePoints])
-        setWorkBodyTriangles([...bodyBaselineTriangles])
-        setHiddenFaces(prev => {
-          const copy = { ...prev }
-          delete copy[limbId]
-          for (const key of Object.keys(copy)) {
-            copy[key] = { ...copy[key], generated: false, bodyTriangleIndices: [] }
-          }
-          return copy
-        })
-      } else {
-        setHiddenFaces(prev => { const copy = { ...prev }; delete copy[limbId]; return copy })
-      }
+      setHiddenFaces(prev => { const copy = { ...prev }; delete copy[limbId]; return copy })
       if (activeLimbId === limbId) setActiveLimbId(null)
     } else {
       setHiddenFaces(prev => ({
@@ -589,76 +644,42 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     }
   }
 
-  function toggleLimbHiddenFace(limbId: string) {
+  function addLimbHiddenFace(limbZoneId: string) {
     pushHistory()
-    if (limbHiddenFaces[limbId]) {
-      const hfl = limbHiddenFaces[limbId]
-      if (hfl.generated && hfl.zoneTriangleIndices.length > 0) {
-        setWorkZonePoints(prev => ({
-          ...prev,
-          [limbId]: [...(zoneBaselinePoints[limbId] ?? pt.zonePoints[limbId] ?? [])],
-        }))
-        setWorkZoneTriangles(prev => ({
-          ...prev,
-          [limbId]: [...(zoneBaselineTriangles[limbId] ?? pt.zoneTriangles[limbId] ?? [])],
-        }))
-      }
-      setLimbHiddenFaces(prev => { const copy = { ...prev }; delete copy[limbId]; return copy })
-      if (activeLimbId === limbId) setActiveLimbId(null)
-    } else {
-      setLimbHiddenFaces(prev => ({
-        ...prev,
-        [limbId]: { zoneVertexA: null, zoneVertexB: null, bridgePoints: [], zoneTriangleIndices: [], generated: false },
-      }))
-      setActiveLimbId(limbId)
-    }
+    const id = crypto.randomUUID()
+    setLimbHiddenFaces(prev => ({
+      ...prev,
+      [id]: {
+        id, limbZoneId,
+        zoneVertexA: null, zoneVertexB: null, bridgePoints: [], zoneTriangleIndices: [], generated: false,
+      },
+    }))
+    setActiveLimbId(id)
   }
 
-  // ─── Generate triangulation ────────────────────────────────────────
+  function deleteLimbHiddenFace(hflId: string) {
+    pushHistory()
+    setLimbHiddenFaces(prev => { const copy = { ...prev }; delete copy[hflId]; return copy })
+    if (activeLimbId === hflId) setActiveLimbId(null)
+  }
 
   function handleGenerate() {
     if (!activeLimbId) return
     pushHistory()
     if (mode === 'body') {
       if (!activeBodyHF || activeBodyHF.vertexA === null || activeBodyHF.vertexB === null) return
-      const result = triangulateHiddenFace(
-        workBodyPoints, workBodyTriangles,
-        activeBodyHF.vertexA, activeBodyHF.vertexB,
-        activeBodyHF.bridgePoints,
-      )
-      setWorkBodyPoints(result.updatedBodyPoints)
-      setWorkBodyTriangles(result.updatedBodyTriangles)
       setHiddenFaces(prev => ({
         ...prev,
-        [activeLimbId]: {
-          ...prev[activeLimbId],
-          bodyTriangleIndices: result.hiddenFaceTriangleIndices,
-          generated: true,
-        },
+        [activeLimbId]: { ...prev[activeLimbId], generated: true },
       }))
     } else {
       if (!activeLimbHF || activeLimbHF.zoneVertexA === null || activeLimbHF.zoneVertexB === null) return
-      const zonePts = workZonePoints[activeLimbId] ?? []
-      const zoneTris = workZoneTriangles[activeLimbId] ?? []
-      const result = triangulateHiddenFaceLimb(
-        zonePts, zoneTris,
-        activeLimbHF.zoneVertexA, activeLimbHF.zoneVertexB,
-        activeLimbHF.bridgePoints,
-      )
-      setWorkZonePoints(prev => ({ ...prev, [activeLimbId]: result.updatedZonePoints }))
-      setWorkZoneTriangles(prev => ({ ...prev, [activeLimbId]: result.updatedZoneTriangles }))
       setLimbHiddenFaces(prev => ({
         ...prev,
-        [activeLimbId]: {
-          ...prev[activeLimbId],
-          zoneTriangleIndices: result.hiddenFaceLimbTriangleIndices,
-          generated: true,
-        },
+        [activeLimbId]: { ...prev[activeLimbId], generated: true },
       }))
     }
   }
-
-  // ─── Mouse handlers ────────────────────────────────────────────────
 
   function handleMouseDown(e: React.MouseEvent) {
     if (e.button === 2) { handleContextMenu(e); return }
@@ -703,7 +724,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         setDragIdx(bpIdx)
         return
       }
-      // Add new bridge point
       pushHistory()
       if (mode === 'body') {
         setHiddenFaces(prev => ({
@@ -771,73 +791,53 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     }
   }
 
-  // ─── Reset ─────────────────────────────────────────────────────────
-
   function handleReset() {
     if (!activeLimbId) return
     pushHistory()
     if (mode === 'body') {
-      // Reset body au baseline (avant toute fusion HF) et invalide toutes les body HF.
-      setWorkBodyPoints([...bodyBaselinePoints])
-      setWorkBodyTriangles([...bodyBaselineTriangles])
-      setHiddenFaces(prev => {
-        const copy = { ...prev }
-        copy[activeLimbId] = { vertexA: null, vertexB: null, bridgePoints: [], bodyTriangleIndices: [], generated: false }
-        for (const key of Object.keys(copy)) {
-          if (key !== activeLimbId) {
-            copy[key] = { ...copy[key], generated: false, bodyTriangleIndices: [] }
-          }
-        }
-        return copy
-      })
+      setHiddenFaces(prev => ({
+        ...prev,
+        [activeLimbId]: { vertexA: null, vertexB: null, bridgePoints: [], bodyTriangleIndices: [], generated: false },
+      }))
     } else {
+      if (!activeLimbHF) return
       setLimbHiddenFaces(prev => ({
         ...prev,
-        [activeLimbId]: { zoneVertexA: null, zoneVertexB: null, bridgePoints: [], zoneTriangleIndices: [], generated: false },
-      }))
-      setWorkZonePoints(prev => ({
-        ...prev,
-        [activeLimbId]: [...(zoneBaselinePoints[activeLimbId] ?? pt.zonePoints[activeLimbId] ?? [])],
-      }))
-      setWorkZoneTriangles(prev => ({
-        ...prev,
-        [activeLimbId]: [...(zoneBaselineTriangles[activeLimbId] ?? pt.zoneTriangles[activeLimbId] ?? [])],
+        [activeLimbId]: {
+          ...prev[activeLimbId],
+          zoneVertexA: null, zoneVertexB: null, bridgePoints: [], zoneTriangleIndices: [], generated: false,
+        },
       }))
     }
   }
 
-  // ─── Save ──────────────────────────────────────────────────────────
-
   async function handleSave() {
     setSaving(true)
     try {
-      // Build body hidden face zones
       const hiddenFaceZones: HiddenFaceZone[] = []
       for (const [limbZoneId, hf] of Object.entries(hiddenFaces)) {
-        if (hf.vertexA !== null && hf.vertexB !== null && hf.bodyTriangleIndices.length > 0) {
+        const indices = rebuilt.hfzTriIdx[limbZoneId] ?? []
+        if (hf.generated && hf.vertexA !== null && hf.vertexB !== null && indices.length > 0) {
           hiddenFaceZones.push({
             limbZoneId,
             bodyVertexA: hf.vertexA,
             bodyVertexB: hf.vertexB,
             bridgePoints: hf.bridgePoints,
-            bodyTriangleIndices: hf.bodyTriangleIndices,
+            bodyTriangleIndices: indices,
           })
         }
       }
 
-      // Build limb hidden face zones
-      const hiddenFaceLimbZones: HiddenFaceLimbZone[] = []
-      for (const [limbZoneId, hfl] of Object.entries(limbHiddenFaces)) {
-        if (hfl.zoneVertexA !== null && hfl.zoneVertexB !== null && hfl.zoneTriangleIndices.length > 0) {
-          hiddenFaceLimbZones.push({
-            limbZoneId,
-            zoneVertexA: hfl.zoneVertexA,
-            zoneVertexB: hfl.zoneVertexB,
-            bridgePoints: hfl.bridgePoints,
-            zoneTriangleIndices: hfl.zoneTriangleIndices,
-          })
-        }
-      }
+      const hiddenFaceLimbZones: HiddenFaceLimbZone[] = Object.values(limbHiddenFaces)
+        .filter(e => e.generated && e.zoneVertexA !== null && e.zoneVertexB !== null && (rebuilt.hflTriIdx[e.id]?.length ?? 0) > 0)
+        .map(e => ({
+          id: e.id,
+          limbZoneId: e.limbZoneId,
+          zoneVertexA: e.zoneVertexA as number,
+          zoneVertexB: e.zoneVertexB as number,
+          bridgePoints: e.bridgePoints,
+          zoneTriangleIndices: rebuilt.hflTriIdx[e.id] ?? [],
+        }))
 
       const updatedPT = {
         ...pt,
@@ -845,6 +845,10 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         bodyTriangles: workBodyTriangles,
         zonePoints: { ...pt.zonePoints, ...workZonePoints },
         zoneTriangles: { ...pt.zoneTriangles, ...workZoneTriangles },
+        bodyPointsBaseline: bodyBaselinePoints,
+        bodyTrianglesBaseline: bodyBaselineTriangles,
+        zonePointsBaseline: { ...pt.zonePointsBaseline, ...zoneBaselinePoints },
+        zoneTrianglesBaseline: { ...pt.zoneTrianglesBaseline, ...zoneBaselineTriangles },
         hiddenFaceZones,
         hiddenFaceLimbZones,
         step3Validated: true,
@@ -859,11 +863,25 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
   // ─── Render ────────────────────────────────────────────────────────
 
-  const currentFaces = mode === 'body' ? hiddenFaces : limbHiddenFaces
-  const enabledCount = Object.keys(currentFaces).length
-  const generatedCount = mode === 'body'
-    ? Object.values(hiddenFaces).filter(hf => hf.generated).length
-    : Object.values(limbHiddenFaces).filter(hfl => hfl.generated).length
+  const bodyEnabledCount = Object.keys(hiddenFaces).length
+  const bodyGeneratedCount = Object.values(hiddenFaces).filter(hf => hf.generated).length
+  const limbEnabledCount = Object.keys(limbHiddenFaces).length
+  const limbGeneratedCount = Object.values(limbHiddenFaces).filter(hfl => hfl.generated).length
+  const enabledCount = mode === 'body' ? bodyEnabledCount : limbEnabledCount
+  const generatedCount = mode === 'body' ? bodyGeneratedCount : limbGeneratedCount
+
+  // Limb mode : entrées groupées par limbZoneId, triées par id pour ordre stable.
+  const limbEntriesByZone: Record<string, HiddenFaceLimbEntry[]> = {}
+  if (mode === 'limb') {
+    for (const zone of legZones) limbEntriesByZone[zone.id] = []
+    for (const e of Object.values(limbHiddenFaces)) {
+      if (!limbEntriesByZone[e.limbZoneId]) limbEntriesByZone[e.limbZoneId] = []
+      limbEntriesByZone[e.limbZoneId].push(e)
+    }
+    for (const k of Object.keys(limbEntriesByZone)) {
+      limbEntriesByZone[k].sort((a, b) => a.id.localeCompare(b.id))
+    }
+  }
 
   return (
     <div style={{ display: 'flex', gap: 16, height: '100%', minHeight: 0 }}>
@@ -894,7 +912,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
       </div>
 
       <div style={{ width: 260, flexShrink: 0, overflowY: 'auto' }}>
-        {/* Mode toggle */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
           <button
             className={`btn-sm ${mode === 'body' ? 'btn-primary' : 'btn-secondary'}`}
@@ -925,20 +942,17 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 12 }}>
           {mode === 'body'
             ? 'Maillage derriere chaque patte (corps cache par la patte).'
-            : 'Extension de la patte (partie cachee derriere le corps).'}
+            : 'Extension de la patte (partie cachee derriere le corps). Plusieurs faces cachees par membre autorisees.'}
         </div>
 
-        {legZones.map(zone => {
-          const isEnabled = mode === 'body' ? !!hiddenFaces[zone.id] : !!limbHiddenFaces[zone.id]
+        {mode === 'body' && legZones.map(zone => {
+          const isEnabled = !!hiddenFaces[zone.id]
           const isActive = zone.id === activeLimbId
-          const hf = mode === 'body' ? hiddenFaces[zone.id] : null
-          const hfl = mode === 'limb' ? limbHiddenFaces[zone.id] : null
+          const hf = hiddenFaces[zone.id]
           return (
             <div key={zone.id} style={{ marginBottom: 6 }}>
               <div
-                onClick={() => {
-                  if (isEnabled) setActiveLimbId(isActive ? null : zone.id)
-                }}
+                onClick={() => { if (isEnabled) setActiveLimbId(isActive ? null : zone.id) }}
                 style={{
                   padding: '8px 10px', borderRadius: 6,
                   border: isActive ? `2px solid ${zone.color}` : '1px solid #374151',
@@ -952,17 +966,13 @@ function HiddenFaceEditor({ project, onSave }: Props) {
                   <span style={{ color: '#e5e7eb', fontWeight: 500, flex: 1 }}>{zone.label}</span>
                   <button
                     className={`btn-sm ${isEnabled ? 'btn-ghost' : 'btn-secondary'}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      if (mode === 'body') toggleBodyHiddenFace(zone.id)
-                      else toggleLimbHiddenFace(zone.id)
-                    }}
+                    onClick={(e) => { e.stopPropagation(); toggleBodyHiddenFace(zone.id) }}
                     style={{ fontSize: 10, padding: '2px 6px' }}
                   >
                     {isEnabled ? 'X' : '+ Activer'}
                   </button>
                 </div>
-                {mode === 'body' && hf && (
+                {hf && (
                   <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>
                     {hf.generated
                       ? `${hf.bodyTriangleIndices.length} triangles generes`
@@ -971,21 +981,69 @@ function HiddenFaceEditor({ project, onSave }: Props) {
                         : hf.vertexA !== null ? 'Point A selectionne, cliquez B...' : 'Selectionnez le point A...'}
                   </div>
                 )}
-                {mode === 'limb' && hfl && (
-                  <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>
-                    {hfl.generated
-                      ? `${hfl.zoneTriangleIndices.length} triangles generes`
-                      : hfl.zoneVertexA !== null && hfl.zoneVertexB !== null
-                        ? `A=${hfl.zoneVertexA} B=${hfl.zoneVertexB} · ${hfl.bridgePoints.length} pts bridge`
-                        : hfl.zoneVertexA !== null ? 'Point A selectionne, cliquez B...' : 'Selectionnez le point A...'}
-                  </div>
-                )}
               </div>
             </div>
           )
         })}
 
-        {/* Action buttons for active face */}
+        {mode === 'limb' && legZones.map(zone => {
+          const entries = limbEntriesByZone[zone.id] ?? []
+          return (
+            <div key={zone.id} style={{
+              marginBottom: 8, padding: '8px 10px', borderRadius: 6,
+              border: '1px solid #374151',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: zone.color, flexShrink: 0 }} />
+                <span style={{ color: '#e5e7eb', fontWeight: 500, flex: 1, fontSize: 13 }}>{zone.label}</span>
+                <span style={{ color: '#6b7280', fontSize: 11 }}>{entries.length}</span>
+              </div>
+
+              {entries.map((entry, idx) => {
+                const isActive = entry.id === activeLimbId
+                return (
+                  <div
+                    key={entry.id}
+                    onClick={() => setActiveLimbId(isActive ? null : entry.id)}
+                    style={{
+                      padding: '6px 8px', borderRadius: 4, marginBottom: 4,
+                      border: isActive ? `2px solid ${zone.color}` : '1px solid #2a2f3a',
+                      background: isActive ? 'rgba(255,255,255,0.05)' : 'transparent',
+                      cursor: 'pointer', fontSize: 12,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: '#e5e7eb', flex: 1 }}>HFL #{idx + 1}</span>
+                      <button
+                        className="btn-sm btn-ghost"
+                        onClick={(e) => { e.stopPropagation(); deleteLimbHiddenFace(entry.id) }}
+                        style={{ fontSize: 10, padding: '2px 6px' }}
+                      >
+                        X
+                      </button>
+                    </div>
+                    <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>
+                      {entry.generated
+                        ? `${entry.zoneTriangleIndices.length} triangles generes`
+                        : entry.zoneVertexA !== null && entry.zoneVertexB !== null
+                          ? `A=${entry.zoneVertexA} B=${entry.zoneVertexB} · ${entry.bridgePoints.length} pts bridge`
+                          : entry.zoneVertexA !== null ? 'Point A selectionne, cliquez B...' : 'Selectionnez le point A...'}
+                    </div>
+                  </div>
+                )
+              })}
+
+              <button
+                className="btn-sm btn-secondary"
+                onClick={() => addLimbHiddenFace(zone.id)}
+                style={{ width: '100%', fontSize: 11, marginTop: 4 }}
+              >
+                + Nouvelle face cachee
+              </button>
+            </div>
+          )
+        })}
+
         {activeLimbId && (activeBodyHF || activeLimbHF) && (
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {editPhase === 'bridge' && (
@@ -1013,8 +1071,8 @@ function HiddenFaceEditor({ project, onSave }: Props) {
 
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
           {enabledCount === 0
-            ? 'Aucune face cachee. Activez une patte pour definir.'
-            : `${enabledCount} zone(s) · ${generatedCount} generee(s)`}
+            ? 'Aucune face cachee.'
+            : `${enabledCount} face(s) cachee(s) · ${generatedCount} generee(s)`}
         </div>
 
         <button
@@ -1029,8 +1087,6 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     </div>
   )
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────
 
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16)

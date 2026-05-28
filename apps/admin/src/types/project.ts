@@ -383,6 +383,10 @@ export interface HiddenFaceZone {
 }
 
 export interface HiddenFaceLimbZone {
+  /** ID unique de cette face cachée. Permet plusieurs faces cachées par membre
+   *  (ex : aile cachée par body ET par tête). Absent sur les anciens projets ; le
+   *  deserializer en génère un à la volée. */
+  id?: string;
   limbZoneId: string;              // réf WalkLimbZone.id (patte à étendre)
   zoneVertexA: number;             // index dans zonePoints[limbZoneId] — vertex de contour A
   zoneVertexB: number;             // index dans zonePoints[limbZoneId] — vertex de contour B

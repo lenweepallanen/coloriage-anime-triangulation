@@ -337,6 +337,10 @@ interface ProjectTriangulationDoc {
   zoneDensity: Record<string, number>
   bodyPoints: Point2D[]
   bodyTriangles: TriangleDoc[]
+  bodyPointsBaseline?: Point2D[]
+  bodyTrianglesBaseline?: TriangleDoc[]
+  zonePointsBaseline?: Record<string, Point2D[]>
+  zoneTrianglesBaseline?: Record<string, TriangleDoc[]>
   step2Validated: boolean
   // Step 3
   hiddenFaceZones: import('../types/project').HiddenFaceZone[]
@@ -533,6 +537,7 @@ function limbSeparationToDoc(sep: WalkLimbSeparation | null | undefined): unknow
   // Hidden face limb zones (extensions de pattes)
   if (sep.hiddenFaceLimbZones && sep.hiddenFaceLimbZones.length > 0) {
     doc.hiddenFaceLimbZones = sep.hiddenFaceLimbZones.map(hfl => ({
+      id: hfl.id ?? crypto.randomUUID(),
       limbZoneId: hfl.limbZoneId,
       zoneVertexA: hfl.zoneVertexA,
       zoneVertexB: hfl.zoneVertexB,
@@ -587,6 +592,7 @@ function limbSeparationFromDoc(doc: Record<string, unknown> | null | undefined):
   if (d.hiddenFaceLimbZones && Array.isArray(d.hiddenFaceLimbZones)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     result.hiddenFaceLimbZones = d.hiddenFaceLimbZones.map((hfl: any) => ({
+      id: hfl.id ?? crypto.randomUUID(),
       limbZoneId: hfl.limbZoneId,
       zoneVertexA: hfl.zoneVertexA ?? 0,
       zoneVertexB: hfl.zoneVertexB ?? 0,
@@ -648,6 +654,14 @@ function projectTriangulationToDoc(tri: ProjectTriangulation): ProjectTriangulat
     zoneDensity: tri.zoneDensity ?? {},
     bodyPoints: tri.bodyPoints ?? [],
     bodyTriangles: triToDoc(tri.bodyTriangles ?? []),
+    ...(tri.bodyPointsBaseline != null && { bodyPointsBaseline: tri.bodyPointsBaseline }),
+    ...(tri.bodyTrianglesBaseline != null && { bodyTrianglesBaseline: triToDoc(tri.bodyTrianglesBaseline) }),
+    ...(tri.zonePointsBaseline != null && { zonePointsBaseline: tri.zonePointsBaseline }),
+    ...(tri.zoneTrianglesBaseline != null && {
+      zoneTrianglesBaseline: Object.fromEntries(
+        Object.entries(tri.zoneTrianglesBaseline).map(([zid, tris]) => [zid, triToDoc(tris)])
+      ),
+    }),
     step2Validated: tri.step2Validated ?? false,
     hiddenFaceZones: tri.hiddenFaceZones ?? [],
     hiddenFaceLimbZones: tri.hiddenFaceLimbZones ?? [],
@@ -708,9 +722,20 @@ function projectTriangulationFromDoc(doc: ProjectTriangulationDoc): Omit<Project
     zoneDensity: doc.zoneDensity ?? {},
     bodyPoints: doc.bodyPoints ?? [],
     bodyTriangles: docToTri(doc.bodyTriangles ?? []),
+    ...(doc.bodyPointsBaseline != null && { bodyPointsBaseline: doc.bodyPointsBaseline }),
+    ...(doc.bodyTrianglesBaseline != null && { bodyTrianglesBaseline: docToTri(doc.bodyTrianglesBaseline) }),
+    ...(doc.zonePointsBaseline != null && { zonePointsBaseline: doc.zonePointsBaseline }),
+    ...(doc.zoneTrianglesBaseline != null && {
+      zoneTrianglesBaseline: Object.fromEntries(
+        Object.entries(doc.zoneTrianglesBaseline).map(([zid, tris]) => [zid, docToTri(tris as TriangleDoc[])])
+      ),
+    }),
     step2Validated: doc.step2Validated ?? false,
     hiddenFaceZones: doc.hiddenFaceZones ?? [],
-    hiddenFaceLimbZones: doc.hiddenFaceLimbZones ?? [],
+    hiddenFaceLimbZones: (doc.hiddenFaceLimbZones ?? []).map(hfl => ({
+      ...hfl,
+      id: hfl.id ?? crypto.randomUUID(),
+    })),
     step3Validated: doc.step3Validated ?? false,
     outlineWidthGlobal: doc.outlineWidthGlobal,
     outlineWidthByZone: doc.outlineWidthByZone,

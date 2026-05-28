@@ -404,6 +404,10 @@ export function flowExtrudeLimbOnScan(
   imageWidth: number,
   imageHeight: number,
   contentAlignment?: ContentAlignment,
+  /** Union des indices d'extension de TOUTES les HFL de ce membre. Si fourni, sert
+   *  à exclure ces triangles du "visible" pour qu'une HFL ne pompe pas les pixels
+   *  d'une autre HFL voisine quand un même membre a plusieurs faces cachées. */
+  allExtTriIndices?: ReadonlyArray<number> | Set<number>,
 ): void {
   if (zone.zoneTriangleIndices.length === 0) return
 
@@ -430,10 +434,13 @@ export function flowExtrudeLimbOnScan(
   let chordNy = chordDx / chordLen
 
   // ─── 1. Split triangles into visible vs extension ───────────────
-  const extTriSet = new Set(zone.zoneTriangleIndices)
+  // visible = NOT in any HFL extension set (current + voisines sur même membre)
+  const excludedFromVisible: Set<number> = allExtTriIndices instanceof Set
+    ? allExtTriIndices
+    : new Set(allExtTriIndices ?? zone.zoneTriangleIndices)
   const visibleTriangles: [number, number, number][] = []
   for (let i = 0; i < zoneTriangles.length; i++) {
-    if (!extTriSet.has(i)) visibleTriangles.push(zoneTriangles[i])
+    if (!excludedFromVisible.has(i)) visibleTriangles.push(zoneTriangles[i])
   }
   if (visibleTriangles.length === 0) return
 

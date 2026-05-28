@@ -204,8 +204,8 @@ export default function TriangulationLoopPreview({
       if (inpaintedTextures?.bodyCanvas) hfTexture = PIXI.Texture.from(inpaintedTextures.bodyCanvas)
       if (inpaintedTextures?.limbCanvases) {
         hflTextures = {}
-        for (const [zoneId, canvas] of Object.entries(inpaintedTextures.limbCanvases)) {
-          hflTextures[zoneId] = PIXI.Texture.from(canvas)
+        for (const [key, canvas] of Object.entries(inpaintedTextures.limbCanvases)) {
+          hflTextures[key] = PIXI.Texture.from(canvas)
         }
       }
       const setup = buildZoneMeshes(

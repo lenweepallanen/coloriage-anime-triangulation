@@ -54,13 +54,14 @@ export function buildZoneMeshes(
   const zoneMeshes: ZoneMeshInfo[] = []
   const hiddenFaceLimbMeshes: ZoneMeshInfo[] = []
 
-  // Build per-limb hidden face triangle index sets for splitting
-  const hflByZone = new Map<string, Set<number>>()
+  // Index des faces cachées par zone-mère (limbZoneId). Une zone peut avoir N entrées
+  // (ex : aile cachée par body ET par tête = 2 entrées distinctes sur l'aile).
+  const hflByZone = new Map<string, NonNullable<typeof separation.hiddenFaceLimbZones>>()
   if (separation.hiddenFaceLimbZones) {
     for (const hfl of separation.hiddenFaceLimbZones) {
-      const set = new Set<number>()
-      for (const ti of hfl.zoneTriangleIndices) set.add(ti)
-      hflByZone.set(hfl.limbZoneId, set)
+      const list = hflByZone.get(hfl.limbZoneId) ?? []
+      list.push(hfl)
+      hflByZone.set(hfl.limbZoneId, list)
     }
   }
 
@@ -70,12 +71,15 @@ export function buildZoneMeshes(
     const tris = separation.zoneTriangles[zone.id] || []
     if (pts.length === 0 || tris.length === 0) continue
 
-    const hflTriSet = hflByZone.get(zone.id)
+    const hflEntries = hflByZone.get(zone.id) ?? []
 
-    if (hflTriSet && hflTriSet.size > 0) {
-      // Split: visible triangles (scan texture) + extension triangles (inpainted limb texture)
-      const visibleTris = tris.filter((_, i) => !hflTriSet.has(i))
-      const extTris = [...hflTriSet].map(i => tris[i]).filter(Boolean)
+    if (hflEntries.length > 0) {
+      // Union de tous les indices d'extension pour exclure de la partie visible
+      const allExtTriIdx = new Set<number>()
+      for (const hfl of hflEntries) {
+        for (const ti of hfl.zoneTriangleIndices) allExtTriIdx.add(ti)
+      }
+      const visibleTris = tris.filter((_, i) => !allExtTriIdx.has(i))
 
       // Visible part
       if (visibleTris.length > 0) {
@@ -84,15 +88,16 @@ export function buildZoneMeshes(
         container.addChild(info.pixiMesh)
       }
 
-      // Extension part : rendue JUSTE EN DESSOUS de sa propre zone (zOrder - 0.5).
-      // Conséquence : l'extension est cachée par sa zone-mère ET par toute zone de zOrder
-      // supérieur (body, autre membre…). Elle n'est révélée que si toutes les zones qui la
-      // couvrent en 2D bougent (animation). Permet le cas membre-cache-membre (tête couvre aile)
-      // sans hardcoder le hider.
-      if (extTris.length > 0) {
-        const limbTex = hiddenFaceLimbTextures?.[zone.id] ?? texture
+      // Une sous-mesh PIXI par face cachée. Texture clé = HFL.id (fallback limbZoneId
+      // pour rétro-compat). Z-order : zone.zOrder - 0.5 (juste derrière la zone-mère, donc
+      // cachée par n'importe quelle zone de z-order supérieur).
+      for (const hfl of hflEntries) {
+        const extTris = hfl.zoneTriangleIndices.map(i => tris[i]).filter(Boolean)
+        if (extTris.length === 0) continue
+        const texKey = hfl.id ?? hfl.limbZoneId
+        const limbTex = hiddenFaceLimbTextures?.[texKey] ?? hiddenFaceLimbTextures?.[hfl.limbZoneId] ?? texture
         const extInfo = buildMesh(
-          `__hfl_${zone.id}`, pts, extTris,
+          zone.id, pts, extTris,
           limbTex, imageWidth, imageHeight, scale, offsetX, offsetY,
           zone.zOrder - 0.5, contentAlignment,
         )

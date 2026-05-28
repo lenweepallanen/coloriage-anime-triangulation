@@ -607,6 +607,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       let hflTextures: Record<string, PIXI.Texture> | undefined
       if (sep.hiddenFaceLimbZones && sep.hiddenFaceLimbZones.length > 0) {
         hflTextures = {}
+        // Union des extension-tris par limbZoneId : exclut TOUTES les HFL du membre de la
+        // partie "visible" qu'on extrude, pour qu'une HFL voisine ne pollue pas l'échantillon.
+        const allExtByLimb = new Map<string, Set<number>>()
+        for (const hfl of sep.hiddenFaceLimbZones) {
+          const set = allExtByLimb.get(hfl.limbZoneId) ?? new Set<number>()
+          for (const ti of hfl.zoneTriangleIndices) set.add(ti)
+          allExtByLimb.set(hfl.limbZoneId, set)
+        }
         for (const hfl of sep.hiddenFaceLimbZones) {
           const zonePts = sep.zonePoints[hfl.limbZoneId]
           const zoneTris = sep.zoneTriangles[hfl.limbZoneId]
@@ -615,8 +623,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           hflCanvas.width = scanCanvas.width
           hflCanvas.height = scanCanvas.height
           hflCanvas.getContext('2d')!.drawImage(scanCanvas, 0, 0)
-          flowExtrudeLimbOnScan(hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height, contentAlignment ?? undefined)
-          hflTextures[hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
+          flowExtrudeLimbOnScan(
+            hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height,
+            contentAlignment ?? undefined, allExtByLimb.get(hfl.limbZoneId),
+          )
+          hflTextures[hfl.id ?? hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
         }
       }
 
@@ -1296,7 +1307,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           // Update hidden face limb meshes (same zonePoints, same zoneFrames)
           if (setup.hiddenFaceLimbMeshes) {
             for (const hflm of setup.hiddenFaceLimbMeshes) {
-              const zoneId = hflm.zoneId.replace('__hfl_', '')
+              const zoneId = hflm.zoneId
               const zp = activeZonePlaybacks.find(z => z.zoneId === zoneId)
               if (zp) {
                 let pts = zp.playback.getPositions()

@@ -86,6 +86,12 @@ export default function InpaintedPreview({ project, animation, height = 520, bac
         }
 
         const limbCanvases: Record<string, HTMLCanvasElement> = {}
+        const allExtByLimb = new Map<string, Set<number>>()
+        for (const hfl of tri.hiddenFaceLimbZones) {
+          const set = allExtByLimb.get(hfl.limbZoneId) ?? new Set<number>()
+          for (const ti of hfl.zoneTriangleIndices) set.add(ti)
+          allExtByLimb.set(hfl.limbZoneId, set)
+        }
         for (const hfl of tri.hiddenFaceLimbZones) {
           const zonePts = tri.zonePoints[hfl.limbZoneId]
           const zoneTris = tri.zoneTriangles[hfl.limbZoneId]
@@ -94,8 +100,8 @@ export default function InpaintedPreview({ project, animation, height = 520, bac
           c.width = imgW
           c.height = imgH
           c.getContext('2d')!.drawImage(img, 0, 0)
-          flowExtrudeLimbOnScan(c, hfl, zonePts, zoneTris, imgW, imgH)
-          limbCanvases[hfl.limbZoneId] = c
+          flowExtrudeLimbOnScan(c, hfl, zonePts, zoneTris, imgW, imgH, undefined, allExtByLimb.get(hfl.limbZoneId))
+          limbCanvases[hfl.id ?? hfl.limbZoneId] = c
         }
 
         setTextures({ bodyCanvas, limbCanvases })
