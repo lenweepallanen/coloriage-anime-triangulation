@@ -12,13 +12,18 @@
  */
 
 import * as PIXI from 'pixi.js'
-import type { ProjectTriangulation, Point2D } from '../types/project'
+import type { ProjectTriangulation, Point2D, MouthDefinition } from '../types/project'
 import type { ContentAlignment } from './textureExtractor'
-import { filterTrianglesOutsideMouth } from './mouthOverlay'
+import { computeMouthPolygonBary } from './mouthOverlay'
+import { pointInPolygon } from './geometry'
 
 export interface MouthHoleForOutline {
+  /** Polygone bouche (frame courant, coords image) — fallback si `mouth` absent. */
   polygon: Point2D[]
   zoneId: string
+  /** Définition bouche : si fournie, le polygone est re-résolu sur les positions
+   *  courantes de la zone (openness 0) pour rester aligné au trou de texture. */
+  mouth?: MouthDefinition
 }
 
 export interface ApplyZoneOutlinesOptions {
@@ -197,6 +202,81 @@ export interface ZoneOutlinePolyline {
   color: string
 }
 
+/** Index du sommet de `poly` le plus proche de `p`. */
+function nearestPolyIndex(poly: Point2D[], p: Point2D): number {
+  let bi = 0, bd = Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const dx = poly[i].x - p.x, dy = poly[i].y - p.y
+    const d = dx * dx + dy * dy
+    if (d < bd) { bd = d; bi = i }
+  }
+  return bi
+}
+
+/** Sous-chaîne de `poly` de `from` à `to` (indices), dans le sens `forward`. */
+function polyArc(poly: Point2D[], from: number, to: number, forward: boolean): Point2D[] {
+  const m = poly.length
+  const out: Point2D[] = []
+  let i = from
+  let guard = 0
+  while (guard <= m) {
+    out.push(poly[i])
+    if (i === to) break
+    i = forward ? (i + 1) % m : (i - 1 + m) % m
+    guard++
+  }
+  return out
+}
+
+/**
+ * Remplace les tronçons du contour qui « plongent » dans le polygone bouche
+ * (sommets à l'intérieur) par l'arc lisse correspondant du polygone bouche.
+ * Évite le zigzag d'arêtes de triangles autour du trou bouche.
+ *
+ * Pour chaque run de sommets intérieurs, on relie le sommet extérieur précédent
+ * (A) au suivant (B) par l'arc Bézier ; on choisit l'arc le plus proche du
+ * centroïde du contour (= lèvre côté tête) plutôt que l'arc opposé.
+ */
+function spliceMouthIntoContour(contour: Point2D[], mouthPoly: Point2D[]): Point2D[] {
+  const n = contour.length
+  if (n < 3 || mouthPoly.length < 3) return contour
+  const inside = contour.map(p => pointInPolygon(p, mouthPoly))
+  let countInside = 0
+  for (const v of inside) if (v) countInside++
+  if (countInside === 0 || countInside >= n) return contour // rien à splicer / dégénéré
+
+  // Centroïde du contour (dominé par la masse de la tête) → choix de l'arc côté tête.
+  let cx = 0, cy = 0
+  for (const p of contour) { cx += p.x; cy += p.y }
+  cx /= n; cy /= n
+  const meanDistToCentroid = (arc: Point2D[]): number => {
+    let s = 0
+    for (const p of arc) s += Math.hypot(p.x - cx, p.y - cy)
+    return arc.length > 0 ? s / arc.length : Infinity
+  }
+
+  const firstOutside = inside.findIndex(v => !v)
+  const out: Point2D[] = []
+  let step = 0
+  while (step < n) {
+    const idx = (firstOutside + step) % n
+    if (!inside[idx]) { out.push(contour[idx]); step++; continue }
+    // Début d'un run intérieur : mesurer sa longueur.
+    let len = 1
+    while (inside[(firstOutside + step + len) % n]) len++
+    const A = contour[(idx - 1 + n) % n]              // extérieur juste avant
+    const B = contour[(firstOutside + step + len) % n] // extérieur juste après
+    const pa = nearestPolyIndex(mouthPoly, A)
+    const pb = nearestPolyIndex(mouthPoly, B)
+    const fwd = polyArc(mouthPoly, pa, pb, true)
+    const bwd = polyArc(mouthPoly, pa, pb, false)
+    const arc = meanDistToCentroid(fwd) <= meanDistToCentroid(bwd) ? fwd : bwd
+    for (const p of arc) out.push(p)
+    step += len
+  }
+  return out.length >= 3 ? out : contour
+}
+
 /** Calcule les polylignes d'outline pour chaque zone à partir des positions
  *  courantes des sommets (en coords image). Indépendant du renderer : à toi
  *  de dessiner sur canvas 2D, PIXI.Graphics, SVG, etc.
@@ -223,29 +303,44 @@ export function computeZoneOutlinePolylines(
   const sorted = [...tri.zones].sort((u, v) => (u.zOrder ?? 0) - (v.zOrder ?? 0))
   const out: ZoneOutlinePolyline[] = []
   for (const zone of sorted) {
-    let overrideTris: [number, number, number][] | undefined
-    if (mouthHole && mouthHole.zoneId === zone.id) {
-      const pts = zone.id === 'body' ? tri.bodyPoints : tri.zonePoints?.[zone.id]
-      const tris = zone.id === 'body' ? tri.bodyTriangles : tri.zoneTriangles?.[zone.id]
-      if (pts && tris) overrideTris = filterTrianglesOutsideMouth(pts, tris, mouthHole.polygon)
-    }
-    const indices = getZoneContourIndices(tri, zone.id, overrideTris)
+    // Épaisseur 0 → aucun tracé (sinon le floor max(1,…) laisserait un trait 1px).
+    const widthImg = getZoneOutlineWidth(tri, zone.id)
+    if (widthImg <= 0) continue
+    // Contour complet de la zone (sans découpe de triangles) : le trou bouche
+    // est géré par splice du Bézier lisse, pas par suppression de triangles.
+    const indices = getZoneContourIndices(tri, zone.id)
     if (!indices || indices.length < 3) continue
     const src = zone.id === 'body' ? pointsByZone.body : pointsByZone.limbs?.[zone.id]
     if (!src) continue
-    const imgPositions: Point2D[] = []
+    let imgPositions: Point2D[] = []
     for (const i of indices) {
       const p = src[i]
       if (p) imgPositions.push(p)
     }
     if (imgPositions.length < 3) continue
+    // Splice bouche : remplace le tronçon qui plonge dans la bouche par l'arc
+    // Bézier lisse, pour éviter le zigzag d'arêtes de triangles.
+    if (mouthHole && mouthHole.zoneId === zone.id) {
+      const tris = zone.id === 'body' ? tri.bodyTriangles : tri.zoneTriangles?.[zone.id]
+      const restPts = zone.id === 'body' ? tri.bodyPoints : tri.zonePoints?.[zone.id]
+      let mouthPoly: Point2D[] | null = null
+      if (mouthHole.mouth && tris && restPts) {
+        // Déformation barycentrique (pas de re-flatten Bézier) → pas de vaguelettes.
+        mouthPoly = computeMouthPolygonBary(mouthHole.mouth, restPts, src, tris, 0)
+      } else if (mouthHole.polygon.length >= 3) {
+        mouthPoly = mouthHole.polygon
+      }
+      if (mouthPoly && mouthPoly.length >= 3) {
+        imgPositions = spliceMouthIntoContour(imgPositions, mouthPoly)
+        if (imgPositions.length < 3) continue
+      }
+    }
     // Inflate/deflate en coords image (avant le mapping vers cible)
     const inflateImg = getZoneOutlineInflate(tri, zone.id)
     const inflated = inflateImg !== 0 ? inflateLoop(imgPositions, inflateImg) : imgPositions
     const mapped = inflated.map(mapPoint)
     const iters = Math.round(getZoneOutlineSmoothing(tri, zone.id))
     const smoothed = chaikinSmooth(mapped, iters)
-    const widthImg = getZoneOutlineWidth(tri, zone.id)
     const width = Math.max(1, widthImg * k)
     out.push({
       zoneId: zone.id,

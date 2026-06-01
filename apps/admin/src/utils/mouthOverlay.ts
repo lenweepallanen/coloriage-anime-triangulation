@@ -2,7 +2,7 @@ import * as PIXI from 'pixi.js'
 import earcut from 'earcut'
 import type { MouthDefinition, Point2D } from '../types/project'
 import { flattenClosedBezier } from './bezierUtils'
-import { interpolateInternalPoint } from './barycentricUtils'
+import { interpolateInternalPoint, computeAllBarycentrics } from './barycentricUtils'
 import { computeUVs, type ContentAlignment } from './textureExtractor'
 import { pointInPolygon } from './geometry'
 
@@ -47,6 +47,37 @@ export function filterTrianglesOutsideMouth(
     if (!pointInPolygon({ x: cx, y: cy }, polygon)) kept.push(tri)
   }
   return kept
+}
+
+/**
+ * Polygone bouche déformé **sans artefact de poignée Bézier**.
+ *
+ * Au lieu de re-flatten la Bézier par frame (poignées seulement translatées →
+ * vaguelettes quand le maillage se déforme non-uniformément), on flatten une
+ * fois en frame 0, on calcule les barycentriques de chaque point dense sur le
+ * maillage au repos, puis on déforme ces points denses via les positions
+ * courantes du maillage. La courbe suit la peau du maillage, lisse par densité.
+ *
+ * - `restPositions` : positions frame 0 du maillage d'attache (ex. tri.bodyPoints).
+ * - `currentPositions` : positions courantes du même maillage.
+ * - `triangles` : triangles du maillage d'attache.
+ */
+export function computeMouthPolygonBary(
+  mouth: MouthDefinition,
+  restPositions: Point2D[],
+  currentPositions: Point2D[],
+  triangles: [number, number, number][],
+  openness: number,
+): Point2D[] {
+  // Frame 0 : les nœuds Bézier sont déjà en coords image frame 0 (= rest).
+  const base = flattenClosedBezier(mouth.bezierNodes, SAMPLES_PER_SEGMENT)
+  const barys = computeAllBarycentrics(base, restPositions, triangles)
+  const deformed = barys.map(b => interpolateInternalPoint(b, currentPositions, triangles))
+  const hingeRef = mouth.hingeBodyAnchor ?? mouth.hingeAnchor
+  const hinge = interpolateInternalPoint(hingeRef, currentPositions, triangles)
+  const angle = (openness * mouth.maxOpenAngleDeg * mouth.rotationSign * Math.PI) / 180
+  if (Math.abs(angle) < 1e-4) return deformed
+  return deformed.map(p => rotatePoint(p, hinge, angle))
 }
 
 function rotatePoint(p: Point2D, pivot: Point2D, angleRad: number): Point2D {
@@ -101,6 +132,7 @@ export class MouthOverlay {
   private mesh: PIXI.Mesh
   private geometry: PIXI.MeshGeometry
   private numVerts: number
+  private sampleBarys: import('../types/project').BarycentricRef[]
   private destroyed = false
 
   constructor(
@@ -135,6 +167,11 @@ export class MouthOverlay {
     })
     const flattened = flattenClosedBezier(nodesResolved, SAMPLES_PER_SEGMENT)
     this.numVerts = flattened.length
+
+    // Barycentriques des points denses (frame 0) sur le maillage d'attache :
+    // permet de déformer la courbe via la peau du maillage sans re-flatten la
+    // Bézier (qui produirait des vaguelettes car les poignées ne tournent pas).
+    this.sampleBarys = computeAllBarycentrics(flattened, bodyPointsFrame0, bodyTriangles)
 
     // Triangulation interne par earcut (réutilisée chaque frame)
     const flat: number[] = []
@@ -176,25 +213,12 @@ export class MouthOverlay {
     const positions = bodyPositions ?? null
     if (!positions) return
 
-    // 1. Résoudre les ancres pour la frame courante
-    const refs = this.mouth.contourBodyAnchors ?? this.mouth.contourAnchors
-    const resolvedAnchors: Point2D[] = new Array(refs.length)
-    for (let i = 0; i < refs.length; i++) {
-      resolvedAnchors[i] = interpolateInternalPoint(refs[i], positions, this.bodyTriangles)
+    // 1+2. Déformer les points denses (frame 0) via la peau du maillage —
+    // barycentrique, pas de re-flatten Bézier → pas de vaguelettes.
+    const flattened: Point2D[] = new Array(this.sampleBarys.length)
+    for (let i = 0; i < this.sampleBarys.length; i++) {
+      flattened[i] = interpolateInternalPoint(this.sampleBarys[i], positions, this.bodyTriangles)
     }
-    // 2. Reconstruire les BezierNodes avec offsets de handles conservés
-    const nodes = this.mouth.bezierNodes.map((n, i) => {
-      const a = resolvedAnchors[i]
-      const dx = a.x - n.anchor.x
-      const dy = a.y - n.anchor.y
-      return {
-        anchor: a,
-        handleIn: { x: n.handleIn.x + dx, y: n.handleIn.y + dy },
-        handleOut: { x: n.handleOut.x + dx, y: n.handleOut.y + dy },
-        smooth: n.smooth,
-      }
-    })
-    const flattened = flattenClosedBezier(nodes, SAMPLES_PER_SEGMENT)
 
     // 3. Charnière + rotation
     const hingeRef = this.mouth.hingeBodyAnchor ?? this.mouth.hingeAnchor

@@ -11,11 +11,11 @@ import * as PIXI from 'pixi.js'
 import type { Project, Animation, Point2D, ProjectTriangulation, WalkLimbSeparation, UploadHint } from '../../types/project'
 import { LoopPlayback } from '../../utils/loopPlayback'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
-import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
+import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData, getZoneOutlineColor, getZoneOutlineWidth } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
 import { interpolateInternalPoint } from '../../utils/barycentricUtils'
-import { MouthOverlay, computeMouthPolygonFrame0, computeMouthPolygonDeformed } from '../../utils/mouthOverlay'
+import { MouthOverlay, computeMouthPolygonFrame0, computeMouthPolygonBary } from '../../utils/mouthOverlay'
 import { getMouthAttachMesh, EyeBlinkOverlay, buildEyeAttachMeshes } from '../../utils/eyeBlinkOverlay'
 
 interface Props {
@@ -359,12 +359,17 @@ export default function TriangulationLoopPreview({
             ? (jawFrames[Math.min(fr, jawFrames.length - 1)] ?? 0)
             : 0
           mouthOverlay.update(bodyPositions, scale, offsetX, offsetY, openness)
-          // Stroke noir autour du polygone bouche déformé + rotaté
+          // Contour bouche : déformation barycentrique (pas de re-flatten Bézier
+          // → pas de vaguelettes) + couleur/épaisseur reprises de la zone d'attache.
           const mouthDef = project.projectMouth
-          if (mouthDef && bodyPositions && attachTris) {
-            const poly = computeMouthPolygonDeformed(mouthDef, bodyPositions, attachTris, openness)
+          const restPts = attachZoneId === 'body' ? tri?.bodyPoints : tri?.zonePoints?.[attachZoneId]
+          const mouthWidthImg = tri ? getZoneOutlineWidth(tri, attachZoneId) : 0
+          if (mouthDef && bodyPositions && attachTris && restPts && tri && mouthWidthImg > 0) {
+            const poly = computeMouthPolygonBary(mouthDef, restPts, bodyPositions, attachTris, openness)
             if (poly.length >= 3) {
-              mouthOutlineGfx.lineStyle(2, 0x000000, 1)
+              const colorNum = parseInt(getZoneOutlineColor(tri, attachZoneId).replace('#', ''), 16) || 0
+              const widthScreen = Math.max(1, mouthWidthImg * scale)
+              mouthOutlineGfx.lineStyle({ width: widthScreen, color: colorNum, alignment: 0.5, cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND })
               const s0 = { x: poly[0].x * scale + offsetX, y: poly[0].y * scale + offsetY }
               mouthOutlineGfx.moveTo(s0.x, s0.y)
               for (let i = 1; i < poly.length; i++) {
@@ -513,7 +518,7 @@ export default function TriangulationLoopPreview({
             if (p.region !== 'body') limbPositions[p.region] = p.pb.getPositions()
           }
           const mouthHole = mouthPolyImage && mouthPolyImage.length >= 3 && project.projectMouth
-            ? { polygon: mouthPolyImage, zoneId: project.projectMouth.attachZoneId ?? 'body' }
+            ? { polygon: mouthPolyImage, zoneId: project.projectMouth.attachZoneId ?? 'body', mouth: project.projectMouth }
             : null
           const polylines = computeZoneOutlinePolylines(
             tri,

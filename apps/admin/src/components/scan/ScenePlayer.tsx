@@ -1526,8 +1526,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           triForOutline,
           { body: bodyPositions, limbs: limbPositions },
           mapPoint,
-          mouthHolePolygon
-            ? { polygon: mouthHolePolygon, zoneId: project.projectMouth?.attachZoneId ?? 'body' }
+          mouthHolePolygon && project.projectMouth
+            ? { polygon: mouthHolePolygon, zoneId: project.projectMouth.attachZoneId ?? 'body', mouth: project.projectMouth }
             : null,
         )
         const activeZoneOutlineMap = activeWalkZoneAnimId ? zoneOutlineByAnim.get(activeWalkZoneAnimId) : null
