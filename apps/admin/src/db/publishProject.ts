@@ -16,17 +16,22 @@ export async function setProjectPublished(projectId: string, published: boolean)
 }
 
 /**
- * Génère l'URL publique du projet côté play. Lue depuis VITE_PLAY_BASE_URL
- * (configurée en prod via Vercel env var), fallback sur l'URL Vercel par défaut.
+ * Base publique côté play. Lue depuis VITE_PLAY_BASE_URL (configurée en prod via
+ * Vercel env var), fallback sur l'URL Vercel par défaut. Garde-fou : si la var est
+ * mal configurée sur le domaine admin, on la réécrit vers le domaine play pour que
+ * le lien USER ne pointe jamais vers l'admin.
  */
-export function buildPlayUrl(projectId: string): string {
+function playBaseUrl(): string {
   const base = (import.meta.env.VITE_PLAY_BASE_URL ?? 'https://coloriage-anime-play.vercel.app').replace(/\/+$/, '')
-  return `${base}/p/${projectId}`
+  return base.replace('coloriage-anime-admin', 'coloriage-anime-play')
+}
+
+export function buildPlayUrl(projectId: string): string {
+  return `${playBaseUrl()}/p/${projectId}`
 }
 
 export function buildBookPlayUrl(bookId: string): string {
-  const base = (import.meta.env.VITE_PLAY_BASE_URL ?? 'https://coloriage-anime-play.vercel.app').replace(/\/+$/, '')
-  return `${base}/livre/${bookId}`
+  return `${playBaseUrl()}/livre/${bookId}`
 }
 
 /** URL de preview locale (dev) — basé sur VITE_PLAY_LOCAL_URL ou fallback 5175. */
