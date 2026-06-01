@@ -854,7 +854,29 @@ function HiddenFaceEditor({ project, onSave }: Props) {
         step3Validated: true,
       }
 
-      await onSave({ ...project, projectTriangulation: updatedPT })
+      // Topology changed (bodyPoints/zonePoints longueurs modifiées) → invalide les frames
+      // pré-calculées des animations dépendantes. Sans ça, updateZoneMeshVertices ne touche
+      // que les anciens indices et les nouveaux vertices restent figés à leur position
+      // d'init → triangles étirés à travers tout le canvas.
+      const TOPOLOGY_DEPENDENT: ReadonlyArray<string> = ['members-bones', 'members-bones-v2', 'members-bones-v3', 'cotracker-bones', 'walk', 'marche']
+      const invalidatedAnimations = project.animations.map(anim => {
+        if (!TOPOLOGY_DEPENDENT.includes(anim.type)) return anim
+        if (!anim.mesh) return anim
+        return {
+          ...anim,
+          mesh: {
+            ...anim.mesh,
+            walkBodyFrames: null,
+            walkZoneFrames: null,
+            walkBodyFramesSmoothed: null,
+            walkBodyFramesSmoothingValidated: false,
+            walkZoneFramesSmoothed: null,
+            walkZoneFramesSmoothingValidated: false,
+          },
+        }
+      })
+
+      await onSave({ ...project, animations: invalidatedAnimations, projectTriangulation: updatedPT })
     } catch (err) {
       console.error('[ProjectTriangHiddenFace] save failed:', err)
     }

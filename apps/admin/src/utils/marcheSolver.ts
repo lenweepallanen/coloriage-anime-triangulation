@@ -726,9 +726,10 @@ export function buildMarcheInheritSnapshot(
   }
 
   // La marche procédurale n'a pas de tracking cotracker pour piloter une
-  // mâchoire — on strip le champ `jaw` du snapshot.
+  // mâchoire ni les pupilles — on strip `jaw` et `eyeLinks` du snapshot.
   const skeletonCopy: CoTrackerSkeleton = JSON.parse(JSON.stringify(parentMesh.cotrackerSkeleton))
   skeletonCopy.jaw = null
+  skeletonCopy.eyeLinks = null
 
   return {
     marcheParentAnimationId: parentAnimId,

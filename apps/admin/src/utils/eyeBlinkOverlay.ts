@@ -92,13 +92,72 @@ function easeInOutQuad(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
 }
 
-const EYE_STROKE_PX = 2
+/** Parse une couleur hex ('#rgb' ou '#rrggbb') en nombre PIXI. Fallback fourni. */
+function hexToNum(hex: string | undefined, fallback: number): number {
+  if (!hex) return fallback
+  let h = hex.trim().replace('#', '')
+  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  const n = parseInt(h, 16)
+  return Number.isFinite(n) ? n : fallback
+}
+
+/** Repère local d'un œil à partir de son polygone (n'importe quel espace de coords).
+ *  ux suit le vecteur centre→premier point (tourne avec l'œil). halfU/halfV =
+ *  demi-extensions du polygone le long des axes locaux. */
+export interface EyeFrame {
+  center: Point2D
+  ux: number; uy: number
+  vx: number; vy: number
+  halfU: number; halfV: number
+}
+
+export function computeEyeFrame(poly: Point2D[]): EyeFrame {
+  let cx = 0, cy = 0
+  for (const p of poly) { cx += p.x; cy += p.y }
+  cx /= poly.length; cy /= poly.length
+  let ux = poly[0].x - cx, uy = poly[0].y - cy
+  const n = Math.hypot(ux, uy)
+  if (n < 1e-6) { ux = 1; uy = 0 } else { ux /= n; uy /= n }
+  const vx = -uy, vy = ux
+  let halfU = 0, halfV = 0
+  for (const p of poly) {
+    const dx = p.x - cx, dy = p.y - cy
+    halfU = Math.max(halfU, Math.abs(dx * ux + dy * uy))
+    halfV = Math.max(halfV, Math.abs(dx * vx + dy * vy))
+  }
+  return { center: { x: cx, y: cy }, ux, uy, vx, vy, halfU, halfV }
+}
+
+export interface EyeAttachMesh {
+  triangles: [number, number, number][]
+  pointsFrame0: Point2D[]
+}
+/** Maillages d'attache par zone (clé = attachZoneId, 'body' inclus). */
+export type EyeAttachMeshes = Record<string, EyeAttachMesh>
+
+/** Construit les maillages d'attache (frame 0) pour tous les yeux : 'body' + chaque
+ *  zone patte de projectTriangulation, sinon fallback body legacy (walkLimbSeparation). */
+export function buildEyeAttachMeshes(project: Project): EyeAttachMeshes | null {
+  const tri = project.projectTriangulation
+  if (tri?.bodyPoints && tri.bodyTriangles && tri.bodyPoints.length > 0 && tri.bodyTriangles.length > 0) {
+    const out: EyeAttachMeshes = { body: { triangles: tri.bodyTriangles, pointsFrame0: tri.bodyPoints } }
+    for (const zid of Object.keys(tri.zonePoints ?? {})) {
+      const pts = tri.zonePoints?.[zid]
+      const trs = tri.zoneTriangles?.[zid]
+      if (pts && trs && pts.length > 0 && trs.length > 0) out[zid] = { triangles: trs, pointsFrame0: pts }
+    }
+    return out
+  }
+  const m = getEyeBodyMeshData(project)
+  if (m) return { body: { triangles: m.bodyTriangles, pointsFrame0: m.bodyPoints } }
+  return null
+}
 
 export class EyeBlinkOverlay {
   private eyes: ProjectEyes
   private trackedTriangles: [number, number, number][] | null
   private slice: TrackedSlice | null
-  private bodyTriangles: [number, number, number][] | null
+  private attachMeshes: EyeAttachMeshes | null
   private container: PIXI.Container
   private graphics: PIXI.Graphics[] = []
   private state: BlinkState
@@ -108,19 +167,21 @@ export class EyeBlinkOverlay {
     parent: PIXI.Container,
     trackedTriangles: [number, number, number][] | null,
     slice: TrackedSlice | null,
-    bodyTriangles: [number, number, number][] | null = null,
-    bodyPointsFrame0: Point2D[] | null = null,
+    attachMeshes: EyeAttachMeshes | null = null,
   ) {
     this.eyes = eyes
     this.trackedTriangles = trackedTriangles
     this.slice = slice
-    this.bodyTriangles = bodyTriangles
-    // Auto-compute missing bodyBarycentricRefs for legacy eyes saved before body tracking
-    // was supported. Mutates the eyes objects in place so subsequent saves persist them.
-    if (bodyTriangles && bodyTriangles.length > 0 && bodyPointsFrame0 && bodyPointsFrame0.length > 0) {
+    this.attachMeshes = attachMeshes
+    // (Re)calcule TOUJOURS les bodyBarycentricRefs depuis le maillage de la zone
+    // d'attache de chaque œil (source de vérité courante). Évite les refs périmés
+    // après re-triangulation, et permet d'ancrer un œil à une zone précise.
+    if (attachMeshes) {
       for (const eye of eyes.regions) {
-        if (!eye.bodyBarycentricRefs || eye.bodyBarycentricRefs.length !== eye.contourPoints.length) {
-          eye.bodyBarycentricRefs = computeAllBarycentrics(eye.contourPoints, bodyPointsFrame0, bodyTriangles)
+        const zoneId = eye.attachZoneId ?? 'body'
+        const m = attachMeshes[zoneId]
+        if (m && m.triangles.length > 0 && m.pointsFrame0.length > 0 && eye.contourPoints.length >= 3) {
+          eye.bodyBarycentricRefs = computeAllBarycentrics(eye.contourPoints, m.pointsFrame0, m.triangles)
         }
       }
     }
@@ -152,17 +213,20 @@ export class EyeBlinkOverlay {
   private deformEye(
     eye: EyeRegion,
     allPositions: Point2D[] | null,
-    bodyPositions: Point2D[] | null,
+    bodyPositionsByZone: Record<string, Point2D[]> | null,
   ): Point2D[] {
+    const zoneId = eye.attachZoneId ?? 'body'
+    const m = this.attachMeshes?.[zoneId]
+    const positions = bodyPositionsByZone?.[zoneId]
     if (
-      bodyPositions
-      && this.bodyTriangles
-      && this.bodyTriangles.length > 0
+      positions
+      && m
+      && m.triangles.length > 0
       && eye.bodyBarycentricRefs
       && eye.bodyBarycentricRefs.length === eye.contourPoints.length
     ) {
       return eye.contourPoints.map((_, i) =>
-        interpolateInternalPoint(eye.bodyBarycentricRefs![i], bodyPositions, this.bodyTriangles!)
+        interpolateInternalPoint(eye.bodyBarycentricRefs![i], positions, m.triangles)
       )
     }
     if (
@@ -180,23 +244,35 @@ export class EyeBlinkOverlay {
     return eye.contourPoints
   }
 
+  /**
+   * @param pupilOffsets   Offsets pupille (anim courante).
+   * @param prevPupilOffsets Offsets pupille de l'anim précédente, pour crossfade.
+   * @param fadeT          Facteur de blend ∈ [0,1] : 0 = prev, 1 = current. Défaut 1.
+   */
   update(
     allPositions: Point2D[] | null,
-    bodyPositions: Point2D[] | null,
+    bodyPositionsByZone: Record<string, Point2D[]> | null,
     scale: number,
     offsetX: number,
     offsetY: number,
     dtMs: number,
+    pupilOffsets: Record<string, Point2D> | null = null,
+    prevPupilOffsets: Record<string, Point2D> | null = null,
+    fadeT: number = 1,
   ): void {
-    if (!this.eyes.blinkEnabled || this.eyes.regions.length === 0) {
+    if (this.eyes.regions.length === 0) {
       for (const g of this.graphics) g.clear()
       return
     }
 
     // Advance single shared blink state machine (all eyes blink in sync).
+    // Si le clignement est désactivé, on reste en phase idle (progress = 0)
+    // mais on dessine quand même l'œil.
     const st = this.state
-    st.timer += dtMs
-    if (st.phase === 'idle') {
+    if (this.eyes.blinkEnabled) st.timer += dtMs
+    if (!this.eyes.blinkEnabled) {
+      st.phase = 'idle'
+    } else if (st.phase === 'idle') {
       if (st.timer >= st.nextDelay) {
         st.phase = 'closing'
         st.timer = 0
@@ -232,41 +308,94 @@ export class EyeBlinkOverlay {
       const eye = this.eyes.regions[i]
       const g = this.graphics[i]
       g.clear()
-      if (progress <= 0.001) continue
 
       // Deform polygon (image coords) → screen coords
-      const polyImg = this.deformEye(eye, allPositions, bodyPositions)
+      const polyImg = this.deformEye(eye, allPositions, bodyPositionsByZone)
       if (polyImg.length < 3) continue
       const polyScreen: Point2D[] = polyImg.map(p => ({ x: p.x * scale + offsetX, y: p.y * scale + offsetY }))
 
-      // Compute bbox in screen space
-      let minY = Infinity, maxY = -Infinity
-      for (const p of polyScreen) {
-        if (p.y < minY) minY = p.y
-        if (p.y > maxY) maxY = p.y
-      }
-      // Double eyelid : top descends, bottom rises, meet in the middle at progress=1.
-      const half = (maxY - minY) * (progress / 2)
-      const topCutY = minY + half
-      const bottomCutY = maxY - half
-      const topPoly = clipPolygonY(polyScreen, topCutY, 'above')
-      const bottomPoly = clipPolygonY(polyScreen, bottomCutY, 'below')
+      const frame = computeEyeFrame(polyScreen)
 
-      g.lineStyle({ width: EYE_STROKE_PX, color: 0x000000, alpha: 1, alignment: 0.5 })
-      g.beginFill(0x000000, 1)
-      if (topPoly.length >= 3) {
-        g.moveTo(topPoly[0].x, topPoly[0].y)
-        for (let k = 1; k < topPoly.length; k++) g.lineTo(topPoly[k].x, topPoly[k].y)
-        g.closePath()
-      }
-      if (bottomPoly.length >= 3) {
-        g.moveTo(bottomPoly[0].x, bottomPoly[0].y)
-        for (let k = 1; k < bottomPoly.length; k++) g.lineTo(bottomPoly[k].x, bottomPoly[k].y)
-        g.closePath()
-      }
+      // ── Ellipse 1 : sclère (blanc + contour noir réglable) ──
+      const scleraColor = hexToNum(eye.scleraColor, 0xffffff)
+      const outlineColor = hexToNum(eye.outlineColor, 0x000000)
+      const strokePx = Math.max(0, (eye.outlineThickness ?? 3) * scale)
+      g.lineStyle({ width: strokePx, color: outlineColor, alpha: 1, alignment: 0.5 })
+      g.beginFill(scleraColor, 1)
+      g.moveTo(polyScreen[0].x, polyScreen[0].y)
+      for (let k = 1; k < polyScreen.length; k++) g.lineTo(polyScreen[k].x, polyScreen[k].y)
+      g.closePath()
       g.endFill()
       g.lineStyle(0)
+
+      // ── Ellipse 2 : pupille (suit le point CoTracker, clampée par le compute) ──
+      const minHalf = Math.min(frame.halfU, frame.halfV)
+      const pupilR = Math.max(1, (eye.pupilRadiusFrac ?? 0.45) * minHalf)
+      // Tracking actif → la pupille "regarde" le point CoTracker (offset déjà clampé
+      // dans l'ellipse au pré-calcul, en unités image → écran via scale).
+      // Sinon → position de repos des sliders (fraction des demi-axes).
+      // Crossfade : blend entre prev et cur pour lisser les transitions d'animations.
+      const baseU = (eye.pupilOffsetFrac?.x ?? 0) * frame.halfU
+      const baseV = (eye.pupilOffsetFrac?.y ?? 0) * frame.halfV
+      const curT = pupilOffsets?.[eye.id]
+      const curU = curT ? curT.x * scale : baseU
+      const curV = curT ? curT.y * scale : baseV
+      const prevT = prevPupilOffsets?.[eye.id]
+      const prevU = prevT ? prevT.x * scale : baseU
+      const prevV = prevT ? prevT.y * scale : baseV
+      const t = Math.max(0, Math.min(1, fadeT))
+      let offU = prevU + (curU - prevU) * t
+      let offV = prevV + (curV - prevV) * t
+      const ax = Math.max(1, frame.halfU - pupilR)
+      const ay = Math.max(1, frame.halfV - pupilR)
+      const ecl = (offU * offU) / (ax * ax) + (offV * offV) / (ay * ay)
+      if (ecl > 1) { const s = 1 / Math.sqrt(ecl); offU *= s; offV *= s }
+      const pupilCx = frame.center.x + offU * frame.ux + offV * frame.vx
+      const pupilCy = frame.center.y + offU * frame.uy + offV * frame.vy
+      g.beginFill(hexToNum(eye.pupilColor, 0x000000), 1)
+      g.drawCircle(pupilCx, pupilCy, pupilR)
+      g.endFill()
+
+      // ── Ellipse 3 : reflet (petit disque dans la pupille) ──
+      const reflR = Math.max(0.5, (eye.reflectionRadiusFrac ?? 0.30) * pupilR)
+      const roff = eye.reflectionOffsetFrac ?? { x: -0.3, y: -0.3 }
+      const reflCx = pupilCx + roff.x * pupilR * frame.ux + roff.y * pupilR * frame.vx
+      const reflCy = pupilCy + roff.x * pupilR * frame.uy + roff.y * pupilR * frame.vy
+      g.beginFill(hexToNum(eye.reflectionColor, 0xffffff), 1)
+      g.drawCircle(reflCx, reflCy, reflR)
+      g.endFill()
+
+      // ── Volet de clignement (par-dessus, masque pupille+reflet) ──
+      if (progress > 0.001) {
+        let minY = Infinity, maxY = -Infinity
+        for (const p of polyScreen) {
+          if (p.y < minY) minY = p.y
+          if (p.y > maxY) maxY = p.y
+        }
+        const half = (maxY - minY) * (progress / 2)
+        const topPoly = clipPolygonY(polyScreen, minY + half, 'above')
+        const bottomPoly = clipPolygonY(polyScreen, maxY - half, 'below')
+        g.lineStyle({ width: strokePx, color: outlineColor, alpha: 1, alignment: 0.5 })
+        g.beginFill(outlineColor, 1)
+        if (topPoly.length >= 3) {
+          g.moveTo(topPoly[0].x, topPoly[0].y)
+          for (let k = 1; k < topPoly.length; k++) g.lineTo(topPoly[k].x, topPoly[k].y)
+          g.closePath()
+        }
+        if (bottomPoly.length >= 3) {
+          g.moveTo(bottomPoly[0].x, bottomPoly[0].y)
+          for (let k = 1; k < bottomPoly.length; k++) g.lineTo(bottomPoly[k].x, bottomPoly[k].y)
+          g.closePath()
+        }
+        g.endFill()
+        g.lineStyle(0)
+      }
     }
+  }
+
+  setVisible(visible: boolean): void {
+    this.container.visible = visible
+    if (!visible) for (const g of this.graphics) g.clear()
   }
 
   destroy(): void {

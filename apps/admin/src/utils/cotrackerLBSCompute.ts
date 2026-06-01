@@ -14,6 +14,7 @@ import type {
   Project, Animation, Point2D, CoTrackerLBSParams,
 } from '../types/project'
 import { computeJawOpennessFrames } from './cotrackerJawCompute'
+import { computeEyePupilFrames } from './cotrackerEyeCompute'
 import {
   resolveCoTrackerBodyChain,
   computeCoTrackerLegRestPose,
@@ -213,6 +214,7 @@ export interface LBSComputeResult {
   cotrackerBodyJointFrames: Point2D[][]
   cotrackerLegBoneFrames: Record<string, { chain: Point2D[][] }>
   cotrackerJawOpennessFrames: number[] | null
+  cotrackerEyePupilFrames: Record<string, Point2D[]> | null
 }
 
 /** Override bone frames already resolved in image coords (no cotrackerFrames needed). */
@@ -536,5 +538,25 @@ export async function runCoTrackerLBSCompute(
     }
   }
 
-  return { walkBodyFrames, walkZoneFrames, cotrackerBodyJointFrames, cotrackerLegBoneFrames, cotrackerJawOpennessFrames }
+  // ── Pupille des yeux (suivi d'un point CoTracker par œil) ─────────
+  let cotrackerEyePupilFrames: Record<string, Point2D[]> | null = null
+  const eyes = project.projectEyes?.regions
+  const eyeLinks = skeleton.eyeLinks ?? []
+  if (eyes && eyes.length > 0 && eyeLinks.length > 0 && !override && ctFrames && walkBodyFrames.length > 0) {
+    const framesByZone: Record<string, Point2D[][]> = { body: walkBodyFrames, ...walkZoneFrames }
+    const trianglesByZone: Record<string, [number, number, number][]> = { body: tri.bodyTriangles }
+    for (const zid of Object.keys(tri.zoneTriangles ?? {})) trianglesByZone[zid] = tri.zoneTriangles[zid]
+    const result = computeEyePupilFrames({
+      eyes,
+      eyeLinks,
+      cotrackerFrames: ctFrames,
+      videoSize: { width: vidW, height: vidH },
+      imageSize: { width: imgW, height: imgH },
+      framesByZone,
+      trianglesByZone,
+    })
+    if (Object.keys(result).length > 0) cotrackerEyePupilFrames = result
+  }
+
+  return { walkBodyFrames, walkZoneFrames, cotrackerBodyJointFrames, cotrackerLegBoneFrames, cotrackerJawOpennessFrames, cotrackerEyePupilFrames }
 }

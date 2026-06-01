@@ -9,7 +9,7 @@ import type { OneshotAnimation } from '../../utils/multiAnimationPlayback'
 import { DeviceParallax } from '../../utils/deviceParallax'
 import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRenderer'
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
-import { EyeBlinkOverlay, getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
+import { EyeBlinkOverlay, buildEyeAttachMeshes } from '../../utils/eyeBlinkOverlay'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan } from '../../utils/hiddenFaceTexture'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 
@@ -461,7 +461,6 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     let eyeOverlay: EyeBlinkOverlay | null = null
     app.stage.sortableChildren = true
     if (project.projectEyes && project.projectEyes.regions.length > 0) {
-      const bodyMesh = getEyeBodyMeshData(project)
       eyeOverlay = new EyeBlinkOverlay(
         project.projectEyes,
         app.stage,
@@ -471,8 +470,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           nContourSubdivision: mesh.contourSubdivisionPoints.length,
           nAnchorPoints: mesh.anchorPoints.length,
         },
-        bodyMesh?.bodyTriangles ?? null,
-        bodyMesh?.bodyPoints ?? null,
+        buildEyeAttachMeshes(project),
       )
     }
 
@@ -641,8 +639,33 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
 
         // Eye blink overlay
         if (eyeOverlay) {
-          const bodyFrame = walkBodyFrames?.[walkFrameCounter] ?? walkBodyFrames?.[0] ?? null
-          eyeOverlay.update(positions, bodyFrame, scale, offsetX, offsetY, (delta / 60) * 1000)
+          // Pendant une animation de zone (walk/cotracker) : déformer l'œil par le
+          // maillage body/zone. Sinon (rest loop) : laisser le chemin "tracked" via
+          // `positions` (byZone = null).
+          let byZone: Record<string, Point2D[]> | null = null
+          if (isWalkZonePlaying && walkBodyFrames) {
+            byZone = { body: walkBodyFrames[walkFrameCounter] ?? walkBodyFrames[0] }
+            if (walkZoneFrames) {
+              for (const zid of Object.keys(walkZoneFrames)) {
+                const f = walkZoneFrames[zid]?.[walkFrameCounter] ?? walkZoneFrames[zid]?.[0]
+                if (f) byZone[zid] = f
+              }
+            }
+          }
+          // Offset pupille : seulement pendant la lecture de l'animation cotracker
+          // qui possède les frames pré-calculées. Sinon pupille centrée.
+          let pupilOffsets: Record<string, Point2D> | null = null
+          const eyePupilFrames = zoneAnim?.mesh?.cotrackerEyePupilFrames
+          if (isWalkZonePlaying && eyePupilFrames) {
+            pupilOffsets = {}
+            for (const eyeId of Object.keys(eyePupilFrames)) {
+              const frames = eyePupilFrames[eyeId]
+              if (frames && frames.length > 0) {
+                pupilOffsets[eyeId] = frames[Math.min(walkFrameCounter, frames.length - 1)]
+              }
+            }
+          }
+          eyeOverlay.update(positions, byZone, scale, offsetX, offsetY, (delta / 60) * 1000, pupilOffsets)
         }
 
         // Parallax on background

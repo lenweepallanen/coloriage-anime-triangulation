@@ -14,7 +14,7 @@ import { buildZoneMeshes, updateZoneMeshVertices } from '../../utils/zoneMeshRen
 import { computeZoneOutlinePolylines, drawZoneOutlinesPixi, hasZoneOutlineData } from '../../utils/zoneOutlines'
 import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan, imageToScanPixel } from '../../utils/hiddenFaceTexture'
-import { EyeBlinkOverlay, getEyeBodyMeshData, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
+import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
 import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 
@@ -572,7 +572,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // --- Eye blink overlay (project-level, optional) ---
     let eyeOverlay: EyeBlinkOverlay | null = null
     if (project.projectEyes && project.projectEyes.regions.length > 0) {
-      const bodyMesh = getEyeBodyMeshData(project)
       eyeOverlay = new EyeBlinkOverlay(
         project.projectEyes,
         characterContainer,
@@ -582,8 +581,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           nContourSubdivision: mesh.contourSubdivisionPoints.length,
           nAnchorPoints: mesh.anchorPoints.length,
         },
-        bodyMesh?.bodyTriangles ?? null,
-        bodyMesh?.bodyPoints ?? null,
+        buildEyeAttachMeshes(project),
       )
     }
 
@@ -762,7 +760,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     let currentAdvance: (delta: number) => void = () => {}
 
     let crossfadeProgress = 1   // 1 = no fade in progress
-    let crossfadeDuration = 290 / 1000   // seconds
+    let crossfadeDuration = 400 / 1000   // seconds
     let currentAdvanceEaseIn = false   // true = ramp new playback's delta during fade (segment → rest)
     let prevGetPositions: (() => Point2D[]) | null = null
     let prevAdvance: ((delta: number) => void) | null = null
@@ -1026,7 +1024,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const sep = anim.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
       if (!sep) return false
 
-      beginCrossfade(290, false)
+      beginCrossfade(400, false)
       activateZoneMeshes(anim.id)
       pixiMesh.visible = false
 
@@ -1061,7 +1059,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     function revertFromZoneOneshot() {
       zoneOneshotBody = null
-      beginCrossfade(290, false)
+      beginCrossfade(400, false)
       const rp = scenePlayback.currentRestPoint
       setupInteractionAnimation(rp?.restAnimationId, collectRestPointAnimIds(rp))
     }
@@ -1140,7 +1138,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         scenePlayback.update(deltaSeconds)
         const newState = scenePlayback.currentState
         const newSegAnimId = scenePlayback.currentSegmentAnimationId
-        const segCrossfade = 290
+        const segCrossfade = 400
 
         // State change OR segment→segment animation change within the same transition
         const stateChanged = newState !== prevSceneState
@@ -1150,12 +1148,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
         if (stateChanged || segmentBoundary) {
           // Choose crossfade duration: outgoing segment if we're leaving one,
-          // otherwise incoming segment, otherwise default 290ms.
+          // otherwise incoming segment, otherwise default 400ms.
           let durationMs: number
           if (prevSceneState === 'entering' && (newState === 'interaction' || newState === 'blend')) {
             // Segment → rest point : priorité au fondu d'arrivée propre au rest point
             const arrivalMs = scenePlayback.currentRestPoint?.arrivalCrossfadeMs
-            durationMs = arrivalMs ?? lastSegmentCrossfadeMs ?? 290
+            durationMs = arrivalMs ?? lastSegmentCrossfadeMs ?? 400
           } else if (prevSceneState === 'entering' && lastSegmentCrossfadeMs != null) {
             durationMs = lastSegmentCrossfadeMs
           } else if (newState === 'segment') {
@@ -1165,7 +1163,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             // les premières frames du cycle, ce qui rend le départ du pas naturel.
             durationMs = 120
           } else {
-            durationMs = 290
+            durationMs = 400
           }
           setSceneState(newState)
           const easeInNew = prevSceneState === 'entering' && (newState === 'interaction' || newState === 'blend')
@@ -1340,7 +1338,46 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         bodyPositionsForOverlays = blendPts(prevBodyPlayback.getPositions(), bodyPositionsForOverlays, fadeT)
       }
       if (eyeOverlay) {
-        eyeOverlay.update(positions, bodyPositionsForOverlays, charScale, charOffsetX, charOffsetY, (delta / 60) * 1000)
+        // Construit le mapping zone → positions courantes (avec crossfade) :
+        // 'body' + chaque zone patte (walkZoneFrames). null si pas d'anim active.
+        let byZone: Record<string, Point2D[]> | null = null
+        if (bodyPositionsForOverlays) {
+          byZone = { body: bodyPositionsForOverlays }
+          if (activeZonePlaybacks) {
+            for (const zp of activeZonePlaybacks) {
+              let pts = zp.playback.getPositions()
+              if (fadeActive && prevZonePlaybacks) {
+                const prev = prevZonePlaybacks.find(z => z.zoneId === zp.zoneId)
+                if (prev) pts = blendPts(prev.playback.getPositions(), pts, fadeT)
+              }
+              byZone[zp.zoneId] = pts
+            }
+          }
+        }
+        // Offsets pupille depuis cotrackerEyePupilFrames de l'anim active + prev
+        // (pour crossfader le mouvement de la pupille pendant les transitions).
+        const pickPupilOffsets = (
+          animId: string | null,
+          pb: LoopPlayback | OncePlayback | null,
+        ): Record<string, Point2D> | null => {
+          if (!animId || !pb || !('currentFrame' in pb)) return null
+          const anim = project.animations.find(a => a.id === animId)
+          const epf = anim?.mesh?.cotrackerEyePupilFrames
+          if (!epf) return null
+          const fr = pb.currentFrame
+          const out: Record<string, Point2D> = {}
+          for (const eyeId of Object.keys(epf)) {
+            const fs = epf[eyeId]
+            if (fs && fs.length > 0) out[eyeId] = fs[Math.min(fr, fs.length - 1)]
+          }
+          return Object.keys(out).length > 0 ? out : null
+        }
+        const pupilOffsets = pickPupilOffsets(activeWalkZoneAnimId, activeBodyPlayback)
+        const prevPupilOffsets = fadeActive ? pickPupilOffsets(prevWalkZoneAnimId, prevBodyPlayback) : null
+        eyeOverlay.update(
+          positions, byZone, charScale, charOffsetX, charOffsetY, (delta / 60) * 1000,
+          pupilOffsets, prevPupilOffsets, fadeT,
+        )
       }
 
       // Mouth overlay : pilote l'ouverture par RMS du speak audio.

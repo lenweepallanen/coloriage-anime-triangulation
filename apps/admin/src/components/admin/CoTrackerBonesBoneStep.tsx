@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Project, Animation, Point2D,
   CoTrackerSkeleton, CoTrackerBodyJoint, CoTrackerLegBone, CoTrackerEndpointRef,
+  CoTrackerEyeLink, CoTrackerPoint, EyeRegion,
 } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
@@ -44,6 +45,7 @@ type Mode =
   | { kind: 'place-leg-chain'; zoneId: string }
   | { kind: 'assign-bary' }
   | { kind: 'place-jaw-tail' }
+  | { kind: 'assign-eye'; eyeId: string }
 
 const JAW_TAIL_COLOR = '#ff66cc'
 const JAW_BONE_COLOR = '#ff66cc'
@@ -487,6 +489,23 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     if (!cotrackerFrames) return
     const p = canvasToVideo(e)
 
+    if (mode.kind === 'assign-eye') {
+      const nearestIds = nearestTrackerIds(p)
+      if (nearestIds.length === 0) {
+        setError('Aucun point cotracker proche : cliquez sur un point existant.')
+        return
+      }
+      setError(null)
+      const pointId = nearestIds[0]
+      const eyeId = mode.eyeId
+      setSkeleton(sk => {
+        const links = (sk.eyeLinks ?? []).filter(l => l.eyeId !== eyeId)
+        return { ...sk, eyeLinks: [...links, { eyeId, pointId }] }
+      })
+      setMode({ kind: 'idle' })
+      return
+    }
+
     if (mode.kind === 'place-jaw-tail') {
       const nearestIds = nearestTrackerIds(p)
       if (nearestIds.length === 0) {
@@ -693,6 +712,9 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
   function cancelMode() {
     setMode({ kind: 'idle' })
   }
+  function removeEyeLink(eyeId: string) {
+    setSkeleton(sk => ({ ...sk, eyeLinks: (sk.eyeLinks ?? []).filter(l => l.eyeId !== eyeId) }))
+  }
 
   function deleteJoint(i: number) {
     const j = skeleton.bodyChain[i]
@@ -813,6 +835,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
         walkZoneFrames: null,
         walkZoneFramesSmoothed: null,
         cotrackerJawOpennessFrames: null,
+        cotrackerEyePupilFrames: null,
       },
     }
     await onSave({ ...project, animations: project.animations.map(a => a.id === animation.id ? updatedAnim : a) })
@@ -845,6 +868,7 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
     if (mode.kind === 'place-leg-chain') return `Cliquez successivement pour poser hip, joints intermédiaires (genou, …) et foot de ${zoneLabelOf(mode.zoneId)}. Le 1er clic = hip, le dernier avant terminer = foot. Terminez quand vous avez fini.`
     if (mode.kind === 'assign-bary') return `Cliquez les points trackers pour les ajouter/retirer du barycentre — ${pickLabel}`
     if (mode.kind === 'place-jaw-tail') return 'Cliquez sur le canvas (frame 0) pour placer la pointe de la mâchoire. Drag pour ajuster ensuite.'
+    if (mode.kind === 'assign-eye') return 'Cliquez sur le point cotracker (placé sur le reflet de la pupille) qui pilotera cet œil.'
     return null
   })()
 
@@ -1077,6 +1101,15 @@ export default function CoTrackerBonesBoneStep({ project, animation, onSave }: P
             onRemove={() => { setSkeleton(sk => ({ ...sk, jaw: null })); setPick(null); setMode({ kind: 'idle' }) }}
             onChangeMaxOverride={(v) => setSkeleton(sk => sk.jaw ? { ...sk, jaw: { ...sk.jaw, maxOpenAngleDegOverride: v } } : sk)}
           />
+          <EyeLinksSection
+            eyes={project.projectEyes?.regions ?? []}
+            points={points}
+            eyeLinks={skeleton.eyeLinks ?? []}
+            mode={mode}
+            onStartAssign={(eyeId) => { setPick(null); setMode({ kind: 'assign-eye', eyeId }) }}
+            onCancel={() => setMode({ kind: 'idle' })}
+            onRemove={removeEyeLink}
+          />
           <div style={{ marginTop: 12 }}>
             <button className="btn-primary" onClick={handleValidate}>Valider le squelette</button>
             {mesh?.cotrackerBonesValidated && <p style={{ color: '#22c55e', fontSize: 12 }}>✓ Squelette validé</p>}
@@ -1176,6 +1209,61 @@ function JawSection({
           <button className="btn-danger btn-sm" style={{ marginTop: 8 }} onClick={onRemove}>
             Supprimer mâchoire
           </button>
+        </>
+      )}
+    </section>
+  )
+}
+
+interface EyeLinksSectionProps {
+  eyes: EyeRegion[]
+  points: CoTrackerPoint[]
+  eyeLinks: CoTrackerEyeLink[]
+  mode: Mode
+  onStartAssign: (eyeId: string) => void
+  onCancel: () => void
+  onRemove: (eyeId: string) => void
+}
+
+function EyeLinksSection({ eyes, points, eyeLinks, mode, onStartAssign, onCancel, onRemove }: EyeLinksSectionProps) {
+  const assigningEyeId = mode.kind === 'assign-eye' ? mode.eyeId : null
+  return (
+    <section style={{ marginTop: 16, padding: 10, border: '1px solid #333', borderRadius: 6 }}>
+      <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Yeux (suivi pupille, optionnel)</h4>
+      {eyes.length === 0 ? (
+        <p style={{ fontSize: 11, opacity: 0.7, margin: 0 }}>
+          Aucun œil défini. Créez les yeux dans la section « Yeux » du projet.
+        </p>
+      ) : (
+        <>
+          <p style={{ fontSize: 11, opacity: 0.7, margin: '0 0 8px' }}>
+            Pour chaque œil, assignez le point cotracker placé sur le reflet de la pupille.
+            La pupille suivra ce point (calculé à l'étape LBS).
+          </p>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {eyes.map((eye, i) => {
+              const link = eyeLinks.find(l => l.eyeId === eye.id)
+              const pt = link ? points.find(p => p.id === link.pointId) : null
+              const isAssigning = assigningEyeId === eye.id
+              return (
+                <li key={eye.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                  <span style={{ flex: 1 }}>
+                    Œil {i + 1} — {link ? (pt?.name || link.pointId.slice(0, 6)) : <em style={{ opacity: 0.6 }}>non lié</em>}
+                  </span>
+                  {isAssigning ? (
+                    <button className="btn-ghost btn-sm" onClick={onCancel}>Annuler</button>
+                  ) : (
+                    <button className="btn-secondary btn-sm" onClick={() => onStartAssign(eye.id)}>
+                      {link ? 'Réassigner' : 'Assigner'}
+                    </button>
+                  )}
+                  {link && !isAssigning && (
+                    <button className="btn-icon btn-sm" title="Retirer" onClick={() => onRemove(eye.id)}>×</button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
         </>
       )}
     </section>

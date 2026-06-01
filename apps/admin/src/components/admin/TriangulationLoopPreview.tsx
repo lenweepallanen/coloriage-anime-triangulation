@@ -16,7 +16,7 @@ import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { resolveEndpointFrame } from '../../utils/cotrackerBoneSolver'
 import { interpolateInternalPoint } from '../../utils/barycentricUtils'
 import { MouthOverlay, computeMouthPolygonFrame0, computeMouthPolygonDeformed } from '../../utils/mouthOverlay'
-import { getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
+import { getMouthAttachMesh, EyeBlinkOverlay, buildEyeAttachMeshes } from '../../utils/eyeBlinkOverlay'
 
 interface Props {
   project: Project
@@ -89,6 +89,8 @@ export default function TriangulationLoopPreview({
   const [playing, setPlaying] = useState(true)
   const [showMesh, setShowMesh] = useState(effectiveMode === 'wireframe')
   const [showBones, setShowBones] = useState(effectiveMode === 'wireframe')
+  const hasEyes = (project.projectEyes?.regions.length ?? 0) > 0
+  const [showEyes, setShowEyes] = useState(true)
   const zoneIds = useMemo(() => (tri ? tri.zones.map(z => z.id) : []), [tri])
   const [regionVisibility, setRegionVisibility] = useState<Record<string, boolean>>(() => {
     const m: Record<string, boolean> = {}
@@ -113,6 +115,7 @@ export default function TriangulationLoopPreview({
   const playingRef = useRef(playing); playingRef.current = playing
   const showMeshRef = useRef(showMesh); showMeshRef.current = showMesh
   const showBonesRef = useRef(showBones); showBonesRef.current = showBones
+  const showEyesRef = useRef(showEyes); showEyesRef.current = showEyes
   const regionVisibilityRef = useRef(regionVisibility); regionVisibilityRef.current = regionVisibility
 
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -255,6 +258,16 @@ export default function TriangulationLoopPreview({
         }
       }
 
+      // EyeBlinkOverlay : 3 ellipses par œil, déformées par le body mesh + pupille
+      // animée par mesh.cotrackerEyePupilFrames. Toggle "Yeux".
+      let eyeOverlay: EyeBlinkOverlay | null = null
+      const eyes = project.projectEyes
+      if (eyes && eyes.regions.length > 0) {
+        eyeOverlay = new EyeBlinkOverlay(
+          eyes, setup.container, null, null, buildEyeAttachMeshes(project),
+        )
+      }
+
       // Bone frames (cotracker), in VIDEO coords — converted to image coords for drawing.
       const skeleton = mesh?.cotrackerSkeleton ?? null
       const bodyJointFrames = preferSmoothed
@@ -300,6 +313,28 @@ export default function TriangulationLoopPreview({
           hfl.pixiMesh.visible = vis[baseZoneId] !== false
           const p = playbacks.find(pb => pb.region === baseZoneId)
           if (p) updateZoneMeshVertices(hfl, p.pb.getPositions(), scale, offsetX, offsetY)
+        }
+
+        // EyeBlinkOverlay : déformation par le body mesh + pupille animée.
+        if (eyeOverlay) {
+          eyeOverlay.setVisible(showEyesRef.current)
+          if (showEyesRef.current && bodyPb) {
+            const byZone: Record<string, Point2D[]> = { body: bodyPb.pb.getPositions() }
+            for (const { region, pb } of playbacks) {
+              if (region !== 'body') byZone[region] = pb.getPositions()
+            }
+            const fr = bodyPb.pb.currentFrame
+            const epf = mesh?.cotrackerEyePupilFrames
+            let pupilOffsets: Record<string, Point2D> | null = null
+            if (epf) {
+              pupilOffsets = {}
+              for (const k of Object.keys(epf)) {
+                const fs = epf[k]
+                if (fs && fs.length > 0) pupilOffsets[k] = fs[Math.min(fr, fs.length - 1)]
+              }
+            }
+            eyeOverlay.update(null, byZone, scale, offsetX, offsetY, (delta / 60) * 1000, pupilOffsets)
+          }
         }
 
         // MouthOverlay : rotation pilotée par cotrackerJawOpennessFrames
@@ -561,6 +596,12 @@ export default function TriangulationLoopPreview({
           <input type="checkbox" checked={showBones} onChange={e => setShowBones(e.target.checked)} />
           Bones
         </label>
+        {hasEyes && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, cursor: 'pointer' }}>
+            <input type="checkbox" checked={showEyes} onChange={e => setShowEyes(e.target.checked)} />
+            Yeux
+          </label>
+        )}
         <span style={{ width: 1, height: 16, background: '#444', margin: '0 4px' }} />
         {tri?.zones.map(z => (
           <label key={z.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, cursor: 'pointer' }} title={z.label}>

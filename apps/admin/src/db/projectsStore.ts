@@ -110,6 +110,7 @@ interface MeshDoc {
   cotrackerLBSParams?: import('../types/project').CoTrackerLBSParams
   cotrackerLBSValidated?: boolean
   cotrackerJawOpennessFrames?: number[] | null
+  cotrackerEyePupilFrames?: Record<string, Point2D[]> | null
   // Marche
   marcheParentAnimationId?: string | null
   marcheSkeleton?: import('../types/project').CoTrackerSkeleton | null
@@ -861,6 +862,7 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     ...(mesh.cotrackerLBSParams != null && { cotrackerLBSParams: mesh.cotrackerLBSParams }),
     ...(mesh.cotrackerLBSValidated != null && { cotrackerLBSValidated: mesh.cotrackerLBSValidated }),
     ...(mesh.cotrackerJawOpennessFrames != null && { cotrackerJawOpennessFrames: mesh.cotrackerJawOpennessFrames }),
+    ...(mesh.cotrackerEyePupilFrames != null && { cotrackerEyePupilFrames: mesh.cotrackerEyePupilFrames }),
     // Marche (animation type 'marche')
     ...(mesh.marcheParentAnimationId != null && { marcheParentAnimationId: mesh.marcheParentAnimationId }),
     ...(mesh.marcheSkeleton != null && { marcheSkeleton: mesh.marcheSkeleton }),
@@ -1122,6 +1124,7 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
       console.log('[Firebase load] cotrackerJawOpennessFrames raw:', v == null ? v : `array(${v.length})`, 'cotrackerLBSValidated:', d.cotrackerLBSValidated, 'cotrackerSkeleton.jaw:', (d as any).cotrackerSkeleton?.jaw ? 'yes' : 'no')
       return v ?? null
     })(),
+    cotrackerEyePupilFrames: d.cotrackerEyePupilFrames ?? null,
     // Marche
     marcheParentAnimationId: d.marcheParentAnimationId,
     marcheSkeleton: d.marcheSkeleton,

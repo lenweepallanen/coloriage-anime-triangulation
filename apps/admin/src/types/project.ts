@@ -247,6 +247,10 @@ export interface MeshData {
   // Jaw bone : openness ∈ [0,1] par frame, pilote la rotation de projectMouth.
   // null si l'animation n'a pas de jaw bone.
   cotrackerJawOpennessFrames?: number[] | null;
+  // Pupille des yeux : eyeId → offset par frame en repère LOCAL de l'œil (coords
+  // image), relatif au centre de l'œil déformé, clampé dans l'ellipse 1.
+  // Consommé par EyeBlinkOverlay pendant la lecture de cette animation.
+  cotrackerEyePupilFrames?: Record<string, Point2D[]> | null;
 
   // ─── Marche (animation type 'marche') ──────────────────────────────────
   // Étape 1 : héritage depuis une animation parente cotracker-bones (snapshot)
@@ -588,10 +592,20 @@ export interface CoTrackerJawBone {
   maxOpenAngleDegOverride?: number | null;
 }
 
+/** Lien œil → point cotracker. La pupille de l'œil (project.projectEyes) suit ce
+ *  point pendant la lecture de cette animation. Défini par animation (hérité avec
+ *  le squelette). */
+export interface CoTrackerEyeLink {
+  eyeId: string;        // référence EyeRegion.id (project.projectEyes)
+  pointId: string;      // référence CoTrackerPoint.id
+}
+
 export interface CoTrackerSkeleton {
   bodyChain: CoTrackerBodyJoint[];
   legs: CoTrackerLegBone[];
   jaw?: CoTrackerJawBone | null;
+  /** Liens œil→point cotracker (animation des pupilles). */
+  eyeLinks?: CoTrackerEyeLink[] | null;
 }
 
 export type CoTrackerLBSMode = 'lbs-arap' | 'lbs-contour-arap';
@@ -876,10 +890,34 @@ export interface EyeRegion {
    *  Consommé par le rendu/clignement et l'ancrage barycentrique. */
   contourPoints: Point2D[];
   barycentricRefs: BarycentricRef[]; // 1 par point, via trackedTriangles du mesh rest
-  /** Refs barycentriques contre le maillage body (projectTriangulation ou walkLimbSeparation).
-   *  Utilisé pour suivre la déformation des animations walk/members-bones. */
+  /** Refs barycentriques contre le maillage de la zone d'attache (voir attachZoneId).
+   *  Utilisé pour suivre la déformation des animations walk/members-bones/cotracker. */
   bodyBarycentricRefs?: BarycentricRef[];
+  /** Zone du maillage à laquelle l'œil est rattaché ('body' par défaut, ou un id de
+   *  zone patte de projectTriangulation). Détermine quels triangles déforment l'œil. */
+  attachZoneId?: string;
   seed: Point2D;                    // centre approximatif (debug)
+
+  // ─── Rendu de l'œil dessiné (3 ellipses) ───────────────────────────────
+  /** Épaisseur du contour de la sclère, en px image. Défaut 3. */
+  outlineThickness?: number;
+  /** Couleur de remplissage de la sclère (ellipse 1). Défaut '#ffffff'. */
+  scleraColor?: string;
+  /** Couleur du contour de la sclère. Défaut '#000000'. */
+  outlineColor?: string;
+  /** Couleur de la pupille (ellipse 2 pleine). Défaut '#000000'. */
+  pupilColor?: string;
+  /** Rayon de la pupille en fraction du demi-petit-axe de l'œil. Défaut 0.45. */
+  pupilRadiusFrac?: number;
+  /** Position de repos de la pupille (repère local de l'œil, fraction des demi-axes).
+   *  {0,0} = centrée. Le suivi de tracking s'ajoute par-dessus. Défaut {0,0}. */
+  pupilOffsetFrac?: Point2D;
+  /** Couleur du reflet (ellipse 3). Défaut '#ffffff'. */
+  reflectionColor?: string;
+  /** Rayon du reflet en fraction du rayon pupille. Défaut 0.30. */
+  reflectionRadiusFrac?: number;
+  /** Offset du reflet dans la pupille (repère local de l'œil, fraction du rayon pupille). Défaut {-0.3,-0.3}. */
+  reflectionOffsetFrac?: Point2D;
 }
 
 export interface ProjectEyes {

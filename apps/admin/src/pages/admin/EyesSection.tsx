@@ -9,7 +9,7 @@ import {
   type Project,
   type ProjectEyes,
 } from '../../types/project'
-import { getEyeBodyMeshData } from '../../utils/eyeBlinkOverlay'
+import { getMouthAttachMesh, computeEyeFrame } from '../../utils/eyeBlinkOverlay'
 import { computeAllBarycentrics } from '../../utils/barycentricUtils'
 import {
   flattenClosedBezier,
@@ -80,6 +80,33 @@ interface DraftEye {
   nodes: BezierNode[]
 }
 
+/** Champs visuels + lien tracking d'un œil, édités séparément de la géométrie. */
+type EyeProps = Pick<EyeRegion,
+  'outlineThickness' | 'scleraColor' | 'outlineColor' | 'pupilColor' | 'pupilRadiusFrac' | 'pupilOffsetFrac'
+  | 'reflectionColor' | 'reflectionRadiusFrac' | 'reflectionOffsetFrac' | 'attachZoneId'>
+
+/** Retire les clés dont la valeur est undefined (Firestore refuse undefined). */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
+  const out = {} as Record<string, unknown>
+  for (const k of Object.keys(obj)) if (obj[k] !== undefined) out[k] = obj[k]
+  return out as T
+}
+
+function extractEyeProps(r: EyeRegion): EyeProps {
+  return stripUndefined({
+    outlineThickness: r.outlineThickness,
+    scleraColor: r.scleraColor,
+    outlineColor: r.outlineColor,
+    pupilColor: r.pupilColor,
+    pupilRadiusFrac: r.pupilRadiusFrac,
+    pupilOffsetFrac: r.pupilOffsetFrac,
+    reflectionColor: r.reflectionColor,
+    reflectionRadiusFrac: r.reflectionRadiusFrac,
+    reflectionOffsetFrac: r.reflectionOffsetFrac,
+    attachZoneId: r.attachZoneId,
+  })
+}
+
 type Tool = 'select' | 'ellipse'
 type HandleKind = 'anchor' | 'in' | 'out' | 'move'
 
@@ -141,6 +168,8 @@ export default function EyesSection() {
 
   const persistedEyes = ensureEyes(project)
   const [draft, setDraft] = useState<DraftEye[]>([])
+  const [eyeProps, setEyeProps] = useState<Record<string, EyeProps>>({})
+  const [showPreview, setShowPreview] = useState(true)
   const [selectedEyeId, setSelectedEyeId] = useState<string | null>(null)
   const [selectedNodeIdx, setSelectedNodeIdx] = useState<number | null>(null)
   const [tool, setTool] = useState<Tool>('select')
@@ -178,11 +207,35 @@ export default function EyesSection() {
   useEffect(() => {
     const hydrated: DraftEye[] = persistedEyes.regions.map(r => ({ id: r.id, nodes: hydrateNodes(r) }))
     setDraft(hydrated)
+    const props: Record<string, EyeProps> = {}
+    for (const r of persistedEyes.regions) props[r.id] = extractEyeProps(r)
+    setEyeProps(props)
     setDirty(false)
     setSelectedEyeId(hydrated[0]?.id ?? null)
     setSelectedNodeIdx(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, persistedEyes.regions.length])
+
+  // Update + persistance (debounced) des propriétés visuelles/tracking d'un œil.
+  // Ne touche pas à la géométrie : merge dans les regions persistées et sauve.
+  const eyePropsSaveTimer = useRef<number | null>(null)
+  const pendingEyeProps = useRef<Record<string, EyeProps> | null>(null)
+  function updateEyeProps(id: string, patch: Partial<EyeProps>) {
+    setEyeProps(prev => {
+      const merged = { ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }
+      pendingEyeProps.current = merged
+      if (eyePropsSaveTimer.current != null) clearTimeout(eyePropsSaveTimer.current)
+      eyePropsSaveTimer.current = window.setTimeout(() => {
+        const props = pendingEyeProps.current
+        if (!props) return
+        const eyes = ensureEyes(project)
+        const regions = eyes.regions.map(r => stripUndefined({ ...r, ...(props[r.id] ?? {}) }) as EyeRegion)
+        save({ ...project, projectEyes: { ...eyes, regions } }).catch(() => { /* swallow */ })
+      }, 300)
+      return merged
+    })
+  }
+  useEffect(() => () => { if (eyePropsSaveTimer.current != null) clearTimeout(eyePropsSaveTimer.current) }, [])
 
   // Image
   useEffect(() => {
@@ -260,6 +313,53 @@ export default function EyesSection() {
       ctx.lineWidth = lw2
       ctx.fill()
       ctx.stroke()
+
+      // Aperçu rendu : les 3 ellipses stylées (pupille centrée, comme au repos).
+      if (showPreview) {
+        const ep = eyeProps[eye.id] ?? {}
+        const poly = flattenClosedBezier(nodes, 24)
+        if (poly.length >= 3) {
+          const frame = computeEyeFrame(poly)
+          // Ellipse 1 : sclère
+          ctx.beginPath()
+          ctx.moveTo(nodes[0].anchor.x, nodes[0].anchor.y)
+          for (let i = 0; i < nodes.length; i++) {
+            const a = nodes[i]
+            const b = nodes[(i + 1) % nodes.length]
+            ctx.bezierCurveTo(a.handleOut.x, a.handleOut.y, b.handleIn.x, b.handleIn.y, b.anchor.x, b.anchor.y)
+          }
+          ctx.closePath()
+          ctx.fillStyle = ep.scleraColor ?? '#ffffff'
+          ctx.fill()
+          ctx.lineWidth = ep.outlineThickness ?? 3
+          ctx.strokeStyle = ep.outlineColor ?? '#000000'
+          ctx.stroke()
+          // Ellipse 2 : pupille (centrée en preview)
+          const minHalf = Math.min(frame.halfU, frame.halfV)
+          const pupilR = Math.max(1, (ep.pupilRadiusFrac ?? 0.45) * minHalf)
+          // Position de repos (clampée dans l'ellipse 1)
+          let pOffU = (ep.pupilOffsetFrac?.x ?? 0) * frame.halfU
+          let pOffV = (ep.pupilOffsetFrac?.y ?? 0) * frame.halfV
+          const ax = Math.max(1, frame.halfU - pupilR), ay = Math.max(1, frame.halfV - pupilR)
+          const ecl = (pOffU * pOffU) / (ax * ax) + (pOffV * pOffV) / (ay * ay)
+          if (ecl > 1) { const s = 1 / Math.sqrt(ecl); pOffU *= s; pOffV *= s }
+          const pcx = frame.center.x + pOffU * frame.ux + pOffV * frame.vx
+          const pcy = frame.center.y + pOffU * frame.uy + pOffV * frame.vy
+          ctx.beginPath()
+          ctx.arc(pcx, pcy, pupilR, 0, Math.PI * 2)
+          ctx.fillStyle = ep.pupilColor ?? '#000000'
+          ctx.fill()
+          // Ellipse 3 : reflet
+          const reflR = Math.max(0.5, (ep.reflectionRadiusFrac ?? 0.30) * pupilR)
+          const roff = ep.reflectionOffsetFrac ?? { x: -0.3, y: -0.3 }
+          const rcx = pcx + roff.x * pupilR * frame.ux + roff.y * pupilR * frame.vx
+          const rcy = pcy + roff.x * pupilR * frame.uy + roff.y * pupilR * frame.vy
+          ctx.beginPath()
+          ctx.arc(rcx, rcy, reflR, 0, Math.PI * 2)
+          ctx.fillStyle = ep.reflectionColor ?? '#ffffff'
+          ctx.fill()
+        }
+      }
 
       if (blinkProgress > 0.001) {
         let minY = Infinity, maxY = -Infinity
@@ -378,7 +478,7 @@ export default function EyesSection() {
       ctx.stroke()
       ctx.restore()
     }
-  }, [imageBitmap, draft, selectedEyeId, selectedNodeIdx, k, viewport.panX, viewport.panY, blinkProgress, moveHandlePos])
+  }, [imageBitmap, draft, selectedEyeId, selectedNodeIdx, k, viewport.panX, viewport.panY, blinkProgress, moveHandlePos, showPreview, eyeProps])
 
   useEffect(() => { redraw() }, [redraw])
 
@@ -761,7 +861,6 @@ export default function EyesSection() {
   async function validateAll() {
     setSaving(true); setError(null)
     try {
-      const bodyMesh = getEyeBodyMeshData(project)
       const trackedFrame0 = buildFrame0Tracked?.()
       const regions: EyeRegion[] = draft.map(e => {
         const contourPoints = flattenClosedBezier(e.nodes, 24)
@@ -769,10 +868,13 @@ export default function EyesSection() {
         const barycentricRefs = hasTracking && mesh && trackedFrame0
           ? computeAllBarycentrics(contourPoints, trackedFrame0, mesh.trackedTriangles)
           : []
-        const bodyBarycentricRefs = bodyMesh
-          ? computeAllBarycentrics(contourPoints, bodyMesh.bodyPoints, bodyMesh.bodyTriangles)
+        // Ancrage sur le maillage de la zone choisie (body par défaut).
+        const attachZoneId = eyeProps[e.id]?.attachZoneId ?? 'body'
+        const attachMesh = getMouthAttachMesh(project, attachZoneId)
+        const bodyBarycentricRefs = attachMesh
+          ? computeAllBarycentrics(contourPoints, attachMesh.points, attachMesh.triangles)
           : undefined
-        return { id: e.id, bezierNodes: e.nodes, contourPoints, barycentricRefs, bodyBarycentricRefs, seed: { x: bb.cx, y: bb.cy } }
+        return stripUndefined({ id: e.id, bezierNodes: e.nodes, contourPoints, barycentricRefs, bodyBarycentricRefs, seed: { x: bb.cx, y: bb.cy }, ...(eyeProps[e.id] ?? {}) }) as EyeRegion
       })
       const next: Project = { ...project, projectEyes: { ...ensureEyes(project), regions } }
       await save(next)
@@ -811,6 +913,9 @@ export default function EyesSection() {
             <span style={{ fontSize: 12, opacity: 0.7, marginLeft: 8 }}>Zoom : {(viewport.zoom * 100).toFixed(0)}%</span>
             <button className="btn-secondary btn-sm" onClick={resetView}>Réinit. vue</button>
             <div style={{ flex: 1 }} />
+            <button className={showPreview ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'} onClick={() => setShowPreview(p => !p)}>
+              {showPreview ? 'Aperçu rendu : ON' : 'Aperçu rendu : OFF'}
+            </button>
             <button className="btn-primary btn-sm" disabled={!dirty || saving} onClick={validateAll}>
               {saving ? 'Validation…' : dirty ? 'Valider les yeux' : 'À jour'}
             </button>
@@ -878,6 +983,79 @@ export default function EyesSection() {
               </div>
             ))}
           </div>
+
+          {selectedEye && (() => {
+            const ep = eyeProps[selectedEye.id] ?? {}
+            const zones = project.projectTriangulation?.zones ?? []
+            return (
+              <div style={{ borderTop: '1px solid var(--color-border,#ccc)', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {zones.length > 0 && (
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span>Zone d'attache (suit ce maillage)</span>
+                    <select value={ep.attachZoneId ?? 'body'}
+                      onChange={e => updateEyeProps(selectedEye.id, { attachZoneId: e.target.value })}>
+                      {zones.map(z => <option key={z.id} value={z.id}>{z.label || z.id}</option>)}
+                    </select>
+                    <span style={{ fontSize: 10, opacity: 0.6 }}>Revalider les yeux après changement pour recalculer l'ancrage.</span>
+                  </label>
+                )}
+                <h3 style={{ margin: '4px 0' }}>Apparence de l'œil</h3>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span>Épaisseur contour (px): <strong>{ep.outlineThickness ?? 3}</strong></span>
+                  <input type="range" min={0} max={20} step={1} value={ep.outlineThickness ?? 3}
+                    onChange={e => updateEyeProps(selectedEye.id, { outlineThickness: parseInt(e.target.value, 10) })} />
+                </label>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>Blanc
+                    <input type="color" value={ep.scleraColor ?? '#ffffff'} onChange={e => updateEyeProps(selectedEye.id, { scleraColor: e.target.value })} /></label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>Contour
+                    <input type="color" value={ep.outlineColor ?? '#000000'} onChange={e => updateEyeProps(selectedEye.id, { outlineColor: e.target.value })} /></label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>Pupille
+                    <input type="color" value={ep.pupilColor ?? '#000000'} onChange={e => updateEyeProps(selectedEye.id, { pupilColor: e.target.value })} /></label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>Reflet
+                    <input type="color" value={ep.reflectionColor ?? '#ffffff'} onChange={e => updateEyeProps(selectedEye.id, { reflectionColor: e.target.value })} /></label>
+                </div>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span>Taille pupille: <strong>{(ep.pupilRadiusFrac ?? 0.45).toFixed(2)}</strong></span>
+                  <input type="range" min={0.1} max={0.9} step={0.01} value={ep.pupilRadiusFrac ?? 0.45}
+                    onChange={e => updateEyeProps(selectedEye.id, { pupilRadiusFrac: parseFloat(e.target.value) })} />
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                    <span>Pupille X: <strong>{(ep.pupilOffsetFrac?.x ?? 0).toFixed(2)}</strong></span>
+                    <input type="range" min={-1} max={1} step={0.02} value={ep.pupilOffsetFrac?.x ?? 0}
+                      onChange={e => updateEyeProps(selectedEye.id, { pupilOffsetFrac: { x: parseFloat(e.target.value), y: ep.pupilOffsetFrac?.y ?? 0 } })} />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                    <span>Pupille Y: <strong>{(ep.pupilOffsetFrac?.y ?? 0).toFixed(2)}</strong></span>
+                    <input type="range" min={-1} max={1} step={0.02} value={ep.pupilOffsetFrac?.y ?? 0}
+                      onChange={e => updateEyeProps(selectedEye.id, { pupilOffsetFrac: { x: ep.pupilOffsetFrac?.x ?? 0, y: parseFloat(e.target.value) } })} />
+                  </label>
+                </div>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span>Taille reflet: <strong>{(ep.reflectionRadiusFrac ?? 0.30).toFixed(2)}</strong></span>
+                  <input type="range" min={0} max={0.8} step={0.01} value={ep.reflectionRadiusFrac ?? 0.30}
+                    onChange={e => updateEyeProps(selectedEye.id, { reflectionRadiusFrac: parseFloat(e.target.value) })} />
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                    <span>Reflet X: <strong>{(ep.reflectionOffsetFrac?.x ?? -0.3).toFixed(2)}</strong></span>
+                    <input type="range" min={-1} max={1} step={0.05} value={ep.reflectionOffsetFrac?.x ?? -0.3}
+                      onChange={e => updateEyeProps(selectedEye.id, { reflectionOffsetFrac: { x: parseFloat(e.target.value), y: ep.reflectionOffsetFrac?.y ?? -0.3 } })} />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                    <span>Reflet Y: <strong>{(ep.reflectionOffsetFrac?.y ?? -0.3).toFixed(2)}</strong></span>
+                    <input type="range" min={-1} max={1} step={0.05} value={ep.reflectionOffsetFrac?.y ?? -0.3}
+                      onChange={e => updateEyeProps(selectedEye.id, { reflectionOffsetFrac: { x: ep.reflectionOffsetFrac?.x ?? -0.3, y: parseFloat(e.target.value) } })} />
+                  </label>
+                </div>
+                <p style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>
+                  Le suivi de la pupille par tracking vidéo se configure dans l'étape
+                  « Bones » de l'animation CoTracker concernée.
+                </p>
+              </div>
+            )
+          })()}
 
           {dirty && <div style={{ fontSize: 12, color: '#c80', marginTop: 4 }}>Modifications non validées.</div>}
         </div>
