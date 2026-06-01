@@ -3250,7 +3250,7 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(8px, 2vmin, 22px);
+  gap: clamp(18px, 4.5vmin, 44px);
   background: radial-gradient(120% 120% at 50% 40%, #15161a 0%, #0a0a0c 100%);
 }
 .scene-player--framed .animation-canvas {
@@ -3263,19 +3263,48 @@ code {
 .scene-player--framed .animation-canvas canvas {
   border-radius: inherit;
 }
-/* Les boutons d'action deviennent une colonne à GAUCHE du canvas (dans le flux flex). */
+/* Colonne gauche (⚙ + boutons 1/2/3), à GAUCHE du canvas dans le flux flex. */
+.scene-player--framed .scene-player-left-col {
+  position: static;
+  order: -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(12px, 2.6vmin, 20px);
+}
 .scene-player--framed .scene-player-left-buttons {
   position: static;
   top: auto;
   left: auto;
   transform: none;
-  order: -1;
+}
+
+/* Bouton ⚙ réglages — en haut de la colonne, aligné avec 1/2/3 */
+.scene-player-settings-btn {
+  width: clamp(48px, 11vmin, 84px);
+  height: clamp(48px, 11vmin, 84px);
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(1.3rem, 5vmin, 2rem);
+  line-height: 1;
+  z-index: 110;
+  backdrop-filter: blur(8px);
+  transition: background var(--transition);
+}
+.scene-player-settings-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
 }
 
 .scene-player-action-btn {
   position: relative;
-  width: clamp(50px, 11vmin, 84px);
-  height: clamp(50px, 11vmin, 84px);
+  width: clamp(58px, 13vmin, 100px);
+  height: clamp(58px, 13vmin, 100px);
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.85);

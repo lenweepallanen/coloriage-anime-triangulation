@@ -484,7 +484,11 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
 
       {stage === 'animation' && !(mode === 'play' && isPortrait) && (
         <>
-          <SettingsButton onClick={() => setPaused(true)} />
+          {/* En scène, le ⚙ est intégré dans la colonne gauche du ScenePlayer (onSettings).
+              Le bouton standalone n'est gardé que pour le fallback AnimationPlayer. */}
+          {!(project.scene && project.scene.background && project.scene.restPoint != null) && (
+            <SettingsButton onClick={() => setPaused(true)} />
+          )}
           {paused && (
             <PauseOverlay
               onContinue={() => setPaused(false)}
@@ -508,6 +512,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
               lamaCanvas={lamaCanvas}
               contentAlignment={processor.contentAlignment}
               onClose={handleRetake}
+              onSettings={() => setPaused(true)}
             />
           : <AnimationPlayer
               project={project}

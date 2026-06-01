@@ -43,6 +43,8 @@ interface Props {
   contentAlignment?: ContentAlignment | null
   onClose: () => void
   modal?: boolean
+  /** Ouvre le menu réglages/pause (bouton ⚙ en haut de la colonne gauche). */
+  onSettings?: () => void
 }
 
 function smoothstep(t: number): number {
@@ -50,69 +52,7 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-const LONG_PRESS_DURATION = 3000
-
-function LongPressCloseButton({ onComplete }: { onComplete: () => void }) {
-  const [progress, setProgress] = useState(0)
-  const [pressing, setPressing] = useState(false)
-  const startTimeRef = useRef<number>(0)
-  const rafRef = useRef<number>(0)
-  const completedRef = useRef(false)
-
-  const animate = useCallback(() => {
-    const elapsed = Date.now() - startTimeRef.current
-    const p = Math.min(elapsed / LONG_PRESS_DURATION, 1)
-    setProgress(p)
-    if (p >= 1 && !completedRef.current) {
-      completedRef.current = true
-      onComplete()
-      return
-    }
-    rafRef.current = requestAnimationFrame(animate)
-  }, [onComplete])
-
-  const start = useCallback(() => {
-    completedRef.current = false
-    startTimeRef.current = Date.now()
-    setPressing(true)
-    setProgress(0)
-    rafRef.current = requestAnimationFrame(animate)
-  }, [animate])
-
-  const stop = useCallback(() => {
-    setPressing(false)
-    setProgress(0)
-    cancelAnimationFrame(rafRef.current)
-  }, [])
-
-  useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
-
-  const circumference = 2 * Math.PI * 18
-  const strokeOffset = circumference * (1 - progress)
-
-  return (
-    <button
-      className="long-press-close-btn"
-      onPointerDown={start}
-      onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
-    >
-      <svg width="44" height="44" viewBox="0 0 44 44">
-        <circle cx="22" cy="22" r="18" fill="rgba(0,0,0,0.5)" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
-        {pressing && (
-          <circle cx="22" cy="22" r="18" fill="none" stroke="#ef4444" strokeWidth="3"
-            strokeDasharray={circumference} strokeDashoffset={strokeOffset}
-            strokeLinecap="round" transform="rotate(-90 22 22)" />
-        )}
-        <line x1="16" y1="16" x2="28" y2="28" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
-        <line x1="28" y1="16" x2="16" y2="28" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
-      </svg>
-    </button>
-  )
-}
-
-export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal }: Props) {
+export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -183,7 +123,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const bgAspectH = scene.background?.height
   useEffect(() => {
     if (modal) return
-    const SIDEBAR = 96 // espace réservé à gauche pour les boutons 1/2/3
+    const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
     const PAD = 14
     function compute() {
       const vw = window.innerWidth, vh = window.innerHeight
@@ -1638,14 +1578,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
   }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardSize.w, cardSize.h]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleExitFullscreen = useCallback(() => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {})
-    } else {
-      onClose()
-    }
-  }, [onClose])
-
   const handleActionByIndex = useCallback(async (actionIndex: number) => {
     const rp = scene.restPoint
     const actions = rp?.actions ?? []
@@ -1844,21 +1776,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         style={!modal && cardSize.w ? { width: cardSize.w, height: cardSize.h } : undefined}
       />
 
-      {modal ? (
+      {modal && (
         <button className="preview-modal-close" onClick={onClose} title="Fermer">&times;</button>
-      ) : (
-        <LongPressCloseButton onComplete={handleExitFullscreen} />
       )}
 
-      {/* LEFT side buttons — toujours montés, fade pendant l'entrée */}
-      <div
-        className="scene-player-left-buttons"
-        style={{
-          opacity: buttonsVisible ? 1 : 0,
-          pointerEvents: isInteraction && !anyActive ? 'auto' : 'none',
-          transition: 'opacity 400ms ease',
-        }}
-      >
+      {/* Colonne gauche : ⚙ réglages (toujours actif) en haut, puis boutons 1/2/3. */}
+      <div className="scene-player-left-col">
+        {!modal && onSettings && (
+          <button className="scene-player-settings-btn" onClick={onSettings} title="Réglages" aria-label="Réglages">
+            ⚙
+          </button>
+        )}
+        <div
+          className="scene-player-left-buttons"
+          style={{
+            opacity: buttonsVisible ? 1 : 0,
+            pointerEvents: isInteraction && !anyActive ? 'auto' : 'none',
+            transition: 'opacity 400ms ease',
+          }}
+        >
         {actionButtons.map(b => {
           const id = `action-${b.index}`
           const isActive = activeBtn === id
@@ -1886,6 +1822,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             <span className="action-btn-label">💬</span>
           </button>
         )}
+        </div>
       </div>
 
       {/* RIGHT side - help button */}
