@@ -30,6 +30,21 @@ export function buildPlayUrl(projectId: string): string {
   return `${playBaseUrl()}/p/${projectId}`
 }
 
+/**
+ * Base admin. Lue depuis VITE_ADMIN_BASE_URL, fallback sur l'URL Vercel admin.
+ * Garde-fou symétrique : si la var pointe par erreur vers le domaine play, on la
+ * réécrit vers le domaine admin pour que le lien ADMIN ouvre bien le mode debug.
+ */
+function adminBaseUrl(): string {
+  const base = (import.meta.env.VITE_ADMIN_BASE_URL ?? 'https://coloriage-anime-admin.vercel.app').replace(/\/+$/, '')
+  return base.replace('coloriage-anime-play', 'coloriage-anime-admin')
+}
+
+/** Lien scanner en mode ADMIN (debug complet) : `${adminBaseUrl}/scan/{projectId}`. */
+export function buildAdminScanUrl(projectId: string): string {
+  return `${adminBaseUrl()}/scan/${projectId}`
+}
+
 export function buildBookPlayUrl(bookId: string): string {
   return `${playBaseUrl()}/livre/${bookId}`
 }

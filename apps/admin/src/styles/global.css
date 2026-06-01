@@ -1758,16 +1758,38 @@ code {
   z-index: auto;
 }
 
-/* Force landscape via CSS rotation when in portrait (fallback for iOS) */
-@media screen and (orientation: portrait) {
-  .animation-player {
-    transform: rotate(90deg);
-    transform-origin: top left;
-    width: 100vh;
-    height: 100vw;
-    top: 0;
-    left: 100vw;
-  }
+/* Plus de rotation CSS forcée : la scène se joue en vrai paysage (rendu natif).
+   En portrait (play), un overlay « tourne ton téléphone » est affiché à la place. */
+.rotate-device-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: #000;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: center;
+  padding: 24px;
+  font-family: system-ui, sans-serif;
+}
+.rotate-device-hint__icon {
+  color: #fff;
+  animation: rotate-device-hint-spin 2.4s ease-in-out infinite;
+}
+.rotate-device-hint__text {
+  font-size: clamp(1.2rem, 6vmin, 2rem);
+  font-weight: 700;
+}
+.rotate-device-hint__sub {
+  font-size: clamp(0.9rem, 4vmin, 1.2rem);
+  opacity: 0.7;
+}
+@keyframes rotate-device-hint-spin {
+  0%, 35% { transform: rotate(0deg); }
+  65%, 100% { transform: rotate(-90deg); }
 }
 
 .animation-canvas {
@@ -3213,19 +3235,47 @@ code {
 /* LEFT side buttons — vertically centered */
 .scene-player-left-buttons {
   position: absolute;
-  left: 24px;
+  left: max(12px, 3vmin);
   top: 50%;
   transform: translateY(-50%);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: clamp(10px, 2.2vmin, 18px);
   z-index: 110;
+}
+
+/* ── Mode « carte » (play/scan, hors modal) : canvas centré au format du fond,
+   coins arrondis, boutons 1/2/3 dans la marge gauche (hors canvas). ── */
+.scene-player--framed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 2vmin, 22px);
+  background: radial-gradient(120% 120% at 50% 40%, #15161a 0%, #0a0a0c 100%);
+}
+.scene-player--framed .animation-canvas {
+  flex: 0 0 auto;
+  border-radius: clamp(10px, 2.2vmin, 20px);
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 12px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.scene-player--framed .animation-canvas canvas {
+  border-radius: inherit;
+}
+/* Les boutons d'action deviennent une colonne à GAUCHE du canvas (dans le flux flex). */
+.scene-player--framed .scene-player-left-buttons {
+  position: static;
+  top: auto;
+  left: auto;
+  transform: none;
+  order: -1;
 }
 
 .scene-player-action-btn {
   position: relative;
-  width: 80px;
-  height: 80px;
+  width: clamp(50px, 11vmin, 84px);
+  height: clamp(50px, 11vmin, 84px);
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.85);
@@ -3289,11 +3339,11 @@ code {
 /* RIGHT side — next arrow (vertically centered) */
 .scene-player-next-btn {
   position: absolute;
-  right: 24px;
+  right: max(12px, 3vmin);
   top: 50%;
   transform: translateY(-50%);
-  width: 56px;
-  height: 56px;
+  width: clamp(42px, 8vmin, 60px);
+  height: clamp(42px, 8vmin, 60px);
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.5);
   background: rgba(0, 0, 0, 0.4);
@@ -3320,10 +3370,10 @@ code {
 /* RIGHT side — help button (bottom-right) */
 .scene-player-help-btn {
   position: absolute;
-  right: 24px;
-  bottom: 24px;
-  width: 64px;
-  height: 64px;
+  right: max(12px, 3vmin);
+  bottom: max(12px, 3vmin);
+  width: clamp(46px, 9vmin, 68px);
+  height: clamp(46px, 9vmin, 68px);
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.5);
@@ -3386,11 +3436,11 @@ code {
 /* Bottom center — play/pause */
 .scene-player-playpause {
   position: absolute;
-  bottom: 24px;
+  bottom: max(12px, 3vmin);
   left: 50%;
   transform: translateX(-50%);
-  width: 44px;
-  height: 44px;
+  width: clamp(36px, 7vmin, 48px);
+  height: clamp(36px, 7vmin, 48px);
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.5);

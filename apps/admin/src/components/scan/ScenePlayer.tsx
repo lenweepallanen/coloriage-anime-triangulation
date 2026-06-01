@@ -157,7 +157,47 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
   useEffect(() => { playingRef.current = playing }, [playing])
 
+  // Dimensions natives de l'image du coloriage = espace de coordonnées du maillage.
+  // Sert de référence pour le scaling/position du perso, invariant au scanCanvas
+  // (image en admin, 2048×2048 en play) et au contentAlignment.
+  const [imgRefDims, setImgRefDims] = useState<{ w: number; h: number } | null>(null)
+  const [imgRefReady, setImgRefReady] = useState(false)
+  useEffect(() => {
+    if (!project.originalImageBlob) { setImgRefDims(null); setImgRefReady(true); return }
+    let cancelled = false
+    setImgRefReady(false)
+    const url = URL.createObjectURL(project.originalImageBlob)
+    const img = new Image()
+    img.onload = () => { if (!cancelled) { setImgRefDims({ w: img.naturalWidth, h: img.naturalHeight }); setImgRefReady(true) }; URL.revokeObjectURL(url) }
+    img.onerror = () => { if (!cancelled) setImgRefReady(true); URL.revokeObjectURL(url) } // fallback scanCanvas dims
+    img.src = url
+    return () => { cancelled = true }
+  }, [project.originalImageBlob])
+
   const scene = project.scene!
+
+  // Carte scène (mode play/scan, hors modal) : on dimensionne le canvas EXACTEMENT au
+  // format du fond → scène centrée, coins arrondis, et marge gauche libre pour les boutons.
+  const [cardSize, setCardSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+  const bgAspectW = scene.background?.width
+  const bgAspectH = scene.background?.height
+  useEffect(() => {
+    if (modal) return
+    const SIDEBAR = 96 // espace réservé à gauche pour les boutons 1/2/3
+    const PAD = 14
+    function compute() {
+      const vw = window.innerWidth, vh = window.innerHeight
+      const aspect = bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9
+      const availW = Math.max(160, vw - SIDEBAR - PAD * 2)
+      const availH = Math.max(120, vh - PAD * 2)
+      let h = availH, w = h * aspect
+      if (w > availW) { w = availW; h = w / aspect }
+      setCardSize({ w: Math.round(w), h: Math.round(h) })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    return () => window.removeEventListener('resize', compute)
+  }, [modal, bgAspectW, bgAspectH])
   // Animation idle de la scène : on suit l'animation idle du rest point, sinon fallback.
   const restAnim = getIdleAnimation(project.animations, scene.restPoint?.restAnimationId)
     ?? getGeometryOwner(project.animations)
@@ -208,6 +248,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // PIXI setup
   useEffect(() => {
     if (!containerRef.current || !restAnim?.mesh) return
+    // Attendre la résolution des dimensions de l'image (référence de scaling perso)
+    // AVANT de construire : évite un teardown/rebuild de toute la scène (flash + retour
+    // scan) quand elles arrivent. `imgRefReady` passe true au chargement OU à l'échec.
+    if (!imgRefReady) return
+    // Hors modal : attendre que la taille de la carte soit calculée (le canvas est
+    // dimensionné au format du fond, pas au viewport entier).
+    if (!modal && cardSize.w === 0) return
 
     const mesh = restAnim.mesh as MeshData
     const allPoints = [
@@ -282,7 +329,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
       document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
       document.addEventListener('click', onGesture, { passive: true, capture: true })
-      const tex = PIXI.Texture.from(vid)
+      const tex = PIXI.Texture.from(vid, { resourceOptions: { autoPlay: true } })
+      // iOS : la texture est créée avant que la vidéo ait des frames (→ 0×0 noir).
+      // On force un ré-upload dès que des frames arrivent / la lecture démarre.
+      vid.addEventListener('loadeddata', () => tex.update())
+      vid.addEventListener('playing', () => tex.update())
       const sprite = new PIXI.Sprite(tex)
       sprite.width = bg.width * bgScale
       sprite.height = viewH
@@ -371,7 +422,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
       document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
       document.addEventListener('click', onGesture, { passive: true, capture: true })
-      const tex = PIXI.Texture.from(vid)
+      const tex = PIXI.Texture.from(vid, { resourceOptions: { autoPlay: true } })
+      vid.addEventListener('loadeddata', () => tex.update())
+      vid.addEventListener('playing', () => tex.update())
       const sprite = new PIXI.Sprite(tex)
       sprite.width = fg.width * bgScale
       sprite.height = fg.height * bgScale
@@ -402,13 +455,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
     }
 
-    const charFitScale = viewH / scanCanvas.height
+    // Référence de scaling = dimensions de l'IMAGE du coloriage (espace des coords du
+    // maillage), pas le scanCanvas (2048 en play). En admin scanCanvas == image → identique.
+    const refW = imgRefDims?.w ?? scanCanvas.width
+    const refH = imgRefDims?.h ?? scanCanvas.height
+    const charFitScale = viewH / refH
     const baseCharScale = charFitScale * scene.characterScale
     // charScale, charW, charH, charOffsetY peuvent varier par frame (marche libre :
     // perspective scale + déplacement vertical sur le trapèze).
     let charScale = baseCharScale
-    let charW = scanCanvas.width * charScale
-    let charH = scanCanvas.height * charScale
+    let charW = refW * charScale
+    let charH = refH * charScale
     const baseCharOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
     let charOffsetY = baseCharOffsetY
     // Origine du personnage (U,V) ∈ [0,1] dans l'image du coloriage. Le clic en marche
@@ -416,7 +473,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const originU = scene.characterOriginU ?? 0.5
     const originV = scene.characterOriginV ?? 1.0
     /** Y de l'origine au rest, en coords background front (utilisé comme initial currentY). */
-    const baselineOriginBgY = (baseCharOffsetY + originV * scanCanvas.height * baseCharScale) / bgScale
+    const baselineOriginBgY = (baseCharOffsetY + originV * refH * baseCharScale) / bgScale
 
     // Character X offset: computed dynamically each frame from scenePlayback.currentX.
     // L'origine du personnage (U×W) doit se trouver à (currentX - bgOffset) * bgScale en X.
@@ -747,13 +804,32 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       viewportHeight: viewH / bgScale,
       initialFeetBgY: baselineOriginBgY,
       // Largeur du personnage à scale=1 (sans perspective) en coords background.
-      characterBaseWidthBg: (scanCanvas.width * baseCharScale) / bgScale,
+      characterBaseWidthBg: (refW * baseCharScale) / bgScale,
       characterOriginU: originU,
     })
     scenePlaybackRef.current = scenePlayback
 
     // Now that scenePlayback exists, compute the correct initial charOffsetX
     charOffsetX = computeCharOffsetX(scenePlayback)
+
+    // [DEBUG] Diagnostic caméra/fond — à retirer une fois le placement validé.
+    setTimeout(() => {
+      const vid = bgVideoElements[0]
+      // eslint-disable-next-line no-console
+      console.log('[ScenePlayer DEBUG]', {
+        viewW, viewH, bgScale,
+        bgW: bg?.width, bgH: bg?.height,
+        hasBgVideo: !!bg?.videoBlob, hasBgImage: !!bg?.imageBlob,
+        bgSprite: backgroundSprite
+          ? { x: Math.round(backgroundSprite.x), y: Math.round(backgroundSprite.y), w: Math.round(backgroundSprite.width), h: Math.round(backgroundSprite.height), visible: backgroundSprite.visible }
+          : 'NULL (pas de sprite fond créé)',
+        bgOffsetX: Math.round(scenePlayback.backgroundOffsetX),
+        currentX: Math.round(scenePlayback.currentX),
+        charOffsetX: Math.round(charOffsetX), charScale: charScale.toFixed(3),
+        charW: Math.round(charW), charH: Math.round(charH), refW, refH,
+        video: vid ? { paused: vid.paused, readyState: vid.readyState, vw: vid.videoWidth, vh: vid.videoHeight } : 'pas de <video> fond',
+      })
+    }, 1800)
 
     // --- Animation switching ---
     let currentGetPositions: () => Point2D[] = () => allPoints
@@ -1233,8 +1309,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Sinon, layout standard (centré vertical + characterY).
       const walkScaleMul = scenePlayback.walkScaleMul
       charScale = baseCharScale * walkScaleMul
-      charW = scanCanvas.width * charScale
-      charH = scanCanvas.height * charScale
+      charW = refW * charScale
+      charH = refH * charScale
       if (scene.walkTrapezoid) {
         // currentY = position bg de l'ORIGINE → charOffsetY tel que originV*charH + charOffsetY = currentY*bgScale
         charOffsetY = scenePlayback.currentY * bgScale - originV * charH
@@ -1506,22 +1582,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             limbPositions[zoneId] = triForOutline.zonePoints![zoneId]
           }
         }
-        const mapPoint = (pt: Point2D) => {
-          if (contentAlignment) {
-            const { drawBBox, meshBBox } = contentAlignment
-            const meshW = meshBBox.maxX - meshBBox.minX
-            const meshH = meshBBox.maxY - meshBBox.minY
-            const drawW = drawBBox.maxX - drawBBox.minX
-            const drawH = drawBBox.maxY - drawBBox.minY
-            const nx = meshW > 0 ? (pt.x - meshBBox.minX) / meshW : 0.5
-            const ny = meshH > 0 ? (pt.y - meshBBox.minY) / meshH : 0.5
-            return {
-              x: (nx * drawW + drawBBox.minX) * charScale + charOffsetX,
-              y: (ny * drawH + drawBBox.minY) * charScale + charOffsetY,
-            }
-          }
-          return { x: pt.x * charScale + charOffsetX, y: pt.y * charScale + charOffsetY }
-        }
+        // Les contours doivent suivre EXACTEMENT les vertices du maillage, qui sont
+        // positionnés en coords brutes (pt * charScale + offset). `contentAlignment`
+        // ne sert qu'aux UV de texture, PAS à la géométrie — l'appliquer ici décalait
+        // le halo de contour par rapport à la texture en play (scan 2048 + alignment).
+        const mapPoint = (pt: Point2D) => ({ x: pt.x * charScale + charOffsetX, y: pt.y * charScale + charOffsetY })
         const polylines = computeZoneOutlinePolylines(
           triForOutline,
           { body: bodyPositions, limbs: limbPositions },
@@ -1571,7 +1636,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
-  }, [project, scanCanvas, contentAlignment, scene, restAnim]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardSize.w, cardSize.h]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleExitFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
@@ -1772,8 +1837,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   }
 
   return (
-    <div className="animation-player scene-player" ref={playerRef}>
-      <div ref={containerRef} className="animation-canvas" />
+    <div className={`animation-player scene-player${!modal ? ' scene-player--framed' : ''}`} ref={playerRef}>
+      <div
+        ref={containerRef}
+        className="animation-canvas"
+        style={!modal && cardSize.w ? { width: cardSize.w, height: cardSize.h } : undefined}
+      />
 
       {modal ? (
         <button className="preview-modal-close" onClick={onClose} title="Fermer">&times;</button>

@@ -19,9 +19,12 @@ interface ScanPageProps {
   /** Si false, indique que des blobs (image, JSON) sont encore en train de charger en arrière-plan.
    *  Quand true, on peut afficher l'animation. Tant que false, l'UI scan tolère les blobs null. */
   deferredLoaded?: boolean
+  /** 'admin' (défaut) : flux complet avec écran debug. 'play' : flux simplifié
+   *  (calcul en arrière-plan + écran de validation frame 0, sans étapes intermédiaires). */
+  mode?: 'admin' | 'play'
 }
 
-export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded }: ScanPageProps = {}) {
+export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin' }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
   const fallback = useProject(projectProp === undefined ? projectId : null)
   const project = projectProp !== undefined ? projectProp : fallback.project
@@ -52,14 +55,27 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
     )
   }
 
-  return <ScanFlow project={project} deferredLoaded={deferredLoaded} />
+  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} />
 }
 
-function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoaded?: boolean }) {
+function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play' }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
   const [paused, setPaused] = useState(false)
+
+  // Orientation : en play, la scène se joue en PAYSAGE (rendu natif = desktop).
+  // En portrait on affiche un overlay « tourne ton téléphone » et on ne monte pas
+  // le player (pour qu'il s'initialise toujours avec des dimensions paysage).
+  const [isPortrait, setIsPortrait] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(orientation: portrait)').matches
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(orientation: portrait)')
+    const handler = (e: MediaQueryListEvent) => setIsPortrait(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
   function handleBack() {
     if (bookId) navigate(`/livre/${bookId}`)
     else navigate(-1)
@@ -79,12 +95,12 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
   const lamaStartedRef = useRef(false)
   const processor = useScanProcessor(project)
 
-  // Transition from processing to debug view when rectified canvas is ready
+  // Transition from processing to debug (admin) / validation preview (play) when rectified canvas is ready
   useEffect(() => {
     if (processor.rectifiedCanvas && stage === 'processing' && !processor.processing) {
-      setStage('debug')
+      setStage(mode === 'play' ? 'preview' : 'debug')
     }
-  }, [processor.rectifiedCanvas, processor.processing, stage])
+  }, [processor.rectifiedCanvas, processor.processing, stage, mode])
 
   // Marque le coloriage comme scanné dès qu'on entre dans l'animation
   useEffect(() => {
@@ -210,9 +226,16 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
     (blob: Blob, corners: Point2D[] | null) => {
       setCapturedBlob(blob)
       setDetectedCorners(corners)
-      setStage('adjust')
+      if (mode === 'play') {
+        // Play : pas d'ajustement manuel des coins — on lance tout le calcul
+        // (correction perspective + LaMa) en arrière-plan dès la prise de photo.
+        setStage('processing')
+        void processor.handleCapture(blob, corners)
+      } else {
+        setStage('adjust')
+      }
     },
-    []
+    [mode, processor]
   )
 
   const onCornersConfirmed = useCallback(
@@ -239,7 +262,7 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
 
   return (
     <div className="scan-page">
-      {stage !== 'animation' && <h2>{project.name} — Mode Coloriage</h2>}
+      {stage !== 'animation' && stage !== 'preview' && <h2>{project.name} — Mode Coloriage</h2>}
 
       {stage === 'camera' && (
         <CameraView onCapture={onCameraCapture} />
@@ -257,11 +280,13 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
       {stage === 'processing' && (
         <div className="scan-processing">
           <div className="loading">
-            {processor.processing
-              ? 'Traitement du scan...'
-              : processor.error
-                ? `Erreur : ${processor.error}`
-                : 'Préparation...'}
+            {processor.error
+              ? `Erreur : ${processor.error}`
+              : mode === 'play'
+                ? 'Préparation de ton coloriage…'
+                : processor.processing
+                  ? 'Traitement du scan...'
+                  : 'Préparation...'}
           </div>
           {processor.error && (
             <button onClick={handleRetake} style={{ marginTop: 16 }}>
@@ -406,7 +431,58 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
         </div>
       )}
 
-      {stage === 'animation' && (
+      {stage === 'preview' && processor.rectifiedCanvas && (
+        <>
+          <AnimationPlayer
+            project={project}
+            scanCanvas={processor.rectifiedCanvas}
+            lamaCanvas={lamaCanvas}
+            contentAlignment={processor.contentAlignment}
+            onClose={handleRetake}
+            previewFrame0
+          />
+          <div
+            style={{
+              position: 'fixed',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 200,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 16,
+              padding: '24px 16px calc(24px + env(safe-area-inset-bottom))',
+              background: 'linear-gradient(to top, rgba(0,0,0,0.6), rgba(0,0,0,0))',
+            }}
+          >
+            <h2 style={{ color: '#fff', margin: 0, textShadow: '0 2px 8px rgba(0,0,0,0.6)' }}>
+              Tu valides la photo ?
+            </h2>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                className="btn-primary btn-lg"
+                onClick={() => setStage('animation')}
+                disabled={deferredLoaded === false}
+              >
+                {deferredLoaded === false ? 'Chargement…' : 'Oui'}
+              </button>
+              <button className="btn-secondary btn-lg" onClick={handleRetake}>
+                Non, je reprends
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Play + portrait : on demande de tourner le téléphone (la scène se joue en paysage,
+          rendu natif identique au desktop). Le player n'est pas monté tant qu'on est en
+          portrait, pour qu'il s'initialise avec les bonnes dimensions paysage. */}
+      {stage === 'animation' && mode === 'play' && isPortrait && (
+        <RotateDeviceHint />
+      )}
+
+      {stage === 'animation' && !(mode === 'play' && isPortrait) && (
         <>
           <SettingsButton onClick={() => setPaused(true)} />
           {paused && (
@@ -419,8 +495,13 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
         </>
       )}
 
-      {stage === 'animation' && processor.rectifiedCanvas && (
-        project.scene && !!project.scene.background && (project.scene.background.imageBlob != null || project.scene.background.videoBlob != null) && project.scene.restPoint != null
+      {stage === 'animation' && !(mode === 'play' && isPortrait) && processor.rectifiedCanvas && (
+        // Choix du player basé sur la STRUCTURE de la scène (dispo dès la phase 1),
+        // pas sur la présence du blob de fond (chargé en différé). Sinon, en play,
+        // on tombe à tort sur AnimationPlayer (mauvais HUD + perso non rendu) tant
+        // que le blob n'est pas hydraté. Le blob est garanti chargé au clic « Oui »
+        // (bouton gated sur deferredLoaded).
+        project.scene && !!project.scene.background && project.scene.restPoint != null
           ? <ScenePlayer
               project={project}
               scanCanvas={processor.rectifiedCanvas}
@@ -436,6 +517,20 @@ function ScanFlow({ project, deferredLoaded }: { project: Project; deferredLoade
               onClose={handleRetake}
             />
       )}
+    </div>
+  )
+}
+
+/** Overlay plein écran « tourne ton téléphone » affiché en portrait (mode play). */
+function RotateDeviceHint() {
+  return (
+    <div className="rotate-device-hint">
+      <svg className="rotate-device-hint__icon" width="84" height="84" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="7" y="2" width="10" height="20" rx="2" />
+        <path d="M11 18h2" />
+      </svg>
+      <div className="rotate-device-hint__text">Tourne ton téléphone</div>
+      <div className="rotate-device-hint__sub">pour jouer en plein écran 🦖</div>
     </div>
   )
 }

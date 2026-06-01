@@ -1251,9 +1251,10 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   let sceneBackgroundBlob: Blob | null = null
   let sceneForegroundBlob: Blob | null = null
   if (projDoc.scene) {
-    const hasNewBackground = !!projDoc.scene.background && (projDoc.scene.background.hasImage || projDoc.scene.background.hasVideo)
-    if (hasNewBackground || projDoc.scene.backgroundLayers || projDoc.scene.hasBackgroundImage) {
-      sceneBackgroundBlob = await downloadBlob(`projects/${id}/sceneBackground`)
+    // Robustesse : on télécharge dès que les métadonnées du calque existent, sans se fier
+    // au flag hasImage/hasVideo du doc (qui peut être périmé → fond noir au reload).
+    if (projDoc.scene.background || projDoc.scene.backgroundLayers || projDoc.scene.hasBackgroundImage) {
+      sceneBackgroundBlob = await downloadBlob(`projects/${id}/sceneBackground`).catch(() => null)
       if (!sceneBackgroundBlob) {
         // Fallback chemins legacy (projet migré sans re-upload du blob)
         for (let i = 0; i < 3 && !sceneBackgroundBlob; i++) {
@@ -1261,8 +1262,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         }
       }
     }
-    if (projDoc.scene.foreground?.hasImage || projDoc.scene.foreground?.hasVideo) {
-      sceneForegroundBlob = await downloadBlob(`projects/${id}/sceneForeground`)
+    if (projDoc.scene.foreground) {
+      sceneForegroundBlob = await downloadBlob(`projects/${id}/sceneForeground`).catch(() => null)
     }
   }
 
@@ -1383,9 +1384,12 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     )
     let background: SceneBackground | null = null
     if (projDoc.scene.background) {
+      const bgIsVideo = sceneBackgroundBlob
+        ? (sceneBackgroundBlob.type.startsWith('video/') || projDoc.scene.background.hasVideo === true)
+        : projDoc.scene.background.hasVideo === true
       background = {
-        imageBlob: projDoc.scene.background.hasVideo ? null : sceneBackgroundBlob,
-        videoBlob: projDoc.scene.background.hasVideo ? sceneBackgroundBlob : null,
+        imageBlob: bgIsVideo ? null : sceneBackgroundBlob,
+        videoBlob: bgIsVideo ? sceneBackgroundBlob : null,
         width: projDoc.scene.background.width,
         height: projDoc.scene.background.height,
       }
@@ -1409,10 +1413,13 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       }
     }
     const fgDoc = projDoc.scene.foreground
-    const foreground: SceneForeground | null = (fgDoc?.hasImage || fgDoc?.hasVideo)
+    const fgIsVideo = sceneForegroundBlob
+      ? (sceneForegroundBlob.type.startsWith('video/') || fgDoc?.hasVideo === true)
+      : fgDoc?.hasVideo === true
+    const foreground: SceneForeground | null = fgDoc
       ? {
-          imageBlob: fgDoc.hasVideo ? null : sceneForegroundBlob,
-          videoBlob: fgDoc.hasVideo ? sceneForegroundBlob : null,
+          imageBlob: fgIsVideo ? null : sceneForegroundBlob,
+          videoBlob: fgIsVideo ? sceneForegroundBlob : null,
           width: fgDoc.width,
           height: fgDoc.height,
           chromaKeyColor: fgDoc.chromaKeyColor ?? null,
@@ -2447,22 +2454,25 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
   if (scene) {
     const bgDoc = projDoc?.scene?.background ?? null
     const bgHasVideo = bgDoc?.hasVideo === true
-    const bgHasImage = bgDoc?.hasImage === true
     const fgDocDef = projDoc?.scene?.foreground ?? null
     const fgHasVideo = fgDocDef?.hasVideo === true
-    const fgHasImage = fgDocDef?.hasImage === true
+    // Robustesse : on télécharge dès que les métadonnées du calque existent, sans se
+    // fier au flag hasVideo/hasImage du doc (qui peut être périmé/incohérent → fond noir).
+    // Le type image/vidéo est ensuite déterminé via le MIME du blob.
     const [backgroundBlob, foregroundBlob] = await Promise.all([
-      scene.background && (bgHasVideo || bgHasImage)
+      scene.background
         ? ((scene.background.imageBlob || scene.background.videoBlob)
             ? Promise.resolve(scene.background.imageBlob ?? scene.background.videoBlob)
             : downloadBlob(`projects/${id}/sceneBackground`).catch(() => null))
         : Promise.resolve(null),
-      scene.foreground && (fgHasImage || fgHasVideo)
+      scene.foreground
         ? ((scene.foreground.imageBlob || scene.foreground.videoBlob)
             ? Promise.resolve(scene.foreground.imageBlob ?? scene.foreground.videoBlob)
             : downloadBlob(`projects/${id}/sceneForeground`).catch(() => null))
         : Promise.resolve(null),
     ])
+    const bgIsVideo = backgroundBlob ? (backgroundBlob.type.startsWith('video/') || bgHasVideo) : bgHasVideo
+    const fgIsVideo = foregroundBlob ? (foregroundBlob.type.startsWith('video/') || fgHasVideo) : fgHasVideo
     const speakSoundBlobs = await Promise.all(
       scene.speakSounds.map(s => downloadBlob(`projects/${id}/scene/speakSounds/${s.id}`).catch(() => null))
     )
@@ -2487,15 +2497,15 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
       background: scene.background
         ? {
             ...scene.background,
-            imageBlob: scene.background.imageBlob ?? (bgHasVideo ? null : backgroundBlob),
-            videoBlob: scene.background.videoBlob ?? (bgHasVideo ? backgroundBlob : null),
+            imageBlob: scene.background.imageBlob ?? (bgIsVideo ? null : backgroundBlob),
+            videoBlob: scene.background.videoBlob ?? (bgIsVideo ? backgroundBlob : null),
           }
         : null,
       foreground: scene.foreground
         ? {
             ...scene.foreground,
-            imageBlob: scene.foreground.imageBlob ?? (fgHasVideo ? null : foregroundBlob),
-            videoBlob: scene.foreground.videoBlob ?? (fgHasVideo ? foregroundBlob : null),
+            imageBlob: scene.foreground.imageBlob ?? (fgIsVideo ? null : foregroundBlob),
+            videoBlob: scene.foreground.videoBlob ?? (fgIsVideo ? foregroundBlob : null),
           }
         : null,
       ...(scene.entrySound != null && { entrySound: { ...scene.entrySound, blob: sceneSoundMap.get(scene.entrySound.id) ?? scene.entrySound.blob ?? null } }),

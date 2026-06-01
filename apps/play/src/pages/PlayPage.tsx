@@ -16,7 +16,7 @@ export default function PlayPage() {
     return <UnavailableMessage reason="not-published" />
   }
 
-  return <ScanPage project={project} loading={false} deferredLoaded={deferredLoaded} />
+  return <ScanPage project={project} loading={false} deferredLoaded={deferredLoaded} mode="play" />
 }
 
 function UnavailableMessage({ reason }: { reason: 'not-found' | 'not-published' }) {

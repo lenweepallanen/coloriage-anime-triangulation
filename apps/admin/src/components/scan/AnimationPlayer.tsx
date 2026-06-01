@@ -42,6 +42,9 @@ interface Props {
   lamaCanvas?: HTMLCanvasElement | null
   contentAlignment?: ContentAlignment | null
   onClose: () => void
+  /** Mode aperçu de validation (play) : rend le personnage figé à la frame 0,
+   *  sans plein écran, sans contrôles, sans parallaxe/son/interactions. */
+  previewFrame0?: boolean
 }
 
 // --- Visual effects config ---
@@ -160,7 +163,7 @@ function getAnimationData(project: Project) {
   return { restAnim, readyOneshots }
 }
 
-export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose }: Props) {
+export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, previewFrame0 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -211,6 +214,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
 
   // Enter fullscreen + lock landscape on mount
   useEffect(() => {
+    if (previewFrame0) return // aperçu embarqué : pas de plein écran
     const el = playerRef.current
     if (!el) return
 
@@ -316,7 +320,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       parallax.cssRotationOffset = 90
     }
 
-    if (DeviceParallax.isAvailable) {
+    if (!previewFrame0 && DeviceParallax.isAvailable) {
       if (DeviceParallax.needsPermission) {
         // iOS: need user gesture — show button
         setNeedsMotionPermission(true)
@@ -380,13 +384,51 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     // Scale & offset — fit canvas content to available space
     const scaleX = viewW / scanCanvas.width
     const scaleY = viewH / scanCanvas.height
-    const scale = Math.min(scaleX, scaleY)
-    const offsetX = (viewW - scanCanvas.width * scale) / 2
-    const offsetY = (viewH - scanCanvas.height * scale) / 2
+    let scale = Math.min(scaleX, scaleY)
+    let offsetX = (viewW - scanCanvas.width * scale) / 2
+    let offsetY = (viewH - scanCanvas.height * scale) / 2
 
-    // Initial vertices
+    // Aperçu de validation : cadrer sur le PERSONNAGE (bbox de sa frame 0), pas sur
+    // tout le scan — centré et agrandi pour être bien visible devant l'utilisateur.
+    if (previewFrame0) {
+      const zoneAnimForBox = project.animations.find(a => a.type === 'walk' && a.mesh?.walkZoneFrames && a.mesh?.walkLimbSeparation)
+        ?? project.animations.find(a =>
+          (a.type === 'members-bones' || a.type === 'members-bones-v2' || a.type === 'members-bones-v3' || a.type === 'cotracker-bones' || a.type === 'marche')
+          && a.mesh?.walkZoneFrames && project.projectTriangulation?.step3Validated)
+      const boxPts: Point2D[] = []
+      const zbf = zoneAnimForBox?.mesh?.walkBodyFrames
+      const zzf = zoneAnimForBox?.mesh?.walkZoneFrames
+      if (zbf?.[0]) {
+        boxPts.push(...zbf[0])
+        if (zzf) for (const id of Object.keys(zzf)) { const f0 = zzf[id]?.[0]; if (f0) boxPts.push(...f0) }
+      } else if (hasFlow && mesh.videoFramesMesh![0]) {
+        boxPts.push(...mesh.videoFramesMesh![0])
+      } else {
+        boxPts.push(...allPoints)
+      }
+      if (boxPts.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const p of boxPts) {
+          if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y
+          if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y
+        }
+        const bw = maxX - minX, bh = maxY - minY
+        if (bw > 1 && bh > 1) {
+          const FILL = 0.82 // fraction de la dimension écran occupée par le perso
+          scale = Math.min((viewW * FILL) / bw, (viewH * FILL) / bh)
+          offsetX = viewW / 2 - (minX + bw / 2) * scale
+          offsetY = viewH / 2 - (minY + bh / 2) * scale
+        }
+      }
+    }
+
+    // Initial vertices — en aperçu, on fige sur la frame 0 trackée (videoFramesMesh[0])
+    // si disponible et cohérente, sinon les positions statiques de repos.
+    const frame0 = previewFrame0 && hasFlow && mesh.videoFramesMesh![0]?.length === allPoints.length
+      ? mesh.videoFramesMesh![0]
+      : allPoints
     const vertices = new Float32Array(allPoints.length * 2)
-    allPoints.forEach((p, i) => {
+    frame0.forEach((p, i) => {
       vertices[i * 2] = p.x * scale + offsetX
       vertices[i * 2 + 1] = p.y * scale + offsetY
     })
@@ -483,11 +525,36 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       }, { once: true })
     }
 
+    // --- Aperçu de validation : rendu statique frame 0 (pas de lecture ni ticker) ---
+    // Positionne explicitement le bon maillage sur sa frame 0 : meshes de zones pour
+    // les projets autonomes (members-bones/walk/marche), sinon le mesh unique legacy
+    // (déjà positionné via les vertices initiaux). Le ticker auto de PIXI rend une fois.
+    if (previewFrame0) {
+      const zoneAnimP = walkAnim ?? mbTriangAnim
+      const wbf = zoneAnimP?.mesh?.walkBodyFrames
+      const wzf = zoneAnimP?.mesh?.walkZoneFrames
+      if (zoneMeshSetup && wbf && wbf.length > 0) {
+        pixiMesh.visible = false
+        zoneMeshSetup.container.visible = true
+        const body0 = wbf[0]
+        for (const zm of zoneMeshSetup.zoneMeshes) {
+          const f0 = wzf?.[zm.zoneId]?.[0]
+          if (f0) updateZoneMeshVertices(zm, f0, scale, offsetX, offsetY)
+        }
+        if (body0) updateZoneMeshVertices(zoneMeshSetup.bodyMesh, body0, scale, offsetX, offsetY)
+        if (body0) for (const hfm of zoneMeshSetup.hiddenFaceMeshes) updateZoneMeshVertices(hfm, body0, scale, offsetX, offsetY)
+        for (const hflm of zoneMeshSetup.hiddenFaceLimbMeshes) {
+          const f0 = wzf?.[hflm.zoneId]?.[0]
+          if (f0) updateZoneMeshVertices(hflm, f0, scale, offsetX, offsetY)
+        }
+      }
+    }
+
     // --- Audio elements (oneshot + physics only, not rest) ---
     const audioElements = new Map<string, HTMLAudioElement>()
     const audioUrls: string[] = []
     for (const anim of project.animations) {
-      if (anim.id !== restAnim?.id && anim.audioBlob && anim.audioEnabled) {
+      if (!previewFrame0 && anim.id !== restAnim?.id && anim.audioBlob && anim.audioEnabled) {
         const url = URL.createObjectURL(anim.audioBlob)
         audioUrls.push(url)
         const audio = new Audio(url)
@@ -498,7 +565,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     // --- Ambient sound (project-level, looped continuously) ---
     let ambientAudio: HTMLAudioElement | null = null
     let ambientAudioUrl: string | null = null
-    if (project.ambientSoundBlob && project.ambientSoundEnabled) {
+    if (!previewFrame0 && project.ambientSoundBlob && project.ambientSoundEnabled) {
       ambientAudioUrl = URL.createObjectURL(project.ambientSoundBlob)
       ambientAudio = new Audio(ambientAudioUrl)
       ambientAudio.loop = true
@@ -507,7 +574,9 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     }
 
     // --- Animation loop ---
-    if (hasFlow) {
+    // En aperçu de validation, on ne crée aucune lecture ni ticker : le mesh reste
+    // figé sur la frame 0 (le ticker auto de PIXI rend la scène statique).
+    if (hasFlow && !previewFrame0) {
       // Build oneshot animation data for MultiAnimationPlayback
       const oneshotAnims: OneshotAnimation[] = readyOneshots
         .filter(a => a.mesh?.videoFramesMesh)
@@ -770,14 +839,14 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
   }, [onClose])
 
   return (
-    <div className="animation-player" ref={playerRef}>
+    <div className={`animation-player${previewFrame0 ? ' animation-player--preview' : ''}`} ref={playerRef}>
       <div ref={containerRef} className="animation-canvas" />
 
       {/* Floating close button (long-press 3s) */}
-      <LongPressCloseButton onComplete={handleExitFullscreen} />
+      {!previewFrame0 && <LongPressCloseButton onComplete={handleExitFullscreen} />}
 
       {/* Oneshot animation trigger buttons */}
-      {readyOneshots.length > 0 && (
+      {!previewFrame0 && readyOneshots.length > 0 && (
         <div className="oneshot-buttons" style={{
           position: 'absolute',
           bottom: 20,
@@ -818,6 +887,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       )}
 
       {/* Floating settings gear button */}
+      {!previewFrame0 && (
       <button
         className="fullscreen-settings-btn"
         onClick={() => setSidebarOpen(o => !o)}
@@ -827,9 +897,10 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
+      )}
 
       {/* Retractable sidebar overlay */}
-      {sidebarOpen && (
+      {!previewFrame0 && sidebarOpen && (
         <div className="animation-sidebar-overlay" onClick={() => setSidebarOpen(false)}>
           <div className="animation-sidebar-panel" onClick={e => e.stopPropagation()}>
             <div className="animation-controls">

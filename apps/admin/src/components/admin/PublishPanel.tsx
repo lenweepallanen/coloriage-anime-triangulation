@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { setProjectPublished, buildPlayUrl } from '../../db/publishProject'
+import { setProjectPublished, buildPlayUrl, buildAdminScanUrl } from '../../db/publishProject'
 
 interface Props {
   projectId: string
@@ -11,7 +11,9 @@ interface Props {
 export default function PublishPanel({ projectId, published, publishedAt, onChange }: Props) {
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [copiedAdmin, setCopiedAdmin] = useState(false)
   const url = buildPlayUrl(projectId)
+  const adminUrl = buildAdminScanUrl(projectId)
 
   async function handleToggle() {
     if (busy) return
@@ -34,6 +36,16 @@ export default function PublishPanel({ projectId, published, publishedAt, onChan
       setTimeout(() => setCopied(false), 1500)
     } catch (e) {
       console.error('[publish] copy failed', e)
+    }
+  }
+
+  async function handleCopyAdmin() {
+    try {
+      await navigator.clipboard.writeText(adminUrl)
+      setCopiedAdmin(true)
+      setTimeout(() => setCopiedAdmin(false), 1500)
+    } catch (e) {
+      console.error('[publish] copy admin failed', e)
     }
   }
 
@@ -73,6 +85,17 @@ export default function PublishPanel({ projectId, published, publishedAt, onChan
           Tant que le projet n'est pas publié, le lien play renvoie « Coloriage indisponible ».
         </p>
       )}
+      <div style={{ marginTop: 12 }}>
+        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Lien ADMIN (scanner — mode debug) :</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <code style={{ flex: 1, padding: '6px 10px', background: '#fff', borderRadius: 4, fontSize: 13, overflow: 'auto' }}>
+            {adminUrl}
+          </code>
+          <button onClick={handleCopyAdmin} className="btn-sm btn-secondary">
+            {copiedAdmin ? 'Copié !' : 'Copier'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
