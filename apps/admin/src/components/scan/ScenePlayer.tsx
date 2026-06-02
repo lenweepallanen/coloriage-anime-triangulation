@@ -203,10 +203,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     ]
     const numPoints = allPoints.length
 
+    // Côté play (body.play-app), le canvas est transparent pour laisser apparaître
+    // le fond doodle de la page derrière le personnage. Un éventuel scene.background
+    // opaque recouvre tout de même le doodle (sprite par-dessus).
+    const transparentBg = document.body.classList.contains('play-app')
     const app = new PIXI.Application({
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
       backgroundColor: 0x000000,
+      backgroundAlpha: transparentBg ? 0 : 1,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     })

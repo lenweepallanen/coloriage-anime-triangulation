@@ -1,0 +1,575 @@
+/* =====================================================================
+   Thème PLAY — « livre de coloriage animé pour enfant »
+   Importé UNIQUEMENT par apps/play/src/main.tsx (après global.css).
+   Admin n'importe jamais ce fichier → admin reste intact.
+   Tous les sélecteurs sont scopés sous body.play-app.
+   ===================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Andika:wght@400;700&display=swap');
+
+body.play-app {
+  /* Thème blanc + encres */
+  --paper: #ffffff;
+  --paper-2: #ffffff;
+  --ink: #3a3530;
+  --ink-soft: #6b6357;
+  --accent-sun: #ffcf3f;
+  --accent-mint: #57c8a3;
+  --accent-sky: #5bb8e8;
+  --accent-rose: #ff8fae;
+  --sticker-shadow: 3px 4px 0 rgba(58, 53, 48, 0.18);
+  --sticker-shadow-lg: 5px 7px 0 rgba(58, 53, 48, 0.16);
+  --bg-dots: url('../assets/bg-dots.svg');
+
+  /* Fond blanc + texture pointillée tileable, fixée */
+  background: #ffffff var(--bg-dots) repeat fixed;
+  color: var(--ink);
+  font-family: 'Andika', 'Segoe UI', sans-serif;
+}
+
+body.play-app h1,
+body.play-app h2,
+body.play-app h3 {
+  font-family: 'Fredoka', 'Andika', sans-serif;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.5px;
+}
+
+/* ---------------------------------------------------------------------
+   Bouton crayonné réutilisable
+   ------------------------------------------------------------------- */
+body.play-app .sketch-btn,
+body.play-app .btn-start-camera,
+body.play-app .btn-import,
+body.play-app .btn-capture,
+body.play-app .btn-cancel,
+body.play-app .btn-torch,
+body.play-app .btn-primary,
+body.play-app .btn-secondary {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  /* coins irréguliers façon trait dessiné main */
+  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  box-shadow: var(--sticker-shadow);
+  padding: 0.65em 1.3em;
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.12s ease;
+}
+
+/* coins alternés sur le 2e d'une rangée → casse la symétrie, look plus « main » */
+body.play-app .camera-buttons-row > button:nth-child(even) {
+  border-radius: 15px 225px 15px 255px / 255px 15px 225px 15px;
+}
+
+body.play-app .sketch-btn:hover,
+body.play-app .btn-start-camera:hover,
+body.play-app .btn-import:hover,
+body.play-app .btn-capture:hover,
+body.play-app .btn-cancel:hover,
+body.play-app .btn-torch:hover,
+body.play-app .btn-primary:hover,
+body.play-app .btn-secondary:hover {
+  background: #fff;
+  transform: translateY(-1px) rotate(-0.4deg);
+  box-shadow: var(--sticker-shadow-lg);
+}
+
+body.play-app .sketch-btn:active,
+body.play-app .btn-start-camera:active,
+body.play-app .btn-import:active,
+body.play-app .btn-capture:active,
+body.play-app .btn-cancel:active,
+body.play-app .btn-torch:active,
+body.play-app .btn-primary:active,
+body.play-app .btn-secondary:active {
+  transform: translateY(2px) scale(0.97);
+  box-shadow: 1px 2px 0 rgba(58, 53, 48, 0.18);
+}
+
+body.play-app .btn-start-camera:disabled,
+body.play-app .btn-primary:disabled,
+body.play-app .btn-secondary:disabled,
+body.play-app .sketch-btn:disabled {
+  opacity: 0.55;
+  transform: none;
+}
+
+/* Teintes d'encre par fonction (le fond reste papier blanc) */
+body.play-app .sketch-btn--go,
+body.play-app .btn-capture--ready,
+body.play-app .btn-primary {
+  color: #1f7a5e;
+  border-color: var(--accent-mint);
+  box-shadow: 3px 4px 0 rgba(87, 200, 163, 0.35);
+}
+body.play-app .sketch-btn--scan,
+body.play-app .btn-start-camera,
+body.play-app .btn-import {
+  color: #1f6fa0;
+  border-color: var(--accent-sky);
+  box-shadow: 3px 4px 0 rgba(91, 184, 232, 0.32);
+}
+body.play-app .sketch-btn--photo,
+body.play-app .btn-torch--on {
+  color: #9a6a00;
+  border-color: var(--accent-sun);
+  box-shadow: 3px 4px 0 rgba(255, 207, 63, 0.4);
+}
+body.play-app .sketch-btn--danger,
+body.play-app .btn-cancel,
+body.play-app .btn-secondary {
+  color: #c64f73;
+  border-color: var(--accent-rose);
+  box-shadow: 3px 4px 0 rgba(255, 143, 174, 0.35);
+}
+
+/* ---------------------------------------------------------------------
+   Panneau / carte papier réutilisable
+   ------------------------------------------------------------------- */
+body.play-app .paper-card {
+  background: rgba(255, 253, 248, 0.92);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px 6px 18px 6px / 6px 18px 6px 18px;
+  box-shadow: var(--sticker-shadow-lg);
+  backdrop-filter: blur(1px);
+}
+
+/* ---------------------------------------------------------------------
+   Accueil PLAY
+   ------------------------------------------------------------------- */
+body.play-app .play-home {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  text-align: center;
+}
+body.play-app .play-home-card {
+  max-width: 520px;
+  padding: 36px 32px;
+}
+body.play-app .play-home-title {
+  font-size: clamp(2rem, 7vw, 3.2rem);
+  margin: 0 0 8px;
+  transform: rotate(-2deg);
+}
+body.play-app .play-home-emoji {
+  font-size: clamp(2.4rem, 9vw, 3.6rem);
+  display: block;
+  margin-bottom: 4px;
+}
+body.play-app .play-home-sub {
+  font-size: 1.2rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 8px 0 0;
+}
+
+/* ---------------------------------------------------------------------
+   Menu LIVRE
+   ------------------------------------------------------------------- */
+body.play-app .book-page {
+  min-height: 100vh;
+  padding: 24px 16px 48px;
+}
+body.play-app .book-title {
+  text-align: center;
+  font-size: clamp(1.8rem, 6vw, 3rem);
+  margin: 8px 0 28px;
+  transform: rotate(-1.5deg);
+}
+body.play-app .book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 22px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+body.play-app .book-empty {
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 1.15rem;
+}
+
+body.play-app .vignette {
+  position: relative;
+  cursor: pointer;
+  background: var(--paper-2);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px 8px 18px 8px / 8px 18px 8px 18px;
+  overflow: visible;
+  box-shadow: var(--sticker-shadow);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+body.play-app .vignette:nth-child(odd) { transform: rotate(-1.5deg); }
+body.play-app .vignette:nth-child(even) { transform: rotate(1.5deg); }
+body.play-app .vignette:hover {
+  transform: rotate(0deg) scale(1.04);
+  box-shadow: var(--sticker-shadow-lg);
+  z-index: 2;
+}
+body.play-app .vignette-thumb {
+  aspect-ratio: 1 / 1;
+  border-radius: 16px 6px 16px 6px / 6px 16px 6px 16px;
+  overflow: hidden;
+  background: #f3efe6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+body.play-app .vignette-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+body.play-app .vignette--unscanned .vignette-thumb img {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+body.play-app .vignette-name {
+  font-family: 'Fredoka', sans-serif;
+  padding: 8px 10px 10px;
+  font-size: 1rem;
+  text-align: center;
+  color: var(--ink);
+}
+/* Rond « play » crayonné en overlay */
+body.play-app .vignette-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+body.play-app .vignette-play span {
+  width: 44%;
+  max-width: 70px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.92);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--sticker-shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  font-size: 1.4rem;
+  padding-left: 6px;
+}
+/* Étoile dorée « déjà scanné » */
+body.play-app .vignette-badge {
+  position: absolute;
+  top: -12px;
+  right: -10px;
+  font-size: 2rem;
+  filter: drop-shadow(1px 2px 0 rgba(58, 53, 48, 0.25));
+  transform: rotate(12deg);
+  z-index: 3;
+}
+
+/* ---------------------------------------------------------------------
+   Page scan (machine d'états) — fond papier + doodles partout
+   ------------------------------------------------------------------- */
+body.play-app .scan-page {
+  background: #ffffff var(--bg-dots) repeat fixed;
+}
+
+/* Titre de la page scan : pastille encadrée centrée en haut
+   (identique à .scan-validate-name de l'écran « Tu valides la photo ? ») */
+body.play-app .scan-page > h2 {
+  width: fit-content;
+  max-width: 90%;
+  margin: 12px auto 6px;
+  text-align: center;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(1rem, 4vw, 1.4rem);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 18px;
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  box-shadow: var(--sticker-shadow);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Zone caméra : transparente → la texture pointillée passe derrière.
+   Conseils statiques masqués (l'aide est donnée en temps réel dans l'encadré),
+   donc le contenu est identique caméra inactive/active → on centre sans décalage. */
+body.play-app .camera-capture {
+  background: transparent;
+  justify-content: center;
+  gap: 18px;
+  padding: 8px 12px;
+}
+
+/* La photo / caméra : canvas flottant centré, coins arrondis, contour noir léger */
+body.play-app .camera-square {
+  background: #ffffff;
+  border: 2.5px solid var(--ink);
+  border-radius: 22px;
+  box-shadow: none;
+  margin: 0 auto;
+}
+body.play-app .camera-video {
+  background: transparent;
+}
+
+/* Picto caméra au centre du canvas quand la caméra est inactive */
+body.play-app .camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+  color: rgba(58, 53, 48, 0.4);
+}
+body.play-app .camera-placeholder-icon {
+  width: 30%;
+  max-width: 110px;
+  height: auto;
+}
+body.play-app .camera-placeholder span {
+  font-family: 'Fredoka', sans-serif;
+  font-size: 1.05rem;
+  color: var(--ink-soft);
+}
+
+/* Flèche crayonnée flottante pointant le bouton « Démarrer la caméra » */
+body.play-app .camera-start-wrap {
+  position: relative;
+  display: inline-flex;
+}
+body.play-app .camera-start-arrow {
+  position: absolute;
+  left: 50%;
+  top: -62px;
+  width: 56px;
+  height: 70px;
+  color: var(--ink);
+  pointer-events: none;
+  animation: camera-arrow-bounce 0.9s ease-in-out infinite;
+}
+/* Flèche oblique (tip en bas-droite) qui rebond le long de son axe vers le bouton */
+@keyframes camera-arrow-bounce {
+  0%, 100% { transform: translateX(-78%) rotate(-30deg) translateY(0); }
+  50% { transform: translateX(-78%) rotate(-30deg) translateY(8px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .camera-start-arrow { animation: none; }
+}
+
+/* Conseils statiques masqués : l'aide est donnée en temps réel dans la barre de statut */
+body.play-app .camera-tips {
+  display: none;
+}
+
+/* Conseils + barre de statut → panneaux papier */
+body.play-app .camera-tips {
+  background: rgba(255, 253, 248, 0.92);
+  border: 2.5px solid var(--ink);
+  border-radius: 16px 6px 16px 6px / 6px 16px 6px 16px;
+  box-shadow: var(--sticker-shadow);
+  color: var(--ink);
+  font-size: 1.02rem;
+  line-height: 1.6;
+}
+body.play-app .camera-tips-title {
+  font-family: 'Fredoka', sans-serif;
+  font-size: 1.1rem;
+  color: var(--ink);
+}
+body.play-app .camera-status-bar {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 500;
+  border-radius: 999px;
+}
+
+/* Stage preview « Tu valides la photo ? » : titre + voile adouci */
+body.play-app .scan-validate-title {
+  font-family: 'Fredoka', sans-serif;
+  color: var(--ink) !important;
+  background: rgba(255, 253, 248, 0.9);
+  padding: 8px 20px;
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  box-shadow: var(--sticker-shadow);
+  text-shadow: none !important;
+}
+
+/* Nom du projet conservé en haut sur l'écran « Tu valides la photo ? » */
+body.play-app .scan-validate-name {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 210;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(1rem, 4vw, 1.4rem);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 18px;
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  box-shadow: var(--sticker-shadow);
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Message de traitement / erreur scan */
+body.play-app .scan-status-text {
+  font-family: 'Andika', sans-serif;
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------------
+   Scène / Animation — HUD crayonné + doodle DERRIÈRE le perso
+   ------------------------------------------------------------------- */
+
+/* Cadre du player : fond blanc pointillé au lieu du fond noir */
+body.play-app .animation-player {
+  background: #ffffff var(--bg-dots) repeat;
+}
+body.play-app .scene-player--framed {
+  background: #ffffff var(--bg-dots) repeat;
+}
+/* Canvas PIXI transparent (rendu en backgroundAlpha:0 côté JS) → fond pointillé
+   visible derrière le mesh quand le projet n'a pas de scene.background opaque. */
+body.play-app .animation-canvas,
+body.play-app .scene-player--framed .animation-canvas,
+body.play-app .animation-canvas canvas {
+  background: transparent;
+}
+
+/* ⚙ réglages — pastille papier crayonnée */
+body.play-app .scene-player-settings-btn,
+body.play-app .fullscreen-settings-btn {
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--sticker-shadow);
+  backdrop-filter: none;
+}
+body.play-app .scene-player-settings-btn:hover,
+body.play-app .fullscreen-settings-btn:hover {
+  background: #fff;
+}
+
+/* Boutons d'action 1/2/3 + speak — ronds papier crayonnés */
+body.play-app .scene-player-action-btn {
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--sticker-shadow);
+  backdrop-filter: none;
+}
+body.play-app .scene-player-action-btn .action-btn-label {
+  font-family: 'Fredoka', sans-serif;
+}
+body.play-app .scene-player-action-btn:not(:disabled):hover {
+  background: #fff;
+  transform: translateY(-2px) rotate(-2deg);
+}
+body.play-app .scene-player-action-btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.94);
+}
+/* Anneau de progression → encre menthe */
+body.play-app .action-btn-ring-progress {
+  stroke: var(--accent-mint);
+}
+body.play-app .action-btn-ring-track {
+  stroke: rgba(58, 53, 48, 0.12);
+}
+
+/* Play / Pause + aide — pastilles papier */
+body.play-app .scene-player-playpause,
+body.play-app .scene-player-help-btn,
+body.play-app .scene-player-next-btn {
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--sticker-shadow);
+  backdrop-filter: none;
+}
+body.play-app .scene-player-playpause:hover,
+body.play-app .scene-player-help-btn:not(:disabled):hover,
+body.play-app .scene-player-next-btn:hover {
+  background: #fff;
+}
+/* Bulle d'aide → papier crayonné */
+body.play-app .scene-player-help-bubble {
+  font-family: 'Andika', sans-serif;
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px 6px 18px 6px / 6px 18px 6px 18px;
+  box-shadow: var(--sticker-shadow-lg);
+}
+
+/* Boutons oneshot du player fallback (AnimationPlayer) */
+body.play-app .oneshot-btn {
+  font-family: 'Fredoka', sans-serif !important;
+  background: var(--paper-2) !important;
+  color: var(--ink) !important;
+  border: 2.5px solid var(--ink) !important;
+  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px !important;
+  box-shadow: var(--sticker-shadow) !important;
+  backdrop-filter: none !important;
+}
+
+/* Sidebar de réglages (AnimationPlayer fallback) — accents */
+body.play-app .animation-sidebar-panel {
+  font-family: 'Andika', sans-serif;
+}
+
+/* ---------------------------------------------------------------------
+   États génériques
+   ------------------------------------------------------------------- */
+body.play-app .loading {
+  font-family: 'Fredoka', sans-serif;
+  color: var(--ink);
+}
+body.play-app .play-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  text-align: center;
+}
+body.play-app .play-panel .paper-card {
+  max-width: 480px;
+  padding: 32px 28px;
+}
+body.play-app .play-panel p {
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  body.play-app .book-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 18px;
+  }
+}

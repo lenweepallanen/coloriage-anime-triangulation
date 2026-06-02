@@ -289,7 +289,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
                   : 'Préparation...'}
           </div>
           {processor.error && (
-            <button onClick={handleRetake} style={{ marginTop: 16 }}>
+            <button className="sketch-btn sketch-btn--go" onClick={handleRetake} style={{ marginTop: 16 }}>
               Réessayer
             </button>
           )}
@@ -441,6 +441,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
             onClose={handleRetake}
             previewFrame0
           />
+          <div className="scan-validate-name">{project.name}</div>
           <div
             style={{
               position: 'fixed',
@@ -456,7 +457,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
               background: 'linear-gradient(to top, rgba(0,0,0,0.6), rgba(0,0,0,0))',
             }}
           >
-            <h2 style={{ color: '#fff', margin: 0, textShadow: '0 2px 8px rgba(0,0,0,0.6)' }}>
+            <h2 className="scan-validate-title" style={{ color: '#fff', margin: 0, textShadow: '0 2px 8px rgba(0,0,0,0.6)' }}>
               Tu valides la photo ?
             </h2>
             <div style={{ display: 'flex', gap: 12 }}>

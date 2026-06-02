@@ -503,6 +503,18 @@ export default function CameraView({ onCapture }: Props) {
           </div>
         )}
 
+        {!isCameraActive && document.body.classList.contains('play-app') && (
+          <div className="camera-placeholder" aria-hidden="true">
+            <svg className="camera-placeholder-icon" viewBox="0 0 64 50" fill="none">
+              <rect x="3" y="13" width="58" height="32" rx="7" stroke="currentColor" strokeWidth="3" />
+              <path d="M22 13 l4 -7 h12 l4 7" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" />
+              <circle cx="32" cy="29" r="10" stroke="currentColor" strokeWidth="3" />
+              <circle cx="51" cy="21" r="2" fill="currentColor" />
+            </svg>
+            <span>Prends ton coloriage en photo</span>
+          </div>
+        )}
+
         {showFlash && <div className="camera-flash" />}
       </div>
 
@@ -514,9 +526,17 @@ export default function CameraView({ onCapture }: Props) {
         {!isCameraActive ? (
           <>
             <div className="camera-buttons-row">
-              <button onClick={startCamera} className="btn-start-camera">
-                Demarrer la camera
-              </button>
+              <span className="camera-start-wrap">
+                {document.body.classList.contains('play-app') && (
+                  <svg className="camera-start-arrow" viewBox="0 0 40 50" fill="none" aria-hidden="true">
+                    <path d="M20 4 C12 16 28 25 20 40" stroke="currentColor" strokeWidth="5.5" strokeLinecap="round" />
+                    <path d="M9 30 L20 43 L31 30" stroke="currentColor" strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+                <button onClick={startCamera} className="btn-start-camera">
+                  Demarrer la camera
+                </button>
+              </span>
               <button onClick={() => fileInputRef.current?.click()} className="btn-import">
                 Importer une image
               </button>

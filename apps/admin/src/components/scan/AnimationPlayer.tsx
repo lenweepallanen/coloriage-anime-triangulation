@@ -258,11 +258,15 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     const hasFlow = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
     const hasBgVideo = !!project.backgroundVideoBlob
 
+    // Côté play (body.play-app), canvas transparent → fond doodle de la page visible
+    // derrière le perso quand il n'y a pas de fond vidéo opaque.
+    const transparentBg = document.body.classList.contains('play-app') && !hasBgVideo
     // Create PIXI application
     const app = new PIXI.Application({
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
       backgroundColor: hasBgVideo ? 0x000000 : 0xFFFFFF,
+      backgroundAlpha: transparentBg ? 0 : 1,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     })
@@ -862,6 +866,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
             return (
               <button
                 key={anim.id}
+                className="oneshot-btn"
                 onClick={() => handleOneshotTrigger(anim.id)}
                 disabled={disabled}
                 style={{
