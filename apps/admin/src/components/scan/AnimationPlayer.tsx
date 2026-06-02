@@ -42,9 +42,12 @@ interface Props {
   lamaCanvas?: HTMLCanvasElement | null
   contentAlignment?: ContentAlignment | null
   onClose: () => void
-  /** Mode aperçu de validation (play) : rend le personnage figé à la frame 0,
-   *  sans plein écran, sans contrôles, sans parallaxe/son/interactions. */
+  /** Mode aperçu de validation (play) : cadre sur le personnage, sans plein écran,
+   *  sans contrôles, sans parallaxe/son/interactions. Figé à la frame 0 par défaut. */
   previewFrame0?: boolean
+  /** Aperçu de validation ANIMÉ : on joue la rest loop au lieu de figer la frame 0
+   *  (à combiner avec previewFrame0 pour garder le cadrage/chrome d'aperçu). */
+  previewAnimated?: boolean
 }
 
 // --- Visual effects config ---
@@ -163,7 +166,7 @@ function getAnimationData(project: Project) {
   return { restAnim, readyOneshots }
 }
 
-export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, previewFrame0 }: Props) {
+export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, previewFrame0, previewAnimated }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -533,6 +536,8 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     // Positionne explicitement le bon maillage sur sa frame 0 : meshes de zones pour
     // les projets autonomes (members-bones/walk/marche), sinon le mesh unique legacy
     // (déjà positionné via les vertices initiaux). Le ticker auto de PIXI rend une fois.
+    // On positionne TOUJOURS la frame 0 (perso visible immédiatement). En aperçu ANIMÉ
+    // zone-based, le ticker dédié plus bas prend ensuite le relais.
     if (previewFrame0) {
       const zoneAnimP = walkAnim ?? mbTriangAnim
       const wbf = zoneAnimP?.mesh?.walkBodyFrames
@@ -551,6 +556,46 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
           const f0 = wzf?.[hflm.zoneId]?.[0]
           if (f0) updateZoneMeshVertices(hflm, f0, scale, offsetX, offsetY)
         }
+      }
+    }
+
+    // --- Aperçu ANIMÉ zone-based (rest sans videoFramesMesh) : boucle des frames de
+    // zone (walkBodyFrames/walkZoneFrames) sur les meshes de zone, en rest loop. ---
+    if (previewAnimated && !hasFlow && zoneMeshSetup) {
+      const zAnim = walkAnim ?? mbTriangAnim
+      const wbf = zAnim?.mesh?.walkBodyFrames
+      const wzf = zAnim?.mesh?.walkZoneFrames
+      if (wbf && wbf.length > 0) {
+        pixiMesh.visible = false
+        zoneMeshSetup.container.visible = true
+        const total = wbf.length
+        // Curseur à 24 FPS (= même vitesse que la rest loop), MAIS interpolation
+        // sous-frame entre f0 et f1 comme LoopPlayback → rendu fluide au refresh
+        // écran (60/120 Hz) au lieu de sauter en frames entières (saccade).
+        const FPS = 24
+        let cursor = 0
+        const lerpFrame = (a: Point2D[], b: Point2D[] | undefined, t: number): Point2D[] =>
+          (b && b.length === a.length)
+            ? a.map((p, i) => ({ x: p.x + (b[i].x - p.x) * t, y: p.y + (b[i].y - p.y) * t }))
+            : a
+        app.ticker.add((delta) => {
+          if (!playing) return
+          cursor = (cursor + FPS * (delta / 60)) % total
+          const f0 = Math.floor(cursor)
+          const f1 = (f0 + 1) % total
+          const t = cursor - f0
+          const body = lerpFrame(wbf[f0], wbf[f1], t)
+          for (const zm of zoneMeshSetup!.zoneMeshes) {
+            const z0 = wzf?.[zm.zoneId]?.[f0]
+            if (z0) updateZoneMeshVertices(zm, lerpFrame(z0, wzf?.[zm.zoneId]?.[f1], t), scale, offsetX, offsetY)
+          }
+          updateZoneMeshVertices(zoneMeshSetup!.bodyMesh, body, scale, offsetX, offsetY)
+          for (const hfm of zoneMeshSetup!.hiddenFaceMeshes) updateZoneMeshVertices(hfm, body, scale, offsetX, offsetY)
+          for (const hflm of zoneMeshSetup!.hiddenFaceLimbMeshes) {
+            const z0 = wzf?.[hflm.zoneId]?.[f0]
+            if (z0) updateZoneMeshVertices(hflm, lerpFrame(z0, wzf?.[hflm.zoneId]?.[f1], t), scale, offsetX, offsetY)
+          }
+        })
       }
     }
 
@@ -578,9 +623,9 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     }
 
     // --- Animation loop ---
-    // En aperçu de validation, on ne crée aucune lecture ni ticker : le mesh reste
-    // figé sur la frame 0 (le ticker auto de PIXI rend la scène statique).
-    if (hasFlow && !previewFrame0) {
+    // En aperçu de validation FIGÉ, on ne crée aucune lecture ni ticker (mesh figé
+    // sur la frame 0). En aperçu ANIMÉ, on joue la rest loop comme en lecture normale.
+    if (hasFlow && (!previewFrame0 || previewAnimated)) {
       // Build oneshot animation data for MultiAnimationPlayback
       const oneshotAnims: OneshotAnimation[] = readyOneshots
         .filter(a => a.mesh?.videoFramesMesh)

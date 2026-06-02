@@ -45,6 +45,8 @@ interface Props {
   modal?: boolean
   /** Ouvre le menu réglages/pause (bouton ⚙ en haut de la colonne gauche). */
   onSettings?: () => void
+  /** Quitte la scène et revient au menu LIVRE (bouton « porte » rouge en haut à gauche, play portrait). */
+  onExit?: () => void
 }
 
 function smoothstep(t: number): number {
@@ -52,7 +54,7 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings }: Props) {
+export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -116,17 +118,51 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
   const scene = project.scene!
 
-  // Carte scène (mode play/scan, hors modal) : on dimensionne le canvas EXACTEMENT au
-  // format du fond → scène centrée, coins arrondis, et marge gauche libre pour les boutons.
+  // Mode play : layout PORTRAIT (canvas carré centré, titre + sortie en haut,
+  // boutons 1/2/3 puis ⚙/⏸/? sous le canvas). Pas de plein écran ni de lock
+  // d'orientation (résout les soucis iOS). Détecté via la classe body.play-app.
+  const portrait = !modal && typeof document !== 'undefined' && document.body.classList.contains('play-app')
+
+  // Carte scène (mode play/scan, hors modal) : en play, canvas CARRÉ qui recadre le
+  // fond 16:9 et suit le perso (offset horizontal). En admin/scan paysage, on garde
+  // le format du fond avec une marge gauche pour la colonne de boutons.
   const [cardSize, setCardSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+  // Play horizontal : canvas carré à gauche + HUD à droite (le user choisit en
+  // tournant son téléphone ; pas de lock d'orientation).
+  const [landscape, setLandscape] = useState(false)
   const bgAspectW = scene.background?.width
   const bgAspectH = scene.background?.height
   useEffect(() => {
     if (modal) return
-    const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
-    const PAD = 14
     function compute() {
       const vw = window.innerWidth, vh = window.innerHeight
+      if (portrait) {
+        const isLs = vw > vh
+        setLandscape(isLs)
+        if (isLs) {
+          // Canvas RECTANGULAIRE (ratio de la scène) remplissant les 2/3 GAUCHE ;
+          // le 1/3 DROITE est réservé aux boutons.
+          const PAD = 14
+          const leftW = vw * (2 / 3) - PAD * 2
+          const availH = vh - PAD * 2
+          const aspect = bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9
+          let w = leftW
+          let h = w / aspect
+          if (h > availH) { h = availH; w = h * aspect }
+          setCardSize({ w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) })
+          return
+        }
+        // Bandeau pleine largeur (bord à bord), hauteur ≈ 1/2 de l'écran. Le rendu
+        // « cover » zoome/rogne la vidéo pour remplir ce bandeau (plus haut que le
+        // ratio du fond → rognage gauche/droite, perso centré/suivi). Cap de sécurité
+        // pour garder ~260px aux 2 rangées de boutons + titre sur petits écrans.
+        const w = vw
+        const h = Math.min(Math.round(vh * 0.5), Math.max(180, vh - 260))
+        setCardSize({ w: Math.round(w), h })
+        return
+      }
+      const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
+      const PAD = 14
       const aspect = bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9
       const availW = Math.max(160, vw - SIDEBAR - PAD * 2)
       const availH = Math.max(120, vh - PAD * 2)
@@ -137,7 +173,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     compute()
     window.addEventListener('resize', compute)
     return () => window.removeEventListener('resize', compute)
-  }, [modal, bgAspectW, bgAspectH])
+  }, [modal, portrait, bgAspectW, bgAspectH])
   // Animation idle de la scène : on suit l'animation idle du rest point, sinon fallback.
   const restAnim = getIdleAnimation(project.animations, scene.restPoint?.restAnimationId)
     ?? getGeometryOwner(project.animations)
@@ -153,9 +189,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     animMap.current = map
   }, [project.animations])
 
-  // Enter fullscreen + lock landscape (skip in modal mode)
+  // Enter fullscreen + lock landscape (skip in modal mode et en play portrait :
+  // pas de plein écran / lock d'orientation → évite les soucis iOS).
   useEffect(() => {
-    if (modal) return
+    if (modal || portrait) return
     const el = playerRef.current
     if (!el) return
     let mounted = true
@@ -183,7 +220,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
       try { screen.orientation?.unlock?.() } catch { /* */ }
     }
-  }, [modal])
+  }, [modal, portrait])
 
   // PIXI setup
   useEffect(() => {
@@ -231,8 +268,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     const bg = scene.background
     const fg = scene.foreground
+    // Play (bandeau) : rendu « cover » → le fond remplit toute la largeur ET la
+    // hauteur du canvas (débord rogné), donc plus de vide latéral même si le ratio
+    // du canvas diffère un peu de celui du fond. Admin/modal : calage hauteur (inchangé).
+    const coverFill = document.body.classList.contains('play-app')
     const bgScale = (bg && (bg.imageBlob || bg.videoBlob) && bg.height > 0)
-      ? viewH / bg.height
+      ? (coverFill ? Math.max(viewW / bg.width, viewH / bg.height) : viewH / bg.height)
       : 1
 
     let backgroundSprite: PIXI.Sprite | null = null
@@ -281,7 +322,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       vid.addEventListener('playing', () => tex.update())
       const sprite = new PIXI.Sprite(tex)
       sprite.width = bg.width * bgScale
-      sprite.height = viewH
+      sprite.height = bg.height * bgScale
       bgContainer.addChild(sprite)
       backgroundSprite = sprite
     } else if (bg?.imageBlob) {
@@ -297,7 +338,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const tex = PIXI.Texture.from(canvas)
         const sprite = new PIXI.Sprite(tex)
         sprite.width = bg.width * bgScale
-        sprite.height = viewH
+        sprite.height = bg.height * bgScale
         bgContainer.addChild(sprite)
         backgroundSprite = sprite
       }
@@ -1770,6 +1811,148 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           />
         )}
       </svg>
+    )
+  }
+
+  if (portrait) {
+    // Éléments HUD réutilisés en portrait ET en paysage (canvas à gauche / HUD à droite).
+    const exitBtn = onExit && (
+      <button className="scene-player-exit-btn" onClick={onExit} title="Quitter" aria-label="Quitter">
+        {landscape ? (
+          // Paysage : icône PLEINE (fill) — les traits fins ne se composent pas au-dessus
+          // du <canvas> WebGL sur iOS Safari, les formes pleines si. Cadre de porte + flèche.
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M11 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2.2H6.2V5.2H11V3z" />
+            <path d="M20.5 11.2l-4.2-4.2-1.55 1.55 2.05 2.05H9v2.2h7.8l-2.05 2.05 1.55 1.55 4.2-4.2a1.1 1.1 0 0 0 0-1.55z" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
+            <path d="M10 17l-5-5 5-5" />
+            <path d="M15 12H5" />
+          </svg>
+        )}
+      </button>
+    )
+
+    const actionsRow = (
+      <div
+        className="scene-player-actions-row"
+        style={{
+          opacity: buttonsVisible ? 1 : 0,
+          pointerEvents: isInteraction && !anyActive ? 'auto' : 'none',
+          transition: 'opacity 400ms ease',
+        }}
+      >
+        {actionButtons.map(b => {
+          const id = `action-${b.index}`
+          const isActive = activeBtn === id
+          return (
+            <button
+              key={b.index}
+              className="scene-player-action-btn"
+              onClick={() => handleActionByIndex(b.index)}
+              disabled={!b.enabled || anyActive}
+              aria-label={b.label}
+            >
+              <Ring progress={isActive ? btnProgress : 0} active={isActive} />
+              <span className="action-btn-label">{b.index + 1}</span>
+            </button>
+          )
+        })}
+        {hasSpeakSounds && (
+          <button
+            className="scene-player-action-btn scene-player-action-btn--speak"
+            onClick={handleSpeak}
+            disabled={anyActive}
+            aria-label="Parler"
+          >
+            <Ring progress={activeBtn === 'speak' ? btnProgress : 0} active={activeBtn === 'speak'} />
+            <span className="action-btn-label">💬</span>
+          </button>
+        )}
+      </div>
+    )
+
+    const controlsRow = (
+      <div className="scene-player-controls-row">
+        {onSettings && (
+          <button className="scene-player-settings-btn" onClick={onSettings} title="Réglages" aria-label="Réglages">
+            ⚙
+          </button>
+        )}
+        <button className="scene-player-playpause" onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
+          {playing ? '⏸' : '▶'}
+        </button>
+        {hasHelpTexts && (
+          <button
+            className="scene-player-help-btn"
+            onClick={handleHelp}
+            disabled={anyActive}
+            aria-label="Aide"
+          >
+            <Ring progress={activeBtn === 'help' ? btnProgress : 0} active={activeBtn === 'help'} />
+            <span className="action-btn-label">?</span>
+          </button>
+        )}
+      </div>
+    )
+
+    const helpBubble = showHelpBubble && (
+      <div className="scene-player-help-bubble" onClick={() => setShowHelpBubble(false)}>
+        <p>{currentHelpText}</p>
+      </div>
+    )
+
+    const canvasEl = (
+      <div
+        ref={containerRef}
+        className="animation-canvas"
+        style={cardSize.w ? { width: cardSize.w, height: cardSize.h } : undefined}
+      />
+    )
+
+    // Paysage : canvas carré (bords arrondis) à gauche, colonne titre + boutons à droite.
+    if (landscape) {
+      return (
+        <div className="animation-player scene-player scene-player--framed scene-player--landscape" ref={playerRef}>
+          <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
+          {canvasEl}
+          <div className="scene-player-hud">
+            <div className="scene-player-title">{project.name}</div>
+            {actionsRow}
+            {controlsRow}
+          </div>
+          {helpBubble}
+        </div>
+      )
+    }
+
+    return (
+      <div className="animation-player scene-player scene-player--framed scene-player--portrait" ref={playerRef}>
+        {/* Bouton sortie (porte rouge) : seul, tout en haut à gauche */}
+        <div className="scene-player-exit-row">{exitBtn}</div>
+
+        {/* Espace flexible : pousse le canvas vers le tiers haut */}
+        <div className="scene-player-spacer scene-player-spacer--top" />
+
+        {/* Titre juste au-dessus du canvas */}
+        <div className="scene-player-title">{project.name}</div>
+
+        {/* Canvas carré (≈ tiers haut) */}
+        {canvasEl}
+
+        {/* Boutons d'action 1/2/3 (+ parole) sous le canvas */}
+        {actionsRow}
+
+        {/* Contrôles ⚙ / lecture / aide sous les boutons d'action */}
+        {controlsRow}
+
+        {/* Espace flexible bas : équilibre (canvas reste vers le tiers haut) */}
+        <div className="scene-player-spacer scene-player-spacer--bottom" />
+
+        {helpBubble}
+      </div>
     )
   }
 

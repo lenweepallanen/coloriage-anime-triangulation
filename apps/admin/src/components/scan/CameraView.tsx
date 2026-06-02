@@ -73,9 +73,12 @@ const ISSUE_MESSAGES: Record<QualityIssue, string> = {
 
 interface Props {
   onCapture: (blob: Blob, corners: Point2D[] | null) => void
+  /** Titre affiché dans la colonne droite en mode paysage (masqué en portrait, où
+   *  le titre vient de la pastille .scan-page > h2). */
+  title?: string
 }
 
-export default function CameraView({ onCapture }: Props) {
+export default function CameraView({ onCapture, title }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -118,6 +121,43 @@ export default function CameraView({ onCapture }: Props) {
     ]
   }, [])
 
+  // Choisit l'ID de l'objectif arrière PRINCIPAL (grand-angle), en évitant la
+  // caméra « virtuelle » composite (dual/triple) qui bascule toute seule entre
+  // grand-angle / ultra grand-angle / télé selon la distance de map. C'est cette
+  // bascule auto (mode macro à courte distance) qui fait « sauter » l'image.
+  // Les labels ne sont peuplés qu'après l'octroi de la permission caméra.
+  const pickMainBackCameraId = useCallback(async (): Promise<string | null> => {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) return null
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const videos = devices.filter(d => d.kind === 'videoinput')
+      if (videos.length === 0) return null
+
+      const labelOf = (d: MediaDeviceInfo) => (d.label || '').toLowerCase()
+      const isFront = (l: string) => /front|avant|face|user|selfie/.test(l)
+      const isBack = (l: string) => /back|rear|arri[èe]re|environment|world/.test(l)
+
+      let backs = videos.filter(d => isBack(labelOf(d)))
+      if (backs.length === 0) backs = videos.filter(d => !isFront(labelOf(d)))
+      if (backs.length === 0) backs = videos
+      if (backs.length === 1) return backs[0].deviceId
+
+      // Pénalise les optiques non principales + les capteurs composites virtuels.
+      const penalize = (l: string) =>
+        /ultra|t[ée]l[ée]|telephoto|zoom|dual|triple|depth|profondeur|lidar/.test(l) ? 1 : 0
+      // Bonus pour le grand-angle principal simple ("Back Camera" / "Caméra arrière").
+      const prefer = (l: string) =>
+        /^(back|rear) camera$|cam[ée]ra arri[èe]re/.test(l) ? -1 : 0
+
+      const best = backs
+        .map(d => ({ d, score: penalize(labelOf(d)) + prefer(labelOf(d)) }))
+        .sort((a, b) => a.score - b.score)[0]
+      return best?.d.deviceId || null
+    } catch {
+      return null
+    }
+  }, [])
+
   const startCamera = async () => {
     try {
       // Start loading OpenCV worker in parallel
@@ -125,15 +165,37 @@ export default function CameraView({ onCapture }: Props) {
         console.warn('OpenCV worker load failed:', err)
       })
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment',
-          width: { ideal: 3840 },
-          height: { ideal: 2160 }
-        }
+      const RES = { width: { ideal: 3840 }, height: { ideal: 2160 } }
+
+      // 1. Accès initial → déclenche la permission (et peuple les labels device).
+      let mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', ...RES }
       })
+
+      // 2. Épingle l'objectif principal pour empêcher la bascule d'optique macro.
+      const mainId = await pickMainBackCameraId()
+      const currentId = mediaStream.getVideoTracks()[0]?.getSettings().deviceId
+      if (mainId && mainId !== currentId) {
+        mediaStream.getTracks().forEach(t => t.stop())
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: mainId }, ...RES }
+          })
+        } catch (e) {
+          console.warn('Épinglage objectif principal échoué, retour caméra par défaut:', e)
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', ...RES }
+          })
+        }
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream
+        // iOS Safari : sans muted + play() explicite, l'autoplay d'un flux caméra
+        // est bloqué → la <video> reste blanche bien que le stream tourne.
+        videoRef.current.muted = true
+        videoRef.current.playsInline = true
+        videoRef.current.play().catch(() => { /* autoplay best-effort */ })
         setStream(mediaStream)
         setIsCameraActive(true)
         setError(null)
@@ -484,11 +546,13 @@ export default function CameraView({ onCapture }: Props) {
 
   return (
     <div className="camera-capture">
+      {title && <h2 className="camera-title">{title}</h2>}
       <div className="camera-square">
         <video
           ref={videoRef}
           autoPlay
           playsInline
+          muted
           className="camera-video"
         />
 

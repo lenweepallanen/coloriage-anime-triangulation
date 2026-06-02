@@ -21,8 +21,10 @@ body.play-app {
   --sticker-shadow-lg: 5px 7px 0 rgba(58, 53, 48, 0.16);
   --bg-dots: url('../assets/bg-dots.svg');
 
-  /* Fond blanc + texture pointillée tileable, fixée */
-  background: #ffffff var(--bg-dots) repeat fixed;
+  /* Fond blanc + texture pointillée tileable.
+     NB : pas de background-attachment: fixed → sur iOS Safari un fond fixed casse
+     la composition GPU et rend les <video> (caméra) tout blanc. */
+  background: #ffffff var(--bg-dots) repeat;
   color: var(--ink);
   font-family: 'Andika', 'Segoe UI', sans-serif;
 }
@@ -282,7 +284,7 @@ body.play-app .vignette-badge {
    Page scan (machine d'états) — fond papier + doodles partout
    ------------------------------------------------------------------- */
 body.play-app .scan-page {
-  background: #ffffff var(--bg-dots) repeat fixed;
+  background: #ffffff var(--bg-dots) repeat;
 }
 
 /* Titre de la page scan : pastille encadrée centrée en haut
@@ -321,11 +323,22 @@ body.play-app .camera-square {
   background: #ffffff;
   border: 2.5px solid var(--ink);
   border-radius: 22px;
+  /* PAS d'overflow:hidden ici : sur iOS, clipper une <video> via un conteneur
+     overflow:hidden + border-radius la rend toute blanche. On arrondit donc la
+     vidéo elle-même (clip OK sur l'élément <video>) et on laisse le conteneur libre. */
+  overflow: visible;
   box-shadow: none;
   margin: 0 auto;
 }
-body.play-app .camera-video {
+body.play-app .camera-video,
+body.play-app .camera-guide-overlay {
   background: transparent;
+  border-radius: 19px;
+}
+/* Barre de statut : suit l'arrondi du conteneur (haut) */
+body.play-app .camera-status-bar {
+  border-top-left-radius: 19px;
+  border-top-right-radius: 19px;
 }
 
 /* Picto caméra au centre du canvas quand la caméra est inactive */
@@ -435,6 +448,27 @@ body.play-app .scan-validate-name {
   text-overflow: ellipsis;
 }
 
+/* Barre de validation « Tu valides la photo ? » (ex-styles inline) :
+   en bas, centrée, dégradé sombre pour détacher du coloriage. */
+body.play-app .scan-validate-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
+}
+body.play-app .scan-validate-title { margin: 0; }
+body.play-app .scan-validate-actions {
+  display: flex;
+  gap: 12px;
+}
+
 /* Message de traitement / erreur scan */
 body.play-app .scan-status-text {
   font-family: 'Andika', sans-serif;
@@ -497,7 +531,7 @@ body.play-app .action-btn-ring-progress {
   stroke: var(--accent-mint);
 }
 body.play-app .action-btn-ring-track {
-  stroke: rgba(58, 53, 48, 0.12);
+  stroke: transparent;
 }
 
 /* Play / Pause + aide — pastilles papier */
@@ -572,4 +606,387 @@ body.play-app .play-panel p {
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     gap: 18px;
   }
+}
+
+/* =====================================================================
+   Scène play en PORTRAIT : canvas carré centré, titre + sortie en haut,
+   boutons 1/2/3 puis ⚙/⏸/? sous le canvas. Pas de plein écran ni de lock
+   d'orientation (fiable sur iOS). Activé par la classe scene-player--portrait.
+   ===================================================================== */
+body.play-app .scene-player--portrait {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(8px, 1.8vmin, 14px);
+  /* Pas de padding latéral : le canvas-bandeau va bord à bord. Les rangées de
+     boutons et la ligne sortie portent leur propre marge horizontale. */
+  padding: calc(8px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom));
+  overflow-x: hidden;
+  background: #ffffff var(--bg-dots) repeat;
+}
+
+/* Ligne du bouton sortie : seule, tout en haut (porte rouge à gauche) */
+body.play-app .scene-player-exit-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+/* Espaces flexibles : positionnent le canvas vers le tiers haut (1 part au-dessus,
+   ~1.7 part en dessous → bloc titre+canvas dans le tiers supérieur). */
+body.play-app .scene-player-spacer {
+  width: 1px;
+  pointer-events: none;
+}
+body.play-app .scene-player-spacer--top { flex: 1 1 0; min-height: 4px; }
+body.play-app .scene-player-spacer--bottom { flex: 1.7 1 0; min-height: 8px; }
+body.play-app .scene-player-title {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.4rem, 5.5vw, 2.1rem);
+  color: var(--ink);
+  text-shadow: 0 2px 6px rgba(255, 255, 255, 0.6);
+  padding: 0;
+  margin-bottom: clamp(8px, 2.5vw, 18px);
+  max-width: 80%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Bouton sortie : porte rouge, dans sa ligne propre tout en haut à gauche */
+body.play-app .scene-player-exit-btn {
+  position: static;
+  width: clamp(58px, 15vw, 74px);
+  height: clamp(58px, 15vw, 74px);
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2.5px solid #d83a3a;
+  color: #d83a3a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--sticker-shadow);
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+body.play-app .scene-player-exit-btn:hover { background: #fff5f5; }
+body.play-app .scene-player-exit-btn:active { transform: scale(0.93); }
+body.play-app .scene-player-exit-btn svg { width: 100%; height: 100%; }
+
+/* Canvas-bandeau : pleine largeur bord à bord, contour noir EN HAUT et EN BAS
+   uniquement (pas de bords gauche/droit, pas d'arrondi). */
+body.play-app .scene-player--portrait .animation-canvas {
+  flex: 0 0 auto;
+  border: none;
+  border-top: 2.5px solid var(--ink);
+  border-bottom: 2.5px solid var(--ink);
+  border-radius: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Rangées de boutons sous le canvas */
+body.play-app .scene-player-actions-row,
+body.play-app .scene-player-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 3.4vw, 20px);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+/* Contrôles ⚙ / ⏸ remis dans le flux (plus d'absolute du layout plein écran) */
+body.play-app .scene-player--portrait .scene-player-settings-btn,
+body.play-app .scene-player--portrait .scene-player-playpause {
+  position: static;
+  top: auto;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  transform: none;
+}
+/* Aide : relative (pour son anneau), sans offsets plein écran */
+body.play-app .scene-player--portrait .scene-player-help-btn {
+  position: relative;
+  inset: auto;
+  transform: none;
+}
+
+/* Tailles portrait */
+body.play-app .scene-player--portrait .scene-player-action-btn {
+  width: clamp(52px, 16vw, 84px);
+  height: clamp(52px, 16vw, 84px);
+}
+/* Rangée 1/2/3 descendue d'un cran sous le canvas */
+body.play-app .scene-player--portrait .scene-player-actions-row {
+  margin-top: clamp(6px, 2vw, 14px);
+}
+body.play-app .scene-player--portrait .scene-player-settings-btn,
+body.play-app .scene-player--portrait .scene-player-playpause,
+body.play-app .scene-player--portrait .scene-player-help-btn {
+  width: clamp(46px, 13vw, 66px);
+  height: clamp(46px, 13vw, 66px);
+  font-size: clamp(1.1rem, 4.5vw, 1.6rem);
+}
+
+/* Bulle d'aide centrée au-dessus des contrôles */
+body.play-app .scene-player--portrait .scene-player-help-bubble {
+  left: 50%;
+  right: auto;
+  top: auto;
+  bottom: clamp(80px, 22vw, 140px);
+  transform: translateX(-50%);
+}
+
+/* =====================================================================
+   Boutons du HUD scène (rendu) : cercles « dessinés main » au lieu de
+   cercles parfaits, pour coller au style coloriage du reste de l'app.
+   Bord organique (border-radius irrégulier) + léger angle, variation par
+   bouton pour casser la répétition. (Le bord encre + l'ombre sticker sont
+   déjà appliqués plus haut.)
+   ===================================================================== */
+body.play-app .scene-player-action-btn,
+body.play-app .scene-player-settings-btn,
+body.play-app .scene-player-playpause,
+body.play-app .scene-player-help-btn,
+body.play-app .scene-player-next-btn,
+body.play-app .scene-player-exit-btn {
+  border-radius: 41% 59% 57% 43% / 58% 42% 54% 46%;
+}
+/* Variations par bouton (tremblé accentué) */
+body.play-app .scene-player-actions-row .scene-player-action-btn:nth-child(2) {
+  border-radius: 60% 40% 45% 55% / 42% 58% 46% 54%;
+}
+body.play-app .scene-player-actions-row .scene-player-action-btn:nth-child(3) {
+  border-radius: 50% 50% 61% 39% / 56% 44% 47% 53%;
+}
+body.play-app .scene-player-actions-row .scene-player-action-btn:nth-child(4) {
+  border-radius: 44% 56% 50% 50% / 50% 50% 59% 41%;
+}
+body.play-app .scene-player-controls-row .scene-player-playpause {
+  border-radius: 57% 43% 47% 53% / 41% 59% 45% 55%;
+}
+body.play-app .scene-player-controls-row .scene-player-help-btn {
+  border-radius: 45% 55% 60% 40% / 54% 46% 58% 42%;
+}
+body.play-app .scene-player-exit-btn {
+  border-radius: 43% 57% 54% 46% / 60% 40% 47% 53%;
+}
+
+/* =====================================================================
+   PLAY HORIZONTAL (responsive, sans lock d'orientation)
+   Le user choisit en tournant son téléphone. En paysage : canvas à GAUCHE,
+   HUD (titre + boutons empilés) à DROITE — sur les 3 écrans (scan / validation
+   / scène). Le portrait reste inchangé.
+   ===================================================================== */
+
+/* ---- 1) Écran SCAN (caméra) ---- */
+/* Titre interne à CameraView : masqué en portrait (la pastille .scan-page > h2 sert),
+   affiché en paysage dans la colonne droite. */
+body.play-app .camera-title { display: none; }
+
+@media (orientation: landscape) {
+  /* Hauteur visible réelle (exclut la barre d'URL Safari) → pas de découpe basse */
+  body.play-app .scan-page { height: 100svh; }
+  /* En paysage on masque la pastille du haut : le titre passe dans la colonne droite */
+  body.play-app .scan-page > h2 { display: none; }
+
+  /* Écran splitté en 2 moitiés : GAUCHE = carré caméra centré ; DROITE = titre +
+     boutons centrés. */
+  body.play-app .camera-capture {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr auto auto 1fr;
+    grid-template-areas:
+      "square ."
+      "square title"
+      "square buttons"
+      "square .";
+    align-items: center;
+    justify-items: center;
+    gap: 0;
+    padding: 10px;
+    height: 100%;
+  }
+  body.play-app .camera-square {
+    grid-area: square;
+    /* Largeur ET hauteur explicites (pas seulement via aspect-ratio) : sinon la
+       piste grid se réduit à 0 et le canvas disparaît. Taille = carré tenant dans
+       la moitié gauche. */
+    width: min(86svh, 44vw);
+    height: min(86svh, 44vw);
+    max-width: none;
+    flex: none;
+  }
+  /* Titre dans la colonne droite, juste au-dessus des boutons */
+  body.play-app .camera-title {
+    display: block;
+    grid-area: title;
+    align-self: end;
+    justify-self: center;
+    width: 100%;
+    max-width: 340px;
+    margin: 0 0 12px;
+    text-align: center;
+    font-family: 'Fredoka', sans-serif;
+    font-weight: 600;
+    font-size: clamp(0.95rem, 2.4vh, 1.25rem);
+    color: var(--ink);
+    background: rgba(255, 255, 255, 0.9);
+    padding: 6px 16px;
+    border: 2.5px solid var(--ink);
+    border-radius: 999px;
+    box-shadow: var(--sticker-shadow);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-sizing: border-box;
+  }
+  body.play-app .camera-buttons {
+    grid-area: buttons;
+    align-self: start;
+    justify-self: center;
+    width: 100%;
+    max-width: 340px;
+    margin-top: 0;
+  }
+  body.play-app .camera-buttons-row {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  /* Boutons de même largeur (toute la largeur de la colonne plafonnée).
+     « Démarrer » est enveloppé dans .camera-start-wrap → on étire aussi le wrapper
+     et le bouton interne. */
+  body.play-app .camera-buttons-row > * {
+    width: 100%;
+  }
+  body.play-app .camera-start-wrap {
+    display: flex;
+  }
+  body.play-app .camera-start-wrap > .btn-start-camera {
+    width: 100%;
+  }
+  /* Boîte d'erreur éventuelle : reste dans la colonne droite */
+  body.play-app .camera-error-box {
+    grid-area: buttons;
+    align-self: end;
+  }
+}
+
+/* ---- 2) Écran VALIDATION (« Tu valides la photo ? ») ---- */
+/* Piloté par la classe React .scan-validate--landscape (état orientation JS).
+   Écran splitté en 2 moitiés : GAUCHE = coloriage animé (centré dans sa moitié) ;
+   DROITE = nom + texte + boutons centrés. */
+body.play-app .scan-validate--landscape .animation-player--preview {
+  left: 0;
+  right: auto;
+  width: 50%;
+}
+body.play-app .scan-validate--landscape .scan-validate-name {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 75%;
+  right: auto;
+  transform: translateX(-50%);
+  max-width: 46vw;
+}
+body.play-app .scan-validate--landscape .scan-validate-bar {
+  left: 50%;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(16px, 3vh, 28px);
+  padding: 16px clamp(12px, 2vw, 28px);
+  background: none;
+}
+
+/* ---- 3) Écran SCÈNE : classe React .scene-player--landscape ---- */
+/* Splittée : 2/3 GAUCHE = canvas carré centré ; 1/3 DROITE = titre + boutons centrés. */
+body.play-app .scene-player--landscape {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  align-items: center;
+  justify-items: center;
+  gap: 0;
+  padding: 12px;
+  overflow: hidden;
+  background: #ffffff var(--bg-dots) repeat;
+}
+body.play-app .scene-player--landscape .animation-canvas {
+  flex: 0 0 auto;
+  border: 3px solid var(--ink);
+  border-radius: 24px;
+  box-shadow: var(--sticker-shadow);
+  overflow: hidden;
+}
+body.play-app .scene-player--landscape .animation-canvas canvas {
+  border-radius: 21px;
+}
+/* Colonne HUD à droite : titre puis boutons empilés */
+body.play-app .scene-player-hud {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 2.6vh, 26px);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+body.play-app .scene-player--landscape .scene-player-title {
+  margin-bottom: 0;
+}
+/* Boutons d'action / contrôles : tailles adaptées à la hauteur en paysage */
+body.play-app .scene-player--landscape .scene-player-action-btn {
+  width: clamp(50px, 12vh, 84px);
+  height: clamp(50px, 12vh, 84px);
+}
+body.play-app .scene-player--landscape .scene-player-settings-btn,
+body.play-app .scene-player--landscape .scene-player-playpause,
+body.play-app .scene-player--landscape .scene-player-help-btn {
+  width: clamp(44px, 10vh, 66px);
+  height: clamp(44px, 10vh, 66px);
+  font-size: clamp(1.1rem, 3.4vh, 1.6rem);
+}
+body.play-app .scene-player--landscape .scene-player-actions-row,
+body.play-app .scene-player--landscape .scene-player-controls-row {
+  margin-top: 0;
+  padding: 0;
+}
+/* Bouton sortie (porte) : overlay en haut à gauche en paysage, plus petit.
+   translateZ(0) + isolation : le promeut sur sa propre couche de compositing au-dessus
+   du <canvas> WebGL — sinon, bug iOS Safari : les traits SVG fins ne se composent pas
+   par-dessus la couche GPU du canvas (le fond blanc + la bordure rouge, eux, s'affichent
+   → on voyait le cercle mais pas la porte). */
+body.play-app .scene-player-exit-row--ls {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  left: calc(10px + env(safe-area-inset-left));
+  width: auto;
+  z-index: 30;
+  transform: translateZ(0);
+  isolation: isolate;
+}
+body.play-app .scene-player--landscape .scene-player-exit-btn {
+  width: clamp(38px, 8.5vh, 52px);
+  height: clamp(38px, 8.5vh, 52px);
+}
+/* Icône porte : taille explicite (px) plutôt que % pour éviter tout souci de
+   résolution de hauteur SVG en flex sur Safari. */
+body.play-app .scene-player--landscape .scene-player-exit-btn svg {
+  width: clamp(20px, 4.6vh, 30px);
+  height: clamp(20px, 4.6vh, 30px);
 }

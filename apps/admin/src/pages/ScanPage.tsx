@@ -64,18 +64,24 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   const bookId = searchParams.get('book')
   const [paused, setPaused] = useState(false)
 
-  // Orientation : en play, la scène se joue en PAYSAGE (rendu natif = desktop).
-  // En portrait on affiche un overlay « tourne ton téléphone » et on ne monte pas
-  // le player (pour qu'il s'initialise toujours avec des dimensions paysage).
-  const [isPortrait, setIsPortrait] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia('(orientation: portrait)').matches
+  // Orientation responsive : on ne verrouille PAS l'orientation (cf. soucis iOS) ;
+  // le layout s'adapte au choix du user (téléphone vertical → portrait, horizontal
+  // → canvas à gauche + HUD à droite). Sert aussi de clé de remount pour refit PIXI.
+  const [landscape, setLandscape] = useState(
+    typeof window !== 'undefined' && window.matchMedia?.('(orientation: landscape)').matches
   )
   useEffect(() => {
-    const mq = window.matchMedia('(orientation: portrait)')
-    const handler = (e: MediaQueryListEvent) => setIsPortrait(e.matches)
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(orientation: landscape)')
+    const onChange = () => setLandscape(mq.matches)
+    mq.addEventListener?.('change', onChange)
+    window.addEventListener('resize', onChange)
+    return () => {
+      mq.removeEventListener?.('change', onChange)
+      window.removeEventListener('resize', onChange)
+    }
   }, [])
+
   function handleBack() {
     if (bookId) navigate(`/livre/${bookId}`)
     else navigate(-1)
@@ -265,7 +271,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       {stage !== 'animation' && stage !== 'preview' && <h2>{project.name} — Mode Coloriage</h2>}
 
       {stage === 'camera' && (
-        <CameraView onCapture={onCameraCapture} />
+        <CameraView onCapture={onCameraCapture} title={`${project.name} — Mode Coloriage`} />
       )}
 
       {stage === 'adjust' && capturedBlob && (
@@ -432,35 +438,22 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       )}
 
       {stage === 'preview' && processor.rectifiedCanvas && (
-        <>
+        <div className={`scan-validate${landscape ? ' scan-validate--landscape' : ''}`}>
           <AnimationPlayer
+            // Remount au changement d'orientation → PIXI refit la nouvelle taille de conteneur
+            key={landscape ? 'ls' : 'pt'}
             project={project}
             scanCanvas={processor.rectifiedCanvas}
             lamaCanvas={lamaCanvas}
             contentAlignment={processor.contentAlignment}
             onClose={handleRetake}
             previewFrame0
+            previewAnimated
           />
           <div className="scan-validate-name">{project.name}</div>
-          <div
-            style={{
-              position: 'fixed',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              zIndex: 200,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 16,
-              padding: '24px 16px calc(24px + env(safe-area-inset-bottom))',
-              background: 'linear-gradient(to top, rgba(0,0,0,0.6), rgba(0,0,0,0))',
-            }}
-          >
-            <h2 className="scan-validate-title" style={{ color: '#fff', margin: 0, textShadow: '0 2px 8px rgba(0,0,0,0.6)' }}>
-              Tu valides la photo ?
-            </h2>
-            <div style={{ display: 'flex', gap: 12 }}>
+          <div className="scan-validate-bar">
+            <h2 className="scan-validate-title">Tu valides la photo ?</h2>
+            <div className="scan-validate-actions">
               <button
                 className="btn-primary btn-lg"
                 onClick={() => setStage('animation')}
@@ -473,19 +466,14 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
               </button>
             </div>
           </div>
-        </>
+        </div>
       )}
 
-      {/* Play + portrait : on demande de tourner le téléphone (la scène se joue en paysage,
-          rendu natif identique au desktop). Le player n'est pas monté tant qu'on est en
-          portrait, pour qu'il s'initialise avec les bonnes dimensions paysage. */}
-      {stage === 'animation' && mode === 'play' && isPortrait && (
-        <RotateDeviceHint />
-      )}
-
-      {stage === 'animation' && !(mode === 'play' && isPortrait) && (
+      {/* Play : la scène se joue désormais en PORTRAIT (canvas carré, pas de plein
+          écran ni de lock d'orientation → fiable sur iOS). Plus de RotateDeviceHint. */}
+      {stage === 'animation' && (
         <>
-          {/* En scène, le ⚙ est intégré dans la colonne gauche du ScenePlayer (onSettings).
+          {/* En scène, le ⚙ est intégré dans le ScenePlayer (onSettings).
               Le bouton standalone n'est gardé que pour le fallback AnimationPlayer. */}
           {!(project.scene && project.scene.background && project.scene.restPoint != null) && (
             <SettingsButton onClick={() => setPaused(true)} />
@@ -500,7 +488,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
         </>
       )}
 
-      {stage === 'animation' && !(mode === 'play' && isPortrait) && processor.rectifiedCanvas && (
+      {stage === 'animation' && processor.rectifiedCanvas && (
         // Choix du player basé sur la STRUCTURE de la scène (dispo dès la phase 1),
         // pas sur la présence du blob de fond (chargé en différé). Sinon, en play,
         // on tombe à tort sur AnimationPlayer (mauvais HUD + perso non rendu) tant
@@ -514,6 +502,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
               contentAlignment={processor.contentAlignment}
               onClose={handleRetake}
               onSettings={() => setPaused(true)}
+              onExit={handleBack}
             />
           : <AnimationPlayer
               project={project}
@@ -527,16 +516,3 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   )
 }
 
-/** Overlay plein écran « tourne ton téléphone » affiché en portrait (mode play). */
-function RotateDeviceHint() {
-  return (
-    <div className="rotate-device-hint">
-      <svg className="rotate-device-hint__icon" width="84" height="84" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="7" y="2" width="10" height="20" rx="2" />
-        <path d="M11 18h2" />
-      </svg>
-      <div className="rotate-device-hint__text">Tourne ton téléphone</div>
-      <div className="rotate-device-hint__sub">pour jouer en plein écran 🦖</div>
-    </div>
-  )
-}
