@@ -287,35 +287,6 @@ export default function SceneEditor({ project, onSave }: Props) {
     })
   }, [])
 
-  const handleSpeakSoundImport = useCallback((file: File) => {
-    const id = crypto.randomUUID()
-    const name = file.name
-    const blob = file as Blob
-    setScene(prev => ({
-      ...prev,
-      speakSounds: [...prev.speakSounds, { id, name }],
-      speakSoundBlobs: [...prev.speakSoundBlobs, blob],
-    }))
-    pendingSpeakHintsRef.current.push({ speakSoundId: id })
-  }, [])
-
-  const handleSpeakSoundDelete = useCallback((soundId: string) => {
-    setScene(prev => {
-      const idx = prev.speakSounds.findIndex(s => s.id === soundId)
-      if (idx < 0) return prev
-      return {
-        ...prev,
-        speakSounds: prev.speakSounds.filter(s => s.id !== soundId),
-        speakSoundBlobs: prev.speakSoundBlobs.filter((_, i) => i !== idx),
-        restPoint: {
-          ...prev.restPoint,
-          speakSoundIds: prev.restPoint.speakSoundIds?.filter(id => id !== soundId),
-        },
-      }
-    })
-    pendingSpeakHintsRef.current.push({ deleteSpeakSoundId: soundId })
-  }, [])
-
   const handleSceneSoundImported = useCallback((soundId: string) => {
     pendingSpeakHintsRef.current.push({ sceneSoundId: soundId })
   }, [])
@@ -705,10 +676,6 @@ export default function SceneEditor({ project, onSave }: Props) {
           animations={project.animations}
           bodyZones={project.bodyZones ?? []}
           onRestPointChange={handleRestPointChange}
-          speakSounds={scene.speakSounds}
-          speakSoundBlobs={scene.speakSoundBlobs}
-          onSpeakSoundImport={handleSpeakSoundImport}
-          onSpeakSoundDelete={handleSpeakSoundDelete}
           onSceneSoundImported={handleSceneSoundImported}
           onSceneSoundDeleted={handleSceneSoundDeleted}
         />

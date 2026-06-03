@@ -756,8 +756,10 @@ export interface SceneRestPoint {
   id: string;
   backgroundX: number;
   restAnimationId?: string;
-  /** Actions disponibles (séquences) déclenchées par le bouton ☆. */
+  /** Bouton ACTION (logo étoile). On n'utilise que `actions[0]` (séquence unique). */
   actions?: SceneAction[];
+  /** Boutons « Discours » (1, 2, 3) — mêmes séquences que les actions. Max 3. */
+  speeches?: SceneAction[];
   /** @deprecated legacy lecture-seule, migré vers `actions` à la lecture. */
   randomAnimationIds?: string[];
   /** @deprecated legacy lecture-seule. */

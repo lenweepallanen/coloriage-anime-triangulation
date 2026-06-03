@@ -205,8 +205,10 @@ interface SceneRestPointDoc {
   id: string
   backgroundX: number
   restAnimationId?: string
-  /** Actions (séquences) déclenchables par le bouton ☆. */
+  /** Bouton ACTION (étoile) — séquence unique (`actions[0]`). */
   actions?: SceneActionDoc[]
+  /** Boutons « Discours » (1, 2, 3) — mêmes séquences que les actions. */
+  speeches?: SceneActionDoc[]
   /** @deprecated legacy lecture-seule, migré vers `actions`. */
   randomAnimationIds?: string[]
   /** @deprecated legacy lecture-seule. */
@@ -409,7 +411,7 @@ function collectSceneSoundIds(scene: Scene | null | undefined): string[] {
   if (scene.ambientSound) ids.add(scene.ambientSound.id)
   const rp = scene.restPoint
   if (rp) {
-    for (const a of rp.actions ?? []) {
+    for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? [])]) {
       if (a.sound) ids.add(a.sound.id)
       for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
     }
@@ -425,7 +427,7 @@ function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
   if (scene.ambientSound?.id === soundId && scene.ambientSound.blob) return scene.ambientSound.blob
   const rp = scene.restPoint
   if (!rp) return null
-  for (const a of rp.actions ?? []) {
+  for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? [])]) {
     if (a.sound?.id === soundId && a.sound.blob) return a.sound.blob
     for (const s of a.steps ?? []) {
       if (s.sound?.id === soundId && s.sound.blob) return s.sound.blob
@@ -898,23 +900,23 @@ function sceneSoundMetaToDoc(s: { id: string; name: string; volume?: number }): 
 }
 
 function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRestPointDoc {
+  const actionToDoc = (a: import('../types/project').SceneAction): SceneActionDoc => ({
+    id: a.id,
+    name: a.name,
+    steps: a.steps.map(s => ({
+      animationId: s.animationId,
+      ...(s.sound != null && { sound: sceneSoundMetaToDoc(s.sound) }),
+      ...(s.isSpoken && { isSpoken: true }),
+    })),
+    ...(a.sound != null && { sound: sceneSoundMetaToDoc(a.sound) }),
+    ...(a.isSpoken && { isSpoken: true }),
+  })
   return {
     id: rp.id,
     backgroundX: rp.backgroundX,
     ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
-    ...(rp.actions != null && rp.actions.length > 0 && {
-      actions: rp.actions.map(a => ({
-        id: a.id,
-        name: a.name,
-        steps: a.steps.map(s => ({
-          animationId: s.animationId,
-          ...(s.sound != null && { sound: sceneSoundMetaToDoc(s.sound) }),
-          ...(s.isSpoken && { isSpoken: true }),
-        })),
-        ...(a.sound != null && { sound: sceneSoundMetaToDoc(a.sound) }),
-        ...(a.isSpoken && { isSpoken: true }),
-      })),
-    }),
+    ...(rp.actions != null && rp.actions.length > 0 && { actions: rp.actions.map(actionToDoc) }),
+    ...(rp.speeches != null && rp.speeches.length > 0 && { speeches: rp.speeches.map(actionToDoc) }),
     ...(rp.zoneAnimationMappings != null && rp.zoneAnimationMappings.length > 0 && { zoneAnimationMappings: rp.zoneAnimationMappings }),
     ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
     ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
@@ -1311,7 +1313,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     if (projDoc.scene.ambientSound) ids.add(projDoc.scene.ambientSound.id)
     const rpDoc = projDoc.scene.restPoint ?? projDoc.scene.restPoints?.[0]
     if (rpDoc) {
-      for (const a of rpDoc.actions ?? []) {
+      for (const a of [...(rpDoc.actions ?? []), ...(rpDoc.speeches ?? [])]) {
         if (a.sound) ids.add(a.sound.id)
         for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
       }
@@ -1332,7 +1334,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
    * créer une action 1-étape par animation, avec le 1ᵉʳ son legacy comme son d'action.
    */
   const docToRestPoint = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
-    let actions = rp.actions?.map(a => {
+    const docToAction = (a: SceneActionDoc): import('../types/project').SceneAction => {
       // Migration intra-action : ancien format `animationIds: string[]` → `steps`.
       const steps = a.steps
         ? a.steps.map(s => ({
@@ -1348,7 +1350,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, blob: sceneSoundBlobs.get(a.sound.id) ?? null } }),
         ...(a.isSpoken && { isSpoken: true }),
       }
-    })
+    }
+    let actions = rp.actions?.map(docToAction)
     if (!actions || actions.length === 0) {
       const legacyIds = rp.randomAnimationIds ?? rp.availableAnimationIds ?? []
       if (legacyIds.length > 0) {
@@ -1357,7 +1360,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
           return {
             id: crypto.randomUUID(),
             name: `Action ${i + 1}`,
-            steps: [{ animationId }],
+            steps: [{ animationId: animId }],
             ...(legacySound && {
               sound: { id: legacySound.id, name: legacySound.name, volume: legacySound.volume, blob: sceneSoundBlobs.get(legacySound.id) ?? null },
             }),
@@ -1365,11 +1368,18 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         })
       }
     }
+    let speeches = rp.speeches?.map(docToAction)
+    // Migration 3-boutons → 1 ACTION + Discours : si pas de `speeches`, le reste des actions devient les discours.
+    if (speeches == null && actions && actions.length > 1) {
+      speeches = actions.slice(1)
+      actions = actions.slice(0, 1)
+    }
     return {
       id: rp.id,
       backgroundX: rp.backgroundX,
       ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
       ...(actions && actions.length > 0 && { actions }),
+      ...(speeches && speeches.length > 0 && { speeches }),
       ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
       ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
       ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
@@ -2312,7 +2322,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       : null
 
     const docToRestPointEssentials = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
-      let actions = rp.actions?.map(a => {
+      const docToAction = (a: SceneActionDoc): import('../types/project').SceneAction => {
         const steps = a.steps
           ? a.steps.map(s => ({
               animationId: s.animationId,
@@ -2327,7 +2337,8 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
           ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, blob: null } }),
           ...(a.isSpoken && { isSpoken: true }),
         }
-      })
+      }
+      let actions = rp.actions?.map(docToAction)
       if (!actions || actions.length === 0) {
         const legacyIds = rp.randomAnimationIds ?? rp.availableAnimationIds ?? []
         if (legacyIds.length > 0) {
@@ -2336,17 +2347,24 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
             return {
               id: crypto.randomUUID(),
               name: `Action ${i + 1}`,
-              steps: [{ animationId }],
+              steps: [{ animationId: animId }],
               ...(legacySound && { sound: { id: legacySound.id, name: legacySound.name, volume: legacySound.volume, blob: null } }),
             }
           })
         }
+      }
+      let speeches = rp.speeches?.map(docToAction)
+      // Migration 3-boutons → 1 ACTION + Discours : si pas de `speeches`, le reste des actions devient les discours.
+      if (speeches == null && actions && actions.length > 1) {
+        speeches = actions.slice(1)
+        actions = actions.slice(0, 1)
       }
       return {
         id: rp.id,
         backgroundX: rp.backgroundX,
         ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
         ...(actions && actions.length > 0 && { actions }),
+        ...(speeches && speeches.length > 0 && { speeches }),
         ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
         ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
         ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
@@ -2482,7 +2500,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     if (scene.ambientSound) soundIds.add(scene.ambientSound.id)
     const rp = scene.restPoint
     if (rp) {
-      for (const a of rp.actions ?? []) {
+      for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? [])]) {
         if (a.sound) soundIds.add(a.sound.id)
         for (const s of a.steps ?? []) if (s.sound) soundIds.add(s.sound.id)
       }
@@ -2491,6 +2509,14 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     const ids = [...soundIds]
     const sceneSoundBlobs = await Promise.all(ids.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`).catch(() => null)))
     const sceneSoundMap = new Map(ids.map((sid, i) => [sid, sceneSoundBlobs[i]]))
+    const hydrateActionBlobs = (a: import('../types/project').SceneAction): import('../types/project').SceneAction => ({
+      ...a,
+      ...(a.sound != null && { sound: { ...a.sound, blob: sceneSoundMap.get(a.sound.id) ?? a.sound.blob ?? null } }),
+      steps: a.steps.map(s => ({
+        ...s,
+        ...(s.sound != null && { sound: { ...s.sound, blob: sceneSoundMap.get(s.sound.id) ?? s.sound.blob ?? null } }),
+      })),
+    })
 
     scene = {
       ...scene,
@@ -2513,14 +2539,10 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
       restPoint: {
         ...scene.restPoint,
         ...(scene.restPoint.actions != null && {
-          actions: scene.restPoint.actions.map(a => ({
-            ...a,
-            ...(a.sound != null && { sound: { ...a.sound, blob: sceneSoundMap.get(a.sound.id) ?? a.sound.blob ?? null } }),
-            steps: a.steps.map(s => ({
-              ...s,
-              ...(s.sound != null && { sound: { ...s.sound, blob: sceneSoundMap.get(s.sound.id) ?? s.sound.blob ?? null } }),
-            })),
-          })),
+          actions: scene.restPoint.actions.map(hydrateActionBlobs),
+        }),
+        ...(scene.restPoint.speeches != null && {
+          speeches: scene.restPoint.speeches.map(hydrateActionBlobs),
         }),
       },
       speakSoundBlobs,

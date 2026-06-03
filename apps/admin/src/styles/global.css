@@ -3342,6 +3342,17 @@ code {
   user-select: none;
 }
 
+/* Bouton ACTION : étoile dorée pour le distinguer des Discours numérotés. */
+.scene-player-action-btn--star {
+  color: #f59e0b;
+}
+
+.action-btn-star {
+  display: block;
+  width: 1.6em;
+  height: 1.6em;
+}
+
 .action-btn-ring {
   position: absolute;
   inset: 0;

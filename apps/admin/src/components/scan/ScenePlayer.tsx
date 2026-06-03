@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneActionStep } from '../../types/project'
+import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneAction, type SceneActionStep } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -82,7 +82,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     btnRafRef.current = requestAnimationFrame(tick)
   }, [])
   useEffect(() => () => { if (btnRafRef.current) cancelAnimationFrame(btnRafRef.current) }, [])
-  const speakAudioRef = useRef<HTMLAudioElement | null>(null)
   // Active overlapping audio instances for attached scene animation sounds.
   const animSoundAudiosRef = useRef<HTMLAudioElement[]>([])
   // Lecteur WebAudio pour la bouche animée (RMS lip-sync).
@@ -1624,10 +1623,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
   }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardSize.w, cardSize.h]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleActionByIndex = useCallback(async (actionIndex: number) => {
-    const rp = scene.restPoint
-    const actions = rp?.actions ?? []
-    const action = actions[actionIndex]
+  const playSceneAction = useCallback(async (action: SceneAction | undefined, btnId: string) => {
     if (!action || action.steps.length === 0) return
     const playable = action.steps.every(s => {
       const anim = project.animations.find(x => x.id === s.animationId)
@@ -1701,56 +1697,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         ?? 0
       return acc + n
     }, 0)
-    startBtnTimer(`action-${actionIndex}`, (totalFrames / 24) * 1000)
-  }, [scene, project.animations, project.projectMouth, startBtnTimer])
-
-  const handleSpeak = useCallback(async () => {
-    const rp = scene.restPoint
-    const activeIds = rp?.speakSoundIds ?? []
-    if (activeIds.length === 0) return
-    const randomId = activeIds[Math.floor(Math.random() * activeIds.length)]
-    const idx = scene.speakSounds.findIndex(s => s.id === randomId)
-    const blob = idx >= 0 ? scene.speakSoundBlobs[idx] : null
-    if (!blob) return
-
-    // Si une bouche est définie, on utilise MouthAudioPlayer (AudioBufferSource +
-    // AnalyserNode) pour piloter le lip-sync via RMS. Sinon, fallback HTMLAudio.
-    if (project.projectMouth) {
-      mouthAudioRef.current?.cleanup()
-      mouthAudioRef.current = null
-      try {
-        const player = await loadMouthAudio(blob, {
-          onEnded: () => {
-            mouthOpennessRef.current = 0
-            mouthAudioRef.current?.cleanup()
-            mouthAudioRef.current = null
-            setActiveBtn(null)
-          },
-        })
-        mouthAudioRef.current = player
-        await player.play()
-        const dur = (player as unknown as { duration?: number }).duration
-        startBtnTimer('speak', (typeof dur === 'number' && dur > 0 ? dur : 2) * 1000)
-      } catch (err) {
-        console.error('[ScenePlayer] speak audio failed', err)
-      }
-      return
-    }
-
-    if (speakAudioRef.current) {
-      speakAudioRef.current.pause()
-      URL.revokeObjectURL(speakAudioRef.current.src)
-    }
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    speakAudioRef.current = audio
-    audio.play().catch(() => {})
-    audio.onloadedmetadata = () => {
-      const dur = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 2
-      startBtnTimer('speak', dur * 1000)
-    }
-    audio.onended = () => { URL.revokeObjectURL(url); speakAudioRef.current = null; setActiveBtn(null) }
-  }, [scene, project.projectMouth, startBtnTimer])
+    startBtnTimer(btnId, (totalFrames / 24) * 1000)
+  }, [project.animations, project.projectMouth, startBtnTimer])
 
   const handleHelp = useCallback(() => {
     const rp = scene.restPoint
@@ -1761,13 +1709,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     startBtnTimer('help', 4000)
   }, [scene.restPoint, startBtnTimer])
 
-  // Cleanup speak audio on unmount
+  // Cleanup action/lip-sync audio on unmount
   useEffect(() => () => {
-    if (speakAudioRef.current) {
-      speakAudioRef.current.pause()
-      URL.revokeObjectURL(speakAudioRef.current.src)
-      speakAudioRef.current = null
-    }
     mouthAudioRef.current?.cleanup()
     mouthAudioRef.current = null
     for (const audio of animSoundAudiosRef.current) {
@@ -1778,16 +1721,20 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   }, [])
 
   const currentRp = scene.restPoint
-  const rpActions = currentRp?.actions ?? []
-  const actionButtons = Array.from({ length: 3 }, (_, i) => {
-    const a = rpActions[i]
-    const enabled = !!a && a.steps.length > 0 && a.steps.every(s => {
+  const isActionPlayable = (a: SceneAction | undefined) =>
+    !!a && a.steps.length > 0 && a.steps.every(s => {
       const anim = project.animations.find(x => x.id === s.animationId)
       return anim != null && (anim.mesh?.videoFramesMesh != null || (anim.mesh?.walkZoneFrames != null && anim.mesh?.walkBodyFrames != null))
     })
-    return { index: i, label: a?.name ?? `Action ${i + 1}`, enabled }
+  // Bouton ACTION (étoile) : séquence unique = actions[0].
+  const actionSeq = currentRp?.actions?.[0]
+  const actionEnabled = isActionPlayable(actionSeq)
+  // Boutons « Discours » 1/2/3 : mêmes séquences que les actions.
+  const rpSpeeches = currentRp?.speeches ?? []
+  const speechButtons = Array.from({ length: 3 }, (_, i) => {
+    const a = rpSpeeches[i]
+    return { index: i, seq: a, label: a?.name ?? `Discours ${i + 1}`, enabled: isActionPlayable(a) }
   })
-  const hasSpeakSounds = (currentRp?.speakSoundIds ?? []).length > 0
   const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0
 
   const isInteraction = sceneState === 'interaction'
@@ -1813,6 +1760,42 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       </svg>
     )
   }
+
+  // Boutons HUD partagés entre layouts portrait et paysage :
+  // 1 bouton ACTION (étoile dorée) + 3 boutons Discours numérotés 1/2/3.
+  const sceneButtons = (
+    <>
+      <button
+        className="scene-player-action-btn scene-player-action-btn--star"
+        onClick={() => playSceneAction(actionSeq, 'action')}
+        disabled={!actionEnabled || anyActive}
+        aria-label={actionSeq?.name ?? 'Action'}
+      >
+        <Ring progress={activeBtn === 'action' ? btnProgress : 0} active={activeBtn === 'action'} />
+        <span className="action-btn-label">
+          <svg className="action-btn-star" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 2.2l2.95 5.98 6.6.96-4.77 4.65 1.13 6.57L12 17.23 6.09 20.34l1.13-6.57L2.45 9.14l6.6-.96L12 2.2z" />
+          </svg>
+        </span>
+      </button>
+      {speechButtons.map(b => {
+        const id = `speech-${b.index}`
+        const isActive = activeBtn === id
+        return (
+          <button
+            key={b.index}
+            className="scene-player-action-btn"
+            onClick={() => playSceneAction(b.seq, id)}
+            disabled={!b.enabled || anyActive}
+            aria-label={b.label}
+          >
+            <Ring progress={isActive ? btnProgress : 0} active={isActive} />
+            <span className="action-btn-label">{b.index + 1}</span>
+          </button>
+        )
+      })}
+    </>
+  )
 
   if (portrait) {
     // Éléments HUD réutilisés en portrait ET en paysage (canvas à gauche / HUD à droite).
@@ -1844,33 +1827,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           transition: 'opacity 400ms ease',
         }}
       >
-        {actionButtons.map(b => {
-          const id = `action-${b.index}`
-          const isActive = activeBtn === id
-          return (
-            <button
-              key={b.index}
-              className="scene-player-action-btn"
-              onClick={() => handleActionByIndex(b.index)}
-              disabled={!b.enabled || anyActive}
-              aria-label={b.label}
-            >
-              <Ring progress={isActive ? btnProgress : 0} active={isActive} />
-              <span className="action-btn-label">{b.index + 1}</span>
-            </button>
-          )
-        })}
-        {hasSpeakSounds && (
-          <button
-            className="scene-player-action-btn scene-player-action-btn--speak"
-            onClick={handleSpeak}
-            disabled={anyActive}
-            aria-label="Parler"
-          >
-            <Ring progress={activeBtn === 'speak' ? btnProgress : 0} active={activeBtn === 'speak'} />
-            <span className="action-btn-label">💬</span>
-          </button>
-        )}
+        {sceneButtons}
       </div>
     )
 
@@ -1983,33 +1940,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             transition: 'opacity 400ms ease',
           }}
         >
-        {actionButtons.map(b => {
-          const id = `action-${b.index}`
-          const isActive = activeBtn === id
-          return (
-            <button
-              key={b.index}
-              className="scene-player-action-btn"
-              onClick={() => handleActionByIndex(b.index)}
-              disabled={!b.enabled || anyActive}
-              aria-label={b.label}
-            >
-              <Ring progress={isActive ? btnProgress : 0} active={isActive} />
-              <span className="action-btn-label">{b.index + 1}</span>
-            </button>
-          )
-        })}
-        {hasSpeakSounds && (
-          <button
-            className="scene-player-action-btn scene-player-action-btn--speak"
-            onClick={handleSpeak}
-            disabled={anyActive}
-            aria-label="Parler"
-          >
-            <Ring progress={activeBtn === 'speak' ? btnProgress : 0} active={activeBtn === 'speak'} />
-            <span className="action-btn-label">💬</span>
-          </button>
-        )}
+        {sceneButtons}
         </div>
       </div>
 

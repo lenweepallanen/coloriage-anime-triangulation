@@ -1,15 +1,11 @@
 import { useState, useRef, useCallback } from 'react'
-import { animationHasFrames, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound, type Animation, type SpeakSound, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
+import { animationHasFrames, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound, type Animation, type BodyZone, type ZoneAnimationMapping } from '../../types/project'
 
 interface Props {
   restPoint: SceneRestPoint
   animations: Animation[]
   bodyZones: BodyZone[]
   onRestPointChange: (updated: SceneRestPoint) => void
-  speakSounds: SpeakSound[]
-  speakSoundBlobs: (Blob | null)[]
-  onSpeakSoundImport: (file: File) => void
-  onSpeakSoundDelete: (soundId: string) => void
   onSceneSoundImported: (soundId: string) => void
   onSceneSoundDeleted: (soundId: string) => void
 }
@@ -19,27 +15,26 @@ export default function SceneConfigPanel({
   animations,
   bodyZones,
   onRestPointChange,
-  speakSounds,
-  speakSoundBlobs,
-  onSpeakSoundImport,
-  onSpeakSoundDelete,
   onSceneSoundImported,
   onSceneSoundDeleted,
 }: Props) {
   const readyAnimations = animations.filter(a => animationHasFrames(a))
-  const existing = rp.actions ?? []
-  const actions: SceneAction[] = Array.from({ length: 3 }, (_, i) => existing[i] ?? {
-    id: crypto.randomUUID(),
-    name: `Action ${i + 1}`,
-    steps: [],
-  })
 
-  const updateActions = (next: SceneAction[]) => {
-    onRestPointChange({ ...rp, actions: next })
+  // Bouton ACTION (étoile) : séquence unique = actions[0].
+  const action: SceneAction = rp.actions?.[0] ?? { id: crypto.randomUUID(), name: 'Action', steps: [] }
+  const handleUpdateAction = (partial: Partial<SceneAction>) => {
+    onRestPointChange({ ...rp, actions: [{ ...action, ...partial }] })
   }
 
-  const handleUpdateAction = (idx: number, partial: Partial<SceneAction>) => {
-    updateActions(actions.map((a, i) => i === idx ? { ...a, ...partial } : a))
+  // Boutons « Discours » 1/2/3 : mêmes séquences que les actions.
+  const existingSpeeches = rp.speeches ?? []
+  const speeches: SceneAction[] = Array.from({ length: 3 }, (_, i) => existingSpeeches[i] ?? {
+    id: crypto.randomUUID(),
+    name: `Discours ${i + 1}`,
+    steps: [],
+  })
+  const handleUpdateSpeech = (idx: number, partial: Partial<SceneAction>) => {
+    onRestPointChange({ ...rp, speeches: speeches.map((a, i) => i === idx ? { ...a, ...partial } : a) })
   }
 
   return (
@@ -66,14 +61,25 @@ export default function SceneConfigPanel({
       </div>
 
       <div className="scene-config-panel-field">
-        <label>Actions (3 boutons)</label>
+        <label>Action (bouton ☆)</label>
+        <ActionCard
+          action={action}
+          readyAnimations={readyAnimations}
+          onChange={handleUpdateAction}
+          onSceneSoundImported={onSceneSoundImported}
+          onSceneSoundDeleted={onSceneSoundDeleted}
+        />
+      </div>
+
+      <div className="scene-config-panel-field">
+        <label>Discours (3 boutons : 1, 2, 3)</label>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {actions.map((action, idx) => (
+          {speeches.map((speech, idx) => (
             <ActionCard
-              key={action.id}
-              action={action}
+              key={speech.id}
+              action={speech}
               readyAnimations={readyAnimations}
-              onChange={(partial) => handleUpdateAction(idx, partial)}
+              onChange={(partial) => handleUpdateSpeech(idx, partial)}
               onSceneSoundImported={onSceneSoundImported}
               onSceneSoundDeleted={onSceneSoundDeleted}
             />
@@ -89,15 +95,6 @@ export default function SceneConfigPanel({
           onRestPointChange={onRestPointChange}
         />
       )}
-
-      <SpeakSoundsSection
-        rp={rp}
-        speakSounds={speakSounds}
-        speakSoundBlobs={speakSoundBlobs}
-        onRestPointChange={onRestPointChange}
-        onSpeakSoundImport={onSpeakSoundImport}
-        onSpeakSoundDelete={onSpeakSoundDelete}
-      />
 
       <div className="scene-config-panel-field">
         <label>Fondu d'arrivée (ms) — {rp.arrivalCrossfadeMs ?? 290}</label>
@@ -364,88 +361,6 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
           />
         </>
       )}
-    </div>
-  )
-}
-
-// --- Speak Sounds sub-section ---
-
-function SpeakSoundsSection({ rp, speakSounds, speakSoundBlobs, onRestPointChange, onSpeakSoundImport, onSpeakSoundDelete }: {
-  rp: SceneRestPoint
-  speakSounds: SpeakSound[]
-  speakSoundBlobs: (Blob | null)[]
-  onRestPointChange: (updated: SceneRestPoint) => void
-  onSpeakSoundImport: (file: File) => void
-  onSpeakSoundDelete: (soundId: string) => void
-}) {
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [playingId, setPlayingId] = useState<string | null>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-
-  const handlePreview = useCallback((soundId: string) => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      URL.revokeObjectURL(audioRef.current.src)
-      audioRef.current = null
-    }
-    if (playingId === soundId) { setPlayingId(null); return }
-    const idx = speakSounds.findIndex(s => s.id === soundId)
-    const blob = idx >= 0 ? speakSoundBlobs[idx] : null
-    if (!blob) return
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    audioRef.current = audio
-    setPlayingId(soundId)
-    audio.play().catch(() => {})
-    audio.onended = () => { URL.revokeObjectURL(url); setPlayingId(null); audioRef.current = null }
-  }, [playingId, speakSounds, speakSoundBlobs])
-
-  return (
-    <div className="scene-config-panel-field">
-      <label>Sons "Parler"</label>
-      <button className="btn-sm btn-secondary" style={{ marginBottom: 8 }} onClick={() => fileInputRef.current?.click()}>
-        + Importer son
-      </button>
-      <input
-        ref={fileInputRef} type="file" accept="audio/*" style={{ display: 'none' }}
-        onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) onSpeakSoundImport(file)
-          e.target.value = ''
-        }}
-      />
-      <div className="scene-config-panel-checkboxes">
-        {speakSounds.map(sound => {
-          const checked = rp.speakSoundIds?.includes(sound.id) ?? false
-          return (
-            <div key={sound.id} className="scene-config-panel-sound-row">
-              <label className="scene-config-panel-checkbox">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(e) => {
-                    const current = rp.speakSoundIds ?? []
-                    const updated = e.target.checked
-                      ? [...current, sound.id]
-                      : current.filter(id => id !== sound.id)
-                    onRestPointChange({ ...rp, speakSoundIds: updated })
-                  }}
-                />
-                <span>{sound.name}</span>
-              </label>
-              <div className="scene-config-panel-sound-actions">
-                <button className="btn-icon btn-sm" onClick={() => handlePreview(sound.id)} title={playingId === sound.id ? 'Stop' : 'Écouter'}>
-                  {playingId === sound.id ? '⏹' : '▶'}
-                </button>
-                <button className="btn-icon btn-sm btn-danger" onClick={() => onSpeakSoundDelete(sound.id)} title="Supprimer">&times;</button>
-              </div>
-            </div>
-          )
-        })}
-        {speakSounds.length === 0 && (
-          <span className="scene-config-panel-empty">Aucun son importé</span>
-        )}
-      </div>
     </div>
   )
 }
