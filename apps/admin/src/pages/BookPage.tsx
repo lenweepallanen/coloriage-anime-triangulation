@@ -12,7 +12,10 @@ export default function BookPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
+  const [amazonUrl, setAmazonUrl] = useState('')
+  const [bonusUrl, setBonusUrl] = useState('')
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const [bonusImgUrl, setBonusImgUrl] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -33,8 +36,11 @@ export default function BookPage() {
       }
       setBook(b)
       setName(b.name)
+      setAmazonUrl(b.amazonUrl || 'amazon.com')
+      setBonusUrl(b.bonusUrl || 'amazon.com')
       setProjects(ps)
       if (b.coverImageBlob) setCoverUrl(URL.createObjectURL(b.coverImageBlob))
+      if (b.bonusImageBlob) setBonusImgUrl(URL.createObjectURL(b.bonusImageBlob))
     } catch (err) {
       alert('Erreur chargement : ' + (err instanceof Error ? err.message : err))
     }
@@ -53,6 +59,18 @@ export default function BookPage() {
     }
   }
 
+  async function handleSaveAmazon() {
+    if (!book) return
+    const next = amazonUrl.trim()
+    if (next === (book.amazonUrl || '')) return
+    try {
+      await updateBook({ ...book, amazonUrl: next })
+      setBook({ ...book, amazonUrl: next })
+    } catch (err) {
+      alert('Erreur : ' + (err instanceof Error ? err.message : err))
+    }
+  }
+
   async function handleCoverUpload(file: File) {
     if (!book) return
     try {
@@ -63,6 +81,31 @@ export default function BookPage() {
       setCoverUrl(URL.createObjectURL(file))
     } catch (err) {
       alert('Erreur upload cover : ' + (err instanceof Error ? err.message : err))
+    }
+  }
+
+  async function handleSaveBonusUrl() {
+    if (!book) return
+    const next = bonusUrl.trim()
+    if (next === (book.bonusUrl || '')) return
+    try {
+      await updateBook({ ...book, bonusUrl: next })
+      setBook({ ...book, bonusUrl: next })
+    } catch (err) {
+      alert('Erreur : ' + (err instanceof Error ? err.message : err))
+    }
+  }
+
+  async function handleBonusUpload(file: File) {
+    if (!book) return
+    try {
+      const next = { ...book, bonusImageBlob: file }
+      await updateBook(next, ['bonus'])
+      setBook(next)
+      if (bonusImgUrl) URL.revokeObjectURL(bonusImgUrl)
+      setBonusImgUrl(URL.createObjectURL(file))
+    } catch (err) {
+      alert('Erreur upload bonus : ' + (err instanceof Error ? err.message : err))
     }
   }
 
@@ -203,6 +246,54 @@ export default function BookPage() {
               onChange={e => { const f = e.target.files?.[0]; if (f) handleCoverUpload(f) }}
             />
           </label>
+        </div>
+      </section>
+
+      <section className="create-project-section">
+        <h3>Lien Amazon</h3>
+        <input
+          type="url"
+          value={amazonUrl}
+          onChange={e => setAmazonUrl(e.target.value)}
+          onBlur={handleSaveAmazon}
+          onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          placeholder="amazon.com"
+          style={{ width: '100%', maxWidth: 480 }}
+        />
+      </section>
+
+      <section className="create-project-section">
+        <h3>Bonus à télécharger</h3>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 4 }}>Lien bonus</label>
+          <input
+            type="url"
+            value={bonusUrl}
+            onChange={e => setBonusUrl(e.target.value)}
+            onBlur={handleSaveBonusUrl}
+            onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            placeholder="amazon.com"
+            style={{ width: '100%', maxWidth: 480 }}
+          />
+        </div>
+        <div>
+          <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 4 }}>Vignette bonus</label>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            {bonusImgUrl ? (
+              <img src={bonusImgUrl} alt="bonus" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8 }} />
+            ) : (
+              <div style={{ width: 120, height: 120, background: '#f0f0f0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎁</div>
+            )}
+            <label className="btn-secondary">
+              {bonusImgUrl ? 'Remplacer' : 'Importer'}
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleBonusUpload(f) }}
+              />
+            </label>
+          </div>
         </div>
       </section>
 

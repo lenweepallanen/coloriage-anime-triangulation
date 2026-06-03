@@ -1005,6 +1005,12 @@ export interface Book {
   /** Si true, le menu livre est accessible publiquement (play.<domaine>/livre/{id}). */
   published: boolean;
   publishedAt: number | null;
+  /** Lien Amazon du livre (défaut "amazon.com"). */
+  amazonUrl: string;
+  /** Lien vers le contenu bonus à télécharger (défaut "amazon.com"). */
+  bonusUrl: string;
+  /** Vignette bonus optionnelle (image affichée dans le sticky footer play). */
+  bonusImageBlob: Blob | null;
 }
 
 /** View of a project for step components — includes current animation's video + mesh */

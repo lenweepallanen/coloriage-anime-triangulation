@@ -14,6 +14,7 @@ body.play-app {
   --ink: #3a3530;
   --ink-soft: #6b6357;
   --accent-sun: #ffcf3f;
+  --accent-orange: #ff9b3d;
   --accent-mint: #57c8a3;
   --accent-sky: #5bb8e8;
   --accent-rose: #ff8fae;
@@ -179,17 +180,29 @@ body.play-app .play-home-sub {
    ------------------------------------------------------------------- */
 body.play-app .book-page {
   min-height: 100vh;
-  padding: 24px 16px 48px;
+  /* padding-bottom : laisse de la place au sticky footer bonus + débord image */
+  padding: 24px 16px 100px;
 }
 body.play-app .book-title {
   text-align: center;
-  font-size: clamp(1.8rem, 6vw, 3rem);
-  margin: 8px 0 28px;
+  font-size: clamp(2.4rem, 8vw, 4rem);
+  margin: 8px 0 12px;
   transform: rotate(-1.5deg);
+}
+body.play-app .book-subtitle {
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 3.2vw, 1.25rem);
+  max-width: 360px;
+  margin: 0 auto 28px;
+  padding: 0 16px;
+  line-height: 1.4;
 }
 body.play-app .book-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  /* une seule vignette par ligne, centrée */
+  grid-template-columns: minmax(0, 280px);
+  justify-content: center;
   gap: 22px;
   max-width: 1200px;
   margin: 0 auto;
@@ -212,8 +225,28 @@ body.play-app .vignette {
   flex-direction: column;
   transition: transform 0.14s ease, box-shadow 0.14s ease;
 }
-body.play-app .vignette:nth-child(odd) { transform: rotate(-1.5deg); }
-body.play-app .vignette:nth-child(even) { transform: rotate(1.5deg); }
+/* Variation « dessin à la main » : 5 contours + inclinaisons différents,
+   pour que les vignettes ne soient pas toutes identiques (cycle de 5). */
+body.play-app .vignette:nth-child(5n + 1) {
+  border-radius: 18px 9px 16px 7px / 8px 17px 9px 18px;
+  transform: rotate(-1.6deg);
+}
+body.play-app .vignette:nth-child(5n + 2) {
+  border-radius: 9px 20px 7px 17px / 17px 8px 19px 9px;
+  transform: rotate(1.3deg);
+}
+body.play-app .vignette:nth-child(5n + 3) {
+  border-radius: 22px 7px 14px 10px / 7px 19px 8px 15px;
+  transform: rotate(-0.7deg);
+}
+body.play-app .vignette:nth-child(5n + 4) {
+  border-radius: 8px 16px 11px 20px / 18px 9px 17px 7px;
+  transform: rotate(2deg);
+}
+body.play-app .vignette:nth-child(5n + 5) {
+  border-radius: 15px 11px 19px 8px / 10px 16px 7px 18px;
+  transform: rotate(-1.1deg);
+}
 body.play-app .vignette:hover {
   transform: rotate(0deg) scale(1.04);
   box-shadow: var(--sticker-shadow-lg);
@@ -229,6 +262,11 @@ body.play-app .vignette-thumb {
   justify-content: center;
   position: relative;
 }
+body.play-app .vignette:nth-child(5n + 1) .vignette-thumb { border-radius: 16px 7px 14px 6px / 6px 15px 8px 16px; }
+body.play-app .vignette:nth-child(5n + 2) .vignette-thumb { border-radius: 7px 17px 6px 15px / 15px 7px 16px 8px; }
+body.play-app .vignette:nth-child(5n + 3) .vignette-thumb { border-radius: 19px 6px 12px 9px / 6px 16px 7px 13px; }
+body.play-app .vignette:nth-child(5n + 4) .vignette-thumb { border-radius: 7px 14px 10px 17px / 15px 8px 14px 6px; }
+body.play-app .vignette:nth-child(5n + 5) .vignette-thumb { border-radius: 13px 10px 16px 7px / 9px 14px 6px 15px; }
 body.play-app .vignette-thumb img {
   width: 100%;
   height: 100%;
@@ -278,6 +316,126 @@ body.play-app .vignette-badge {
   filter: drop-shadow(1px 2px 0 rgba(58, 53, 48, 0.25));
   transform: rotate(12deg);
   z-index: 3;
+}
+
+/* Section « Dans la même collection » — bas du menu LIVRE */
+body.play-app .book-collection-sep {
+  max-width: 1200px;
+  margin: 44px auto 8px;
+  border: none;
+  border-top: 2px dashed var(--ink-soft);
+}
+body.play-app .book-collection-title {
+  text-align: center;
+  font-size: clamp(1.3rem, 4vw, 2rem);
+  margin: 12px 0 24px;
+  transform: rotate(-1.5deg);
+}
+body.play-app .book-collection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 22px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* Sticky footer BONUS — bas de la page LIVRE */
+body.play-app .book-bonus-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  background: var(--accent-orange);
+  border-top: 3px solid var(--ink);
+  box-shadow: 0 -3px 10px rgba(58, 53, 48, 0.16);
+  padding: 6px 14px;
+  /* overflow visible : la vignette bonus déborde par le haut */
+  overflow: visible;
+  /* caché par défaut : glissé vers le bas + transparent ;
+     révélé après ~1/3 du scroll via .book-bonus-footer--visible */
+  transform: translateY(160%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.4s cubic-bezier(.2, .8, .2, 1), opacity 0.4s ease;
+}
+body.play-app .book-bonus-footer--visible {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Partie gauche (1/3) : vignette bonus posée par-dessus, débordant vers le haut */
+body.play-app .book-bonus-left {
+  flex: 0 0 33.33%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+body.play-app .book-bonus-vignette {
+  width: auto;
+  max-width: 90%;
+  height: 96px;
+  max-height: 96px;
+  object-fit: cover;
+  /* bords arrondis + contour noir */
+  border: 2.5px solid var(--ink);
+  border-radius: 14px;
+  background: var(--paper-2);
+  /* remonte l'image pour qu'elle dépasse au-dessus du footer */
+  margin-top: -52px;
+  margin-bottom: 3px;
+  box-shadow: var(--sticker-shadow);
+  pointer-events: none;
+}
+/* Partie droite (2/3) : bouton télécharger */
+body.play-app .book-bonus-right {
+  flex: 1 1 66.66%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+body.play-app .book-bonus-btn {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1rem, 3.2vw, 1.35rem);
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 2.5px solid var(--ink);
+  border-radius: 12px 5px 12px 5px / 5px 12px 5px 12px;
+  box-shadow: var(--sticker-shadow);
+  padding: 11px 26px;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  /* petit « wizz » périodique pour attirer le clic (toutes les 4,5 s) */
+  animation: bonus-wizz 4.5s ease-in-out infinite;
+  transform-origin: center;
+}
+body.play-app .book-bonus-btn:hover {
+  transform: scale(1.04) rotate(-1deg);
+  box-shadow: var(--sticker-shadow-lg);
+  /* on fige le wizz au survol pour laisser jouer le hover */
+  animation-play-state: paused;
+}
+body.play-app .book-bonus-btn:active {
+  transform: scale(0.98);
+  animation-play-state: paused;
+}
+
+/* Le wizz se concentre sur la fin du cycle : repos puis secousse rapide */
+@keyframes bonus-wizz {
+  0%, 86%, 100% { transform: scale(1) rotate(0deg); }
+  88% { transform: scale(1.09) rotate(-4deg); }
+  90% { transform: scale(1.09) rotate(4deg); }
+  92% { transform: scale(1.09) rotate(-3deg); }
+  94% { transform: scale(1.07) rotate(3deg); }
+  96% { transform: scale(1.05) rotate(-1.5deg); }
+  98% { transform: scale(1.02) rotate(0deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .book-bonus-btn { animation: none; }
 }
 
 /* ---------------------------------------------------------------------
@@ -603,7 +761,9 @@ body.play-app .play-panel p {
 
 @media (max-width: 480px) {
   body.play-app .book-grid {
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    /* une seule vignette par ligne, centrée (mobile) */
+    grid-template-columns: minmax(0, 280px);
+    justify-content: center;
     gap: 18px;
   }
 }
