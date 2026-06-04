@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Project } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
+import { generateThumbnailBlob } from '../../utils/thumbnailGenerator'
 
 interface Props {
   project: Project
@@ -59,7 +60,20 @@ export default function ProjectImportSection({ project, onSave }: Props) {
     if (!file) return
     setSaving(true)
     try {
-      await onSave({ ...project, originalImageBlob: file }, ['image'])
+      const next: Project = { ...project, originalImageBlob: file }
+      const hints: UploadHint[] = ['image']
+      // Génère une vignette légère pour le menu livre play, sauf si l'admin en a
+      // déjà fourni une manuellement (on ne l'écrase pas). Passe par le flux onSave
+      // normal → upload + flag hasThumbnail + état mémoire cohérents.
+      if (!project.thumbnailBlob) {
+        try {
+          next.thumbnailBlob = await generateThumbnailBlob(file)
+          hints.push('thumbnail')
+        } catch (thumbErr) {
+          console.warn('Thumbnail generation failed (non-blocking):', thumbErr)
+        }
+      }
+      await onSave(next, hints)
     } catch (err) {
       console.error('Failed to save image:', err)
       alert('Erreur lors de la sauvegarde de l\'image : ' + (err instanceof Error ? err.message : err))

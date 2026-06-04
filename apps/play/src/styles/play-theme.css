@@ -252,6 +252,18 @@ body.play-app .vignette:hover {
   box-shadow: var(--sticker-shadow-lg);
   z-index: 2;
 }
+/* Squelette de couverture en attente de lazy-load (réserve la place + observable
+   par l'IntersectionObserver tant que l'image n'est pas chargée). */
+body.play-app .vignette--cover-placeholder {
+  aspect-ratio: 3 / 4;
+  background: #f3efe6;
+  cursor: default;
+  box-shadow: none;
+}
+body.play-app .vignette--cover-placeholder:hover {
+  transform: none;
+  box-shadow: none;
+}
 body.play-app .vignette-thumb {
   aspect-ratio: 1 / 1;
   border-radius: 16px 6px 16px 6px / 6px 16px 6px 16px;

@@ -1,12 +1,19 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
 import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
 import CornerAdjustment from '../components/scan/CornerAdjustment'
 import { useScanProcessor } from '../components/scan/ScanProcessor'
-import AnimationPlayer from '../components/scan/AnimationPlayer'
-import ScenePlayer from '../components/scan/ScenePlayer'
+// PIXI (plusieurs centaines de Ko) n'est tiré QUE par ces deux players. On les charge
+// en lazy → ils sortent du bundle initial (menu livre / accueil play, qui n'en ont pas
+// besoin). On les précharge ensuite en tâche de fond dès l'entrée sur la page scan
+// (cf. effet dans ScanFlow), comme OpenCV, pour que l'étape preview/animation reste
+// sans temps mort. importXxx réutilisé pour le préchargement (le bundler déduplique).
+const importAnimationPlayer = () => import('../components/scan/AnimationPlayer')
+const importScenePlayer = () => import('../components/scan/ScenePlayer')
+const AnimationPlayer = lazy(importAnimationPlayer)
+const ScenePlayer = lazy(importScenePlayer)
 import { generateLimbMask, generateLimbMaskFromContours } from '../utils/limbMaskGenerator'
 import { requestLamaInpainting } from '../utils/lamaInpainting'
 import { renderIsolatedLimbDebug } from '../utils/hiddenFaceTexture'
@@ -80,6 +87,15 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       mq.removeEventListener?.('change', onChange)
       window.removeEventListener('resize', onChange)
     }
+  }, [])
+
+  // Préchargement non bloquant de PIXI + players (même logique qu'OpenCV au démarrage
+  // caméra) : pendant que l'utilisateur cadre puis prend sa photo, le gros chunk
+  // d'animation se télécharge en arrière-plan → l'étape preview/animation s'affiche
+  // sans temps mort. Échec silencieux : Suspense couvrira le cas au moment du rendu.
+  useEffect(() => {
+    void importAnimationPlayer().catch(() => {})
+    void importScenePlayer().catch(() => {})
   }, [])
 
   function handleBack() {
@@ -439,17 +455,19 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
 
       {stage === 'preview' && processor.rectifiedCanvas && (
         <div className={`scan-validate${landscape ? ' scan-validate--landscape' : ''}`}>
-          <AnimationPlayer
-            // Remount au changement d'orientation → PIXI refit la nouvelle taille de conteneur
-            key={landscape ? 'ls' : 'pt'}
-            project={project}
-            scanCanvas={processor.rectifiedCanvas}
-            lamaCanvas={lamaCanvas}
-            contentAlignment={processor.contentAlignment}
-            onClose={handleRetake}
-            previewFrame0
-            previewAnimated
-          />
+          <Suspense fallback={<div className="loading">Chargement…</div>}>
+            <AnimationPlayer
+              // Remount au changement d'orientation → PIXI refit la nouvelle taille de conteneur
+              key={landscape ? 'ls' : 'pt'}
+              project={project}
+              scanCanvas={processor.rectifiedCanvas}
+              lamaCanvas={lamaCanvas}
+              contentAlignment={processor.contentAlignment}
+              onClose={handleRetake}
+              previewFrame0
+              previewAnimated
+            />
+          </Suspense>
           <div className="scan-validate-name">{project.name}</div>
           <div className="scan-validate-bar">
             <h2 className="scan-validate-title">Tu valides la photo ?</h2>
@@ -494,23 +512,25 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
         // on tombe à tort sur AnimationPlayer (mauvais HUD + perso non rendu) tant
         // que le blob n'est pas hydraté. Le blob est garanti chargé au clic « Oui »
         // (bouton gated sur deferredLoaded).
-        project.scene && !!project.scene.background && project.scene.restPoint != null
-          ? <ScenePlayer
-              project={project}
-              scanCanvas={processor.rectifiedCanvas}
-              lamaCanvas={lamaCanvas}
-              contentAlignment={processor.contentAlignment}
-              onClose={handleRetake}
-              onSettings={() => setPaused(true)}
-              onExit={handleBack}
-            />
-          : <AnimationPlayer
-              project={project}
-              scanCanvas={processor.rectifiedCanvas}
-              lamaCanvas={lamaCanvas}
-              contentAlignment={processor.contentAlignment}
-              onClose={handleRetake}
-            />
+        <Suspense fallback={<div className="loading">Chargement…</div>}>
+          {project.scene && !!project.scene.background && project.scene.restPoint != null
+            ? <ScenePlayer
+                project={project}
+                scanCanvas={processor.rectifiedCanvas}
+                lamaCanvas={lamaCanvas}
+                contentAlignment={processor.contentAlignment}
+                onClose={handleRetake}
+                onSettings={() => setPaused(true)}
+                onExit={handleBack}
+              />
+            : <AnimationPlayer
+                project={project}
+                scanCanvas={processor.rectifiedCanvas}
+                lamaCanvas={lamaCanvas}
+                contentAlignment={processor.contentAlignment}
+                onClose={handleRetake}
+              />}
+        </Suspense>
       )}
     </div>
   )

@@ -7,6 +7,7 @@ import {
 } from 'firebase/storage'
 import { db, storage } from './firebase'
 import { logAudit } from './audit'
+import { generateThumbnailBlob } from '../utils/thumbnailGenerator'
 import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackground, SceneForeground, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
 
 // Firestore doc shape (no blobs, no large JSON arrays)
@@ -2205,6 +2206,9 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
       bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
+      // Permet à la vignette play d'éviter une requête /thumbnail vouée à 404 quand
+      // le projet n'a pas de vignette dédiée (cf. BookPage → fallback image directe).
+      hasThumbnail: projDoc.hasThumbnail === true,
     }
   })
   return list.sort((a, b) => (a.bookOrder ?? 0) - (b.bookOrder ?? 0))
@@ -2213,6 +2217,41 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
 /** Télécharge uniquement la vignette d'un projet (pour le menu livre côté play). */
 export async function getProjectThumbnailBlob(projectId: string): Promise<Blob | null> {
   return downloadBlob(`projects/${projectId}/thumbnail`)
+}
+
+export type EnsureThumbnailResult = 'generated' | 'skipped-existing' | 'no-image' | 'not-found' | 'error'
+
+/**
+ * Garantit qu'une vignette légère existe pour le projet, pour un menu livre rapide
+ * côté play. No-op si une vignette est déjà présente (`hasThumbnail`), sauf si
+ * `opts.force` est vrai (régénération depuis l'image originale). Génère une image
+ * réduite depuis l'image originale (fournie ou re-téléchargée), l'upload sous
+ * `projects/{id}/thumbnail` et lève le flag Firestore `hasThumbnail`.
+ *
+ * Appelé à la publication (backfill des projets existants), à l'import d'image
+ * (cf. ProjectImportSection) et par le script de backfill global (backfillThumbnails).
+ * Tolérant : toute erreur est avalée (log) et renvoyée comme statut — ne bloque rien.
+ */
+export async function ensureProjectThumbnail(
+  projectId: string,
+  imageBlob?: Blob | null,
+  opts?: { force?: boolean },
+): Promise<EnsureThumbnailResult> {
+  try {
+    const snap = await getDoc(projectRef(projectId))
+    if (!snap.exists()) return 'not-found'
+    const data = snap.data() as Record<string, unknown>
+    if (data.hasThumbnail === true && !opts?.force) return 'skipped-existing'
+    const source = imageBlob ?? (await downloadBlob(`projects/${projectId}/originalImage`))
+    if (!source) return 'no-image'
+    const thumb = await generateThumbnailBlob(source)
+    await uploadBlob(`projects/${projectId}/thumbnail`, thumb)
+    if (data.hasThumbnail !== true) await updateDoc(projectRef(projectId), { hasThumbnail: true })
+    return 'generated'
+  } catch (err) {
+    console.warn(`[thumbnail] ensure failed for ${projectId}:`, err)
+    return 'error'
+  }
 }
 
 // ===================================================================

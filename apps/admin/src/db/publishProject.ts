@@ -1,6 +1,7 @@
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from './firebase'
 import { logAudit } from './audit'
+import { ensureProjectThumbnail } from './projectsStore'
 
 /**
  * Bascule le flag `published` d'un projet sans toucher au reste du document.
@@ -13,6 +14,12 @@ export async function setProjectPublished(projectId: string, published: boolean)
     ...(published ? { publishedAt: serverTimestamp() } : {}),
   })
   await logAudit(published ? 'project.publish' : 'project.unpublish', projectId)
+  // Backfill vignette : tout projet visible dans un menu livre (donc publié) doit
+  // avoir une vignette légère pour que la grille play reste rapide. No-op si déjà
+  // présente. Non bloquant en cas d'échec (la publication reste effective).
+  if (published) {
+    await ensureProjectThumbnail(projectId)
+  }
 }
 
 /**

@@ -996,6 +996,11 @@ export interface Project {
   bookOrder: number;
   /** Vignette affichée dans le menu du livre côté play. */
   thumbnailBlob: Blob | null;
+  /** Flag de présence d'une vignette dédiée côté Storage (`projects/{id}/thumbnail`).
+   *  Renseigné par les chargements légers (getProjectsByBook) pour éviter une requête
+   *  /thumbnail inutile quand il n'y en a pas. Optionnel : non garanti sur tous les
+   *  chemins de chargement. */
+  hasThumbnail?: boolean;
 }
 
 export interface Book {

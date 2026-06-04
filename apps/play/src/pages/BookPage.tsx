@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getBook, getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import { getProjectsByBook, getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
@@ -44,16 +44,19 @@ export default function BookPage() {
       } catch (err) {
         console.error(err)
         setNotAvailable(true)
+      } finally {
+        // Le livre + ses coloriages sont prêts → on affiche TOUT DE SUITE. La liste
+        // « même collection » (sous le fold) ne doit pas retarder l'affichage.
+        setLoading(false)
       }
-      // Chargement « même collection » non-bloquant : un échec ne doit pas
-      // masquer le livre courant.
+      // Chargement « même collection » vraiment non-bloquant : démarré après que la
+      // page est rendue, un échec ne masque pas le livre courant.
       try {
         const all = await getPublishedBooks()
         setOtherBooks(all.filter(x => x.id !== bookId))
       } catch (err) {
         console.error('Collection load failed', err)
       }
-      setLoading(false)
     })()
     return () => { if (revokeBonus) URL.revokeObjectURL(revokeBonus) }
   }, [bookId])
@@ -143,8 +146,27 @@ export default function BookPage() {
 function BookCover({ book }: { book: Book }) {
   // null = en cours de chargement, '' = pas de couverture (vignette masquée)
   const [url, setUrl] = useState<string | null>(null)
+  // Lazy-load : la section « même collection » est sous le fold. On ne télécharge la
+  // couverture (image pleine taille) qu'une fois la case visible à l'écran.
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [visible, setVisible] = useState(false)
 
   useEffect(() => {
+    const el = wrapRef.current
+    if (!el || visible) return
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return }
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) {
+        setVisible(true)
+        io.disconnect()
+      }
+    }, { rootMargin: '200px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [visible])
+
+  useEffect(() => {
+    if (!visible) return
     let revoke: string | null = null
     ;(async () => {
       const blob = await getBookCover(book.id)
@@ -157,10 +179,13 @@ function BookCover({ book }: { book: Book }) {
       }
     })()
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
-  }, [book.id])
+  }, [book.id, visible])
 
-  // Vignette = couverture : on n'affiche pas les livres sans couverture
-  if (url === null || url === '') return null
+  // Tant qu'on n'a pas tenté le chargement, on garde un placeholder observable (sinon
+  // l'IntersectionObserver n'a rien à observer). '' = pas de couverture → masqué.
+  if (url === '') return null
+  if (url === null) return <div ref={wrapRef} className="vignette vignette--cover-placeholder" aria-hidden="true" />
+
 
   const open = () => window.open(normalizeUrl(book.amazonUrl), '_blank', 'noopener')
 
@@ -187,8 +212,12 @@ function Vignette({ project, onClick }: { project: Project; onClick: () => void 
     try { setScanned(localStorage.getItem(`scanned:${project.id}`) === '1') } catch { /* ignore */ }
     let revoke: string | null = null
     ;(async () => {
-      // Priorité à la vignette dédiée, sinon fallback sur l'image coloriage
-      const blob = (await getProjectThumbnailBlob(project.id)) ?? (await getProjectThumbnail(project.id))
+      // Priorité à la vignette dédiée (légère), sinon fallback sur l'image coloriage
+      // pleine taille. On ne tente la requête /thumbnail que si le projet déclare en
+      // avoir une (hasThumbnail) → évite un 404 inutile par vignette sinon.
+      let blob: Blob | null = null
+      if (project.hasThumbnail) blob = await getProjectThumbnailBlob(project.id)
+      if (!blob) blob = await getProjectThumbnail(project.id)
       if (blob) {
         const u = URL.createObjectURL(blob)
         revoke = u
