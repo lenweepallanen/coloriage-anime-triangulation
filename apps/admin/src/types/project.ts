@@ -760,6 +760,10 @@ export interface SceneRestPoint {
   actions?: SceneAction[];
   /** Boutons « Discours » (1, 2, 3) — mêmes séquences que les actions. Max 3. */
   speeches?: SceneAction[];
+  /** Animation de présentation (intro) : jouée une fois automatiquement à l'arrivée
+   *  au rest point, AVANT que l'interaction ne soit débloquée. Même structure qu'une
+   *  action (séquence d'animations + son optionnel avec toggle « parlé »). */
+  presentation?: SceneAction;
   /** @deprecated legacy lecture-seule, migré vers `actions` à la lecture. */
   randomAnimationIds?: string[];
   /** @deprecated legacy lecture-seule. */

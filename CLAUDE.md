@@ -680,6 +680,7 @@ Scene {
 SceneRestPoint {
   id, backgroundX
   restAnimationId?: string
+  presentation?: SceneAction          // Intro jouée 1× à l'arrivée (anim + son « parlé »), avant interaction
   randomAnimationIds?: string[]
   zoneAnimationMappings?: ZoneAnimationMapping[]  // Zone corporelle → animation
   speakSoundIds?: string[]

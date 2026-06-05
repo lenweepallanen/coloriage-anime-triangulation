@@ -54,29 +54,52 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
+/** Lit la durée (ms) d'un blob audio via ses métadonnées. 0 si indéterminé. */
+function getAudioDurationMs(blob: Blob): Promise<number> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob)
+    const a = new Audio()
+    a.preload = 'metadata'
+    const done = (ms: number) => { try { URL.revokeObjectURL(url) } catch { /* */ } resolve(ms) }
+    a.onloadedmetadata = () => done(Number.isFinite(a.duration) ? a.duration * 1000 : 0)
+    a.onerror = () => done(0)
+    a.src = url
+  })
+}
+
 export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
   const [playing, setPlaying] = useState(true)
   const playingRef = useRef(true)
-  const [sceneState, setSceneState] = useState<SceneState>('interaction')
+  // État initial cohérent avec ScenePlayback : 'entering' si entrée 'moving' (walk
+  // initial), sinon 'interaction'. Sinon, le ticker ne pousse jamais 'entering' vers
+  // React (pas de changement vs prevSceneState) → les boutons resteraient actifs
+  // pendant le walk d'entrée.
+  const [sceneState, setSceneState] = useState<SceneState>(() => {
+    const s = project.scene
+    return (s && s.entry === 'moving' && s.entryStartX != null && s.restPoint) ? 'entering' : 'interaction'
+  })
   const [showHelpBubble, setShowHelpBubble] = useState(false)
   const [currentHelpText, setCurrentHelpText] = useState('')
   // Bouton actif (animation/son en cours). Tous les autres boutons sont désactivés.
   const [activeBtn, setActiveBtn] = useState<string | null>(null)
   const [btnProgress, setBtnProgress] = useState(0)
   const btnRafRef = useRef<number | null>(null)
-  const startBtnTimer = useCallback((id: string, durationMs: number) => {
+  // Vrai tant qu'une action/discours est en cours (anim + audio). Lu par le ticker
+  // PIXI pour bloquer la marche libre pendant qu'une animation joue.
+  const actionPlayingRef = useRef(false)
+  const startBtnTimer = useCallback((id: string, durationMs: number, onComplete?: () => void) => {
     if (btnRafRef.current) cancelAnimationFrame(btnRafRef.current)
-    if (durationMs <= 0) { setActiveBtn(null); setBtnProgress(0); return }
+    if (durationMs <= 0) { setActiveBtn(null); setBtnProgress(0); onComplete?.(); return }
     setActiveBtn(id)
     setBtnProgress(0)
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / durationMs)
       setBtnProgress(t)
-      if (t >= 1) { setActiveBtn(null); btnRafRef.current = null; return }
+      if (t >= 1) { setActiveBtn(null); btnRafRef.current = null; onComplete?.(); return }
       btnRafRef.current = requestAnimationFrame(tick)
     }
     btnRafRef.current = requestAnimationFrame(tick)
@@ -93,6 +116,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const activeActionStepsRef = useRef<SceneActionStep[] | null>(null)
   const actionStepIdxRef = useRef(0)
   const scenePlaybackRef = useRef<ScenePlayback | null>(null)
+  // Pont vers playSceneAction (défini plus bas) pour permettre au ticker PIXI de
+  // déclencher l'animation de présentation (intro) à l'arrivée au rest point.
+  const playSceneActionRef = useRef<((action: SceneAction | undefined, btnId: string) => void) | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
@@ -277,71 +303,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     let backgroundSprite: PIXI.Sprite | null = null
     let foregroundSprite: PIXI.Sprite | null = null
+    let bgVideoUpdate: (() => void) | null = null
+    let fgVideoUpdate: (() => void) | null = null
     const bgImageUrls: string[] = []
     const bgVideoElements: HTMLVideoElement[] = []
-
-    if (bg?.videoBlob) {
-      const url = URL.createObjectURL(bg.videoBlob)
-      bgImageUrls.push(url)
-      const vid = document.createElement('video')
-      vid.muted = true
-      vid.defaultMuted = true
-      vid.loop = true
-      vid.autoplay = true
-      vid.playsInline = true
-      vid.setAttribute('muted', '')
-      vid.setAttribute('playsinline', '')
-      vid.setAttribute('webkit-playsinline', '')
-      vid.setAttribute('autoplay', '')
-      vid.setAttribute('loop', '')
-      vid.crossOrigin = 'anonymous'
-      vid.src = url
-      vid.style.position = 'absolute'
-      vid.style.width = '1px'
-      vid.style.height = '1px'
-      vid.style.opacity = '0'
-      vid.style.pointerEvents = 'none'
-      document.body.appendChild(vid)
-      bgVideoElements.push(vid)
-      const tryPlay = () => vid.play().catch(() => {})
-      tryPlay()
-      const onGesture = () => {
-        tryPlay()
-        document.removeEventListener('pointerdown', onGesture, true)
-        document.removeEventListener('touchstart', onGesture, true)
-        document.removeEventListener('click', onGesture, true)
-      }
-      document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
-      document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
-      document.addEventListener('click', onGesture, { passive: true, capture: true })
-      const tex = PIXI.Texture.from(vid, { resourceOptions: { autoPlay: true } })
-      // iOS : la texture est créée avant que la vidéo ait des frames (→ 0×0 noir).
-      // On force un ré-upload dès que des frames arrivent / la lecture démarre.
-      vid.addEventListener('loadeddata', () => tex.update())
-      vid.addEventListener('playing', () => tex.update())
-      const sprite = new PIXI.Sprite(tex)
-      sprite.width = bg.width * bgScale
-      sprite.height = bg.height * bgScale
-      bgContainer.addChild(sprite)
-      backgroundSprite = sprite
-    } else if (bg?.imageBlob) {
-      const url = URL.createObjectURL(bg.imageBlob)
-      bgImageUrls.push(url)
-      const img = new Image()
-      img.src = url
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = img.naturalWidth
-        canvas.height = img.naturalHeight
-        canvas.getContext('2d')!.drawImage(img, 0, 0)
-        const tex = PIXI.Texture.from(canvas)
-        const sprite = new PIXI.Sprite(tex)
-        sprite.width = bg.width * bgScale
-        sprite.height = bg.height * bgScale
-        bgContainer.addChild(sprite)
-        backgroundSprite = sprite
-      }
-    }
 
     // Filtre chroma key partagé image/vidéo :
     //  - smoothstep entre threshold et threshold+smoothness → bord progressif
@@ -373,30 +338,65 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       })
     }
 
-    if (fg?.videoBlob) {
-      const url = URL.createObjectURL(fg.videoBlob)
+    // Vidéo en boucle CROSSFADE (seamless loop) : deux <video> de la même source
+    // jouées en alternance ; à l'approche de la fin du clip actif, on lance l'autre
+    // depuis 0 et on fond l'alpha de l'un vers l'autre. Donne l'impression d'une vraie
+    // boucle continue sans le saut sec de `video.loop`. Retourne le sprite principal
+    // (pour le debug / null-checks) + un updater à appeler chaque frame.
+    const setupCrossfadeVideo = (
+      blob: Blob,
+      w: number,
+      h: number,
+      container: PIXI.Container,
+      chroma?: { color: string; threshold: number; smoothness: number },
+    ): { update: () => void; primary: PIXI.Sprite } => {
+      const url = URL.createObjectURL(blob)
       bgImageUrls.push(url)
-      const vid = document.createElement('video')
-      vid.muted = true
-      vid.defaultMuted = true
-      vid.loop = true
-      vid.autoplay = true
-      vid.playsInline = true
-      vid.setAttribute('muted', '')
-      vid.setAttribute('playsinline', '')
-      vid.setAttribute('webkit-playsinline', '')
-      vid.setAttribute('autoplay', '')
-      vid.setAttribute('loop', '')
-      vid.crossOrigin = 'anonymous'
-      vid.src = url
-      vid.style.position = 'absolute'
-      vid.style.width = '1px'
-      vid.style.height = '1px'
-      vid.style.opacity = '0'
-      vid.style.pointerEvents = 'none'
-      document.body.appendChild(vid)
-      bgVideoElements.push(vid)
-      const tryPlay = () => vid.play().catch(() => {})
+      const sprites: PIXI.Sprite[] = []
+      const videos: HTMLVideoElement[] = []
+      for (let i = 0; i < 2; i++) {
+        const vid = document.createElement('video')
+        vid.muted = true
+        vid.defaultMuted = true
+        vid.loop = false // boucle gérée manuellement (crossfade)
+        vid.autoplay = i === 0
+        vid.playsInline = true
+        vid.setAttribute('muted', '')
+        vid.setAttribute('playsinline', '')
+        vid.setAttribute('webkit-playsinline', '')
+        vid.setAttribute('preload', 'auto')
+        if (i === 0) vid.setAttribute('autoplay', '')
+        vid.crossOrigin = 'anonymous'
+        vid.src = url
+        vid.style.position = 'absolute'
+        vid.style.width = '1px'
+        vid.style.height = '1px'
+        vid.style.opacity = '0'
+        vid.style.pointerEvents = 'none'
+        document.body.appendChild(vid)
+        bgVideoElements.push(vid)
+        videos.push(vid)
+        const tex = PIXI.Texture.from(vid, { resourceOptions: { autoPlay: i === 0 } })
+        // iOS : la texture est créée avant que la vidéo ait des frames (→ 0×0 noir).
+        vid.addEventListener('loadeddata', () => tex.update())
+        vid.addEventListener('playing', () => tex.update())
+        // Le clip actif doit démarrer dès la 1re seconde : l'appel play() au montage
+        // part souvent avant que la vidéo soit prête (promesse rejetée), et n'était
+        // relancé qu'au 1er geste. On relance donc play() dès que la vidéo est prête.
+        if (i === 0) {
+          const kick = () => { vid.play().catch(() => {}) }
+          vid.addEventListener('loadedmetadata', kick)
+          vid.addEventListener('canplay', kick)
+        }
+        const sprite = new PIXI.Sprite(tex)
+        sprite.width = w
+        sprite.height = h
+        sprite.alpha = i === 0 ? 1 : 0
+        if (chroma) sprite.filters = [buildChromaKeyFilter(chroma.color, chroma.threshold, chroma.smoothness)]
+        container.addChild(sprite)
+        sprites.push(sprite)
+      }
+      const tryPlay = () => videos[0].play().catch(() => {})
       tryPlay()
       const onGesture = () => {
         tryPlay()
@@ -407,17 +407,81 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       document.addEventListener('pointerdown', onGesture, { passive: true, capture: true })
       document.addEventListener('touchstart', onGesture, { passive: true, capture: true })
       document.addEventListener('click', onGesture, { passive: true, capture: true })
-      const tex = PIXI.Texture.from(vid, { resourceOptions: { autoPlay: true } })
-      vid.addEventListener('loadeddata', () => tex.update())
-      vid.addEventListener('playing', () => tex.update())
-      const sprite = new PIXI.Sprite(tex)
-      sprite.width = fg.width * bgScale
-      sprite.height = fg.height * bgScale
-      if (fg.chromaKeyColor) {
-        sprite.filters = [buildChromaKeyFilter(fg.chromaKeyColor, fg.chromaKeyThreshold ?? 0.1, fg.chromaKeySmoothness ?? 0.12)]
+
+      let activeIdx = 0
+      let fading = false
+      const update = () => {
+        const act = videos[activeIdx]
+        // Garantit que la vidéo active joue dès que possible (l'autoplay/play() au
+        // montage peut échouer par course avant que la vidéo soit prête). On relance
+        // donc à chaque frame du ticker tant qu'elle est en pause → démarre dès la 1re
+        // seconde, sans attendre un geste / l'arrivée au rest point.
+        if (act.paused && !act.ended) act.play().catch(() => {})
+        const dur = act.duration
+        if (!Number.isFinite(dur) || dur <= 0) return
+        // Durée du fondu : 0.6 s, borné à 30 % du clip pour les boucles très courtes.
+        const fade = Math.min(0.6, dur * 0.3)
+        const inc = videos[1 - activeIdx]
+        const actSpr = sprites[activeIdx]
+        const incSpr = sprites[1 - activeIdx]
+        const t = act.currentTime
+        if (!fading && t >= dur - fade) {
+          fading = true
+          // Le sortant reste OPAQUE ; l'entrant apparaît PAR-DESSUS (évite que le noir
+          // du fond transparaisse au milieu du fondu → plus de « fondu au noir »).
+          container.addChild(incSpr) // ré-empile l'entrant au-dessus du sortant
+          incSpr.alpha = 0
+          try { inc.currentTime = 0 } catch { /* */ }
+          inc.play().catch(() => {})
+        }
+        if (fading) {
+          const cp = Math.max(0, Math.min(1, 1 - (dur - t) / fade))
+          actSpr.alpha = 1 // sortant toujours pleinement visible sous l'entrant
+          incSpr.alpha = cp // entrant fondu de 0 → 1
+          if (cp >= 1 || act.ended) {
+            incSpr.alpha = 1
+            act.pause()
+            try { act.currentTime = 0 } catch { /* */ }
+            // L'ancien actif reste alpha 1 mais entièrement masqué derrière l'entrant ;
+            // il sera remis à 0 et ré-empilé au-dessus quand il redeviendra l'entrant.
+            activeIdx = 1 - activeIdx
+            fading = false
+          }
+        }
       }
-      foregroundContainer.addChild(sprite)
-      foregroundSprite = sprite
+      return { update, primary: sprites[0] }
+    }
+
+    if (bg?.videoBlob) {
+      const { update, primary } = setupCrossfadeVideo(bg.videoBlob, bg.width * bgScale, bg.height * bgScale, bgContainer)
+      bgVideoUpdate = update
+      backgroundSprite = primary
+    } else if (bg?.imageBlob) {
+      const url = URL.createObjectURL(bg.imageBlob)
+      bgImageUrls.push(url)
+      const img = new Image()
+      img.src = url
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        canvas.getContext('2d')!.drawImage(img, 0, 0)
+        const tex = PIXI.Texture.from(canvas)
+        const sprite = new PIXI.Sprite(tex)
+        sprite.width = bg.width * bgScale
+        sprite.height = bg.height * bgScale
+        bgContainer.addChild(sprite)
+        backgroundSprite = sprite
+      }
+    }
+
+    if (fg?.videoBlob) {
+      const chroma = fg.chromaKeyColor
+        ? { color: fg.chromaKeyColor, threshold: fg.chromaKeyThreshold ?? 0.1, smoothness: fg.chromaKeySmoothness ?? 0.12 }
+        : undefined
+      const { update, primary } = setupCrossfadeVideo(fg.videoBlob, fg.width * bgScale, fg.height * bgScale, foregroundContainer, chroma)
+      fgVideoUpdate = update
+      foregroundSprite = primary
     } else if (fg?.imageBlob) {
       const url = URL.createObjectURL(fg.imageBlob)
       bgImageUrls.push(url)
@@ -1067,9 +1131,24 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (!rp) return []
       const set = new Set<string>()
       for (const a of rp.actions ?? []) for (const s of a.steps) if (s.animationId) set.add(s.animationId)
+      // L'intro de présentation doit être enregistrée comme oneshot pour être jouable.
+      for (const s of rp.presentation?.steps ?? []) if (s.animationId) set.add(s.animationId)
       for (const m of rp.zoneAnimationMappings ?? []) if (m.animationId) set.add(m.animationId)
       for (const id of rp.randomAnimationIds ?? []) set.add(id) // legacy
       return Array.from(set)
+    }
+
+    // Animation de présentation (intro) : jouée une fois à l'arrivée au rest point,
+    // avant que l'interaction ne soit débloquée. Le `playSceneAction` route le son
+    // (+ lip-sync « parlé ») et met `activeBtn`='presentation' → boutons grisés tant
+    // qu'elle joue. `presentationStarted` garantit un seul déclenchement par scène.
+    let presentationStarted = false
+    function startPresentationIfNeeded() {
+      if (presentationStarted) return
+      presentationStarted = true
+      const pres = scene.restPoint?.presentation
+      if (!pres || pres.steps.length === 0) return
+      playSceneActionRef.current?.(pres, 'presentation')
     }
 
     /**
@@ -1127,6 +1206,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     // Initialize based on scene playback initial state
     const initialState = scenePlayback.currentState
+    // Pousse l'état réel vers React (le ticker ne déclenche un setSceneState que sur
+    // un CHANGEMENT vs prevSceneState ; sans ça, 'entering' n'arrive jamais au rendu
+    // et les boutons restent actifs pendant le walk d'entrée).
+    setSceneState(initialState)
     if (scene.restPoint) {
       if (initialState === 'entering') {
         setupMovementAnimation(scenePlayback.currentSegmentAnimationId)
@@ -1145,6 +1228,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Marche en cours : on ignore complètement les clics jusqu'à l'arrivée.
       if (scenePlayback.currentState === 'walking') return
       if (scenePlayback.currentState !== 'interaction') return
+      // Une action/discours/présentation joue : interaction gelée (cohérent avec les
+      // boutons grisés). Bloque notamment l'intro de présentation à l'arrivée.
+      if (actionPlayingRef.current) return
 
       // Tente d'abord un hit sur une zone corporelle (oneshot via mapping)
       const img = screenToImage(e.offsetX, e.offsetY)
@@ -1167,8 +1253,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         }
       }
 
-      // Pas de zone touchée : tente une marche libre si la scène a un trapèze
-      if (scene.walkTrapezoid) {
+      // Pas de zone touchée : tente une marche libre si la scène a un trapèze.
+      // MAIS on bloque la marche tant qu'une animation joue (action/discours en cours,
+      // oneshot de zone, ou son d'action encore en lecture).
+      const mp = currentMultiPlaybackRef
+      const animPlaying = actionPlayingRef.current
+        || (mp?.isPlayingOneshot ?? false)
+        || (zoneOneshotBody != null && !zoneOneshotBody.isFinished)
+      if (scene.walkTrapezoid && !animPlaying) {
         const bgX = e.offsetX / bgScale + scenePlayback.backgroundOffsetX
         const bgY = e.offsetY / bgScale
         scenePlayback.requestWalkTo(bgX, bgY)
@@ -1230,6 +1322,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           const easeInNew = prevSceneState === 'entering' && (newState === 'interaction' || newState === 'blend')
           switchAnimation(newState, durationMs, easeInNew)
           prevSceneState = newState
+          // Arrivée au rest point (fin de l'entrée/marche) → lance l'intro de présentation.
+          if (newState === 'interaction') startPresentationIfNeeded()
         }
 
         // Track current segment metadata (for next-frame outgoing decision)
@@ -1530,9 +1624,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
 
       // Scroll synchrone arrière-plan + avant-plan (mêmes dimensions, suivent le perso 1:1).
+      // L'offset est porté par les conteneurs (chaque plan peut contenir 2 sprites
+      // crossfade), pas par un sprite unique.
       const offsetPx = scenePlayback.backgroundOffsetX * bgScale
-      if (backgroundSprite) backgroundSprite.x = -offsetPx
-      if (foregroundSprite) foregroundSprite.x = -offsetPx
+      bgContainer.x = -offsetPx
+      foregroundContainer.x = -offsetPx
+      // Avance le crossfade seamless des vidéos de fond / avant-plan.
+      if (bgVideoUpdate) bgVideoUpdate()
+      if (fgVideoUpdate) fgVideoUpdate()
 
       // Outlines de zones
       outlineOverlay.clear()
@@ -1608,6 +1707,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     ;(scenePlaybackRef.current as unknown as { getMultiPlayback: typeof getMultiPlayback }).getMultiPlayback = getMultiPlayback
     ;(scenePlaybackRef.current as unknown as { triggerZoneOneshot: typeof triggerZoneOneshot }).triggerZoneOneshot = triggerZoneOneshot
 
+    // Entrée 'fixed' : la scène démarre directement en interaction (pas de marche).
+    // On déclenche alors l'intro de présentation maintenant que le multi-playback est prêt.
+    if (scenePlayback.currentState === 'interaction') startPresentationIfNeeded()
+
     return () => {
       scenePlaybackRef.current = null
       canvas.removeEventListener('pointerdown', onPointerDown)
@@ -1630,6 +1733,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       return anim != null && animationHasFrames(anim)
     })
     if (!playable) return
+
+    // Marque l'animation active immédiatement (bloque la marche libre pendant le jeu).
+    actionPlayingRef.current = true
 
     // Couper l'audio d'action précédent (sons HTML cumulés + lip-sync mouth)
     for (const a of animSoundAudiosRef.current) {
@@ -1689,16 +1795,36 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     if (mp) mp.requestSequence(animIds)
     else sp?.triggerZoneOneshot?.(animIds[0])
 
-    // Durée totale = somme des frames des steps / 24 fps
-    const totalFrames = action.steps.reduce((acc, s) => {
+    // Durée du curseur circulaire = durée TOTALE de l'action, c.-à-d. le max entre :
+    //  - la durée cumulée des animations (frames / 24 fps),
+    //  - la fin de l'audio général d'action (lancé à t=0),
+    //  - la fin du dernier audio d'étape (lancé au démarrage de son animation).
+    const fps = 24
+    let cumFrames = 0
+    const stepStartMs: number[] = []
+    for (const s of action.steps) {
+      stepStartMs.push((cumFrames / fps) * 1000)
       const anim = project.animations.find(x => x.id === s.animationId)
       const n = anim?.mesh?.videoFramesMesh?.length
         ?? anim?.mesh?.walkBodyFrames?.length
         ?? 0
-      return acc + n
-    }, 0)
-    startBtnTimer(btnId, (totalFrames / 24) * 1000)
+      cumFrames += n
+    }
+    const animMs = (cumFrames / fps) * 1000
+    const [actionSoundMs, stepSoundEndsMs] = await Promise.all([
+      action.sound?.blob ? getAudioDurationMs(action.sound.blob) : Promise.resolve(0),
+      Promise.all(action.steps.map(async (s, i) => {
+        if (!s.sound?.blob) return 0
+        const d = await getAudioDurationMs(s.sound.blob)
+        return stepStartMs[i] + d
+      })),
+    ])
+    const lastStepAudioMs = stepSoundEndsMs.length ? Math.max(...stepSoundEndsMs) : 0
+    const totalMs = Math.max(animMs, actionSoundMs, lastStepAudioMs)
+    startBtnTimer(btnId, totalMs, () => { actionPlayingRef.current = false })
   }, [project.animations, project.projectMouth, startBtnTimer])
+  // Expose au ticker PIXI pour déclencher l'intro de présentation à l'arrivée.
+  useEffect(() => { playSceneActionRef.current = playSceneAction }, [playSceneAction])
 
   const handleHelp = useCallback(() => {
     const rp = scene.restPoint
@@ -1738,10 +1864,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const hasHelpTexts = (currentRp?.helpTexts ?? []).length > 0
 
   const isInteraction = sceneState === 'interaction'
-  const isWalking = sceneState === 'walking'
-  const buttonsVisible = sceneState !== 'entering'
-  // Boutons grisés + non cliquables pendant la marche libre.
-  const anyActive = activeBtn != null || isWalking
+  // Boutons toujours visibles (même pendant le walk d'entrée / la présentation) mais
+  // GRISÉS et non cliquables tant qu'on n'est pas en interaction libre (cf. anyActive).
+  const buttonsVisible = true
+  // Boutons grisés + non cliquables dès qu'on n'est PAS en interaction libre :
+  // arrivée/entrée, marche, fondu de blend, ou pendant qu'une action/discours joue.
+  const anyActive = activeBtn != null || !isInteraction
   const RING_R = 46
   const RING_C = 2 * Math.PI * RING_R
   function Ring({ progress, active }: { progress: number; active: boolean }) {

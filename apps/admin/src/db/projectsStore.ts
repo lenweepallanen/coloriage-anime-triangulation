@@ -210,6 +210,8 @@ interface SceneRestPointDoc {
   actions?: SceneActionDoc[]
   /** Boutons « Discours » (1, 2, 3) — mêmes séquences que les actions. */
   speeches?: SceneActionDoc[]
+  /** Animation de présentation (intro) jouée une fois à l'arrivée. */
+  presentation?: SceneActionDoc
   /** @deprecated legacy lecture-seule, migré vers `actions`. */
   randomAnimationIds?: string[]
   /** @deprecated legacy lecture-seule. */
@@ -412,7 +414,7 @@ function collectSceneSoundIds(scene: Scene | null | undefined): string[] {
   if (scene.ambientSound) ids.add(scene.ambientSound.id)
   const rp = scene.restPoint
   if (rp) {
-    for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? [])]) {
+    for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? []), ...(rp.presentation ? [rp.presentation] : [])]) {
       if (a.sound) ids.add(a.sound.id)
       for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
     }
@@ -428,7 +430,7 @@ function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
   if (scene.ambientSound?.id === soundId && scene.ambientSound.blob) return scene.ambientSound.blob
   const rp = scene.restPoint
   if (!rp) return null
-  for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? [])]) {
+  for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? []), ...(rp.presentation ? [rp.presentation] : [])]) {
     if (a.sound?.id === soundId && a.sound.blob) return a.sound.blob
     for (const s of a.steps ?? []) {
       if (s.sound?.id === soundId && s.sound.blob) return s.sound.blob
@@ -918,6 +920,7 @@ function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRes
     ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
     ...(rp.actions != null && rp.actions.length > 0 && { actions: rp.actions.map(actionToDoc) }),
     ...(rp.speeches != null && rp.speeches.length > 0 && { speeches: rp.speeches.map(actionToDoc) }),
+    ...(rp.presentation != null && (rp.presentation.steps.length > 0 || rp.presentation.sound != null) && { presentation: actionToDoc(rp.presentation) }),
     ...(rp.zoneAnimationMappings != null && rp.zoneAnimationMappings.length > 0 && { zoneAnimationMappings: rp.zoneAnimationMappings }),
     ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
     ...(rp.helpTexts != null && rp.helpTexts.length > 0 && { helpTexts: rp.helpTexts }),
@@ -1314,7 +1317,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     if (projDoc.scene.ambientSound) ids.add(projDoc.scene.ambientSound.id)
     const rpDoc = projDoc.scene.restPoint ?? projDoc.scene.restPoints?.[0]
     if (rpDoc) {
-      for (const a of [...(rpDoc.actions ?? []), ...(rpDoc.speeches ?? [])]) {
+      for (const a of [...(rpDoc.actions ?? []), ...(rpDoc.speeches ?? []), ...(rpDoc.presentation ? [rpDoc.presentation] : [])]) {
         if (a.sound) ids.add(a.sound.id)
         for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
       }
@@ -1381,6 +1384,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
       ...(actions && actions.length > 0 && { actions }),
       ...(speeches && speeches.length > 0 && { speeches }),
+      ...(rp.presentation != null && { presentation: docToAction(rp.presentation) }),
       ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
       ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
       ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
@@ -2404,6 +2408,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
         ...(rp.restAnimationId != null && { restAnimationId: rp.restAnimationId }),
         ...(actions && actions.length > 0 && { actions }),
         ...(speeches && speeches.length > 0 && { speeches }),
+        ...(rp.presentation != null && { presentation: docToAction(rp.presentation) }),
         ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings }),
         ...(rp.speakSoundIds != null && { speakSoundIds: rp.speakSoundIds }),
         ...(rp.helpTexts != null && { helpTexts: rp.helpTexts }),
@@ -2539,7 +2544,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     if (scene.ambientSound) soundIds.add(scene.ambientSound.id)
     const rp = scene.restPoint
     if (rp) {
-      for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? [])]) {
+      for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? []), ...(rp.presentation ? [rp.presentation] : [])]) {
         if (a.sound) soundIds.add(a.sound.id)
         for (const s of a.steps ?? []) if (s.sound) soundIds.add(s.sound.id)
       }
@@ -2582,6 +2587,9 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
         }),
         ...(scene.restPoint.speeches != null && {
           speeches: scene.restPoint.speeches.map(hydrateActionBlobs),
+        }),
+        ...(scene.restPoint.presentation != null && {
+          presentation: hydrateActionBlobs(scene.restPoint.presentation),
         }),
       },
       speakSoundBlobs,

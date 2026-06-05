@@ -37,6 +37,12 @@ export default function SceneConfigPanel({
     onRestPointChange({ ...rp, speeches: speeches.map((a, i) => i === idx ? { ...a, ...partial } : a) })
   }
 
+  // Animation de présentation (intro) : jouée une fois à l'arrivée, avant l'interaction.
+  const presentation: SceneAction = rp.presentation ?? { id: crypto.randomUUID(), name: 'Présentation', steps: [] }
+  const handleUpdatePresentation = (partial: Partial<SceneAction>) => {
+    onRestPointChange({ ...rp, presentation: { ...presentation, ...partial } })
+  }
+
   return (
     <div className="scene-config-panel">
       <div className="scene-config-panel-header">
@@ -58,6 +64,21 @@ export default function SceneConfigPanel({
         {readyAnimations.length === 0 && (
           <span className="scene-config-panel-empty">Aucune animation prête.</span>
         )}
+      </div>
+
+      <div className="scene-config-panel-field">
+        <label>Présentation (intro auto à l'arrivée)</label>
+        <ActionCard
+          action={presentation}
+          readyAnimations={readyAnimations}
+          onChange={handleUpdatePresentation}
+          onSceneSoundImported={onSceneSoundImported}
+          onSceneSoundDeleted={onSceneSoundDeleted}
+        />
+        <span className="scene-config-panel-empty">
+          Jouée une fois dès l'arrivée au rest point (après l'entrée). Les boutons restent
+          grisés pendant l'entrée + la présentation, puis l'interaction démarre.
+        </span>
       </div>
 
       <div className="scene-config-panel-field">
