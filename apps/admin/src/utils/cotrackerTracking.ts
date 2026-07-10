@@ -35,6 +35,7 @@ export interface CoTrackerResult {
   videoHeight: number
   numFrames: number
   points: Record<string, Point2D[]>  // pointId → positions per frame (video coords)
+  visibility?: Record<string, number[]>  // pointId → score [0,1] par frame (absent = ancien serveur)
   elapsedMs: number                  // total wall-clock time côté client (warmup → fin tracking)
   serverInferenceMs?: number         // temps inférence côté serveur (somme des appels)
   resolutionUsed: CoTrackerResolution
@@ -48,6 +49,7 @@ interface ServerResponse {
   videoHeight: number
   numFrames: number
   points: Record<string, [number, number][]>  // pointId → [[x,y], ...] per frame
+  visibility?: Record<string, number[]>       // pointId → [v, ...] per frame, v ∈ [0,1]
   executionTimeMs?: number
   interpShapeUsed?: [number, number]
   resolutionUsed?: string
@@ -154,6 +156,7 @@ export async function requestCoTracker(
     if (typeof data.subsampleUsed === 'number') subsampleUsed = data.subsampleUsed
     if (data.engineUsed === 'offline' || data.engineUsed === 'online') engineUsed = data.engineUsed
 
+    const allVisibility: Record<string, number[]> = {}
     for (const pt of points) {
       const traj = data.points[pt.id]
       if (!traj) {
@@ -161,7 +164,10 @@ export async function requestCoTracker(
         continue
       }
       allTrajectories[pt.id] = traj.map(([x, y]) => ({ x, y }))
+      const vis = data.visibility?.[pt.id]
+      if (Array.isArray(vis)) allVisibility[pt.id] = vis.map(v => Number(v))
     }
+    const hasVisibility = Object.keys(allVisibility).length > 0
 
     const elapsedMs = performance.now() - t0Wall
     console.log(
@@ -174,6 +180,7 @@ export async function requestCoTracker(
       videoHeight: outHeight,
       numFrames: outFrames,
       points: allTrajectories,
+      visibility: hasVisibility ? allVisibility : undefined,
       elapsedMs,
       serverInferenceMs: serverInferenceMs > 0 ? serverInferenceMs : undefined,
       resolutionUsed: resolution,

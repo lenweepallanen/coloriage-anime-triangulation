@@ -226,8 +226,18 @@ export interface MeshData {
   // Dimensions vidéo au moment du tracking (invalidation si re-upload)
   cotrackerVideoWidth?: number;
   cotrackerVideoHeight?: number;
-  // Résultats CoTracker3 : pointId → positions par frame (coords vidéo)
+  // Résultats CoTracker3 : pointId → positions par frame (coords vidéo).
+  // Positions INTERPOLÉES si visibilité disponible (frames occluses remplacées
+  // par lerp entre dernière/prochaine position visible) — l'aval consomme ce champ.
   cotrackerFrames?: Record<string, Point2D[]> | null;
+  // Trajectoires brutes serveur (avant interpolation occlusion) — permet de
+  // rejouer le seuil sans relancer l'inférence. Coords vidéo.
+  cotrackerFramesRaw?: Record<string, Point2D[]> | null;
+  // Visibilité CoTracker3 par point par frame (0..1 ; bool serveur → 0/1,
+  // fractionnaire après agrégation multi-query / subsample). null si ancien serveur.
+  cotrackerVisibility?: Record<string, number[]> | null;
+  // Seuil utilisé pour dériver cotrackerFrames depuis Raw (défaut 0.5)
+  cotrackerVisibilityThreshold?: number;
   cotrackerTrackingValidated?: boolean;
   // Étape 3 : squelette N-aire référencé sur les points CoTracker
   cotrackerSkeleton?: CoTrackerSkeleton;

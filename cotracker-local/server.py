@@ -85,7 +85,7 @@ def root():
             "engine=%s resolution=%s interp_shape=%s subsample=%d video=%dx%d frames_orig=%d frames_kept=%d",
             engine, resolution, interp_shape, subsample_applied, w, h, n_orig, frames.shape[0],
         )
-        out, interp_used = run_inference(
+        out, vis_out, interp_used = run_inference(
             frames, payload["queries"], device, model,
             interp_shape=interp_shape, subsample=subsample_applied, n_orig=n_orig,
             engine=engine,
@@ -102,6 +102,7 @@ def root():
             interp_shape_used=interp_used,
             subsample_used=subsample_applied,
             engine_used=engine,
+            visibility=vis_out,
         )
         return app.response_class(json.dumps(resp), mimetype="application/json")
     except ValueError as e:

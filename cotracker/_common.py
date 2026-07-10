@@ -7,7 +7,9 @@ Protocol:
     resolution?: 'native'|'512',                 // alias: 'native' = no override, '512' = (384,512)
     interpShape?: [h, w] | null                  // override explicite de model.model.interp_shape
   }
-  →   { videoWidth, videoHeight, numFrames, points: { pointId: [[x,y], ...] }, executionTimeMs, interpShapeUsed }
+  →   { videoWidth, videoHeight, numFrames, points: { pointId: [[x,y], ...] },
+        visibility: { pointId: [v, ...] },           // v ∈ [0,1] par frame (optionnel)
+        executionTimeMs, interpShapeUsed }
 
 ⚠️ Note importante :
 `CoTrackerPredictor` resize la vidéo en interne via `model.model.interp_shape`
@@ -171,14 +173,15 @@ def _run_online_inference(
     video_full: torch.Tensor,
     queries_tensor: torch.Tensor,
     model: Any,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Inférence par fenêtres glissantes pour CoTracker3 online.
 
     Pattern (cf. README facebookresearch/co-tracker) :
       - fenêtre = `model.step * 2` frames (typique 8)
       - premier appel : `is_first_step=True` + `queries=...` → init état + retourne tracks
       - appels suivants : `is_first_step=False` → propagent et accumulent
-    Le dernier appel retourne `pred_tracks` shape [1, T_total, N, 2] couvrant toute la vidéo.
+    Le dernier appel retourne `(pred_tracks [1, T_total, N, 2], pred_visibility [1, T_total, N])`
+    couvrant toute la vidéo.
     """
     T = int(video_full.shape[1])
     step = int(getattr(model, "step", 4))
@@ -186,24 +189,26 @@ def _run_online_inference(
 
     is_first = True
     pred_tracks = None
+    pred_vis = None
 
-    def _call(start: int, end: int, first: bool) -> torch.Tensor | None:
+    def _call(start: int, end: int, first: bool) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         chunk = video_full[:, start:end]
         kwargs: dict[str, Any] = {"is_first_step": first}
         if first:
             kwargs["queries"] = queries_tensor
         out = model(chunk, **kwargs)
         if isinstance(out, tuple) and len(out) >= 1:
-            return out[0]
-        return None
+            return out[0], (out[1] if len(out) >= 2 else None)
+        return None, None
 
     # Sliding windows at indices step, 2*step, ... (cf. README: `if i % step == 0 and i != 0`)
     for i in range(step, T, step):
         end = i + 1
         start = max(0, end - window)
-        tracks = _call(start, end, is_first)
+        tracks, vis = _call(start, end, is_first)
         if tracks is not None:
             pred_tracks = tracks
+            pred_vis = vis
         is_first = False
 
     # Final partial window
@@ -211,13 +216,14 @@ def _run_online_inference(
     remainder = last_i % step
     final_size = remainder + step + 1
     start = max(0, T - final_size)
-    tracks = _call(start, T, is_first)
+    tracks, vis = _call(start, T, is_first)
     if tracks is not None:
         pred_tracks = tracks
+        pred_vis = vis
 
     if pred_tracks is None:
         raise RuntimeError("CoTracker online: aucune track produite (vidéo trop courte ?)")
-    return pred_tracks
+    return pred_tracks, pred_vis
 
 
 def run_inference(
@@ -229,8 +235,12 @@ def run_inference(
     subsample: int = 1,
     n_orig: int | None = None,
     engine: str = "offline",
-) -> tuple[dict[str, list[list[float]]], tuple[int, int] | None]:
-    """Run CoTracker3 tracking. Returns ({pointId: [[x,y],...]}, interp_shape_effective).
+) -> tuple[dict[str, list[list[float]]], dict[str, list[float]] | None, tuple[int, int] | None]:
+    """Run CoTracker3 tracking.
+
+    Returns ({pointId: [[x,y],...]}, {pointId: [vis,...]} | None, interp_shape_effective).
+    `vis` ∈ [0,1] par frame (les predictors CoTracker3 retournent un booléen → 0/1 ;
+    fractionnaire après agrégation multi-query ou expansion subsample).
 
     Si `subsample > 1`, les queries' `frameIdx` (en coords frames originales) sont
     remappées sur les frames échantillonnées avant inférence, puis les tracks
@@ -264,25 +274,38 @@ def run_inference(
 
     with torch.no_grad():
         if engine == "online":
-            pred_tracks = _run_online_inference(video, q_tensor, model)
+            pred_tracks, pred_vis = _run_online_inference(video, q_tensor, model)
         else:
-            pred_tracks, _vis = model(video, queries=q_tensor)
+            pred_tracks, pred_vis = model(video, queries=q_tensor)
 
     tracks_sub = pred_tracks[0].cpu().numpy()  # T_sub × N × 2
+    # bool ou float selon versions → float32 uniforme (0/1 si bool).
+    vis_sub = pred_vis[0].cpu().numpy().astype(np.float32) if pred_vis is not None else None  # T_sub × N
     t_out = tracks_sub.shape[0]
     target_n = int(n_orig) if (n_orig is not None and subsample > 1) else t_out
 
     out: dict[str, list[list[float]]] = {}
+    vis_out: dict[str, list[float]] | None = {} if vis_sub is not None else None
     for pid, qidxs in pid_to_qidx.items():
         per_frame_sub = np.mean(tracks_sub[:, qidxs, :], axis=1)  # T_sub × 2
+        # min conservateur : si une des trajectoires du point est perdue,
+        # la position moyenne est suspecte.
+        per_frame_vis = np.min(vis_sub[:, qidxs], axis=1) if vis_sub is not None else None  # T_sub
         if subsample <= 1 or target_n == t_out:
             out[pid] = [[float(x), float(y)] for x, y in per_frame_sub]
+            if vis_out is not None and per_frame_vis is not None:
+                vis_out[pid] = [float(v) for v in per_frame_vis]
         else:
             # Linear interp from t_out kept frames to target_n original-frame slots.
             expanded: list[list[float]] = []
+            expanded_vis: list[float] = []
             for f in range(target_n):
                 idx_f = f / subsample
                 i_lo = int(idx_f)
+                # Visibilité : frame conservée la plus proche (pas de lerp sur un signal binaire).
+                if per_frame_vis is not None:
+                    i_near = min(t_out - 1, int(round(idx_f)))
+                    expanded_vis.append(float(per_frame_vis[i_near]))
                 if i_lo >= t_out - 1:
                     expanded.append([float(per_frame_sub[t_out - 1][0]), float(per_frame_sub[t_out - 1][1])])
                     continue
@@ -291,8 +314,10 @@ def run_inference(
                 y = per_frame_sub[i_lo][1] * (1.0 - t) + per_frame_sub[i_lo + 1][1] * t
                 expanded.append([float(x), float(y)])
             out[pid] = expanded
+            if vis_out is not None and per_frame_vis is not None:
+                vis_out[pid] = expanded_vis
 
-    return out, effective_shape
+    return out, vis_out, effective_shape
 
 
 def build_response(
@@ -305,6 +330,7 @@ def build_response(
     interp_shape_used: tuple[int, int] | None = None,
     subsample_used: int | None = None,
     engine_used: str | None = None,
+    visibility: dict[str, list[float]] | None = None,
 ) -> dict[str, Any]:
     resp: dict[str, Any] = {
         "videoWidth": width,
@@ -312,6 +338,8 @@ def build_response(
         "numFrames": num_frames,
         "points": out,
     }
+    if visibility is not None:
+        resp["visibility"] = visibility
     if execution_time_ms is not None:
         resp["executionTimeMs"] = round(execution_time_ms, 1)
     if resolution_used is not None:

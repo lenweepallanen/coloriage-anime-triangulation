@@ -12,6 +12,7 @@ import EyesSection from './pages/admin/EyesSection'
 import MouthSection from './pages/admin/MouthSection'
 import ScanPage from './pages/ScanPage'
 import ColoriageBwPage from './pages/tools/ColoriageBwPage'
+import VideoPosterizePage from './pages/tools/VideoPosterizePage'
 import BookPage from './pages/BookPage'
 import LoginPage from './auth/LoginPage'
 import ProtectedRoute from './auth/ProtectedRoute'
@@ -36,6 +37,7 @@ function App() {
           <Route path="/books/:bookId" element={<BookPage />} />
           <Route path="/scan/:projectId" element={<ScanPage />} />
           <Route path="/tools/coloriage-bw" element={<ColoriageBwPage />} />
+          <Route path="/tools/video-posterize" element={<VideoPosterizePage />} />
         </Route>
       </Route>
     </Routes>

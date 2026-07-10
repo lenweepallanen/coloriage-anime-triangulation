@@ -37,6 +37,13 @@ export default function Layout() {
               >
                 Couleur → N&B (upscale 2000)
               </Link>
+              <Link
+                to="/tools/video-posterize"
+                onClick={() => setToolsOpen(false)}
+                style={{ display: 'block', padding: '10px 14px', color: '#e6e6e6', textDecoration: 'none' }}
+              >
+                Posterisation vidéo (aplats couleur)
+              </Link>
             </div>
           )}
         </div>

@@ -12,9 +12,11 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Project, Animation, CoTrackerPoint } from '../../types/project'
+import type { Project, Animation, CoTrackerPoint, Point2D } from '../../types/project'
 import type { UploadHint } from '../../db/projectsStore'
 import { requestCoTracker, type CoTrackerResolution, type CoTrackerEngine } from '../../utils/cotrackerTracking'
+import { applyOcclusionInterpolation } from '../../utils/cotrackerOcclusion'
+import { computeColorConstraintVisibility, combineVisibility } from '../../utils/cotrackerColorConstraint'
 
 interface TimingInfo {
   label: string
@@ -34,6 +36,10 @@ interface Props {
 
 const PALETTE = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#ec4899']
 
+// Visibilité CoTracker3 quasi binaire (0/1) → seuil fixe, pas de réglage UI.
+// Une frame avec visibilité < seuil est "perdue" : position interpolée au lieu du tracking.
+const OCCLUSION_THRESHOLD = 0.5
+
 export default function CoTrackerBonesTrackingStep({ project, animation, onSave }: Props) {
   const mesh = animation.mesh
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -49,9 +55,35 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
   const [trackedFrames, setTrackedFrames] = useState<Record<string, { x: number; y: number }[]> | null>(
     mesh?.cotrackerFrames ?? null
   )
+  // Occlusion : trajectoires brutes + visibilité CoTracker3 (pour la visualisation)
+  const [rawFrames, setRawFrames] = useState<Record<string, Point2D[]> | null>(mesh?.cotrackerFramesRaw ?? null)
+  const [visibility, setVisibility] = useState<Record<string, number[]> | null>(mesh?.cotrackerVisibility ?? null)
   const [error, setError] = useState<string | null>(null)
   const [resolution, setResolution] = useState<CoTrackerResolution>('native')
   const [lastTiming, setLastTiming] = useState<TimingInfo | null>(null)
+
+  // Segments occlus dérivés pour la visualisation (les frames sauvées sont déjà interpolées)
+  const occlusion = useMemo(() => {
+    if (!rawFrames || !visibility) return null
+    return applyOcclusionInterpolation(rawFrames, visibility, OCCLUSION_THRESHOLD)
+  }, [rawFrames, visibility])
+  // Frames affichées : interpolées si visibilité dispo, sinon legacy (cotrackerFrames brut)
+  const displayFrames = occlusion?.frames ?? trackedFrames
+
+  const occlusionStats = useMemo(() => {
+    if (!occlusion || !rawFrames) return null
+    let pointsWithOcclusion = 0
+    let totalOccludedFrames = 0
+    const allLostIds: string[] = []
+    for (const [pid, segs] of Object.entries(occlusion.segments)) {
+      if (segs.length === 0) continue
+      pointsWithOcclusion++
+      totalOccludedFrames += segs.reduce((s, sg) => s + sg.end - sg.start + 1, 0)
+      const trackLen = rawFrames[pid]?.length ?? 0
+      if (segs.length === 1 && segs[0].start === 0 && segs[0].end === trackLen - 1) allLostIds.push(pid)
+    }
+    return { pointsWithOcclusion, totalOccludedFrames, allLostIds }
+  }, [occlusion, rawFrames])
 
   // Load video blob
   useEffect(() => {
@@ -104,22 +136,57 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
       }
 
       // Tracked trajectories (only if no prompt overrides at this frame)
-      if (trackedFrames) {
+      if (displayFrames) {
         points.forEach((pt, idx) => {
           const hasPromptHere = pt.prompts.some(q => q.frameIdx === frame)
           if (hasPromptHere) return // drawn below as manual marker
-          const traj = trackedFrames[pt.id]
+          const traj = displayFrames[pt.id]
           if (!traj) return
           const f = traj[frame]
           if (!f) return
-          ctx.fillStyle = pt.color
-          ctx.beginPath()
-          ctx.arc(f.x, f.y, 6, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.strokeStyle = pt.id === selectedId ? '#fff' : '#000'
-          ctx.lineWidth = pt.id === selectedId ? 2 : 1
-          ctx.stroke()
-          drawLabel(f.x, f.y, String(idx + 1))
+          const vis = visibility?.[pt.id]?.[frame]
+          const isOccluded = occlusion != null && vis != null && vis < OCCLUSION_THRESHOLD
+          if (isOccluded) {
+            // Position brute erronée (ce que CoTracker aurait donné) : croix rouge pâle
+            const raw = rawFrames?.[pt.id]?.[frame]
+            if (raw && (raw.x !== f.x || raw.y !== f.y)) {
+              ctx.strokeStyle = 'rgba(248, 113, 113, 0.55)'
+              ctx.lineWidth = 1.5
+              ctx.beginPath()
+              ctx.moveTo(raw.x - 5, raw.y - 5); ctx.lineTo(raw.x + 5, raw.y + 5)
+              ctx.moveTo(raw.x - 5, raw.y + 5); ctx.lineTo(raw.x + 5, raw.y - 5)
+              ctx.stroke()
+              // Trait fin pointillé brut → interpolé (matérialise la correction)
+              ctx.setLineDash([3, 3])
+              ctx.beginPath()
+              ctx.moveTo(raw.x, raw.y); ctx.lineTo(f.x, f.y)
+              ctx.stroke()
+              ctx.setLineDash([])
+            }
+            // Point interpolé : cercle creux pointillé + anneau rouge
+            ctx.setLineDash([4, 3])
+            ctx.strokeStyle = pt.color
+            ctx.lineWidth = 2
+            ctx.beginPath()
+            ctx.arc(f.x, f.y, 6, 0, Math.PI * 2)
+            ctx.stroke()
+            ctx.setLineDash([])
+            ctx.strokeStyle = '#ef4444'
+            ctx.lineWidth = 1.5
+            ctx.beginPath()
+            ctx.arc(f.x, f.y, 10, 0, Math.PI * 2)
+            ctx.stroke()
+            drawLabel(f.x, f.y, String(idx + 1) + '⊘')
+          } else {
+            ctx.fillStyle = pt.color
+            ctx.beginPath()
+            ctx.arc(f.x, f.y, 6, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.strokeStyle = pt.id === selectedId ? '#fff' : '#000'
+            ctx.lineWidth = pt.id === selectedId ? 2 : 1
+            ctx.stroke()
+            drawLabel(f.x, f.y, String(idx + 1))
+          }
         })
       }
       // Manual prompts at current frame — distinctive square + white double ring
@@ -146,7 +213,13 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
     const tick = () => { render(); raf = requestAnimationFrame(tick) }
     tick()
     return () => cancelAnimationFrame(raf)
-  }, [points, frame, videoDims, selectedId, trackedFrames])
+  }, [points, frame, videoDims, selectedId, displayFrames, rawFrames, visibility, occlusion])
+
+  function invalidateTracking() {
+    setTrackedFrames(null)
+    setRawFrames(null)
+    setVisibility(null)
+  }
 
   function canvasToVideo(e: React.MouseEvent<HTMLCanvasElement>) {
     const c = canvasRef.current
@@ -177,7 +250,7 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
         name: `pt${ps.length + 1}`,
         prompts: [{ frameIdx: frame, x: pos.x, y: pos.y }],
       }])
-      setTrackedFrames(null) // invalidate previous tracking
+      invalidateTracking() // invalidate previous tracking
     }
   }
 
@@ -197,11 +270,11 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
     if (bestId) {
       setPoints(ps => ps.filter(p => p.id !== bestId))
       if (selectedId === bestId) setSelectedId(null)
-      setTrackedFrames(null)
+      invalidateTracking()
     }
   }
 
-  async function handleRun(mode: 'standard' | 'optimized' = 'standard') {
+  async function handleRun(mode: 'standard' | 'optimized' | 'color' = 'standard') {
     if (!animation.videoBlob) { setError('Aucune vidéo'); return }
     if (points.length === 0) { setError('Aucun point à tracker'); return }
     setError(null)
@@ -216,9 +289,28 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
         subsample,
         engine,
       })
-      setTrackedFrames(res.points)
+      // Contrainte couleur : un point dont la couleur sous-jacente ne matche plus sa
+      // couleur de référence (frame 0) a dérivé vers une zone voisine → occlus.
+      let combinedVisibility = res.visibility ?? null
+      if (mode === 'color') {
+        setTracking({ phase: 'analyse couleur' })
+        const colorVis = await computeColorConstraintVisibility(
+          animation.videoBlob,
+          res.points,
+          frac => setTracking({ phase: `analyse couleur ${Math.round(frac * 100)}%` }),
+        )
+        combinedVisibility = combineVisibility(combinedVisibility, colorVis)
+      }
+      // Interpolation des frames occluses (visibilité < seuil)
+      const interp = combinedVisibility ? applyOcclusionInterpolation(res.points, combinedVisibility, OCCLUSION_THRESHOLD) : null
+      const finalFrames = interp?.frames ?? res.points
+      setRawFrames(res.points)
+      setVisibility(combinedVisibility)
+      setTrackedFrames(finalFrames)
       setLastTiming({
-        label: mode === 'optimized' ? 'CoTracker Optimisé (12 fps + 8 vCPU)' : `CoTracker ${requestResolution}`,
+        label: mode === 'optimized' ? 'CoTracker Optimisé (12 fps + 8 vCPU)'
+          : mode === 'color' ? 'CoTracker + Contrainte Couleur'
+          : `CoTracker ${requestResolution}`,
         resolution: res.resolutionUsed,
         elapsedMs: res.elapsedMs,
         serverInferenceMs: res.serverInferenceMs,
@@ -231,7 +323,10 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
         mesh: {
           ...(mesh ?? {} as any),
           cotrackerPoints: points,
-          cotrackerFrames: res.points,
+          cotrackerFrames: finalFrames,
+          cotrackerFramesRaw: res.points,
+          cotrackerVisibility: combinedVisibility,
+          cotrackerVisibilityThreshold: OCCLUSION_THRESHOLD,
           cotrackerVideoWidth: res.videoWidth,
           cotrackerVideoHeight: res.videoHeight,
           cotrackerTrackingValidated: true,
@@ -247,7 +342,11 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
       }
       await onSave(
         { ...project, animations: project.animations.map(a => a.id === animation.id ? updatedAnim : a) },
-        [{ animationId: animation.id, field: 'cotrackerFrames' }],
+        [
+          { animationId: animation.id, field: 'cotrackerFrames' },
+          { animationId: animation.id, field: 'cotrackerFramesRaw' },
+          { animationId: animation.id, field: 'cotrackerVisibility' },
+        ],
       )
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
@@ -330,6 +429,31 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
                   )}
                 </div>
               )}
+              {/* Barres rouges : segments occlus (point sélectionné, ou tous si aucun) */}
+              {totalFrames > 1 && occlusion && (
+                <div style={{ position: 'relative', height: 6, marginTop: 1 }}>
+                  {(selectedId ? points.filter(p => p.id === selectedId) : points).flatMap(pt =>
+                    (occlusion.segments[pt.id] ?? []).map((seg, i) => (
+                      <div
+                        key={`occ-${pt.id}-${i}`}
+                        onClick={() => setFrame(seg.start)}
+                        title={`${pt.name ?? pt.id.slice(0, 6)} — occlus frames ${seg.start}–${seg.end}`}
+                        style={{
+                          position: 'absolute',
+                          left: `${(seg.start / (totalFrames - 1)) * 100}%`,
+                          width: `${Math.max(0.5, ((seg.end - seg.start + 1) / (totalFrames - 1)) * 100)}%`,
+                          height: 4,
+                          top: 1,
+                          background: '#ef4444',
+                          borderRadius: 2,
+                          cursor: 'pointer',
+                          opacity: selectedId ? 1 : 0.65,
+                        }}
+                      />
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             <span>{frame} / {totalFrames - 1}</span>
           </div>
@@ -350,6 +474,11 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
                 <span style={{ width: 14, height: 14, borderRadius: '50%', background: p.color, flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 12 }}>
                   {p.name ?? p.id.slice(0, 6)} — {p.prompts.length} prompt(s)
+                  {occlusion && (occlusion.segments[p.id]?.length ?? 0) > 0 && (
+                    <span style={{ color: '#f87171' }}>
+                      {' · '}{occlusion.segments[p.id].reduce((s, sg) => s + sg.end - sg.start + 1, 0)} occluses
+                    </span>
+                  )}
                   {p.prompts.length > 1 && (
                     <span style={{ display: 'block', fontSize: 10, opacity: 0.7 }}>
                       frames : {p.prompts.map(q => q.frameIdx).join(', ')}
@@ -358,7 +487,7 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
                 </span>
                 <button
                   className="btn-icon btn-sm"
-                  onClick={(e) => { e.stopPropagation(); setPoints(ps => ps.filter(pp => pp.id !== p.id)); setTrackedFrames(null) }}
+                  onClick={(e) => { e.stopPropagation(); setPoints(ps => ps.filter(pp => pp.id !== p.id)); invalidateTracking() }}
                   title="Supprimer"
                 >×</button>
               </li>
@@ -395,19 +524,52 @@ export default function CoTrackerBonesTrackingStep({ project, animation, onSave 
                 <span>CoTracker 512 <span style={{ opacity: 0.6 }}>(downscale côté long ≤ 512 px)</span></span>
               </label>
             </div>
-            <button className="btn-primary" onClick={() => handleRun('standard')} disabled={tracking != null || points.length === 0}>
+            {occlusionStats && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 8, background: '#1a1a1a', borderRadius: 6, fontSize: 11 }}>
+                <span style={{ color: occlusionStats.pointsWithOcclusion > 0 ? '#f87171' : '#22c55e' }}>
+                  {occlusionStats.pointsWithOcclusion > 0
+                    ? `⊘ ${occlusionStats.pointsWithOcclusion} point(s) avec occlusions · ${occlusionStats.totalOccludedFrames} frames interpolées`
+                    : '✓ Aucune occlusion détectée'}
+                </span>
+                {occlusionStats.allLostIds.length > 0 && (
+                  <span style={{ color: '#fbbf24' }}>
+                    ⚠ {occlusionStats.allLostIds.length} point(s) perdu(s) sur toute la vidéo — trajectoire brute conservée
+                  </span>
+                )}
+              </div>
+            )}
+            {visibility == null && trackedFrames != null && (
+              <p style={{ fontSize: 11, color: '#fbbf24', margin: 0 }}>
+                Visibilité non disponible (tracking antérieur) — relancez le tracking pour activer la gestion des occlusions.
+              </p>
+            )}
+            <button
+              className="btn-primary"
+              onClick={() => handleRun('standard')}
+              disabled={tracking != null || points.length === 0}
+              title="Tracking complet sur toutes les frames (24 fps)"
+            >
               {tracking
                 ? `CoTracker3… (${tracking.phase})`
-                : (trackedFrames ? 'Recalculer (avec corrections)' : 'Lancer CoTracker3')}
+                : (trackedFrames ? 'Recalculer — toutes les frames' : 'Lancer CoTracker3 — toutes les frames')}
             </button>
             <button
               className="btn-secondary"
               onClick={() => handleRun('optimized')}
               disabled={tracking != null || points.length === 0}
-              title="12 fps (subsample 2× + interpolation linéaire) sur Cloud Function 8 vCPU"
+              title="Plus rapide mais moins précis : 1 frame sur 2 (12 fps) + interpolation linéaire — les mouvements rapides entre 2 frames conservées sont écrasés"
               style={{ borderColor: '#22c55e', color: '#22c55e' }}
             >
-              ⚡ CoTracker Optimisé
+              ⚡ CoTracker Optimisé — 1 frame / 2
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => handleRun('color')}
+              disabled={tracking != null || points.length === 0}
+              title="Tracking complet (toutes les frames, 24 fps) + détection des points qui ont dérivé hors de leur membre (la couleur sous le point ne matche plus sa couleur de référence frame 0), interpolés comme des occlusions. Nécessite un membre = une couleur."
+              style={{ borderColor: '#a855f7', color: '#a855f7' }}
+            >
+              🎨 CoTracker + Contrainte Couleur
             </button>
             <button className="btn-secondary" onClick={handleSavePromptsOnly} disabled={tracking != null}>
               Sauvegarder les prompts (sans tracking)
