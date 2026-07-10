@@ -5,7 +5,28 @@
    Tous les sélecteurs sont scopés sous body.play-app.
    ===================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Andika:wght@400;700&display=swap');
+/* Fontes auto-hébergées (offline natif : pas de dépendance Google Fonts) */
+@font-face {
+  font-family: 'Fredoka';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../assets/fonts/fredoka-400-700-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Andika';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/andika-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Andika';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/andika-700-latin.woff2') format('woff2');
+}
 
 body.play-app {
   /* Thème blanc + encres */
@@ -143,36 +164,676 @@ body.play-app .paper-card {
 }
 
 /* ---------------------------------------------------------------------
-   Accueil PLAY
+   Style "soft" (nouveau branding pastel) — cartes et boutons sans doodle
    ------------------------------------------------------------------- */
-body.play-app .play-home {
+body.play-app .soft-card {
+  background: #ffffff;
+  border: none;
+  border-radius: 24px;
+  box-shadow: 0 8px 24px rgba(90, 80, 140, 0.16);
+}
+body.play-app .soft-btn {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: #ffffff;
+  background: #8b7cf0;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 28px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(139, 124, 240, 0.4);
+  transition: transform 0.1s ease;
+}
+body.play-app .soft-btn:active {
+  transform: scale(0.96);
+}
+
+/* ---------------------------------------------------------------------
+   Shell PLAY — fond illustré + menu ☰ + barre d'onglets
+   ------------------------------------------------------------------- */
+body.play-app .play-shell {
+  min-height: 100vh;
+}
+body.play-app .shell-bg {
+  position: fixed;
+  inset: 0;
+  background: #fdf8ea url('../assets/bg-meadow.webp') center bottom / cover no-repeat;
+  z-index: 0;
+}
+body.play-app .shell-content {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  padding-bottom: calc(112px + env(safe-area-inset-bottom));
+}
+
+/* Bouton menu ☰ (pastille violette, haut droite) */
+body.play-app .shell-menu-btn {
+  position: fixed;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 16px;
+  z-index: 60;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #8b7cf0;
+  border: none;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(139, 124, 240, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+body.play-app .shell-menu-btn:active {
+  transform: scale(0.94);
+}
+body.play-app .shell-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+}
+body.play-app .shell-menu-dropdown {
+  position: fixed;
+  top: calc(74px + env(safe-area-inset-top));
+  right: 16px;
+  z-index: 62;
+  min-width: 230px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+body.play-app .shell-menu-item {
+  text-align: left;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 12px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+body.play-app .shell-menu-item:active {
+  background: #f3eefe;
+}
+body.play-app .shell-menu-sep {
+  border-top: 2px dashed rgba(58, 53, 48, 0.15);
+  margin: 6px 8px;
+}
+body.play-app .shell-menu-lang {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+body.play-app .shell-menu-lang-btns {
+  display: flex;
+  gap: 6px;
+}
+body.play-app .shell-lang-btn {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.92rem;
+  border: 2px solid transparent;
+  background: #f5f2ea;
+  border-radius: 999px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+body.play-app .shell-lang-btn--active {
+  border-color: #8b7cf0;
+  color: #8b7cf0;
+  background: #f3eefe;
+}
+
+/* Barre d'onglets du bas : bande lavande ondulée, icônes colorées rondes,
+   bouton SCANNER central mis en avant (grand cercle blanc surélevé). */
+body.play-app .shell-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+}
+body.play-app .shell-tabbar-wave {
+  display: block;
+  width: 100%;
+  height: 26px;
+  /* PAS de filter ici : sur iOS il crée un calque composité dont la couleur
+     diffère légèrement du bandeau (seam visible entre vague et barre). */
+  margin-bottom: -1px;
+}
+body.play-app .shell-tabbar-inner {
+  background: #cfc0f1;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
+}
+body.play-app .shell-tab {
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+/* Pastilles rondes colorées (Accueil, Galerie) — contour blanc PERMANENT
+   (uniforme, actif ou non) ; l'état actif se marque par la surélévation. */
+body.play-app .tab-bubble {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 2.5px solid #ffffff;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(90, 80, 140, 0.28);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+body.play-app .tab-bubble--home { background: #ff8fae; }
+body.play-app .tab-bubble--gallery { background: #5bb8e8; }
+body.play-app .shell-tab--active .tab-bubble {
+  transform: translateY(-4px) scale(1.06);
+  box-shadow: 0 8px 16px rgba(90, 80, 140, 0.35);
+}
+
+/* Bouton SCANNER central : grand cercle blanc surélevé.
+   z-index explicite : le drop-shadow du SVG de vague crée un contexte
+   d'empilement sur iOS qui passerait sinon PAR-DESSUS le cercle. */
+body.play-app .shell-tab--scan {
+  margin-top: -44px;
+  z-index: 3;
+}
+body.play-app .tab-scan-circle {
+  width: 98px;
+  height: 98px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #8b7cf0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
+  gap: 1px;
+  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.32);
+  transition: transform 0.12s ease;
+}
+body.play-app .shell-tab--scan:active .tab-scan-circle {
+  transform: scale(0.95);
+}
+body.play-app .shell-tab--scan.shell-tab--active .tab-scan-circle {
+  box-shadow: 0 0 0 4px #b3a2ec, 0 6px 16px rgba(90, 80, 140, 0.32);
+}
+body.play-app .tab-scan-label {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 0.62rem;
+  letter-spacing: 0.6px;
+  color: #8b7cf0;
+}
+
+/* ---------------------------------------------------------------------
+   Wordmark PicoPop multicolore + devise
+   ------------------------------------------------------------------- */
+body.play-app .wordmark {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(2.6rem, 12vw, 4rem);
+  letter-spacing: 1px;
+  line-height: 1.05;
+  margin: 4px 0 6px;
+  text-align: center;
+  /* effet sticker : contour blanc + ombre douce */
+  text-shadow:
+    -3px -3px 0 #fff, 3px -3px 0 #fff, -3px 3px 0 #fff, 3px 3px 0 #fff,
+    -3px 0 0 #fff, 3px 0 0 #fff, 0 -3px 0 #fff, 0 3px 0 #fff,
+    0 6px 14px rgba(90, 80, 140, 0.22);
+}
+body.play-app .wordmark span:nth-child(1) { color: #ff8fae; }
+body.play-app .wordmark span:nth-child(2) { color: #57c8a3; }
+body.play-app .wordmark span:nth-child(3) { color: #9b8cf5; }
+body.play-app .wordmark span:nth-child(4) { color: #ffcf3f; }
+body.play-app .wordmark span:nth-child(5) { color: #ff6b6b; }
+body.play-app .wordmark span:nth-child(6) { color: #8b7cf0; }
+body.play-app .wordmark span:nth-child(7) { color: #57c8a3; }
+
+body.play-app .home-tagline,
+body.play-app .boot-tagline {
+  text-align: center;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  color: #2e2a5e;
+  margin: 0;
+  line-height: 1.5;
+}
+body.play-app .tagline-line1,
+body.play-app .tagline-line2 {
+  display: block;
+  font-size: clamp(1.15rem, 4.6vw, 1.5rem);
+}
+body.play-app .tagline-hl {
+  font-style: normal;
+  color: #8b7cf0;
+}
+
+/* ---------------------------------------------------------------------
+   Boot screen — logo Picopop + devise + spinner (avant le menu principal)
+   ------------------------------------------------------------------- */
+body.play-app .boot-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #fdf8ea url('../assets/bg-meadow.webp') center bottom / cover no-repeat;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   padding: 24px;
   text-align: center;
 }
-body.play-app .play-home-card {
-  max-width: 520px;
-  padding: 36px 32px;
+body.play-app .boot-logo {
+  width: clamp(140px, 40vw, 220px);
+  height: auto;
 }
-body.play-app .play-home-title {
-  font-size: clamp(2rem, 7vw, 3.2rem);
-  margin: 0 0 8px;
-  transform: rotate(-2deg);
+body.play-app .boot-tagline {
+  margin-bottom: 18px;
 }
-body.play-app .play-home-emoji {
-  font-size: clamp(2.4rem, 9vw, 3.6rem);
+/* Devise en cascade (boot uniquement) */
+body.play-app .boot-tagline .tagline-line1,
+body.play-app .boot-tagline .tagline-line2 {
+  opacity: 0;
+  animation: boot-line-in 0.5s ease forwards;
+}
+body.play-app .boot-tagline .tagline-line1 { animation-delay: 0.2s; }
+body.play-app .boot-tagline .tagline-line2 { animation-delay: 0.9s; }
+@keyframes boot-line-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .boot-tagline .tagline-line1,
+  body.play-app .boot-tagline .tagline-line2 { animation: none; opacity: 1; }
+}
+body.play-app .boot-spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid rgba(58, 53, 48, 0.15);
+  border-top-color: var(--accent-sun);
+  animation: boot-spin 0.9s linear infinite;
+}
+body.play-app .boot-spinner--small {
+  width: 30px;
+  height: 30px;
+  border-width: 3.5px;
+}
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------------------------
+   Accueil PLAY — header + sections MES LIVRES / LES AUTRES LIVRES
+   ------------------------------------------------------------------- */
+body.play-app .home-page {
+  min-height: 100vh;
+  padding: 0 18px;
+  max-width: 680px;
+  margin: 0 auto;
+}
+body.play-app .home-header {
+  text-align: center;
+  padding: calc(20px + env(safe-area-inset-top)) 0 10px;
+  margin-bottom: 14px;
+}
+body.play-app .home-logo {
+  width: clamp(96px, 28vw, 150px);
+  height: auto;
+}
+
+/* Titres de section : texte violet centré + petites étincelles décoratives */
+body.play-app .section-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #7a52c7;
+  font-size: clamp(1.55rem, 6.5vw, 2.1rem);
+  margin: 22px 0 18px;
+}
+body.play-app .section-title::before,
+body.play-app .section-title::after {
+  content: '✦';
+  font-size: 0.75em;
+  color: #ff8fae;
+  transform: rotate(-12deg);
+}
+body.play-app .section-title::after {
+  transform: rotate(12deg);
+}
+body.play-app .section-title--other {
+  margin-top: 34px;
+}
+body.play-app .section-title--other::before,
+body.play-app .section-title--other::after {
+  color: #5bb8e8;
+}
+
+/* Grille de cartes livres (2 colonnes comme la maquette) */
+body.play-app .home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* Carte livre : CARRÉE, bordure blanche + ombre douce (maquette) */
+body.play-app .book-card {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 24px;
+  border: 6px solid #ffffff;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(90, 80, 140, 0.2);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+body.play-app .book-card:active {
+  transform: scale(0.97);
+}
+body.play-app .book-card-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
-  margin-bottom: 4px;
+  border-radius: 18px;
 }
-body.play-app .play-home-sub {
-  font-size: 1.2rem;
-  line-height: 1.5;
+body.play-app .book-card-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 2.6rem;
+  background: #fdf6e3;
+}
+body.play-app .book-card-fallback-name {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--ink);
+  text-align: center;
+  padding: 0 10px;
+}
+
+/* Bloc téléchargement : cercle blanc (flèche violette) + pilule violette */
+body.play-app .book-dl {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 92%;
+}
+body.play-app .book-dl-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  color: #8b7cf0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.28);
+}
+body.play-app .book-dl-plus {
+  font-family: 'Fredoka', sans-serif;
+  font-size: 2rem;
+  line-height: 1;
+  font-weight: 700;
+}
+body.play-app .book-dl-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: #8b7cf0;
+  color: #ffffff;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.92rem;
+  padding: 8px 18px;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.3);
+  white-space: nowrap;
+}
+
+/* Carte « + » : ajouter un livre (scan du QR) */
+body.play-app .add-card {
+  border: 4px dashed #c9bdf2;
+  background: rgba(255, 255, 255, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.12);
+}
+body.play-app .add-card-plus {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 4rem;
+  line-height: 1;
+  color: #8b7cf0;
+}
+
+/* ---------------------------------------------------------------------
+   Page SCANNER — choix + caméra QR
+   ------------------------------------------------------------------- */
+body.play-app .scanner-page {
+  min-height: 70vh;
+  padding: calc(20px + env(safe-area-inset-top)) 18px 24px;
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+body.play-app .scanner-page .section-title {
+  margin-top: 56px;
+}
+body.play-app .scanner-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 10px;
+}
+body.play-app .scanner-choice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 20px;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.12s ease;
+}
+body.play-app .scanner-choice:active {
+  transform: scale(0.97);
+}
+body.play-app .scanner-choice-icon {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+body.play-app .scanner-choice-icon--book { background: #ffcf3f; }
+body.play-app .scanner-choice-icon--coloring { background: #8b7cf0; }
+body.play-app .scanner-choice-texts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+body.play-app .scanner-choice-texts strong {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: #2e2a5e;
+}
+body.play-app .scanner-choice-texts small {
+  font-family: 'Andika', sans-serif;
+  font-size: 0.95rem;
   color: var(--ink-soft);
-  margin: 8px 0 0;
+  line-height: 1.35;
+}
+
+body.play-app .scanner-camera-title {
+  text-align: center;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  color: #2e2a5e;
+  font-size: clamp(1.25rem, 5vw, 1.6rem);
+  margin: 14px 0 16px;
+}
+body.play-app .scanner-camera-card {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 1 / 1;
+  max-width: 420px;
+  width: 100%;
+  margin: 0 auto;
+  background: #1e1b2e;
+}
+body.play-app .scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+body.play-app .scanner-viewfinder {
+  position: absolute;
+  inset: 14%;
+  pointer-events: none;
+  opacity: 0.9;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+}
+body.play-app .scanner-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 18px auto 0;
+  width: fit-content;
+  max-width: 100%;
+  background: #ffffff;
+  color: #2e2a5e;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  padding: 12px 22px;
+  border-radius: 999px;
+  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.22);
+}
+body.play-app .scanner-status--success {
+  background: #57c8a3;
+  color: #ffffff;
+}
+
+/* ---------------------------------------------------------------------
+   Pages placeholder (Scanner, Galerie, Tuto, À propos)
+   ------------------------------------------------------------------- */
+body.play-app .placeholder-page {
+  min-height: 72vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(84px + env(safe-area-inset-top)) 20px 40px;
+}
+body.play-app .placeholder-card {
+  max-width: 420px;
+  padding: 36px 28px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+body.play-app .placeholder-icon {
+  color: #8b7cf0;
+  font-size: 3rem;
+  display: flex;
+}
+body.play-app .placeholder-card h1 {
+  margin: 0;
+  font-size: 1.7rem;
+}
+body.play-app .placeholder-card p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+body.play-app .placeholder-logo {
+  width: 90px;
+  height: auto;
+}
+body.play-app .home-status {
+  max-width: 420px;
+  margin: 40px auto 0;
+  padding: 28px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+body.play-app .home-status p {
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Bouton retour accueil (haut de la page LIVRE) — style soft */
+body.play-app .book-home-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.98rem;
+  color: #8b7cf0;
+  background: #ffffff;
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.2);
+  padding: 9px 18px;
+  cursor: pointer;
+  margin: calc(6px + env(safe-area-inset-top)) 0 4px;
+  transition: transform 0.1s ease;
+}
+body.play-app .book-home-btn:active {
+  transform: scale(0.95);
 }
 
 /* ---------------------------------------------------------------------
@@ -213,43 +874,22 @@ body.play-app .book-empty {
   font-size: 1.15rem;
 }
 
+/* Vignettes (page livre) : style soft uniformisé — bordure blanche + ombre */
 body.play-app .vignette {
   position: relative;
   cursor: pointer;
-  background: var(--paper-2);
-  border: 2.5px solid var(--ink);
-  border-radius: 18px 8px 18px 8px / 8px 18px 8px 18px;
+  background: #ffffff;
+  border: 6px solid #ffffff;
+  border-radius: 22px;
   overflow: visible;
-  box-shadow: var(--sticker-shadow);
+  box-shadow: 0 8px 20px rgba(90, 80, 140, 0.18);
   display: flex;
   flex-direction: column;
   transition: transform 0.14s ease, box-shadow 0.14s ease;
 }
-/* Variation « dessin à la main » : 5 contours + inclinaisons différents,
-   pour que les vignettes ne soient pas toutes identiques (cycle de 5). */
-body.play-app .vignette:nth-child(5n + 1) {
-  border-radius: 18px 9px 16px 7px / 8px 17px 9px 18px;
-  transform: rotate(-1.6deg);
-}
-body.play-app .vignette:nth-child(5n + 2) {
-  border-radius: 9px 20px 7px 17px / 17px 8px 19px 9px;
-  transform: rotate(1.3deg);
-}
-body.play-app .vignette:nth-child(5n + 3) {
-  border-radius: 22px 7px 14px 10px / 7px 19px 8px 15px;
-  transform: rotate(-0.7deg);
-}
-body.play-app .vignette:nth-child(5n + 4) {
-  border-radius: 8px 16px 11px 20px / 18px 9px 17px 7px;
-  transform: rotate(2deg);
-}
-body.play-app .vignette:nth-child(5n + 5) {
-  border-radius: 15px 11px 19px 8px / 10px 16px 7px 18px;
-  transform: rotate(-1.1deg);
-}
 body.play-app .vignette:hover {
-  transform: rotate(0deg) scale(1.04);
-  box-shadow: var(--sticker-shadow-lg);
+  transform: scale(1.04);
+  box-shadow: 0 10px 26px rgba(90, 80, 140, 0.26);
   z-index: 2;
 }
 /* Squelette de couverture en attente de lazy-load (réserve la place + observable
@@ -266,19 +906,14 @@ body.play-app .vignette--cover-placeholder:hover {
 }
 body.play-app .vignette-thumb {
   aspect-ratio: 1 / 1;
-  border-radius: 16px 6px 16px 6px / 6px 16px 6px 16px;
+  border-radius: 16px;
   overflow: hidden;
-  background: #f3efe6;
+  background: #faf6ec;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
 }
-body.play-app .vignette:nth-child(5n + 1) .vignette-thumb { border-radius: 16px 7px 14px 6px / 6px 15px 8px 16px; }
-body.play-app .vignette:nth-child(5n + 2) .vignette-thumb { border-radius: 7px 17px 6px 15px / 15px 7px 16px 8px; }
-body.play-app .vignette:nth-child(5n + 3) .vignette-thumb { border-radius: 19px 6px 12px 9px / 6px 16px 7px 13px; }
-body.play-app .vignette:nth-child(5n + 4) .vignette-thumb { border-radius: 7px 14px 10px 17px / 15px 8px 14px 6px; }
-body.play-app .vignette:nth-child(5n + 5) .vignette-thumb { border-radius: 13px 10px 16px 7px / 9px 14px 6px 15px; }
 body.play-app .vignette-thumb img {
   width: 100%;
   height: 100%;
@@ -309,13 +944,13 @@ body.play-app .vignette-play span {
   max-width: 70px;
   aspect-ratio: 1;
   border-radius: 50%;
-  background: rgba(255, 253, 248, 0.92);
-  border: 2.5px solid var(--ink);
-  box-shadow: var(--sticker-shadow);
+  background: rgba(255, 255, 255, 0.96);
+  border: none;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.28);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ink);
+  color: #8b7cf0;
   font-size: 1.4rem;
   padding-left: 6px;
 }
@@ -356,8 +991,9 @@ body.play-app .book-bonus-footer {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
-  z-index: 50;
+  /* au-dessus de la barre d'onglets du shell */
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  z-index: 49;
   display: flex;
   align-items: center;
   background: var(--accent-orange);

@@ -2,8 +2,9 @@ import {
   doc, setDoc, getDoc, getDocs, deleteDoc,
   collection, query, where,
 } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
+import { ref, uploadBytes, deleteObject } from 'firebase/storage'
 import { db, storage } from './firebase'
+import { cachedDownloadBlob, invalidateBlobCache } from './blobCache'
 import { logAudit } from './audit'
 import { setProjectBook, duplicateProject } from './projectsStore'
 import type { Book, Project } from '../types/project'
@@ -30,16 +31,11 @@ function bookRef(id: string) {
 
 async function uploadBlob(path: string, blob: Blob): Promise<void> {
   await uploadBytes(ref(storage, path), blob, { cacheControl: 'public, max-age=31536000, immutable' })
+  invalidateBlobCache(path)
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {
-  try {
-    const url = await getDownloadURL(ref(storage, path))
-    const res = await fetch(url)
-    return await res.blob()
-  } catch {
-    return null
-  }
+  return cachedDownloadBlob(path)
 }
 
 function toDoc(book: Book): BookDoc {

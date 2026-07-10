@@ -3,9 +3,10 @@ import {
   collection, query, where
 } from 'firebase/firestore'
 import {
-  ref, uploadBytes, getBlob, deleteObject
+  ref, uploadBytes, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
+import { cachedDownloadBlob } from './blobCache'
 import type { Scan } from '../types/project'
 
 interface ScanDoc {
@@ -45,12 +46,8 @@ export async function getScan(id: string): Promise<Scan | undefined> {
   if (!snap.exists()) return undefined
   const data = snap.data() as ScanDoc
 
-  let scanImageBlob: Blob
-  try {
-    scanImageBlob = await getBlob(ref(storage, `scans/${id}/scanImage`))
-  } catch {
-    return undefined
-  }
+  const scanImageBlob = await cachedDownloadBlob(`scans/${id}/scanImage`)
+  if (!scanImageBlob) return undefined
 
   return {
     id: data.id,

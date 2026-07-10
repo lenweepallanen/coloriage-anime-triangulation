@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { getBook, getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import { getProjectsByBook, getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
 import type { Book, Project } from '@shared/types/project'
+import { useI18n } from '../i18n'
 
 /** Préfixe https:// si l'URL n'a pas de schéma (ex. "amazon.com" → "https://amazon.com"). */
 function normalizeUrl(u: string): string {
@@ -14,6 +15,7 @@ function normalizeUrl(u: string): string {
 export default function BookPage() {
   const { bookId } = useParams<{ bookId: string }>()
   const navigate = useNavigate()
+  const { t } = useI18n()
   const [book, setBook] = useState<Book | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [otherBooks, setOtherBooks] = useState<Book[]>([])
@@ -82,13 +84,13 @@ export default function BookPage() {
     }
   }, [bonusImgUrl, loading, projects.length, otherBooks.length])
 
-  if (loading) return <div className="loading">Chargement…</div>
+  if (loading) return <div className="loading">{t('loading')}</div>
   if (notAvailable || !book) {
     return (
       <div className="play-panel">
         <div className="paper-card">
-          <h1>Livre indisponible</h1>
-          <p>Ce livre n'existe pas ou n'est pas publié.</p>
+          <h1>{t('book.unavailable.title')}</h1>
+          <p>{t('book.unavailable.text')}</p>
         </div>
       </div>
     )
@@ -96,10 +98,13 @@ export default function BookPage() {
 
   return (
     <div className="book-page">
+      <button className="book-home-btn" onClick={() => navigate('/')}>
+        ← {t('book.back')}
+      </button>
       <h1 className="book-title">{book.name}</h1>
-      <p className="book-subtitle">Clique sur l'un des coloriages pour le scanner et le voir s'animer !</p>
+      <p className="book-subtitle">{t('book.subtitle')}</p>
       {projects.length === 0 ? (
-        <p className="book-empty">Aucun coloriage disponible dans ce livre pour le moment.</p>
+        <p className="book-empty">{t('book.empty')}</p>
       ) : (
         <div className="book-grid">
           {projects.map(p => (
@@ -115,7 +120,7 @@ export default function BookPage() {
       {otherBooks.length > 0 && (
         <>
           <hr className="book-collection-sep" />
-          <h2 className="book-collection-title">Dans la même collection</h2>
+          <h2 className="book-collection-title">{t('book.collection')}</h2>
           <div className="book-collection-grid">
             {otherBooks.map(b => (
               <BookCover key={b.id} book={b} />
@@ -134,7 +139,7 @@ export default function BookPage() {
               className="book-bonus-btn"
               onClick={() => window.open(normalizeUrl(book.bonusUrl), '_blank', 'noopener')}
             >
-              TÉLÉCHARGER BONUS
+              {t('book.bonus')}
             </button>
           </div>
         </div>

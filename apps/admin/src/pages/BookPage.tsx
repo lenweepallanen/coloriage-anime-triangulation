@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getBook, updateBook, deleteBook } from '../db/booksStore'
 import { getProjectsByBook, getProjectThumbnail, setProjectBook } from '../db/projectsStore'
 import { buildBookPlayUrl, buildBookPlayUrlLocal, setBookPublished } from '../db/publishProject'
+import { downloadQrPng } from '../utils/qrGenerator'
 import type { Book, Project } from '../types/project'
 
 export default function BookPage() {
@@ -320,6 +321,13 @@ export default function BookPage() {
                 </code>
                 <button onClick={handleCopyUrl} className="btn-sm btn-secondary">
                   {copied ? 'Copié !' : 'Copier'}
+                </button>
+                <button
+                  onClick={() => downloadQrPng(url, `livre-${book.name.replace(/[^\w-]+/g, '_')}-qr.png`).catch(e => alert('Échec QR : ' + e))}
+                  className="btn-sm btn-secondary"
+                  title="Télécharger le QR code à imprimer au début du livre (ajout du livre dans l'app)"
+                >
+                  QR code
                 </button>
               </div>
               <div style={{ fontSize: 12, color: '#666', margin: '12px 0 4px' }}>Aperçu local (dev) :</div>

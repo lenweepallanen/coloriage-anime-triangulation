@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { setProjectPublished, buildPlayUrl, buildAdminScanUrl } from '../../db/publishProject'
+import { downloadQrPng } from '../../utils/qrGenerator'
 
 interface Props {
   projectId: string
@@ -12,6 +13,7 @@ export default function PublishPanel({ projectId, published, publishedAt, onChan
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
   const [copiedAdmin, setCopiedAdmin] = useState(false)
+  const [qrBusy, setQrBusy] = useState(false)
   const url = buildPlayUrl(projectId)
   const adminUrl = buildAdminScanUrl(projectId)
 
@@ -36,6 +38,19 @@ export default function PublishPanel({ projectId, published, publishedAt, onChan
       setTimeout(() => setCopied(false), 1500)
     } catch (e) {
       console.error('[publish] copy failed', e)
+    }
+  }
+
+  async function handleDownloadQr() {
+    if (qrBusy) return
+    setQrBusy(true)
+    try {
+      await downloadQrPng(url, `coloriage-${projectId}-qr.png`)
+    } catch (e) {
+      console.error('[publish] QR download failed', e)
+      alert('Échec de la génération du QR : ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setQrBusy(false)
     }
   }
 
@@ -76,6 +91,9 @@ export default function PublishPanel({ projectId, published, publishedAt, onChan
             </code>
             <button onClick={handleCopy} className="btn-sm btn-secondary">
               {copied ? 'Copié !' : 'Copier'}
+            </button>
+            <button onClick={handleDownloadQr} disabled={qrBusy} className="btn-sm btn-secondary" title="Télécharger le QR code à imprimer en face du coloriage">
+              {qrBusy ? '…' : 'QR code'}
             </button>
           </div>
         </div>

@@ -3,9 +3,10 @@ import {
   collection, query, where
 } from 'firebase/firestore'
 import {
-  ref, uploadBytes, getDownloadURL, deleteObject
+  ref, uploadBytes, deleteObject
 } from 'firebase/storage'
 import { db, storage } from './firebase'
+import { cachedDownloadBlob, invalidateBlobCache } from './blobCache'
 import { logAudit } from './audit'
 import { generateThumbnailBlob } from '../utils/thumbnailGenerator'
 import type { Project, Animation, AnimationType, Point2D, BarycentricRef, KeyframeData, CannyParams, CurvilinearParam, MeshData, Scene, BodyZone, SceneBackground, SceneForeground, Bone, WalkSkeletonDefinition, WalkParams, WalkLimbSeparation, ProjectTriangulation } from '../types/project'
@@ -104,6 +105,9 @@ interface MeshDoc {
   cotrackerVideoHeight?: number
   cotrackerTrackingValidated?: boolean
   hasCotrackerFrames?: boolean
+  hasCotrackerFramesRaw?: boolean
+  hasCotrackerVisibility?: boolean
+  cotrackerVisibilityThreshold?: number
   cotrackerSkeleton?: import('../types/project').CoTrackerSkeleton
   cotrackerBonesValidated?: boolean
   cotrackerBoneSmoothingCutoffHz?: number
@@ -448,18 +452,11 @@ const STORAGE_CACHE_METADATA = { cacheControl: 'public, max-age=31536000, immuta
 async function uploadBlob(path: string, blob: Blob): Promise<void> {
   const storageRef = ref(storage, path)
   await uploadBytes(storageRef, blob, STORAGE_CACHE_METADATA)
+  invalidateBlobCache(path)
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {
-  try {
-    const storageRef = ref(storage, path)
-    const url = await getDownloadURL(storageRef)
-    const response = await fetch(url)
-    return await response.blob()
-  } catch (err) {
-    console.warn(`[Storage] Download failed for ${path}:`, err)
-    return null
-  }
+  return cachedDownloadBlob(path)
 }
 
 async function downloadJSON<T>(path: string): Promise<T | null> {
@@ -860,6 +857,9 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     ...(mesh.cotrackerVideoHeight != null && { cotrackerVideoHeight: mesh.cotrackerVideoHeight }),
     ...(mesh.cotrackerTrackingValidated != null && { cotrackerTrackingValidated: mesh.cotrackerTrackingValidated }),
     hasCotrackerFrames: mesh.cotrackerFrames != null,
+    hasCotrackerFramesRaw: mesh.cotrackerFramesRaw != null,
+    hasCotrackerVisibility: mesh.cotrackerVisibility != null,
+    ...(mesh.cotrackerVisibilityThreshold != null && { cotrackerVisibilityThreshold: mesh.cotrackerVisibilityThreshold }),
     ...(mesh.cotrackerSkeleton != null && { cotrackerSkeleton: mesh.cotrackerSkeleton }),
     ...(mesh.cotrackerBonesValidated != null && { cotrackerBonesValidated: mesh.cotrackerBonesValidated }),
     ...(mesh.cotrackerBoneSmoothingCutoffHz != null && { cotrackerBoneSmoothingCutoffHz: mesh.cotrackerBoneSmoothingCutoffHz }),
@@ -997,7 +997,7 @@ type MeshWithoutLargeJSON = Omit<import('../types/project').MeshData,
   'sam2MasksRLE' |
   'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames' |
   'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames' |
-  'cotrackerFrames'>
+  'cotrackerFrames' | 'cotrackerFramesRaw' | 'cotrackerVisibility'>
 
 function isLegacyMeshDoc(meshDoc: MeshDoc | LegacyMeshDoc): meshDoc is LegacyMeshDoc {
   const legacy = meshDoc as LegacyMeshDoc
@@ -1119,6 +1119,7 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     cotrackerVideoWidth: d.cotrackerVideoWidth,
     cotrackerVideoHeight: d.cotrackerVideoHeight,
     cotrackerTrackingValidated: d.cotrackerTrackingValidated,
+    cotrackerVisibilityThreshold: d.cotrackerVisibilityThreshold,
     cotrackerSkeleton: d.cotrackerSkeleton,
     cotrackerBonesValidated: d.cotrackerBonesValidated,
     cotrackerBoneSmoothingCutoffHz: d.cotrackerBoneSmoothingCutoffHz,
@@ -1173,6 +1174,8 @@ async function loadAnimationJSON(
   walkBodyFramesSmoothed: Point2D[][] | null
   walkZoneFramesSmoothed: Record<string, Point2D[][]> | null
   cotrackerFrames: Record<string, Point2D[]> | null
+  cotrackerFramesRaw: Record<string, Point2D[]> | null
+  cotrackerVisibility: Record<string, number[]> | null
 }> {
   // Legacy projects store files at root level, new ones under animations/{animId}/
   const path = (file: string) =>
@@ -1202,6 +1205,8 @@ async function loadAnimationJSON(
     meshDoc.hasWalkBodyFramesSmoothed ? downloadJSON<Point2D[][]>(path('walkBodyFramesSmoothed.json')) : null,
     meshDoc.hasWalkZoneFramesSmoothed ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFramesSmoothed.json')) : null,
     meshDoc.hasCotrackerFrames ? downloadJSON<Record<string, Point2D[]>>(path('cotrackerFrames.json')) : null,
+    meshDoc.hasCotrackerFramesRaw ? downloadJSON<Record<string, Point2D[]>>(path('cotrackerFramesRaw.json')) : null,
+    meshDoc.hasCotrackerVisibility ? downloadJSON<Record<string, number[]>>(path('cotrackerVisibility.json')) : null,
   ])
 
   return {
@@ -1228,6 +1233,8 @@ async function loadAnimationJSON(
     walkBodyFramesSmoothed: downloads[20] as Point2D[][] | null,
     walkZoneFramesSmoothed: downloads[21] as Record<string, Point2D[][]> | null,
     cotrackerFrames: downloads[22] as Record<string, Point2D[]> | null,
+    cotrackerFramesRaw: downloads[23] as Record<string, Point2D[]> | null,
+    cotrackerVisibility: downloads[24] as Record<string, number[]> | null,
   }
 }
 
@@ -1747,7 +1754,7 @@ export type AnimationUploadField =
   | 'sam2MasksRLE'
   | 'sam2Contours' | 'sam2ContourOriginFrames' | 'sam2ContourAnchorFrames' | 'sam2ContourSubdivisionFrames'
   | 'sam2SmoothedAnchorFrames' | 'sam2SmoothedSubdivisionFrames' | 'sam2SmoothedContourOriginFrames'
-  | 'cotrackerFrames'
+  | 'cotrackerFrames' | 'cotrackerFramesRaw' | 'cotrackerVisibility'
 
 export type UploadHint =
   | 'image' | 'backgroundVideo' | 'ambientSound' | 'thumbnail'
@@ -1931,6 +1938,8 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
           walkBodyFramesSmoothed: anim.mesh.walkBodyFramesSmoothed,
           walkZoneFramesSmoothed: anim.mesh.walkZoneFramesSmoothed,
           cotrackerFrames: anim.mesh.cotrackerFrames,
+          cotrackerFramesRaw: anim.mesh.cotrackerFramesRaw,
+          cotrackerVisibility: anim.mesh.cotrackerVisibility,
         }
         const data = jsonFieldMap[field]
         const isNonEmpty = data != null && (Array.isArray(data) ? data.length > 0 : (typeof data === 'object' ? Object.keys(data).length > 0 : true))
@@ -1976,6 +1985,8 @@ const ANIM_JSON_FILES = [
   'walkBodyFramesSmoothed.json',
   'walkZoneFramesSmoothed.json',
   'cotrackerFrames.json',
+  'cotrackerFramesRaw.json',
+  'cotrackerVisibility.json',
 ]
 
 export async function deleteProject(id: string): Promise<void> {

@@ -26,3 +26,10 @@ dist-ssr
 # Python
 __pycache__/
 *.pyc
+
+# Environnements Python locaux
+cotracker-local/.venv/
+
+# Claude Code local
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
