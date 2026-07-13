@@ -91,6 +91,12 @@ h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
   opacity: 0;
   animation: line-in 0.5s ease forwards;
 }
+/* « Color. » et « Scan. » sur la MÊME ligne, mais apparition en 2 temps */
+.tagline-line1,
+.tagline-line2 {
+  display: inline-block;
+}
+.tagline-line2 { margin-left: 0.35em; }
 .tagline-line1 { animation-delay: 0.2s; }
 .tagline-line2 { animation-delay: 0.65s; }
 .tagline-line3 { animation-delay: 1.1s; }
@@ -165,12 +171,13 @@ h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
 .badge {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
   background: #1d1d1f;
   color: #fff;
   border-radius: 14px;
-  padding: 10px 20px;
-  min-width: 210px;
+  padding: 14px 24px;
+  min-width: 200px;
   text-align: left;
   cursor: default;
   user-select: none;
