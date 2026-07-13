@@ -30,13 +30,23 @@ html, body {
 body {
   font-family: 'Andika', 'Segoe UI', sans-serif;
   color: #2e2a5e;
-  background: #fdf8ea url('bg.webp') center bottom / cover no-repeat fixed;
+  /* Fond uni #FFF2DE + calque image FIXÉ au viewport (::before) :
+     l'image n'est jamais « coupée » au scroll (background-attachment: fixed
+     est buggé sur iOS, un calque position:fixed ne l'est pas). */
+  background: #FFF2DE;
   display: flex;
   flex-direction: column;
   align-items: center;
   min-height: 100vh;
   padding: 32px 20px 40px;
   text-align: center;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: #FFF2DE url('bg.webp') center bottom / cover no-repeat;
 }
 
 h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
@@ -73,6 +83,24 @@ h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
 }
 .tagline .hl { color: #8b7cf0; font-style: normal; }
 
+/* Devise en cascade au chargement (comme le boot screen de l'app) */
+.tagline-line1,
+.tagline-line2 {
+  display: block;
+  opacity: 0;
+  animation: line-in 0.6s ease forwards;
+}
+.tagline-line1 { animation-delay: 0.3s; }
+.tagline-line2 { animation-delay: 1.1s; }
+@keyframes line-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tagline-line1, .tagline-line2 { animation: none; opacity: 1; }
+  .fan { animation: none; opacity: 1; }
+}
+
 /* --- Éventail de covers --- */
 .fan {
   display: flex;
@@ -80,6 +108,9 @@ h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
   align-items: flex-end;
   margin: clamp(36px, 7vh, 64px) 0 clamp(28px, 5vh, 48px);
   padding: 0 10px;
+  opacity: 0;
+  animation: line-in 0.7s ease forwards;
+  animation-delay: 1.8s;
 }
 .fan img {
   width: clamp(130px, 22vw, 230px);
@@ -88,13 +119,19 @@ h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
   border: 6px solid #fff;
   border-radius: 20px;
   box-shadow: 0 10px 28px rgba(90, 80, 140, 0.28);
+  position: relative;
   transition: transform 0.18s ease;
 }
-.fan img:nth-child(1) { transform: rotate(-9deg) translateY(14px); }
-.fan img:nth-child(2) { transform: rotate(-3deg); margin-left: -34px; z-index: 2; position: relative; }
-.fan img:nth-child(3) { transform: rotate(3deg); margin-left: -34px; z-index: 3; position: relative; }
-.fan img:nth-child(4) { transform: rotate(9deg) translateY(14px); margin-left: -34px; }
-.fan img:hover { transform: rotate(0deg) translateY(-8px) scale(1.05); z-index: 5; position: relative; }
+/* z-order FIGÉ (jamais modifié au hover — sinon les cartes "sautent") */
+.fan img:nth-child(1) { transform: rotate(-9deg) translateY(14px); z-index: 1; }
+.fan img:nth-child(2) { transform: rotate(-3deg); margin-left: -34px; z-index: 2; }
+.fan img:nth-child(3) { transform: rotate(3deg); margin-left: -34px; z-index: 3; }
+.fan img:nth-child(4) { transform: rotate(9deg) translateY(14px); margin-left: -34px; z-index: 2; }
+/* Hover : chaque carte garde sa rotation et son empilement, elle se soulève juste */
+.fan img:nth-child(1):hover { transform: rotate(-9deg) translateY(2px) scale(1.05); }
+.fan img:nth-child(2):hover { transform: rotate(-3deg) translateY(-12px) scale(1.05); }
+.fan img:nth-child(3):hover { transform: rotate(3deg) translateY(-12px) scale(1.05); }
+.fan img:nth-child(4):hover { transform: rotate(9deg) translateY(2px) scale(1.05); }
 
 /* --- Badges stores (non cliquables) --- */
 .coming {
