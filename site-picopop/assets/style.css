@@ -1,0 +1,195 @@
+/* Picopop — mini site vitrine (picopop.app) */
+
+@font-face {
+  font-family: 'Fredoka';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('fonts/fredoka-400-700-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Andika';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fonts/andika-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Andika';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('fonts/andika-700-latin.woff2') format('woff2');
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  min-height: 100%;
+}
+body {
+  font-family: 'Andika', 'Segoe UI', sans-serif;
+  color: #2e2a5e;
+  background: #fdf8ea url('bg.webp') center bottom / cover no-repeat fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 32px 20px 40px;
+  text-align: center;
+}
+
+h1, h2, h3 { font-family: 'Fredoka', sans-serif; }
+
+/* --- Header / branding --- */
+.logo {
+  width: clamp(110px, 22vw, 170px);
+  height: auto;
+}
+.wordmark {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(2.8rem, 9vw, 4.4rem);
+  letter-spacing: 1px;
+  line-height: 1.05;
+  margin: 6px 0 10px;
+  text-shadow:
+    -3px -3px 0 #fff, 3px -3px 0 #fff, -3px 3px 0 #fff, 3px 3px 0 #fff,
+    -3px 0 0 #fff, 3px 0 0 #fff, 0 -3px 0 #fff, 0 3px 0 #fff,
+    0 6px 14px rgba(90, 80, 140, 0.22);
+}
+.wordmark span:nth-child(1) { color: #ff8fae; }
+.wordmark span:nth-child(2) { color: #57c8a3; }
+.wordmark span:nth-child(3) { color: #9b8cf5; }
+.wordmark span:nth-child(4) { color: #ffcf3f; }
+.wordmark span:nth-child(5) { color: #ff6b6b; }
+.wordmark span:nth-child(6) { color: #8b7cf0; }
+.wordmark span:nth-child(7) { color: #57c8a3; }
+.tagline {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(1.15rem, 4vw, 1.5rem);
+  line-height: 1.5;
+}
+.tagline .hl { color: #8b7cf0; font-style: normal; }
+
+/* --- Éventail de covers --- */
+.fan {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  margin: clamp(36px, 7vh, 64px) 0 clamp(28px, 5vh, 48px);
+  padding: 0 10px;
+}
+.fan img {
+  width: clamp(130px, 22vw, 230px);
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border: 6px solid #fff;
+  border-radius: 20px;
+  box-shadow: 0 10px 28px rgba(90, 80, 140, 0.28);
+  transition: transform 0.18s ease;
+}
+.fan img:nth-child(1) { transform: rotate(-9deg) translateY(14px); }
+.fan img:nth-child(2) { transform: rotate(-3deg); margin-left: -34px; z-index: 2; position: relative; }
+.fan img:nth-child(3) { transform: rotate(3deg); margin-left: -34px; z-index: 3; position: relative; }
+.fan img:nth-child(4) { transform: rotate(9deg) translateY(14px); margin-left: -34px; }
+.fan img:hover { transform: rotate(0deg) translateY(-8px) scale(1.05); z-index: 5; position: relative; }
+
+/* --- Badges stores (non cliquables) --- */
+.coming {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #7a52c7;
+  font-size: clamp(1.15rem, 4vw, 1.5rem);
+  margin-bottom: 18px;
+}
+.badges {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+}
+.badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #1d1d1f;
+  color: #fff;
+  border-radius: 14px;
+  padding: 10px 20px;
+  min-width: 210px;
+  text-align: left;
+  cursor: default;
+  user-select: none;
+  box-shadow: 0 6px 16px rgba(46, 42, 94, 0.25);
+}
+.badge svg { flex: 0 0 auto; }
+.badge small {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 1.2px;
+  opacity: 0.85;
+  font-family: 'Fredoka', sans-serif;
+}
+.badge strong {
+  display: block;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+/* --- Footer --- */
+footer {
+  margin-top: auto;
+  padding-top: 48px;
+  font-size: 0.9rem;
+  color: #6b6357;
+}
+footer a {
+  color: #7a52c7;
+  font-weight: 700;
+  text-decoration: none;
+}
+footer a:hover { text-decoration: underline; }
+footer .sep { margin: 0 8px; opacity: 0.5; }
+
+/* --- Pages légales --- */
+.legal-page {
+  text-align: left;
+  align-items: center;
+}
+.legal-card {
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 24px;
+  box-shadow: 0 8px 24px rgba(90, 80, 140, 0.16);
+  max-width: 760px;
+  width: 100%;
+  padding: clamp(24px, 5vw, 48px);
+  margin-top: 20px;
+  line-height: 1.65;
+}
+.legal-card h1 { font-size: 2rem; margin-bottom: 18px; color: #2e2a5e; }
+.legal-card h2 { font-size: 1.25rem; margin: 26px 0 8px; color: #7a52c7; }
+.legal-card p, .legal-card li { color: #3a3560; margin-bottom: 8px; }
+.legal-card ul { padding-left: 22px; }
+.back-home {
+  display: inline-block;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  color: #8b7cf0;
+  background: #fff;
+  border-radius: 999px;
+  padding: 10px 22px;
+  text-decoration: none;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.2);
+}
+
+@media (max-width: 560px) {
+  .fan img { width: 24vw; border-width: 4px; border-radius: 14px; }
+  .fan img:nth-child(2), .fan img:nth-child(3), .fan img:nth-child(4) { margin-left: -5vw; }
+  .fan img:nth-child(1), .fan img:nth-child(4) { transform-origin: bottom center; }
+}
