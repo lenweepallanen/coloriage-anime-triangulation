@@ -39,7 +39,13 @@ export async function initNative(): Promise<void> {
   }
 
   // Plein écran immersif + écran jamais en veille pendant le jeu.
-  await Promise.allSettled([StatusBar.hide(), KeepAwake.keepAwake()])
+  // App verrouillée PORTRAIT par défaut (menus stables) ; l'écran scan/animation
+  // bascule lui-même en paysage via screen.orientation.lock (polyfillé ci-dessus).
+  await Promise.allSettled([
+    StatusBar.hide(),
+    KeepAwake.keepAwake(),
+    ScreenOrientation.lock({ orientation: 'portrait' }),
+  ])
 }
 
 /**

@@ -1455,6 +1455,46 @@ body.play-app .scan-status-text {
   color: var(--ink);
 }
 
+/* --- Overlay « Tourne ton téléphone ! » (app native, paysage forcé) --- */
+body.play-app .rotate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: var(--cream);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--accent-violet);
+}
+body.play-app .rotate-overlay-phone {
+  animation: rotate-phone-hint 1.6s ease-in-out infinite;
+}
+@keyframes rotate-phone-hint {
+  0%, 20% { transform: rotate(0deg); }
+  55%, 80% { transform: rotate(-90deg); }
+  100% { transform: rotate(-90deg); }
+}
+body.play-app .rotate-overlay-title {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.5rem, 6vw, 2rem);
+  color: var(--ink);
+  margin: 10px 0 0;
+}
+body.play-app .rotate-overlay-sub {
+  font-family: 'Andika', sans-serif;
+  font-size: 1.05rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .rotate-overlay-phone { animation: none; transform: rotate(-90deg); }
+}
+
 /* --- « En train de scanner » (mode play) : photo + coins jaunes + ligne --- */
 body.play-app .scan-processing--play {
   display: flex;

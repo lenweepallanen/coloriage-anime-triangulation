@@ -47,6 +47,8 @@ interface Props {
   onSettings?: () => void
   /** Quitte la scène et revient au menu LIVRE (bouton « porte » rouge en haut à gauche, play portrait). */
   onExit?: () => void
+  /** Pause forcée de l'extérieur (ex. overlay « tourne ton téléphone » du mode natif). */
+  forcePaused?: boolean
 }
 
 function smoothstep(t: number): number {
@@ -67,11 +69,16 @@ function getAudioDurationMs(blob: Blob): Promise<number> {
   })
 }
 
-export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit }: Props) {
+export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
   const [playing, setPlaying] = useState(true)
+  // Pause/reprise pilotée de l'extérieur (overlay orientation du mode natif)
+  useEffect(() => {
+    if (forcePaused === undefined) return
+    setPlaying(!forcePaused)
+  }, [forcePaused])
   const playingRef = useRef(true)
   // État initial cohérent avec ScenePlayback : 'entering' si entrée 'moving' (walk
   // initial), sinon 'interaction'. Sinon, le ticker ne pousse jamais 'entering' vers

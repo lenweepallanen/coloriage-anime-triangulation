@@ -71,6 +71,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   const bookId = searchParams.get('book')
   const [paused, setPaused] = useState(false)
 
+
   // Orientation responsive : on ne verrouille PAS l'orientation (cf. soucis iOS) ;
   // le layout s'adapte au choix du user (téléphone vertical → portrait, horizontal
   // → canvas à gauche + HUD à droite). Sert aussi de clé de remount pour refit PIXI.
@@ -106,6 +107,53 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   type LamaStatus = 'idle' | 'generating-mask' | 'warmup' | 'inpainting' | 'done' | 'error' | 'not-needed'
 
   const [stage, setStage] = useState<ScanStage>('camera')
+  // --- App native (mode play) : validation + animation FIGÉES en paysage ---
+  // Le lock passe par le polyfill screen.orientation.lock (→ plugin Capacitor
+  // en natif, rejeté/no-op sur le web où le comportement responsive demeure).
+  const isNativeApp =
+    typeof globalThis !== 'undefined' &&
+    (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.() === true
+  const lockedStage = stage === 'preview' || stage === 'animation'
+  useEffect(() => {
+    if (mode !== 'play') return
+    const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
+    const backToPortrait = () => {
+      // Natif : on re-verrouille en portrait (politique globale de l'app) ;
+      // web : lock rejette → unlock (no-op) et le responsive reprend la main.
+      so.lock?.('portrait')?.catch?.(() => { try { so.unlock?.() } catch { /* ignore */ } })
+    }
+    if (lockedStage) {
+      so.lock?.('landscape')?.catch?.(() => { /* web : lock non supporté */ })
+    } else {
+      backToPortrait()
+    }
+    return backToPortrait
+  }, [mode, lockedStage])
+
+  // Orientation PHYSIQUE du téléphone (gravité) : quand l'écran est verrouillé
+  // paysage mais que l'enfant tient le téléphone à la verticale, on affiche
+  // l'overlay « tourne ton téléphone » et on met la scène en pause.
+  const [heldPortrait, setHeldPortrait] = useState(false)
+  useEffect(() => {
+    if (!isNativeApp || mode !== 'play' || !lockedStage) {
+      setHeldPortrait(false)
+      return
+    }
+    const onMotion = (e: DeviceMotionEvent) => {
+      const g = e.accelerationIncludingGravity
+      if (!g || g.x == null || g.y == null) return
+      const ax = Math.abs(g.x)
+      const ay = Math.abs(g.y)
+      // Zone morte (téléphone à plat) : on ne change pas d'état
+      if (ax < 3 && ay < 3) return
+      // Hystérésis pour éviter le clignotement autour de la diagonale
+      setHeldPortrait(prev => (prev ? ay > ax * 0.8 : ay > ax * 1.25))
+    }
+    window.addEventListener('devicemotion', onMotion)
+    return () => window.removeEventListener('devicemotion', onMotion)
+  }, [isNativeApp, mode, lockedStage])
+  const showRotateOverlay = heldPortrait && isNativeApp && mode === 'play' && lockedStage
+
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null)
   // URL de la photo capturée (visuel « scan en cours » du mode play)
   const capturedUrl = useMemo(
@@ -557,6 +605,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
         <Suspense fallback={<div className="loading">Chargement…</div>}>
           {project.scene && !!project.scene.background && project.scene.restPoint != null
             ? <ScenePlayer
+                forcePaused={showRotateOverlay || undefined}
                 project={project}
                 scanCanvas={processor.rectifiedCanvas}
                 lamaCanvas={lamaCanvas}
@@ -573,6 +622,18 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
                 onClose={handleRetake}
               />}
         </Suspense>
+      )}
+      {showRotateOverlay && (
+        <div className="rotate-overlay" role="alert">
+          <svg className="rotate-overlay-phone" viewBox="0 0 48 48" width="88" height="88" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="16" y="6" width="16" height="30" rx="4" />
+            <path d="M22 33.5h4" />
+            <path d="M38 24c0 7.7-6.3 14-14 14" />
+            <path d="m34.5 34 3.5 4 4-3.5" />
+          </svg>
+          <p className="rotate-overlay-title">Tourne ton téléphone&nbsp;!</p>
+          <p className="rotate-overlay-sub">Ton coloriage s'anime en mode paysage.</p>
+        </div>
       )}
     </div>
   )
