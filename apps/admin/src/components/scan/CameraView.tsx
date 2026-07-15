@@ -547,7 +547,7 @@ export default function CameraView({ onCapture, title }: Props) {
   return (
     <div className="camera-capture">
       {title && <h2 className="camera-title">{title}</h2>}
-      <div className="camera-square">
+      <div className={isCameraActive ? 'camera-square' : 'camera-square camera-square--idle'}>
         <video
           ref={videoRef}
           autoPlay
@@ -558,6 +558,10 @@ export default function CameraView({ onCapture, title }: Props) {
 
         {isCameraActive && (
           <canvas ref={overlayRef} className="camera-guide-overlay" />
+        )}
+
+        {isCameraActive && (
+          <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
         )}
 
         {isCameraActive && (
@@ -575,7 +579,8 @@ export default function CameraView({ onCapture, title }: Props) {
               <circle cx="32" cy="29" r="10" stroke="currentColor" strokeWidth="3" />
               <circle cx="51" cy="21" r="2" fill="currentColor" />
             </svg>
-            <span>Prends ton coloriage en photo</span>
+            <span className="camera-placeholder-title">Prêt à scanner ?</span>
+            <span className="camera-placeholder-sub">Appuie sur le bouton pour ouvrir la caméra.</span>
           </div>
         )}
 
@@ -587,6 +592,13 @@ export default function CameraView({ onCapture, title }: Props) {
       {error && <div className="camera-error-box">{error}</div>}
 
       <div className="camera-buttons">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleImportImage}
+          style={{ display: 'none' }}
+        />
         {!isCameraActive ? (
           <>
             <div className="camera-buttons-row">
@@ -598,20 +610,17 @@ export default function CameraView({ onCapture, title }: Props) {
                   </svg>
                 )}
                 <button onClick={startCamera} className="btn-start-camera">
-                  Demarrer la camera
+                  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: '-3px', marginRight: 8 }}>
+                    <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7H7l2-3h6l2 3h2.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5Z" />
+                    <circle cx="12" cy="13" r="3.5" />
+                  </svg>
+                  Ouvrir la caméra
                 </button>
               </span>
               <button onClick={() => fileInputRef.current?.click()} className="btn-import">
                 Importer une image
               </button>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleImportImage}
-              style={{ display: 'none' }}
-            />
             <div className="camera-tips">
               <p className="camera-tips-title">Conseils pour une bonne photo :</p>
               <p>Posez le coloriage a plat sur une table</p>
@@ -621,21 +630,36 @@ export default function CameraView({ onCapture, title }: Props) {
             </div>
           </>
         ) : (
-          <div className="camera-buttons-row">
+          <div className="camera-buttons-row camera-buttons-row--active">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="btn-gallery"
+              aria-label="Importer une image"
+            >
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+                <circle cx="9" cy="10" r="1.6" />
+                <path d="m4.5 17 4.5-4.5 3.5 3.5 3-3 4 4" />
+              </svg>
+            </button>
+            <button
+              onClick={capturePhoto}
+              className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
+              aria-label="Capturer"
+            >
+              <span className="btn-capture-label">Capturer</span>
+            </button>
             {torchSupported && (
               <button
                 onClick={toggleTorch}
                 className={torchOn ? 'btn-torch btn-torch--on' : 'btn-torch'}
+                aria-label={torchOn ? 'Flash activé' : 'Flash'}
               >
-                {torchOn ? 'Flash ON' : 'Flash'}
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" stroke="none">
+                  <path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H13L13 2Z" />
+                </svg>
               </button>
             )}
-            <button
-              onClick={capturePhoto}
-              className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
-            >
-              Capturer
-            </button>
             <button onClick={stopCamera} className="btn-cancel">
               Annuler
             </button>

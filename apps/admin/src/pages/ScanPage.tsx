@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
 import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
 import { useProject } from '../hooks/useProject'
@@ -107,6 +107,12 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
 
   const [stage, setStage] = useState<ScanStage>('camera')
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null)
+  // URL de la photo capturée (visuel « scan en cours » du mode play)
+  const capturedUrl = useMemo(
+    () => (capturedBlob ? URL.createObjectURL(capturedBlob) : null),
+    [capturedBlob],
+  )
+  useEffect(() => () => { if (capturedUrl) URL.revokeObjectURL(capturedUrl) }, [capturedUrl])
   const [detectedCorners, setDetectedCorners] = useState<Point2D[] | null>(null)
   const [lamaCanvas, setLamaCanvas] = useState<HTMLCanvasElement | null>(null)
   const [lamaStatus, setLamaStatus] = useState<LamaStatus>('idle')
@@ -284,7 +290,29 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
 
   return (
     <div className="scan-page">
-      {stage !== 'animation' && stage !== 'preview' && <h2>{project.name} — Mode Coloriage</h2>}
+      {mode === 'play' && stage !== 'animation' && (
+        <button className="scan-back-btn" onClick={() => window.history.back()} aria-label="Retour">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 5 8 12l7 7" />
+          </svg>
+        </button>
+      )}
+      {stage !== 'animation' && stage !== 'preview' && (
+        mode === 'play' ? (
+          <header className="scan-header">
+            <h2 className="scan-header-title">SCAN</h2>
+            <p className="scan-header-sub">
+              {stage === 'camera'
+                ? 'Scanne ton coloriage pour le voir prendre vie !'
+                : stage === 'adjust'
+                  ? 'Ajuste les coins de ton coloriage'
+                  : 'On scanne ton coloriage…'}
+            </p>
+          </header>
+        ) : (
+          <h2>{project.name} — Mode Coloriage</h2>
+        )
+      )}
 
       {stage === 'camera' && (
         <CameraView onCapture={onCameraCapture} title={`${project.name} — Mode Coloriage`} />
@@ -300,16 +328,28 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       )}
 
       {stage === 'processing' && (
-        <div className="scan-processing">
-          <div className="loading">
-            {processor.error
-              ? `Erreur : ${processor.error}`
-              : mode === 'play'
-                ? 'Préparation de ton coloriage…'
+        <div className={mode === 'play' ? 'scan-processing scan-processing--play' : 'scan-processing'}>
+          {mode === 'play' && capturedUrl && !processor.error && (
+            <div className="scan-processing-frame">
+              <img src={capturedUrl} alt="" />
+              <div className="scan-frame-corners" aria-hidden="true"><i /><i /><i /><i /></div>
+              <div className="scan-line" aria-hidden="true" />
+            </div>
+          )}
+          {mode === 'play' && !processor.error ? (
+            <div className="scan-progress-pill">
+              <span className="scan-progress-star" aria-hidden="true">⭐</span>
+              Scan en cours…
+            </div>
+          ) : (
+            <div className="loading">
+              {processor.error
+                ? `Erreur : ${processor.error}`
                 : processor.processing
                   ? 'Traitement du scan...'
                   : 'Préparation...'}
-          </div>
+            </div>
+          )}
           {processor.error && (
             <button className="sketch-btn sketch-btn--go" onClick={handleRetake} style={{ marginTop: 16 }}>
               Réessayer
@@ -470,17 +510,19 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
           </Suspense>
           <div className="scan-validate-name">{project.name}</div>
           <div className="scan-validate-bar">
-            <h2 className="scan-validate-title">Tu valides la photo ?</h2>
+            <h2 className="scan-validate-title">
+              {mode === 'play' ? 'Parfait ! Ton coloriage est prêt !' : 'Tu valides la photo ?'}
+            </h2>
             <div className="scan-validate-actions">
               <button
                 className="btn-primary btn-lg"
                 onClick={() => setStage('animation')}
                 disabled={deferredLoaded === false}
               >
-                {deferredLoaded === false ? 'Chargement…' : 'Oui'}
+                {deferredLoaded === false ? 'Chargement…' : mode === 'play' ? 'Voir mon coloriage prendre vie !' : 'Oui'}
               </button>
               <button className="btn-secondary btn-lg" onClick={handleRetake}>
-                Non, je reprends
+                {mode === 'play' ? 'Reprendre la photo' : 'Non, je reprends'}
               </button>
             </div>
           </div>
