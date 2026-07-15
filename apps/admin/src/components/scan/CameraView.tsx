@@ -72,19 +72,22 @@ const ISSUE_MESSAGES: Record<QualityIssue, string> = {
 }
 
 interface Props {
+  /** Notifie le parent quand la caméra passe active/inactive (sous-titre contextuel). */
+  onActiveChange?: (active: boolean) => void
   onCapture: (blob: Blob, corners: Point2D[] | null) => void
   /** Titre affiché dans la colonne droite en mode paysage (masqué en portrait, où
    *  le titre vient de la pastille .scan-page > h2). */
   title?: string
 }
 
-export default function CameraView({ onCapture, title }: Props) {
+export default function CameraView({ onCapture, title, onActiveChange }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [isCameraActive, setIsCameraActive] = useState(false)
+  useEffect(() => { onActiveChange?.(isCameraActive) }, [isCameraActive, onActiveChange])
   const [error, setError] = useState<string | null>(null)
   const [matchedCount, setMatchedCount] = useState(0)
   const [allStable, setAllStable] = useState(false)
@@ -591,7 +594,7 @@ export default function CameraView({ onCapture, title }: Props) {
 
       {error && <div className="camera-error-box">{error}</div>}
 
-      <div className="camera-buttons">
+      <div className={isCameraActive ? 'camera-buttons camera-buttons--active-state' : 'camera-buttons camera-buttons--idle-state'}>
         <input
           ref={fileInputRef}
           type="file"
@@ -660,6 +663,7 @@ export default function CameraView({ onCapture, title }: Props) {
                 </svg>
               </button>
             )}
+            {!torchSupported && <span className="camera-controls-spacer" aria-hidden="true" />}
             <button onClick={stopCamera} className="btn-cancel">
               Annuler
             </button>

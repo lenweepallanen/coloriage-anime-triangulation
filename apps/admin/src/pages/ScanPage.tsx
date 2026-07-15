@@ -70,6 +70,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
   const [paused, setPaused] = useState(false)
+  const [cameraActive, setCameraActive] = useState(false)
 
 
   // Orientation responsive : on ne verrouille PAS l'orientation (cf. soucis iOS) ;
@@ -345,25 +346,27 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
           </svg>
         </button>
       )}
-      {stage !== 'animation' && stage !== 'preview' && (
+      {stage !== 'animation' && (mode === 'play' || stage !== 'preview') && (
         mode === 'play' ? (
           <header className="scan-header">
             <h2 className="scan-header-title">SCAN</h2>
             <p className="scan-header-sub">
               {stage === 'camera'
-                ? 'Scanne ton coloriage pour le voir prendre vie !'
+                ? (cameraActive ? 'Place ton coloriage dans le cadre' : 'Scanne ton coloriage pour le voir prendre vie !')
                 : stage === 'adjust'
                   ? 'Ajuste les coins de ton coloriage'
-                  : 'On scanne ton coloriage…'}
+                  : stage === 'preview'
+                    ? 'Parfait ! Ton coloriage est prêt !'
+                    : 'On scanne ton coloriage…'}
             </p>
           </header>
-        ) : (
+        ) : stage !== 'preview' ? (
           <h2>{project.name} — Mode Coloriage</h2>
-        )
+        ) : null
       )}
 
       {stage === 'camera' && (
-        <CameraView onCapture={onCameraCapture} title={`${project.name} — Mode Coloriage`} />
+        <CameraView onCapture={onCameraCapture} onActiveChange={setCameraActive} title={`${project.name} — Mode Coloriage`} />
       )}
 
       {stage === 'adjust' && capturedBlob && (

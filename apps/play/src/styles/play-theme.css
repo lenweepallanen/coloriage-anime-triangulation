@@ -1336,16 +1336,62 @@ body.play-app .camera-buttons-row--active .btn-cancel {
   font-size: 0.95rem;
   padding: 0.55em 1.4em;
 }
-/* Portrait : la rangée remonte SUR le flux caméra */
+body.play-app .camera-controls-spacer {
+  width: 52px;
+  height: 52px;
+}
+
+/* Portrait : cadre caméra 3:4 quasi pleine largeur (maquette) + contrôles
+   superposés au flux, répartis galerie / obturateur / flash */
 @media (orientation: portrait) {
+  body.play-app .camera-square {
+    width: min(92vw, 500px);
+    max-width: none;
+    aspect-ratio: 3 / 4;
+  }
   body.play-app .camera-buttons-row--active {
-    margin-top: -118px;
+    margin-top: -108px;
     position: relative;
     z-index: 10;
+    width: min(92vw, 500px);
+    margin-left: auto;
+    margin-right: auto;
+    justify-content: space-between;
+    padding: 0 26px;
+    box-sizing: border-box;
+    flex-wrap: nowrap;
   }
+  /* Pas d'« Annuler » sur la maquette : le bouton retour violet sert de sortie */
   body.play-app .camera-buttons-row--active .btn-cancel {
-    margin-top: 26px;
+    display: none;
   }
+  /* Avant caméra : les boutons remontent DANS la carte pointillée */
+  body.play-app .camera-buttons--idle-state {
+    position: relative;
+    z-index: 5;
+    margin-top: -150px;
+  }
+  body.play-app .camera-buttons--idle-state .camera-buttons-row {
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  body.play-app .camera-square--idle .camera-placeholder {
+    padding-bottom: 150px;
+  }
+}
+/* Barre de statut de détection : pilule flottante en haut du flux */
+body.play-app .camera-status-bar {
+  top: 12px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: fit-content;
+  max-width: 88%;
+  padding: 8px 16px;
+  border-radius: 999px !important;
+  font-size: 0.92rem;
+  font-family: 'Fredoka', sans-serif;
 }
 
 /* Conseils statiques masqués : l'aide est donnée en temps réel dans la barre de statut */
@@ -1424,6 +1470,50 @@ body.play-app .scan-validate-bar {
   background: linear-gradient(to top, rgba(255, 242, 222, 0.96), rgba(255, 242, 222, 0));
 }
 body.play-app .scan-validate-title { margin: 0; }
+
+/* Validation en PORTRAIT (maquette écran 4) : l'aperçu devient une carte
+   centrée sous le header, badge ✓ vert, boutons empilés en bas. */
+@media (orientation: portrait) {
+  body.play-app .scan-validate .animation-player--preview {
+    top: calc(112px + env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(86vw, 420px);
+    height: auto;
+    aspect-ratio: 3 / 4;
+    border: 6px solid #ffffff;
+    border-radius: 22px;
+    overflow: hidden;
+    background: #ffffff;
+    box-shadow: var(--sticker-shadow-lg);
+  }
+  /* Badge ✓ vert en haut à droite de la carte */
+  body.play-app .scan-validate .animation-player--preview::after {
+    content: '✓';
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #34c98e;
+    color: #ffffff;
+    font-family: 'Fredoka', sans-serif;
+    font-weight: 700;
+    font-size: 1.3rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 3px 10px rgba(52, 201, 142, 0.5);
+    z-index: 20;
+    pointer-events: none;
+  }
+  /* Le header SCAN porte déjà « Parfait !… » : on masque les doublons */
+  body.play-app .scan-validate .scan-validate-title,
+  body.play-app .scan-validate .scan-validate-name {
+    display: none;
+  }
+}
 body.play-app .scan-validate-actions {
   display: flex;
   flex-direction: column;
@@ -1505,8 +1595,8 @@ body.play-app .scan-processing--play {
 }
 body.play-app .scan-processing-frame {
   position: relative;
-  width: min(78vw, 62vh, 420px);
-  aspect-ratio: 1 / 1;
+  width: min(80vw, 58vh, 420px);
+  aspect-ratio: 3 / 4;
   border-radius: 18px;
   overflow: hidden;
   background: #1e1b2e;
