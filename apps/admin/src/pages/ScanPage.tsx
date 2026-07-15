@@ -140,6 +140,8 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       setHeldPortrait(false)
       return
     }
+    let attached = false
+    let cancelled = false
     const onMotion = (e: DeviceMotionEvent) => {
       const g = e.accelerationIncludingGravity
       if (!g || g.x == null || g.y == null) return
@@ -150,8 +152,28 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       // Hystérésis pour éviter le clignotement autour de la diagonale
       setHeldPortrait(prev => (prev ? ay > ax * 0.8 : ay > ax * 1.25))
     }
-    window.addEventListener('devicemotion', onMotion)
-    return () => window.removeEventListener('devicemotion', onMotion)
+    const attach = () => {
+      if (attached || cancelled) return
+      attached = true
+      window.addEventListener('devicemotion', onMotion)
+    }
+    // iOS (WKWebView inclus) : les événements devicemotion ne partent qu'après
+    // DeviceMotionEvent.requestPermission(). Dans l'app native (NSMotionUsage-
+    // Description présent), la promesse se résout sans dialogue visible.
+    const DME = (globalThis as unknown as {
+      DeviceMotionEvent?: { requestPermission?: () => Promise<string> }
+    }).DeviceMotionEvent
+    if (typeof DME?.requestPermission === 'function') {
+      DME.requestPermission()
+        .then(res => { if (res === 'granted') attach() })
+        .catch(() => attach())
+    } else {
+      attach()
+    }
+    return () => {
+      cancelled = true
+      if (attached) window.removeEventListener('devicemotion', onMotion)
+    }
   }, [isNativeApp, mode, lockedStage])
   const showRotateOverlay = heldPortrait && isNativeApp && mode === 'play' && lockedStage
 
