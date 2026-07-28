@@ -652,24 +652,26 @@ body.play-app .scanner-page {
 body.play-app .scanner-page .section-title {
   margin-top: 56px;
 }
-/* Écran « Que veux-tu faire ? » : 2 cards carrées côte à côte, centrées */
+/* Écran « Que veux-tu faire ? » : 2 grandes cards empilées, centrées */
 body.play-app .scanner-choices {
   display: flex;
+  flex-direction: column;
   justify-content: center;
-  align-items: stretch;
-  gap: 16px;
+  align-items: center;
+  gap: 22px;
   margin-top: 18px;
+  flex: 1;
+  padding-bottom: 24px;
 }
 body.play-app .scanner-choice {
-  flex: 1 1 0;
-  max-width: 210px;
-  aspect-ratio: 1 / 1;
+  width: min(78vw, 340px);
+  aspect-ratio: 7 / 5;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 14px 12px;
+  gap: 12px;
+  padding: 18px 16px;
   cursor: pointer;
   text-align: center;
   transition: transform 0.12s ease;
@@ -679,8 +681,8 @@ body.play-app .scanner-choice:active {
 }
 body.play-app .scanner-choice-icon {
   flex: 0 0 auto;
-  width: 58px;
-  height: 58px;
+  width: 66px;
+  height: 66px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -698,13 +700,13 @@ body.play-app .scanner-choice-texts {
 body.play-app .scanner-choice-texts strong {
   font-family: 'Fredoka', sans-serif;
   font-weight: 700;
-  font-size: clamp(1rem, 3.6vw, 1.15rem);
+  font-size: clamp(1.15rem, 4.4vw, 1.35rem);
   line-height: 1.2;
   color: #2e2a5e;
 }
 body.play-app .scanner-choice-texts small {
   font-family: 'Andika', sans-serif;
-  font-size: clamp(0.78rem, 2.8vw, 0.88rem);
+  font-size: clamp(0.88rem, 3.2vw, 0.98rem);
   color: var(--ink-soft);
   line-height: 1.3;
 }
