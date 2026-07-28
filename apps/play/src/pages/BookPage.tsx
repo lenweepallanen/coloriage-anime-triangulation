@@ -109,6 +109,7 @@ export default function BookPage() {
       {bonusImgUrl && (
         <div className="book-bonus-card">
           <span className="book-bonus-badge">✦ {t('book.bonusBadge')}</span>
+          <div className="book-bonus-inner">
           <div className="book-bonus-body">
             <img className="book-bonus-img" src={bonusImgUrl} alt="" aria-hidden="true" />
             <div className="book-bonus-texts">
@@ -126,6 +127,7 @@ export default function BookPage() {
                 {t('book.bonus')}
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}
@@ -146,11 +148,10 @@ export default function BookPage() {
 
       {otherBooks.length > 0 && (
         <>
-          <hr className="book-collection-sep" />
           <h2 className="book-collection-title">{t('book.collection')}</h2>
           <div className="book-collection-grid">
             {otherBooks.map(b => (
-              <BookCover key={b.id} book={b} />
+              <CollectionCard key={b.id} book={b} />
             ))}
           </div>
         </>
@@ -160,11 +161,12 @@ export default function BookPage() {
   )
 }
 
-function BookCover({ book }: { book: Book }) {
-  // null = en cours de chargement, '' = pas de couverture (vignette masquée)
+function CollectionCard({ book }: { book: Book }) {
+  const navigate = useNavigate()
+  // null = en cours de chargement, '' = pas de couverture (carte masquée)
   const [url, setUrl] = useState<string | null>(null)
-  // Lazy-load : la section « même collection » est sous le fold. On ne télécharge la
-  // couverture (image pleine taille) qu'une fois la case visible à l'écran.
+  // Lazy-load : la section « collection » est sous le fold. On ne télécharge la
+  // couverture (image pleine taille) qu'une fois la carte visible à l'écran.
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [visible, setVisible] = useState(false)
 
@@ -201,21 +203,32 @@ function BookCover({ book }: { book: Book }) {
   // Tant qu'on n'a pas tenté le chargement, on garde un placeholder observable (sinon
   // l'IntersectionObserver n'a rien à observer). '' = pas de couverture → masqué.
   if (url === '') return null
-  if (url === null) return <div ref={wrapRef} className="vignette vignette--cover-placeholder" aria-hidden="true" />
-
-
-  const open = () => window.open(normalizeUrl(book.amazonUrl), '_blank', 'noopener')
+  if (url === null) return <div ref={wrapRef} className="collection-card collection-card--placeholder" aria-hidden="true" />
 
   return (
-    <div
-      onClick={open}
-      role="button"
-      tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && open()}
-      className="vignette"
-    >
-      <div className="vignette-thumb">
+    <div className="collection-card">
+      <div className="collection-card-cover">
         <img src={url} alt={book.name} />
+      </div>
+      <div className="collection-card-side">
+        <span className="collection-card-name">{book.name}</span>
+        <button
+          className="collection-add-btn"
+          aria-label={book.name}
+          onClick={() => navigate('/scanner?mode=livre')}
+        >
+          +
+        </button>
+        <button
+          className="collection-amazon-btn"
+          onClick={() => window.open(normalizeUrl(book.amazonUrl), '_blank', 'noopener')}
+        >
+          <span className="collection-amazon-word">amazon</span>
+          <svg className="collection-amazon-smile" viewBox="0 0 60 14" aria-hidden="true">
+            <path d="M2 3 C 18 13, 42 13, 55 5" fill="none" stroke="#ff9900" strokeWidth="3" strokeLinecap="round" />
+            <path d="M55 5 l -6 -1.5 M55 5 l -2.5 5" fill="none" stroke="#ff9900" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
     </div>
   )

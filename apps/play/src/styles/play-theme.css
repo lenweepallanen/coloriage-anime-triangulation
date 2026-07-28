@@ -1052,8 +1052,7 @@ body.play-app .book-home-btn:active {
    ------------------------------------------------------------------- */
 body.play-app .book-page {
   min-height: 100vh;
-  /* padding-bottom : laisse de la place au sticky footer bonus + débord image */
-  padding: 24px 16px 100px;
+  padding: 24px 16px 40px;
 }
 body.play-app .book-title {
   display: flex;
@@ -1091,143 +1090,161 @@ body.play-app .book-subtitle {
   padding: 0 16px;
   line-height: 1.4;
 }
-body.play-app .book-grid {
-  display: grid;
-  /* une seule vignette par ligne, centrée */
-  grid-template-columns: minmax(0, 280px);
-  justify-content: center;
-  gap: 22px;
-  max-width: 1200px;
-  margin: 0 auto;
-}
 body.play-app .book-empty {
   text-align: center;
   color: var(--ink-soft);
   font-size: 1.15rem;
 }
 
-/* Vignettes (page livre) : style soft uniformisé — bordure blanche + ombre */
-body.play-app .vignette {
-  position: relative;
-  cursor: pointer;
-  background: #ffffff;
-  border: 6px solid #ffffff;
-  border-radius: 22px;
-  overflow: visible;
-  box-shadow: 0 8px 20px rgba(90, 80, 140, 0.18);
-  display: flex;
-  flex-direction: column;
-  transition: transform 0.14s ease, box-shadow 0.14s ease;
-}
-body.play-app .vignette:hover {
-  transform: scale(1.04);
-  box-shadow: 0 10px 26px rgba(90, 80, 140, 0.26);
-  z-index: 2;
-}
-/* Squelette de couverture en attente de lazy-load (réserve la place + observable
-   par l'IntersectionObserver tant que l'image n'est pas chargée). */
-body.play-app .vignette--cover-placeholder {
-  aspect-ratio: 3 / 4;
-  background: #f3efe6;
-  cursor: default;
-  box-shadow: none;
-}
-body.play-app .vignette--cover-placeholder:hover {
-  transform: none;
-  box-shadow: none;
-}
-body.play-app .vignette-thumb {
-  aspect-ratio: 1 / 1;
-  border-radius: 16px;
-  overflow: hidden;
-  background: #faf6ec;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-body.play-app .vignette-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-body.play-app .vignette--unscanned .vignette-thumb img {
-  filter: grayscale(1);
-  opacity: 0.55;
-}
-body.play-app .vignette-name {
-  font-family: 'Fredoka', sans-serif;
-  padding: 8px 10px 10px;
-  font-size: 1rem;
-  text-align: center;
-  color: var(--ink);
-}
-/* Rond « play » crayonné en overlay */
-body.play-app .vignette-play {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-body.play-app .vignette-play span {
-  width: 44%;
-  max-width: 70px;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  border: none;
-  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.28);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #8b7cf0;
-  font-size: 1.4rem;
-  padding-left: 6px;
-}
-/* Étoile dorée « déjà scanné » */
-body.play-app .vignette-badge {
-  position: absolute;
-  top: -12px;
-  right: -10px;
-  font-size: 2rem;
-  filter: drop-shadow(1px 2px 0 rgba(58, 53, 48, 0.25));
-  transform: rotate(12deg);
-  z-index: 3;
-}
-
-/* Section « Dans la même collection » — bas du menu LIVRE */
-body.play-app .book-collection-sep {
-  max-width: 1200px;
-  margin: 44px auto 8px;
-  border: none;
-  border-top: 2px dashed var(--ink-soft);
-}
+/* Section « Découvre tous nos livres » — bas du menu LIVRE */
 body.play-app .book-collection-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   text-align: center;
-  font-size: clamp(1.3rem, 4vw, 2rem);
-  margin: 12px 0 24px;
-  transform: rotate(-1.5deg);
+  text-transform: uppercase;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.15rem, 4.4vw, 1.5rem);
+  color: var(--ink);
+  margin: 40px 0 18px;
+  transform: none;
+}
+body.play-app .book-collection-title::before,
+body.play-app .book-collection-title::after {
+  content: '✦';
+  font-size: 0.75em;
+  color: #ff8fae;
+  transform: rotate(-12deg);
+}
+body.play-app .book-collection-title::after {
+  transform: rotate(12deg);
 }
 body.play-app .book-collection-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 22px;
-  max-width: 1200px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  max-width: 700px;
   margin: 0 auto;
 }
+body.play-app .collection-card {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  background: #ffffff;
+  border-radius: 22px;
+  padding: 10px;
+  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.14);
+}
+body.play-app .collection-card--placeholder {
+  min-height: 170px;
+}
+body.play-app .collection-card-cover {
+  flex: 1 1 55%;
+  min-width: 0;
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #faf6ec;
+}
+body.play-app .collection-card-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+body.play-app .collection-card-side {
+  flex: 1 1 45%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 4px 2px;
+}
+body.play-app .collection-card-name {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(0.95rem, 3.4vw, 1.1rem);
+  color: var(--ink);
+  text-align: center;
+  line-height: 1.25;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+/* Bouton + : ajouter le livre → scanner (QR au début du livre) */
+body.play-app .collection-add-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-violet);
+  color: #ffffff;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 1.7rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 3px;
+  box-shadow: 0 4px 12px rgba(139, 124, 240, 0.45);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+body.play-app .collection-add-btn:active {
+  transform: scale(0.94);
+}
+/* Bouton amazon : pilule blanche, mot-symbole + sourire orange */
+body.play-app .collection-amazon-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 1.5px solid #e8e2f6;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 7px 18px 5px;
+  box-shadow: 0 3px 10px rgba(90, 80, 140, 0.14);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+body.play-app .collection-amazon-btn:active {
+  transform: scale(0.96);
+}
+body.play-app .collection-amazon-word {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  color: #1a1a1a;
+  line-height: 1;
+}
+body.play-app .collection-amazon-smile {
+  width: 44px;
+  height: 10px;
+  margin-top: -1px;
+}
 
-/* Carte COLORIAGES BONUS — en bas de la liste des coloriages */
+/* Carte COLORIAGES BONUS — en bas de la liste des coloriages.
+   Carte blanche « en avant » (ombre plus marquée que les colo-cards) avec la
+   zone crème pointillée incrustée à l'intérieur (ombre interne). */
 body.play-app .book-bonus-card {
   position: relative;
   max-width: 620px;
   margin: 34px auto 8px;
+  background: #ffffff;
+  border-radius: 28px;
+  padding: 10px;
+  box-shadow: 0 12px 30px rgba(90, 80, 140, 0.26);
+}
+body.play-app .book-bonus-inner {
   background: #fdf3d7;
   border: 2.5px dashed #e8cf8f;
-  border-radius: 24px;
-  padding: 26px 16px 16px;
-  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.12);
+  border-radius: 20px;
+  padding: 24px 14px 14px;
+  box-shadow: inset 0 3px 10px rgba(140, 110, 60, 0.14);
 }
 body.play-app .book-bonus-badge {
   position: absolute;
