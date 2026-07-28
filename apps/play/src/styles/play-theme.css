@@ -1218,74 +1218,84 @@ body.play-app .book-collection-grid {
   margin: 0 auto;
 }
 
-/* Sticky footer BONUS — bas de la page LIVRE */
-body.play-app .book-bonus-footer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  /* au-dessus de la barre d'onglets du shell */
-  bottom: calc(64px + env(safe-area-inset-bottom));
-  z-index: 49;
-  display: flex;
-  align-items: center;
-  background: var(--accent-violet);
-  border-top: none;
-  box-shadow: 0 -4px 14px rgba(90, 80, 140, 0.25);
-  padding: 6px 14px;
-  /* overflow visible : la vignette bonus déborde par le haut */
-  overflow: visible;
-  /* caché par défaut : glissé vers le bas + transparent ;
-     révélé après ~1/3 du scroll via .book-bonus-footer--visible */
-  transform: translateY(160%);
-  opacity: 0;
-  pointer-events: none;
-  transition: transform 0.4s cubic-bezier(.2, .8, .2, 1), opacity 0.4s ease;
+/* Carte COLORIAGES BONUS — en bas de la liste des coloriages */
+body.play-app .book-bonus-card {
+  position: relative;
+  max-width: 620px;
+  margin: 34px auto 8px;
+  background: #fdf3d7;
+  border: 2.5px dashed #e8cf8f;
+  border-radius: 24px;
+  padding: 26px 16px 16px;
+  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.12);
 }
-body.play-app .book-bonus-footer--visible {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-/* Partie gauche (1/3) : vignette bonus posée par-dessus, débordant vers le haut */
-body.play-app .book-bonus-left {
-  flex: 0 0 33.33%;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-}
-body.play-app .book-bonus-vignette {
-  width: auto;
-  max-width: 90%;
-  height: 96px;
-  max-height: 96px;
-  object-fit: cover;
-  /* bords arrondis + contour blanc soft */
-  border: 4px solid #ffffff;
-  border-radius: 14px;
-  background: #ffffff;
-  /* remonte l'image pour qu'elle dépasse au-dessus du footer */
-  margin-top: -52px;
-  margin-bottom: 3px;
-  box-shadow: var(--sticker-shadow);
-  pointer-events: none;
-}
-/* Partie droite (2/3) : bouton télécharger */
-body.play-app .book-bonus-right {
-  flex: 1 1 66.66%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-body.play-app .book-bonus-btn {
+body.play-app .book-bonus-badge {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
   font-family: 'Fredoka', sans-serif;
   font-weight: 700;
-  font-size: clamp(1rem, 3.2vw, 1.35rem);
-  color: var(--accent-violet);
-  background: #ffffff;
-  border: none;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffffff;
+  background: #f987ae;
   border-radius: 999px;
+  padding: 7px 18px;
+  box-shadow: 0 4px 10px rgba(249, 135, 174, 0.4);
+}
+body.play-app .book-bonus-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+body.play-app .book-bonus-img {
+  flex: 0 0 auto;
+  width: clamp(96px, 28vw, 150px);
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: #ffffff;
+  border: 4px solid #ffffff;
+  border-radius: 14px;
   box-shadow: var(--sticker-shadow);
-  padding: 11px 26px;
+}
+body.play-app .book-bonus-texts {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+body.play-app .book-bonus-title {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.05rem, 4vw, 1.25rem);
+  color: var(--ink);
+}
+body.play-app .book-bonus-text {
+  font-family: 'Andika', sans-serif;
+  font-size: 0.95rem;
+  color: var(--ink-soft);
+  line-height: 1.35;
+  margin: 0;
+}
+body.play-app .book-bonus-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(0.95rem, 3.4vw, 1.1rem);
+  color: #ffffff;
+  background: #4cbb8f;
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(76, 187, 143, 0.4);
+  padding: 11px 18px;
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
   /* petit « wizz » périodique pour attirer le clic (toutes les 4,5 s) */
@@ -1294,8 +1304,7 @@ body.play-app .book-bonus-btn {
 }
 body.play-app .book-bonus-btn:hover {
   transform: scale(1.04) rotate(-1deg);
-  box-shadow: var(--sticker-shadow-lg);
-  /* on fige le wizz au survol pour laisser jouer le hover */
+  box-shadow: 0 6px 16px rgba(76, 187, 143, 0.5);
   animation-play-state: paused;
 }
 body.play-app .book-bonus-btn:active {

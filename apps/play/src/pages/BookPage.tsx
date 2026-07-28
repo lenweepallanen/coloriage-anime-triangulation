@@ -22,7 +22,6 @@ export default function BookPage() {
   const [otherBooks, setOtherBooks] = useState<Book[]>([])
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [bonusImgUrl, setBonusImgUrl] = useState<string | null>(null)
-  const [showBonus, setShowBonus] = useState(false)
   const [loading, setLoading] = useState(true)
   const [notAvailable, setNotAvailable] = useState(false)
 
@@ -68,27 +67,6 @@ export default function BookPage() {
     return () => { if (revokeBonus) URL.revokeObjectURL(revokeBonus) }
   }, [bookId])
 
-  // Le sticky footer bonus n'apparaît qu'après ~1/3 du scroll (moins « pushy »).
-  // On attend la fin du chargement (page réellement haute) avant de calculer,
-  // sinon au montage la page courte déclencherait le fallback et l'afficherait
-  // tout de suite. Fallback : page non scrollable → affichage direct.
-  useEffect(() => {
-    if (!bonusImgUrl || loading) return
-    const onScroll = () => {
-      const el = document.documentElement
-      const scrollable = el.scrollHeight - el.clientHeight
-      if (scrollable <= 40) { setShowBonus(true); return }
-      setShowBonus(el.scrollTop / scrollable >= 1 / 3)
-    }
-    onScroll()
-    window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
-    return () => {
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [bonusImgUrl, loading, projects.length, otherBooks.length])
-
   if (loading) return <div className="loading">{t('loading')}</div>
   if (notAvailable || !book) {
     return (
@@ -128,6 +106,30 @@ export default function BookPage() {
         </div>
       )}
 
+      {bonusImgUrl && (
+        <div className="book-bonus-card">
+          <span className="book-bonus-badge">✦ {t('book.bonusBadge')}</span>
+          <div className="book-bonus-body">
+            <img className="book-bonus-img" src={bonusImgUrl} alt="" aria-hidden="true" />
+            <div className="book-bonus-texts">
+              <strong className="book-bonus-title">{t('book.bonusTitle')}</strong>
+              <p className="book-bonus-text">{t('book.bonusText')}</p>
+              <button
+                className="book-bonus-btn"
+                onClick={() => window.open(normalizeUrl(book.bonusUrl), '_blank', 'noopener')}
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 4v10" />
+                  <path d="m8 10.5 4 4 4-4" />
+                  <path d="M5 19h14" />
+                </svg>
+                {t('book.bonus')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="book-remove-row">
         <button
           className="book-remove-btn"
@@ -154,21 +156,6 @@ export default function BookPage() {
         </>
       )}
 
-      {bonusImgUrl && (
-        <div className={`book-bonus-footer ${showBonus ? 'book-bonus-footer--visible' : ''}`}>
-          <div className="book-bonus-left">
-            <img className="book-bonus-vignette" src={bonusImgUrl} alt="Bonus" />
-          </div>
-          <div className="book-bonus-right">
-            <button
-              className="book-bonus-btn"
-              onClick={() => window.open(normalizeUrl(book.bonusUrl), '_blank', 'noopener')}
-            >
-              {t('book.bonus')}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
