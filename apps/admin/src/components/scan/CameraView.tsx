@@ -72,6 +72,8 @@ const ISSUE_MESSAGES: Record<QualityIssue, string> = {
 }
 
 interface Props {
+  /** Démarre la caméra dès le montage (arrivée depuis le scanner QR : elle était déjà ouverte). */
+  autoStart?: boolean
   /** Notifie le parent quand la caméra passe active/inactive (sous-titre contextuel). */
   onActiveChange?: (active: boolean) => void
   onCapture: (blob: Blob, corners: Point2D[] | null) => void
@@ -80,7 +82,7 @@ interface Props {
   title?: string
 }
 
-export default function CameraView({ onCapture, title, onActiveChange }: Props) {
+export default function CameraView({ onCapture, title, onActiveChange, autoStart }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -160,6 +162,16 @@ export default function CameraView({ onCapture, title, onActiveChange }: Props) 
       return null
     }
   }, [])
+
+  // Démarrage automatique (une seule fois) quand on arrive du scanner QR
+  const autoStartedRef = useRef(false)
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current) return
+    autoStartedRef.current = true
+    const tmr = setTimeout(() => { void startCamera() }, 250)
+    return () => clearTimeout(tmr)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart])
 
   const startCamera = async () => {
     try {

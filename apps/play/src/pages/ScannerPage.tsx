@@ -118,7 +118,9 @@ export default function ScannerPage() {
     }
     if (parsed.type === 'project') {
       stopCamera()
-      navigate(`/p/${parsed.id}`)
+      // autocam=1 : la caméra du pipeline scan démarre directement (elle
+      // était déjà ouverte pour lire le QR — pas de ré-écran « Prêt à scanner ? »)
+      navigate(`/p/${parsed.id}?autocam=1`)
       return
     }
     void handleBookQr(parsed.id)
