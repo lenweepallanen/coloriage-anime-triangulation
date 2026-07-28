@@ -28,6 +28,12 @@
   src: url('../assets/fonts/andika-700-latin.woff2') format('woff2');
 }
 
+/* Taille UNIQUE du carré de scan (caméra, QR, scan en cours, validation).
+   56px = paddings page (32) + conteneur (24) ; cap vertical pour que le carré
+   + panneau boutons tiennent au-dessus de la tab bar. */
+body.play-app {
+  --scan-square: min(calc(100vw - 56px), 36vh, 440px);
+}
 body.play-app {
   /* Thème Picopop « soft » : crème + encre marine + accents pastel */
   --paper: #ffffff;
@@ -715,7 +721,8 @@ body.play-app .scanner-camera-card {
   overflow: hidden;
   aspect-ratio: 1 / 1;
   max-width: none;
-  width: min(100%, 46vh, 480px);
+  width: var(--scan-square);
+  height: var(--scan-square);
   box-sizing: border-box;
   margin: 0 auto;
   background: #1e1b2e;
@@ -1737,9 +1744,8 @@ body.play-app .camera-controls-spacer {
     /* Carré GARANTI : largeur et hauteur explicites identiques (l'aspect-ratio
        seul s'est montré fragile). 56px = paddings page (32) + capture (24).
        Cap vertical : cadre + panneau boutons tiennent au-dessus de la tab bar. */
-    --cam-size: min(calc(100vw - 56px), 36vh, 440px);
-    width: var(--cam-size);
-    height: var(--cam-size);
+    width: var(--scan-square);
+    height: var(--scan-square);
     max-width: none;
     box-sizing: border-box;
     aspect-ratio: auto;
@@ -1755,7 +1761,7 @@ body.play-app .camera-controls-spacer {
   body.play-app .camera-buttons-row--active {
     /* panneau blanc arrondi sous le cadre caméra, même largeur */
     margin-top: 0;
-    width: min(calc(100vw - 56px), 36vh, 440px);
+    width: var(--scan-square);
     margin-left: auto;
     margin-right: auto;
     justify-content: space-evenly;
@@ -1888,9 +1894,9 @@ body.play-app .scan-validate-title { margin: 0; }
     transform: none;
     inset: auto;
     z-index: auto;
-    width: min(88vw, 56vh, 460px);
-    height: auto;
-    aspect-ratio: 1 / 1;
+    width: var(--scan-square);
+    height: var(--scan-square);
+    aspect-ratio: auto;
     border: 6px solid #ffffff;
     border-radius: 22px;
     overflow: hidden;
@@ -2039,8 +2045,9 @@ body.play-app .scan-processing--play {
 }
 body.play-app .scan-processing-frame {
   position: relative;
-  width: min(92vw, 62vh, 500px);
-  aspect-ratio: 1 / 1;
+  width: var(--scan-square);
+  height: var(--scan-square);
+  aspect-ratio: auto;
   border: 6px solid #ffffff;
   border-radius: 18px;
   overflow: hidden;
