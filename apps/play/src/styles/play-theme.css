@@ -712,10 +712,12 @@ body.play-app .scanner-camera-card {
   position: relative;
   overflow: hidden;
   aspect-ratio: 1 / 1;
-  max-width: 420px;
-  width: 100%;
+  max-width: none;
+  width: min(92vw, 62vh, 500px);
   margin: 0 auto;
   background: #1e1b2e;
+  border: 6px solid #ffffff;
+  border-radius: 22px;
 }
 body.play-app .scanner-video {
   width: 100%;
@@ -1461,9 +1463,9 @@ body.play-app .camera-controls-spacer {
    superposés au flux, répartis galerie / obturateur / flash */
 @media (orientation: portrait) {
   body.play-app .camera-square {
-    width: min(92vw, 500px);
+    width: min(92vw, 62vh, 500px);
     max-width: none;
-    aspect-ratio: 3 / 4;
+    aspect-ratio: 1 / 1;
   }
   body.play-app .camera-buttons-row--active {
     margin-top: -108px;
@@ -1594,9 +1596,9 @@ body.play-app .scan-validate-title { margin: 0; }
     top: calc(112px + env(safe-area-inset-top));
     left: 50%;
     transform: translateX(-50%);
-    width: min(86vw, 420px);
+    width: min(88vw, 56vh, 460px);
     height: auto;
-    aspect-ratio: 3 / 4;
+    aspect-ratio: 1 / 1;
     border: 6px solid #ffffff;
     border-radius: 22px;
     overflow: hidden;
@@ -1711,8 +1713,9 @@ body.play-app .scan-processing--play {
 }
 body.play-app .scan-processing-frame {
   position: relative;
-  width: min(80vw, 58vh, 420px);
-  aspect-ratio: 3 / 4;
+  width: min(92vw, 62vh, 500px);
+  aspect-ratio: 1 / 1;
+  border: 6px solid #ffffff;
   border-radius: 18px;
   overflow: hidden;
   background: #1e1b2e;
