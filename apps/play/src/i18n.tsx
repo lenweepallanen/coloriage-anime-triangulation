@@ -62,6 +62,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     'book.collection': 'Dans la même collection',
     'book.bonus': 'TÉLÉCHARGER BONUS',
     'book.remove': 'Retirer de mes livres',
+    'book.countPlural': 'coloriages à animer !',
+    'book.countSingle': 'coloriage à animer !',
+    'book.scanned': 'Scanné et animé',
+    'book.notScanned': 'Pas encore scanné',
+    'book.on': 'Le',
     'book.removeConfirm': 'Retirer ce livre de MES LIVRES ? (tu pourras le rajouter en scannant son QR code)',
   },
   en: {
@@ -117,6 +122,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     'book.collection': 'From the same collection',
     'book.bonus': 'DOWNLOAD BONUS',
     'book.remove': 'Remove from my books',
+    'book.countPlural': 'coloring pages to animate!',
+    'book.countSingle': 'coloring page to animate!',
+    'book.scanned': 'Scanned and animated',
+    'book.notScanned': 'Not scanned yet',
+    'book.on': 'On',
     'book.removeConfirm': 'Remove this book from MY BOOKS? (you can add it again by scanning its QR code)',
   },
 }

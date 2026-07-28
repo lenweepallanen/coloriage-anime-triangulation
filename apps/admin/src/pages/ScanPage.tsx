@@ -213,7 +213,10 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   // Marque le coloriage comme scanné dès qu'on entre dans l'animation
   useEffect(() => {
     if (stage === 'animation') {
-      try { localStorage.setItem(`scanned:${project.id}`, '1') } catch { /* ignore */ }
+      try {
+        localStorage.setItem(`scanned:${project.id}`, '1')
+        localStorage.setItem(`scannedAt:${project.id}`, String(Date.now()))
+      } catch { /* ignore */ }
     }
   }, [stage, project.id])
 

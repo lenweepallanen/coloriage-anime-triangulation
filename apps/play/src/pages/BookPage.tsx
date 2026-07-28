@@ -20,6 +20,7 @@ export default function BookPage() {
   const [book, setBook] = useState<Book | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [otherBooks, setOtherBooks] = useState<Book[]>([])
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [bonusImgUrl, setBonusImgUrl] = useState<string | null>(null)
   const [showBonus, setShowBonus] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -38,6 +39,9 @@ export default function BookPage() {
           return
         }
         setBook(b)
+        if (b.coverImageBlob) {
+          setCoverUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(b.coverImageBlob!) })
+        }
         if (b.bonusImageBlob) {
           revokeBonus = URL.createObjectURL(b.bonusImageBlob)
           setBonusImgUrl(revokeBonus)
@@ -102,16 +106,22 @@ export default function BookPage() {
       <button className="book-home-btn" onClick={() => navigate('/')}>
         ← {t('book.back')}
       </button>
+      {coverUrl && (
+        <img className="book-cover-hero" src={coverUrl} alt="" aria-hidden="true" />
+      )}
       <h1 className="book-title">{book.name}</h1>
-      <p className="book-subtitle">{t('book.subtitle')}</p>
+      <p className="book-subtitle">
+        {projects.length} {projects.length > 1 ? t('book.countPlural') : t('book.countSingle')}
+      </p>
       {projects.length === 0 ? (
         <p className="book-empty">{t('book.empty')}</p>
       ) : (
-        <div className="book-grid">
-          {projects.map(p => (
-            <Vignette
+        <div className="colo-list">
+          {projects.map((p, i) => (
+            <ColoCard
               key={p.id}
               project={p}
+              index={i + 1}
               onClick={() => navigate(`/p/${p.id}?book=${book.id}`)}
             />
           ))}
@@ -224,17 +234,20 @@ function BookCover({ book }: { book: Book }) {
   )
 }
 
-function Vignette({ project, onClick }: { project: Project; onClick: () => void }) {
+function ColoCard({ project, index, onClick }: { project: Project; index: number; onClick: () => void }) {
+  const { t, lang } = useI18n()
   const [url, setUrl] = useState<string | null>(null)
   const [scanned, setScanned] = useState(false)
+  const [scannedAt, setScannedAt] = useState<number | null>(null)
 
   useEffect(() => {
-    try { setScanned(localStorage.getItem(`scanned:${project.id}`) === '1') } catch { /* ignore */ }
+    try {
+      setScanned(localStorage.getItem(`scanned:${project.id}`) === '1')
+      const at = Number(localStorage.getItem(`scannedAt:${project.id}`) ?? 0)
+      setScannedAt(at > 0 ? at : null)
+    } catch { /* ignore */ }
     let revoke: string | null = null
     ;(async () => {
-      // Priorité à la vignette dédiée (légère), sinon fallback sur l'image coloriage
-      // pleine taille. On ne tente la requête /thumbnail que si le projet déclare en
-      // avoir une (hasThumbnail) → évite un 404 inutile par vignette sinon.
       let blob: Blob | null = null
       if (project.hasThumbnail) blob = await getProjectThumbnailBlob(project.id)
       if (!blob) blob = await getProjectThumbnail(project.id)
@@ -253,18 +266,40 @@ function Vignette({ project, onClick }: { project: Project; onClick: () => void 
       role="button"
       tabIndex={0}
       onKeyDown={e => e.key === 'Enter' && onClick()}
-      className={`vignette ${scanned ? 'vignette--scanned' : 'vignette--unscanned'}`}
+      className={`colo-card ${scanned ? 'colo-card--scanned' : ''}`}
     >
-      {scanned && <span className="vignette-badge" aria-label="Déjà scanné">⭐</span>}
-      <div className="vignette-thumb">
-        {url ? <img src={url} alt={project.name} /> : <span style={{ color: '#bbb' }}>—</span>}
-        {!scanned && (
-          <div className="vignette-play" aria-hidden="true">
-            <span>▶</span>
-          </div>
+      <div className="colo-card-thumb">
+        {url ? <img src={url} alt={project.name} /> : <span aria-hidden="true">🖍️</span>}
+      </div>
+      <div className="colo-card-texts">
+        <strong className="colo-card-name">{index}. {project.name}</strong>
+        <span className="colo-card-status">
+          {scanned ? t('book.scanned') : t('book.notScanned')}
+        </span>
+        {scanned && scannedAt && (
+          <span className="colo-card-date">
+            {t('book.on')} {new Date(scannedAt).toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-GB')}
+          </span>
         )}
       </div>
-      <div className="vignette-name">{project.name}</div>
+      {scanned ? (
+        <span className="colo-card-badge colo-card-badge--done" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m5 12.5 4.5 4.5L19 7.5" />
+          </svg>
+        </span>
+      ) : (
+        <span className="colo-card-badge colo-card-badge--todo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8" />
+            <path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8" />
+            <path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16" />
+            <path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
+            <circle cx="12" cy="12" r="2.6" />
+          </svg>
+        </span>
+      )}
     </div>
   )
 }
+
