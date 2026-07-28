@@ -227,7 +227,7 @@ export default function ScannerPage() {
   return (
     <div className="scanner-page">
       <button
-        className="book-home-btn"
+        className="scan-back-bar"
         onClick={() => {
           stopCamera()
           setStatus({ kind: 'scanning' })
@@ -237,9 +237,12 @@ export default function ScannerPage() {
       >
         ← {t('scanner.back')}
       </button>
-      <h1 className="scanner-camera-title">
-        {t(mode === 'book' ? 'scanner.camera.book' : 'scanner.camera.coloring')}
-      </h1>
+      <div className="scan-header">
+        <h1 className="scan-header-title">{t('scanner.camera.title')}</h1>
+        <p className="scan-header-sub">
+          {t(mode === 'book' ? 'scanner.camera.book' : 'scanner.camera.coloring')}
+        </p>
+      </div>
 
       {status.kind === 'camera-error' ? (
         <div className="placeholder-card soft-card" style={{ margin: '24px auto', maxWidth: 380 }}>
@@ -250,14 +253,7 @@ export default function ScannerPage() {
         <>
           <div className="scanner-camera-card soft-card">
             <video ref={videoRef} className="scanner-video" playsInline muted autoPlay />
-            <div className="scanner-viewfinder" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" stroke="#ffffff" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8" />
-                <path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8" />
-                <path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16" />
-                <path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
-              </svg>
-            </div>
+            <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
           </div>
           {status.kind === 'confirm' && (
             <div className="scanner-confirm-backdrop" role="dialog" aria-modal="true">

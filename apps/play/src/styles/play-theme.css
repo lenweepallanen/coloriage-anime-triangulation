@@ -360,14 +360,12 @@ body.play-app .tab-scan-circle {
   align-items: center;
   justify-content: center;
   gap: 1px;
-  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.32);
+  /* anneau lavande permanent : identique quelle que soit la page */
+  box-shadow: 0 0 0 4px #e6ddfa, 0 6px 16px rgba(90, 80, 140, 0.32);
   transition: transform 0.12s ease;
 }
 body.play-app .shell-tab--scan:active .tab-scan-circle {
   transform: scale(0.95);
-}
-body.play-app .shell-tab--scan.shell-tab--active .tab-scan-circle {
-  box-shadow: 0 0 0 4px #b3a2ec, 0 6px 16px rgba(90, 80, 140, 0.32);
 }
 body.play-app .tab-scan-label {
   font-family: 'Fredoka', sans-serif;
@@ -643,14 +641,15 @@ body.play-app .add-card-plus {
    ------------------------------------------------------------------- */
 body.play-app .scanner-page {
   min-height: 70vh;
-  padding: calc(20px + env(safe-area-inset-top)) 18px 24px;
+  /* même hauteur de départ que .scan-page : la barre Retour est alignée */
+  padding: calc(74px + env(safe-area-inset-top)) 16px 24px;
   max-width: 560px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
 }
 body.play-app .scanner-page .section-title {
-  margin-top: 56px;
+  margin-top: 2px;
 }
 /* Écran « Que veux-tu faire ? » : 2 grandes cards empilées, centrées */
 body.play-app .scanner-choices {
@@ -711,14 +710,6 @@ body.play-app .scanner-choice-texts small {
   line-height: 1.3;
 }
 
-body.play-app .scanner-camera-title {
-  text-align: center;
-  font-family: 'Fredoka', sans-serif;
-  font-weight: 700;
-  color: #2e2a5e;
-  font-size: clamp(1.25rem, 5vw, 1.6rem);
-  margin: 14px 0 16px;
-}
 body.play-app .scanner-camera-card {
   position: relative;
   overflow: hidden;
@@ -735,13 +726,6 @@ body.play-app .scanner-video {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-body.play-app .scanner-viewfinder {
-  position: absolute;
-  inset: 14%;
-  pointer-events: none;
-  opacity: 0.9;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
 }
 body.play-app .scanner-status {
   display: flex;
@@ -1669,8 +1653,10 @@ body.play-app .camera-buttons-row--active .btn-torch {
   height: 52px;
   padding: 0;
   border-radius: 50%;
-  border: none;
-  background: rgba(30, 27, 46, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  background: rgba(30, 27, 46, 0.62);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -1754,8 +1740,10 @@ body.play-app .camera-controls-spacer {
     width: min(92vw, 500px);
     margin-left: auto;
     margin-right: auto;
-    justify-content: space-between;
-    padding: 0 26px;
+    /* groupés au centre : ne chevauchent plus les coins de visée */
+    justify-content: center;
+    gap: 44px;
+    padding: 0;
     box-sizing: border-box;
     flex-wrap: nowrap;
   }
