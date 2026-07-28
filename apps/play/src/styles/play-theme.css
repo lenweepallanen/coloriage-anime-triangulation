@@ -1655,8 +1655,8 @@ body.play-app .camera-buttons-row--active .btn-torch {
   padding: 0;
   border-radius: 50%;
   border: none;
-  background: #e9e2fb;
-  color: var(--accent-violet);
+  background: #5bb8e8;
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1664,9 +1664,15 @@ body.play-app .camera-buttons-row--active .btn-torch {
   cursor: pointer;
   transition: transform 0.1s ease;
 }
-body.play-app .camera-buttons-row--active .btn-torch--on {
-  background: var(--accent-sun);
+/* Flash : pastille jaune (icône éclair reconnaissable) */
+body.play-app .camera-buttons-row--active .btn-torch {
+  background: #ffcf3f;
   color: #7a5b00;
+}
+body.play-app .camera-buttons-row--active .btn-torch--on {
+  background: #ffb52e;
+  color: #5d4300;
+  box-shadow: 0 0 0 4px rgba(255, 207, 63, 0.45);
 }
 body.play-app .btn-gallery:active,
 body.play-app .camera-buttons-row--active .btn-torch:active {
@@ -1728,25 +1734,28 @@ body.play-app .camera-controls-spacer {
    superposés au flux, répartis galerie / obturateur / flash */
 @media (orientation: portrait) {
   body.play-app .camera-square {
-    /* 100% du conteneur (bordure incluse) : centré, sans déborder.
-       Cap vertical strict : cadre + panneau boutons doivent tenir au-dessus
-       de la tab bar (et de son bouton SCAN qui dépasse). */
-    width: min(100%, 34vh, 440px);
+    /* Carré GARANTI : largeur et hauteur explicites identiques (l'aspect-ratio
+       seul s'est montré fragile). 56px = paddings page (32) + capture (24).
+       Cap vertical : cadre + panneau boutons tiennent au-dessus de la tab bar. */
+    --cam-size: min(calc(100vw - 56px), 36vh, 440px);
+    width: var(--cam-size);
+    height: var(--cam-size);
     max-width: none;
     box-sizing: border-box;
-    aspect-ratio: 1 / 1;
+    aspect-ratio: auto;
     margin-left: auto;
     margin-right: auto;
   }
-  /* le conteneur des boutons prend toute la largeur pour que le panneau
-     puisse s'aligner exactement sur le cadre caméra */
+  /* le conteneur des boutons prend toute la largeur et se colle au cadre :
+     le panneau fait visuellement partie du bloc caméra */
   body.play-app .camera-buttons--active-state {
     width: 100%;
+    margin-top: -8px;
   }
   body.play-app .camera-buttons-row--active {
     /* panneau blanc arrondi sous le cadre caméra, même largeur */
     margin-top: 0;
-    width: min(100%, 34vh, 440px);
+    width: min(calc(100vw - 56px), 36vh, 440px);
     margin-left: auto;
     margin-right: auto;
     justify-content: space-evenly;
