@@ -4,6 +4,7 @@ import { getBook, getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import { getProjectsByBook, getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
 import type { Book, Project } from '@shared/types/project'
 import { useI18n } from '../i18n'
+import { removeBook } from '../utils/bookDownload'
 
 /** Préfixe https:// si l'URL n'a pas de schéma (ex. "amazon.com" → "https://amazon.com"). */
 function normalizeUrl(u: string): string {
@@ -116,6 +117,20 @@ export default function BookPage() {
           ))}
         </div>
       )}
+
+      <div className="book-remove-row">
+        <button
+          className="book-remove-btn"
+          onClick={() => {
+            if (window.confirm(t('book.removeConfirm'))) {
+              removeBook(book.id)
+              navigate('/')
+            }
+          }}
+        >
+          {t('book.remove')}
+        </button>
+      </div>
 
       {otherBooks.length > 0 && (
         <>

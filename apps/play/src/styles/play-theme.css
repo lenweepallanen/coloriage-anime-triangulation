@@ -905,6 +905,24 @@ body.play-app .home-status p {
   margin: 0;
 }
 
+/* Retirer le livre de MES LIVRES (bas du menu livre, discret) */
+body.play-app .book-remove-row {
+  text-align: center;
+  margin: 30px 0 6px;
+}
+body.play-app .book-remove-btn {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--accent-rose);
+  background: transparent;
+  border: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  padding: 8px 14px;
+}
+
 /* Bouton retour accueil (haut de la page LIVRE) — style soft */
 body.play-app .book-home-btn {
   display: inline-flex;

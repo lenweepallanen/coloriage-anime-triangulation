@@ -76,6 +76,13 @@ export function startBackgroundBookDownload(book: Book): void {
     })
 }
 
+/** Retire le livre de MES LIVRES (les assets restent en cache, inoffensif). */
+export function removeBook(bookId: string): void {
+  try {
+    localStorage.removeItem(keyFor(bookId))
+  } catch { /* stockage indisponible */ }
+}
+
 export function isBookDownloaded(book: Book): boolean {
   try {
     const t = Number(localStorage.getItem(keyFor(book.id)) ?? 0)

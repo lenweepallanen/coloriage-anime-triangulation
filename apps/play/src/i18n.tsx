@@ -61,6 +61,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'book.unavailable.text': "Ce livre n'existe pas ou n'est pas publié.",
     'book.collection': 'Dans la même collection',
     'book.bonus': 'TÉLÉCHARGER BONUS',
+    'book.remove': 'Retirer de mes livres',
+    'book.removeConfirm': 'Retirer ce livre de MES LIVRES ? (tu pourras le rajouter en scannant son QR code)',
   },
   en: {
     'loading': 'Loading…',
@@ -114,6 +116,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'book.unavailable.text': 'This book does not exist or is not published.',
     'book.collection': 'From the same collection',
     'book.bonus': 'DOWNLOAD BONUS',
+    'book.remove': 'Remove from my books',
+    'book.removeConfirm': 'Remove this book from MY BOOKS? (you can add it again by scanning its QR code)',
   },
 }
 
