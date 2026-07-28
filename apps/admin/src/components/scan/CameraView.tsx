@@ -577,9 +577,6 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
           <canvas ref={overlayRef} className="camera-guide-overlay" />
         )}
 
-        {isCameraActive && (
-          <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
-        )}
 
         {isCameraActive && (
           <div className={`camera-status-bar ${getStatusClass()}`}>
