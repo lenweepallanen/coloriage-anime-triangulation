@@ -164,15 +164,16 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     }
   }, [])
 
-  // Démarrage automatique (une seule fois) quand on arrive du scanner QR
+  // Démarrage automatique immédiat (arrivée du scanner QR) — l'écran
+  // « Prêt à scanner ! » n'est jamais rendu dans ce mode.
   const autoStartedRef = useRef(false)
   useEffect(() => {
     if (!autoStart || autoStartedRef.current) return
     autoStartedRef.current = true
-    const tmr = setTimeout(() => { void startCamera() }, 250)
-    return () => clearTimeout(tmr)
+    void startCamera()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart])
+  const warmingUp = !!autoStart && !isCameraActive
 
   const startCamera = async () => {
     try {
@@ -563,7 +564,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   return (
     <div className="camera-capture">
       {title && <h2 className="camera-title">{title}</h2>}
-      <div className={isCameraActive ? 'camera-square' : 'camera-square camera-square--idle'}>
+      <div className={isCameraActive || warmingUp ? 'camera-square' : 'camera-square camera-square--idle'}>
         <video
           ref={videoRef}
           autoPlay
@@ -587,7 +588,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
           </div>
         )}
 
-        {!isCameraActive && document.body.classList.contains('play-app') && (
+        {!isCameraActive && !warmingUp && document.body.classList.contains('play-app') && (
           <div className="camera-idle-hero">
             <div className="camera-idle-illustration" aria-hidden="true">
               <img src={picopopLogoUrl} alt="" />
@@ -611,6 +612,12 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
           </div>
         )}
 
+        {warmingUp && (
+          <div className="camera-warming" aria-hidden="true">
+            <span className="camera-warming-spinner" />
+          </div>
+        )}
+
         {showFlash && <div className="camera-flash" />}
       </div>
 
@@ -627,6 +634,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
           style={{ display: 'none' }}
         />
         {!isCameraActive ? (
+          warmingUp ? null : (
           <>
             <div className="camera-buttons-row">
               <span className="camera-start-wrap">
@@ -656,6 +664,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
               <p>Tenez le telephone au-dessus, parallele au papier</p>
             </div>
           </>
+          )
         ) : (
           <div className="camera-buttons-row camera-buttons-row--active">
             <button

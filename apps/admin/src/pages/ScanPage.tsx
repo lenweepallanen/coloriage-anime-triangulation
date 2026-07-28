@@ -71,6 +71,8 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   const bookId = searchParams.get('book')
   const [paused, setPaused] = useState(false)
   const [cameraActive, setCameraActive] = useState(false)
+  // Arrivée depuis le scanner QR : caméra auto, écran « Prêt à scanner ! » sauté
+  const autoCam = mode === 'play' && searchParams.get('autocam') === '1'
 
 
   // Orientation responsive : on ne verrouille PAS l'orientation (cf. soucis iOS) ;
@@ -378,14 +380,14 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
           <header className="scan-header">
             <h2 className="scan-header-title">
               {stage === 'camera'
-                ? (cameraActive ? 'Scan en cours…' : 'Prêt à scanner !')
+                ? (cameraActive || autoCam ? 'Scan en cours…' : 'Prêt à scanner !')
                 : stage === 'adjust'
                   ? 'Ajuste les coins'
                   : stage === 'preview'
                     ? 'Scan réussi !'
                     : 'Scan en cours…'}
             </h2>
-            {(stage === 'camera' && cameraActive) || stage === 'processing' ? (
+            {(stage === 'camera' && (cameraActive || autoCam)) || stage === 'processing' ? (
               <p className="scan-header-sub">Garde ton coloriage bien dans le cadre.</p>
             ) : stage === 'preview' ? (
               <p className="scan-header-sub">Ton coloriage est prêt à prendre vie ✨</p>
@@ -399,7 +401,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       )}
 
       {stage === 'camera' && (
-        <CameraView onCapture={onCameraCapture} onActiveChange={setCameraActive} autoStart={mode === 'play' && searchParams.get('autocam') === '1'} title={`${project.name} — Mode Coloriage`} />
+        <CameraView onCapture={onCameraCapture} onActiveChange={setCameraActive} autoStart={autoCam} title={`${project.name} — Mode Coloriage`} />
       )}
 
       {stage === 'adjust' && capturedBlob && (
