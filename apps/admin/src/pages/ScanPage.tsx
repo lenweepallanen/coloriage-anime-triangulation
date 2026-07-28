@@ -108,6 +108,13 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   type LamaStatus = 'idle' | 'generating-mask' | 'warmup' | 'inpainting' | 'done' | 'error' | 'not-needed'
 
   const [stage, setStage] = useState<ScanStage>('camera')
+  // Squelette d'UI partagé : le shell (barre d'onglets, menu) lit l'étape du
+  // scan sur <body> pour masquer son chrome pendant l'animation plein écran.
+  useEffect(() => {
+    if (mode !== 'play') return
+    document.body.dataset.scanStage = stage
+    return () => { delete document.body.dataset.scanStage }
+  }, [mode, stage])
   // --- App native (mode play) : validation + animation FIGÉES en paysage ---
   // Le lock passe par le polyfill screen.orientation.lock (→ plugin Capacitor
   // en natif, rejeté/no-op sur le web où le comportement responsive demeure).
@@ -362,25 +369,29 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
   return (
     <div className="scan-page">
       {mode === 'play' && stage !== 'animation' && (
-        <button className="scan-back-btn" onClick={() => window.history.back()} aria-label="Retour">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 5 8 12l7 7" />
-          </svg>
+        <button className="scan-back-bar" onClick={() => window.history.back()}>
+          ← Retour
         </button>
       )}
       {stage !== 'animation' && (mode === 'play' || stage !== 'preview') && (
         mode === 'play' ? (
           <header className="scan-header">
-            <h2 className="scan-header-title">SCAN</h2>
-            <p className="scan-header-sub">
+            <h2 className="scan-header-title">
               {stage === 'camera'
-                ? (cameraActive ? 'Place ton coloriage dans le cadre' : 'Scanne ton coloriage pour le voir prendre vie !')
+                ? (cameraActive ? 'Scan en cours…' : 'Prêt à scanner !')
                 : stage === 'adjust'
-                  ? 'Ajuste les coins de ton coloriage'
+                  ? 'Ajuste les coins'
                   : stage === 'preview'
-                    ? 'Parfait ! Ton coloriage est prêt !'
-                    : 'On scanne ton coloriage…'}
-            </p>
+                    ? 'Scan réussi !'
+                    : 'Scan en cours…'}
+            </h2>
+            {(stage === 'camera' && cameraActive) || stage === 'processing' ? (
+              <p className="scan-header-sub">Garde ton coloriage bien dans le cadre.</p>
+            ) : stage === 'preview' ? (
+              <p className="scan-header-sub">Ton coloriage est prêt à prendre vie ✨</p>
+            ) : stage === 'adjust' ? (
+              <p className="scan-header-sub">Ajuste les coins de ton coloriage</p>
+            ) : null}
           </header>
         ) : stage !== 'preview' ? (
           <h2>{project.name} — Mode Coloriage</h2>
@@ -412,7 +423,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
           {mode === 'play' && !processor.error ? (
             <div className="scan-progress-pill">
               <span className="scan-progress-star" aria-hidden="true">⭐</span>
-              Scan en cours…
+              Tiens bon ! On détecte les couleurs et les formes de ton coloriage…
             </div>
           ) : (
             <div className="loading">
@@ -584,7 +595,7 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
           <div className="scan-validate-name">{project.name}</div>
           <div className="scan-validate-bar">
             <h2 className="scan-validate-title">
-              {mode === 'play' ? 'Parfait ! Ton coloriage est prêt !' : 'Tu valides la photo ?'}
+              {mode === 'play' ? 'Ton coloriage a bien été reconnu. Veux-tu le voir s\u2019animer ?' : 'Tu valides la photo ?'}
             </h2>
             <div className="scan-validate-actions">
               <button
@@ -592,10 +603,10 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
                 onClick={() => setStage('animation')}
                 disabled={deferredLoaded === false}
               >
-                {deferredLoaded === false ? 'Chargement…' : mode === 'play' ? 'Voir mon coloriage prendre vie !' : 'Oui'}
+                {deferredLoaded === false ? 'Chargement…' : mode === 'play' ? 'Voir l\u2019animation' : 'Oui'}
               </button>
               <button className="btn-secondary btn-lg" onClick={handleRetake}>
-                {mode === 'play' ? 'Reprendre la photo' : 'Non, je reprends'}
+                {mode === 'play' ? 'Recommencer' : 'Non, je reprends'}
               </button>
             </div>
           </div>

@@ -27,9 +27,10 @@ export default function App() {
           <Route path="/tuto" element={<TutoPage />} />
           <Route path="/a-propos" element={<AProposPage />} />
           <Route path="/livre/:bookId" element={<BookPage />} />
+          {/* Scan : même squelette (fond, menu, onglets) ; le chrome du shell
+              est masqué par CSS pendant l'animation plein écran */}
+          <Route path="/p/:projectId" element={<PlayPage />} />
         </Route>
-        {/* Scan + animation : plein écran, sans shell */}
-        <Route path="/p/:projectId" element={<PlayPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </I18nProvider>

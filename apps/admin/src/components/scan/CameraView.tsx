@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
+import picopopLogoUrl from '../../assets/picopop-logo.png'
 import { loadOpenCVWorker, detectFrame, setDetectCallback } from '../../utils/perspectiveCorrection'
 import type { Point2D } from '../../types/project'
 
@@ -587,15 +588,26 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         )}
 
         {!isCameraActive && document.body.classList.contains('play-app') && (
-          <div className="camera-placeholder" aria-hidden="true">
-            <svg className="camera-placeholder-icon" viewBox="0 0 64 50" fill="none">
-              <rect x="3" y="13" width="58" height="32" rx="7" stroke="currentColor" strokeWidth="3" />
-              <path d="M22 13 l4 -7 h12 l4 7" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" />
-              <circle cx="32" cy="29" r="10" stroke="currentColor" strokeWidth="3" />
-              <circle cx="51" cy="21" r="2" fill="currentColor" />
-            </svg>
-            <span className="camera-placeholder-title">Prêt à scanner ?</span>
-            <span className="camera-placeholder-sub">Appuie sur le bouton pour ouvrir la caméra.</span>
+          <div className="camera-idle-hero">
+            <div className="camera-idle-illustration" aria-hidden="true">
+              <img src={picopopLogoUrl} alt="" />
+              <svg className="camera-idle-cam" viewBox="0 0 64 50" fill="none">
+                <rect x="3" y="13" width="58" height="32" rx="9" fill="#8b7cf0" />
+                <path d="M22 13 l4 -7 h12 l4 7" fill="#8b7cf0" />
+                <circle cx="32" cy="29" r="11" fill="#ffffff" />
+                <circle cx="32" cy="29" r="7" fill="#ff8fae" />
+                <circle cx="51" cy="21" r="2.5" fill="#ffffff" />
+              </svg>
+            </div>
+            <p className="camera-idle-text">Nous ouvrons la caméra<br />pour scanner ton coloriage.</p>
+            <p className="camera-idle-sub">Assure-toi que ton coloriage est bien à plat et entièrement visible.</p>
+            <div className="camera-tip-card">
+              <span className="camera-tip-icon" aria-hidden="true">💡</span>
+              <div>
+                <strong>Conseil</strong>
+                <p>Bonne lumière et plan stable pour un meilleur résultat !</p>
+              </div>
+            </div>
           </div>
         )}
 
