@@ -810,6 +810,45 @@ body.play-app .soft-btn--ghost {
   color: var(--accent-rose);
   box-shadow: 0 4px 12px rgba(255, 143, 174, 0.35);
 }
+/* État « Ajout du livre en cours… » du popup de confirmation */
+body.play-app .scanner-confirm-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--accent-violet);
+  padding: 8px 0 4px;
+}
+
+/* Badge « Ajout en cours… » sur la carte d'un livre (téléchargement fond) */
+body.play-app .book-adding-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--accent-violet);
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.25);
+  white-space: nowrap;
+  max-width: 92%;
+  z-index: 5;
+}
+body.play-app .book-adding-pill .boot-spinner {
+  width: 16px;
+  height: 16px;
+  border-width: 2.5px;
+}
 
 /* ---------------------------------------------------------------------
    Pages placeholder (Scanner, Galerie, Tuto, À propos)

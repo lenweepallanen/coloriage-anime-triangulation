@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import jsQR from 'jsqr'
 import { getBook, getBookCover } from '@shared/db/booksStore'
 import type { Book } from '@shared/types/project'
-import { isBookDownloaded, downloadBook } from '../utils/bookDownload'
+import { isBookDownloaded, startBackgroundBookDownload } from '../utils/bookDownload'
 import { useI18n } from '../i18n'
 
 /**
@@ -24,8 +24,7 @@ type Status =
   | { kind: 'scanning' }
   | { kind: 'camera-error' }
   | { kind: 'message'; text: string }
-  | { kind: 'confirm'; book: Book; coverUrl: string | null }
-  | { kind: 'adding'; done: number; total: number }
+  | { kind: 'confirm'; book: Book; coverUrl: string | null; launching?: boolean }
   | { kind: 'success'; text: string }
 
 function parseQr(data: string): { type: 'project' | 'book'; id: string } | null {
@@ -90,18 +89,18 @@ export default function ScannerPage() {
     }
   }, [flashMessage, navigate, stopCamera, t])
 
-  const confirmAdd = useCallback(async (book: Book, coverUrl: string | null) => {
-    if (coverUrl) URL.revokeObjectURL(coverUrl)
-    try {
-      setStatus({ kind: 'adding', done: 0, total: 0 })
-      await downloadBook(book, (done, total) => setStatus({ kind: 'adding', done, total }))
+  const confirmAdd = useCallback((book: Book, coverUrl: string | null) => {
+    // Le popup passe en mode « Ajout du livre en cours… », le pré-chargement
+    // part en arrière-plan, puis retour au menu (badge de progression sur la
+    // carte du livre — il est ouvrable immédiatement).
+    setStatus({ kind: 'confirm', book, coverUrl, launching: true })
+    startBackgroundBookDownload(book)
+    setTimeout(() => {
+      if (coverUrl) URL.revokeObjectURL(coverUrl)
       stopCamera()
-      navigate(`/livre/${book.id}`)
-    } catch (err) {
-      console.error('[scanner] ajout livre échoué', err)
-      flashMessage(t('home.error1'))
-    }
-  }, [flashMessage, navigate, stopCamera, t])
+      navigate('/')
+    }, 1400)
+  }, [navigate, stopCamera])
 
   const cancelConfirm = useCallback((coverUrl: string | null) => {
     if (coverUrl) URL.revokeObjectURL(coverUrl)
@@ -267,29 +266,30 @@ export default function ScannerPage() {
                   <span className="scanner-confirm-fallback" aria-hidden="true">📖</span>
                 )}
                 <strong className="scanner-confirm-title">{status.book.name}</strong>
-                <p className="scanner-confirm-q">{t('scanner.book.confirmQ')}</p>
-                <div className="scanner-confirm-actions">
-                  <button className="soft-btn" onClick={() => void confirmAdd(status.book, status.coverUrl)}>
-                    {t('common.yes')}
-                  </button>
-                  <button className="soft-btn soft-btn--ghost" onClick={() => cancelConfirm(status.coverUrl)}>
-                    {t('common.no')}
-                  </button>
-                </div>
+                {status.launching ? (
+                  <div className="scanner-confirm-loading">
+                    <span className="boot-spinner boot-spinner--small" />
+                    <span>{t('scanner.book.adding')}</span>
+                  </div>
+                ) : (
+                  <>
+                    <p className="scanner-confirm-q">{t('scanner.book.confirmQ')}</p>
+                    <div className="scanner-confirm-actions">
+                      <button className="soft-btn" onClick={() => confirmAdd(status.book, status.coverUrl)}>
+                        {t('common.yes')}
+                      </button>
+                      <button className="soft-btn soft-btn--ghost" onClick={() => cancelConfirm(status.coverUrl)}>
+                        {t('common.no')}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
           {status.kind !== 'scanning' && status.kind !== 'confirm' && (
             <div className={`scanner-status ${status.kind === 'success' ? 'scanner-status--success' : ''}`}>
-              {status.kind === 'adding' ? (
-                <>
-                  <span className="boot-spinner boot-spinner--small" />
-                  <span>
-                    {t('scanner.book.adding')}
-                    {status.total > 0 && ` ${status.done}/${status.total}`}
-                  </span>
-                </>
-              ) : status.kind === 'message' || status.kind === 'success' ? (
+              {status.kind === 'message' || status.kind === 'success' ? (
                 <span>{status.text}</span>
               ) : null}
             </div>

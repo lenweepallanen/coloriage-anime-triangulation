@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import type { Book } from '@shared/types/project'
-import { isBookDownloaded } from '../utils/bookDownload'
+import { isBookDownloaded, subscribeBookDownloads, getBookDownloadProgress } from '../utils/bookDownload'
 import { useI18n } from '../i18n'
 import logoUrl from '../assets/picopop-logo.png'
 
@@ -41,6 +41,9 @@ export default function PlayHomePage() {
   const [ready, setReady] = useState(homeCache !== null)
   const [error, setError] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  // Re-render quand la progression d'un téléchargement de livre change
+  const [, setDownloadTick] = useState(0)
+  useEffect(() => subscribeBookDownloads(() => setDownloadTick(v => v + 1)), [])
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(
     () => new Set((homeCache?.books ?? []).filter(isBookDownloaded).map(b => b.id)),
   )
@@ -143,6 +146,8 @@ export default function PlayHomePage() {
                 book={b}
                 coverUrl={covers[b.id] ?? null}
                 variant="owned"
+                progress={getBookDownloadProgress(b.id)}
+                addingLabel={t('home.adding')}
                 onClick={() => navigate(`/livre/${b.id}`)}
               />
             ))}
@@ -214,11 +219,13 @@ function AddBookCard({ onClick }: { onClick: () => void }) {
   )
 }
 
-function BookCard({ book, coverUrl, variant, shopLabel, onClick }: {
+function BookCard({ book, coverUrl, variant, shopLabel, progress, addingLabel, onClick }: {
   book: Book
   coverUrl: string | null
   variant: 'owned' | 'shop'
   shopLabel?: string
+  progress?: { done: number; total: number } | null
+  addingLabel?: string
   onClick: () => void
 }) {
   return (
@@ -235,6 +242,15 @@ function BookCard({ book, coverUrl, variant, shopLabel, onClick }: {
         <div className="book-card-fallback">
           <span aria-hidden="true">📖</span>
           <span className="book-card-fallback-name">{book.name}</span>
+        </div>
+      )}
+      {variant === 'owned' && progress && (
+        <div className="book-adding-pill" aria-live="polite">
+          <span className="boot-spinner boot-spinner--small" />
+          <span>
+            {addingLabel}
+            {progress.total > 0 && ` ${progress.done}/${progress.total}`}
+          </span>
         </div>
       )}
       {variant === 'shop' && (
