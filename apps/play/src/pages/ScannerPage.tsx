@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import jsQR from 'jsqr'
-import { getBook } from '@shared/db/booksStore'
+import { getBook, getBookCover } from '@shared/db/booksStore'
+import type { Book } from '@shared/types/project'
 import { isBookDownloaded, downloadBook } from '../utils/bookDownload'
 import { useI18n } from '../i18n'
 
@@ -23,6 +24,7 @@ type Status =
   | { kind: 'scanning' }
   | { kind: 'camera-error' }
   | { kind: 'message'; text: string }
+  | { kind: 'confirm'; book: Book; coverUrl: string | null }
   | { kind: 'adding'; done: number; total: number }
   | { kind: 'success'; text: string }
 
@@ -78,15 +80,34 @@ export default function ScannerPage() {
         }, 1400)
         return
       }
+      // Aperçu du livre (couverture + titre) avant l'ajout
+      const cover = await getBookCover(id).catch(() => null)
+      const coverUrl = cover ? URL.createObjectURL(cover) : null
+      setStatus({ kind: 'confirm', book, coverUrl })
+    } catch (err) {
+      console.error('[scanner] lecture livre échouée', err)
+      flashMessage(t('home.error1'))
+    }
+  }, [flashMessage, navigate, stopCamera, t])
+
+  const confirmAdd = useCallback(async (book: Book, coverUrl: string | null) => {
+    if (coverUrl) URL.revokeObjectURL(coverUrl)
+    try {
       setStatus({ kind: 'adding', done: 0, total: 0 })
       await downloadBook(book, (done, total) => setStatus({ kind: 'adding', done, total }))
       stopCamera()
-      navigate(`/livre/${id}`)
+      navigate(`/livre/${book.id}`)
     } catch (err) {
       console.error('[scanner] ajout livre échoué', err)
       flashMessage(t('home.error1'))
     }
   }, [flashMessage, navigate, stopCamera, t])
+
+  const cancelConfirm = useCallback((coverUrl: string | null) => {
+    if (coverUrl) URL.revokeObjectURL(coverUrl)
+    setStatus({ kind: 'scanning' })
+    handlingRef.current = false
+  }, [])
 
   const handleDecoded = useCallback((data: string) => {
     if (handlingRef.current) return
@@ -237,7 +258,28 @@ export default function ScannerPage() {
               </svg>
             </div>
           </div>
-          {status.kind !== 'scanning' && (
+          {status.kind === 'confirm' && (
+            <div className="scanner-confirm-backdrop" role="dialog" aria-modal="true">
+              <div className="scanner-confirm soft-card">
+                {status.coverUrl ? (
+                  <img className="scanner-confirm-cover" src={status.coverUrl} alt={status.book.name} />
+                ) : (
+                  <span className="scanner-confirm-fallback" aria-hidden="true">📖</span>
+                )}
+                <strong className="scanner-confirm-title">{status.book.name}</strong>
+                <p className="scanner-confirm-q">{t('scanner.book.confirmQ')}</p>
+                <div className="scanner-confirm-actions">
+                  <button className="soft-btn" onClick={() => void confirmAdd(status.book, status.coverUrl)}>
+                    {t('common.yes')}
+                  </button>
+                  <button className="soft-btn soft-btn--ghost" onClick={() => cancelConfirm(status.coverUrl)}>
+                    {t('common.no')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {status.kind !== 'scanning' && status.kind !== 'confirm' && (
             <div className={`scanner-status ${status.kind === 'success' ? 'scanner-status--success' : ''}`}>
               {status.kind === 'adding' ? (
                 <>

@@ -752,6 +752,65 @@ body.play-app .scanner-status--success {
   color: #ffffff;
 }
 
+/* Confirmation d'ajout de livre : aperçu couverture + OUI / NON */
+body.play-app .scanner-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(46, 42, 94, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+body.play-app .scanner-confirm {
+  width: min(88vw, 360px);
+  padding: 24px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+body.play-app .scanner-confirm-cover {
+  width: min(52vw, 200px);
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 4px solid #ffffff;
+  box-shadow: var(--sticker-shadow);
+}
+body.play-app .scanner-confirm-fallback {
+  font-size: 3.4rem;
+}
+body.play-app .scanner-confirm-title {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: var(--ink);
+  line-height: 1.3;
+}
+body.play-app .scanner-confirm-q {
+  font-family: 'Andika', sans-serif;
+  font-size: 1.02rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+body.play-app .scanner-confirm-actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  margin-top: 4px;
+}
+body.play-app .scanner-confirm-actions .soft-btn {
+  flex: 1;
+}
+body.play-app .soft-btn--ghost {
+  background: #ffffff;
+  color: var(--accent-rose);
+  box-shadow: 0 4px 12px rgba(255, 143, 174, 0.35);
+}
+
 /* ---------------------------------------------------------------------
    Pages placeholder (Scanner, Galerie, Tuto, À propos)
    ------------------------------------------------------------------- */
