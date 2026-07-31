@@ -132,8 +132,9 @@ export default function SceneConfigPanel({
 }
 
 // --- Action card (séquence ordonnée + son unique) ---
+// Exporté : réutilisé par SceneFilmEditor pour les blocs « Action » du mode film.
 
-function ActionCard({ action, readyAnimations, onChange, onSceneSoundImported, onSceneSoundDeleted }: {
+export function ActionCard({ action, readyAnimations, onChange, onSceneSoundImported, onSceneSoundDeleted }: {
   action: SceneAction
   readyAnimations: Animation[]
   onChange: (partial: Partial<SceneAction>) => void
@@ -196,6 +197,7 @@ function ActionCard({ action, readyAnimations, onChange, onSceneSoundImported, o
     const url = URL.createObjectURL(action.sound.blob)
     const audio = new Audio(url)
     audio.volume = action.sound.volume ?? 1
+    audio.playbackRate = action.sound.rate ?? 1
     audioRef.current = audio
     setPlayingSound(true)
     audio.play().catch(() => {})
@@ -265,6 +267,25 @@ function ActionCard({ action, readyAnimations, onChange, onSceneSoundImported, o
               />
               parlé
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }} title="Boucle pendant toute l'action, coupé à la fin (ignoré si « parlé »)">
+              <input
+                type="checkbox"
+                checked={action.sound.loop ?? false}
+                onChange={(e) => onChange({ sound: { ...action.sound!, loop: e.target.checked || undefined } })}
+              />
+              loop
+            </label>
+            <input
+              type="number" min={0.1} step={0.1}
+              placeholder="×1"
+              value={action.sound.rate ?? ''}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                onChange({ sound: { ...action.sound!, rate: Number.isFinite(v) && v > 0 ? v : undefined } })
+              }}
+              style={{ width: 64 }}
+              title="Vitesse de lecture du son (synchro son ↔ animation ; modifie la hauteur)"
+            />
             <div style={{ flex: 1 }} />
             <input
               type="range" min={0} max={1} step={0.05}
@@ -329,6 +350,7 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
     const url = URL.createObjectURL(step.sound.blob)
     const audio = new Audio(url)
     audio.volume = step.sound.volume ?? 1
+    audio.playbackRate = step.sound.rate ?? 1
     audioRef.current = audio
     setPlaying(true)
     audio.play().catch(() => {})
@@ -337,6 +359,18 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 28, fontSize: 12, flexWrap: 'wrap' }}>
+      <span style={{ opacity: 0.7 }} title="Multiplicateur de vitesse de lecture de l'animation (0.5 = 2× plus lent)">vitesse ×</span>
+      <input
+        type="number" min={0.1} step={0.1}
+        placeholder="1"
+        value={step.animSpeedMul ?? ''}
+        onChange={(e) => {
+          const v = parseFloat(e.target.value)
+          onChange({ animSpeedMul: Number.isFinite(v) && v > 0 ? v : undefined })
+        }}
+        style={{ width: 90 }}
+        title="Multiplicateur de vitesse de lecture de l'animation (0.5 = 2× plus lent)"
+      />
       <span style={{ opacity: 0.7 }}>son :</span>
       {step.sound ? (
         <>
@@ -349,6 +383,25 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
             />
             parlé
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }} title="Boucle tant que l'animation joue, coupé à la fin de l'action (ignoré si « parlé »)">
+            <input
+              type="checkbox"
+              checked={step.sound.loop ?? false}
+              onChange={(e) => onChange({ sound: { ...step.sound!, loop: e.target.checked || undefined } })}
+            />
+            loop
+          </label>
+          <input
+            type="number" min={0.1} step={0.1}
+            placeholder="×1"
+            value={step.sound.rate ?? ''}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value)
+              onChange({ sound: { ...step.sound!, rate: Number.isFinite(v) && v > 0 ? v : undefined } })
+            }}
+            style={{ width: 64 }}
+            title="Vitesse de lecture du son (synchro son ↔ animation ; modifie la hauteur)"
+          />
           <div style={{ flex: 1 }} />
           <input
             type="range" min={0} max={1} step={0.05}

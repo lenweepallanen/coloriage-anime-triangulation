@@ -2547,26 +2547,46 @@ body.play-app .scan-validate--landscape .scan-validate-bar {
 }
 
 /* ---- 3) Écran SCÈNE : classe React .scene-player--landscape ---- */
-/* Splittée : 2/3 GAUCHE = canvas carré centré ; 1/3 DROITE = titre + boutons centrés. */
-body.play-app .scene-player--landscape {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
+/* PLEIN ÉCRAN paysage : canvas 16:9 bord à bord centré sur fond noir,
+   HUD superposé (porte en haut à gauche, boutons à droite, barre film en bas). */
+body.play-app .scene-player--landscape.scene-player--fullscreen {
+  display: flex;
   align-items: center;
-  justify-items: center;
+  justify-content: center;
   gap: 0;
-  padding: 12px;
+  padding: 0;
   overflow: hidden;
-  background: var(--cream);
+  background: #000;
 }
 body.play-app .scene-player--landscape .animation-canvas {
   flex: 0 0 auto;
-  border: 6px solid #ffffff;
-  border-radius: 24px;
-  box-shadow: var(--sticker-shadow-lg);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 body.play-app .scene-player--landscape .animation-canvas canvas {
-  border-radius: 18px;
+  border-radius: 0;
+}
+/* HUD superposé : colonne de boutons à droite, par-dessus le canvas WebGL.
+   translateZ(0) + isolation : même astuce compositing iOS que le bouton porte. */
+body.play-app .scene-player--fullscreen .scene-player-hud {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  top: 50%;
+  transform: translateY(-50%) translateZ(0);
+  isolation: isolate;
+  z-index: 25;
+}
+/* Barre de progression film : superposée en bas au centre. */
+body.play-app .scene-player--fullscreen .scene-player-film-bar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  width: min(50%, 420px);
+  margin: 0;
+  z-index: 25;
 }
 /* Colonne HUD à droite : titre puis boutons empilés */
 body.play-app .scene-player-hud {

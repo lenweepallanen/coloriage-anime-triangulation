@@ -737,6 +737,12 @@ export interface SceneSound {
   blob: Blob | null;
   /** Volume de lecture entre 0 et 1 (défaut 1). */
   volume?: number;
+  /** Si true, le son boucle tant que son animation/trajet joue, puis est coupé
+   *  (ex. bruit de pas pendant toute la marche). Ignoré si le son est « parlé ». */
+  loop?: boolean;
+  /** Vitesse de lecture du son (playbackRate, défaut 1). Permet de synchroniser
+   *  le son avec l'animation (ex. pas plus rapides quand l'anim est accélérée). */
+  rate?: number;
 }
 
 /**
@@ -747,6 +753,8 @@ export interface SceneActionStep {
   animationId: string;
   sound?: SceneSound;
   isSpoken?: boolean;
+  /** Multiplicateur de vitesse de LECTURE de l'animation de cette étape (défaut 1). */
+  animSpeedMul?: number;
 }
 
 /**
@@ -862,6 +870,64 @@ export interface SceneWalkTrapezoid {
   walkSteepAngleThresholdDeg?: number;
 }
 
+/**
+ * Mode film : la scène se joue seule comme une vidéo. Un film = un CHEMIN de
+ * points posés sur le décor. Entre les points, le personnage se déplace
+ * (animation de déplacement + vitesse + son optionnel) ; à chaque point il joue
+ * une séquence d'animations avec sons (SceneAction). L'entrée (hors-champ) et
+ * la fin (sortie de champ ou fin sur place) font partie du chemin. La caméra
+ * est FIXE (cadrage `cameraX`), l'échelle du perso est définie par point et
+ * interpolée pendant les trajets.
+ */
+
+/** Trajet ENTRANT vers un point (ou vers la sortie). */
+export interface FilmTravel {
+  /** Animation de déplacement ; défaut = `SceneFilm.moveAnimationId`. */
+  animationId?: string;
+  /** Vitesse en px background/s ; défaut = `SceneFilm.moveSpeedPxPerSec`. */
+  speedPxPerSec?: number;
+  /** Multiplicateur de vitesse de LECTURE de l'animation de déplacement (défaut 1).
+   *  Ex. déplacement 2× plus rapide → animSpeedMul 2 pour que les jambes suivent. */
+  animSpeedMul?: number;
+  /** Son joué pendant le trajet, coupé à l'arrivée. */
+  sound?: SceneSound;
+}
+
+export interface FilmPoint {
+  id: string;
+  /** Position de l'origine du perso, en coords background. */
+  x: number;
+  y: number;
+  /** Échelle du perso à ce point (défaut 1). Interpolée pendant les trajets. */
+  scale: number;
+  /** Trajet entrant (depuis le point précédent ; pour le 1er : depuis l'entrée hors-champ). */
+  travel: FilmTravel;
+  /** Séquence jouée à l'arrivée. Absent = point de passage. */
+  action?: SceneAction;
+}
+
+export type FilmEnding =
+  | { kind: 'exit'; side: 'left' | 'right'; travel: FilmTravel }
+  | { kind: 'stay' };
+
+export interface SceneFilm {
+  enabled: boolean;
+  /** Côté d'entrée en scène (le perso arrive hors-champ par ce bord). */
+  entrySide: 'left' | 'right';
+  points: FilmPoint[];
+  ending: FilmEnding;
+  /** Centre du cadre caméra fixe, en coords background. */
+  cameraX: number;
+  /** Animation de déplacement par défaut. */
+  moveAnimationId?: string;
+  /** Vitesse de déplacement par défaut (px background/s). */
+  moveSpeedPxPerSec: number;
+  /** Multiplicateur de vitesse de lecture de l'animation idle aux points (défaut 1).
+   *  Ex. idle un peu rapide → 0.5 = 2× plus lent. */
+  idleSpeedMul?: number;
+  endBehavior: 'menu';
+}
+
 export interface Scene {
   id: string;
   name: string;
@@ -873,6 +939,8 @@ export interface Scene {
   restPoint: SceneRestPoint;
   /** Zone autorisée de marche + perspective 2.5D. Si null, pas de marche libre. */
   walkTrapezoid?: SceneWalkTrapezoid | null;
+  /** Mode film optionnel. Si `film.enabled`, la scène se joue seule (voir SceneFilm). */
+  film?: SceneFilm;
   /** Orientation du coloriage tel qu'il est dessiné. 'right' = par défaut (personnage tourné vers la droite),
    *  'left' = personnage dessiné tourné vers la gauche → le rendu applique un flip horizontal de base. */
   characterFacing?: 'right' | 'left';

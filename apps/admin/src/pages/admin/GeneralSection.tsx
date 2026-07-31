@@ -5,7 +5,7 @@ import PublishPanel from '../../components/admin/PublishPanel'
 import { generateTemplatePDF } from '../../utils/pdfGenerator'
 
 export default function GeneralSection() {
-  const { project, save } = useAdminContext()
+  const { project, save, patchLocal } = useAdminContext()
   const [editingName, setEditingName] = useState(false)
   const [nameValue, setNameValue] = useState(project.name)
   const [generatingPdf, setGeneratingPdf] = useState(false)
@@ -85,8 +85,10 @@ export default function GeneralSection() {
           published={project.published}
           publishedAt={project.publishedAt}
           onChange={(published) => {
-            const updated = { ...project, published, publishedAt: published ? Date.now() : project.publishedAt }
-            void save(updated)
+            // La persistance est déjà faite par setProjectPublished (updateDoc ciblé) —
+            // on ne re-sauvegarde PAS tout le projet (l'ancien `void save(...)` avalait
+            // silencieusement les erreurs et re-sérialisait toute la scène pour rien).
+            patchLocal({ published, publishedAt: published ? Date.now() : project.publishedAt })
           }}
         />
       </div>

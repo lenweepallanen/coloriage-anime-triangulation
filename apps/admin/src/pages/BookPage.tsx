@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getBook, updateBook, deleteBook } from '../db/booksStore'
-import { getProjectsByBook, getProjectThumbnail, setProjectBook } from '../db/projectsStore'
+import { getProjectsByBook, getProjectThumbnail, setProjectBook, duplicateProject } from '../db/projectsStore'
 import { buildBookPlayUrl, buildBookPlayUrlLocal, setBookPublished } from '../db/publishProject'
 import { downloadQrPng } from '../utils/qrGenerator'
 import type { Book, Project } from '../types/project'
@@ -196,6 +196,27 @@ export default function BookPage() {
     }
   }
 
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null)
+
+  /** Duplique un coloriage DANS le livre, inséré juste après l'original. */
+  async function handleDuplicateProject(sourceId: string) {
+    if (!book || duplicatingId) return
+    setDuplicatingId(sourceId)
+    try {
+      const dup = await duplicateProject(sourceId, { bookId: book.id })
+      const idx = projects.findIndex(p => p.id === sourceId)
+      const next = [...projects]
+      next.splice(idx < 0 ? next.length : idx + 1, 0, dup)
+      setProjects(next)
+      // Normalise les bookOrder (0..n-1) pour ancrer le duplicata à côté de l'original.
+      await persistOrder(next)
+    } catch (err) {
+      alert('Erreur duplication : ' + (err instanceof Error ? err.message : err))
+    } finally {
+      setDuplicatingId(null)
+    }
+  }
+
   if (loading || !book) return <div className="loading">Chargement...</div>
 
   const url = buildBookPlayUrl(book.id)
@@ -355,6 +376,9 @@ export default function BookPage() {
                 key={p.id}
                 project={p}
                 onRemove={() => handleRemoveProject(p.id)}
+                onDuplicate={() => handleDuplicateProject(p.id)}
+                duplicating={duplicatingId === p.id}
+                duplicateDisabled={duplicatingId != null}
                 isDragging={draggedId === p.id}
                 onDragStart={() => setDraggedId(p.id)}
                 onDragEnd={() => setDraggedId(null)}
@@ -372,9 +396,14 @@ export default function BookPage() {
   )
 }
 
-function BookProjectCard({ project, onRemove, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
+function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicateDisabled, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
   project: Project
   onRemove: () => void
+  onDuplicate: () => void
+  /** true pendant que CE coloriage est en cours de duplication. */
+  duplicating: boolean
+  /** true si une duplication est en cours quelque part (désactive le bouton). */
+  duplicateDisabled: boolean
   isDragging: boolean
   onDragStart: () => void
   onDragEnd: () => void
@@ -427,6 +456,14 @@ function BookProjectCard({ project, onRemove, isDragging, onDragStart, onDragEnd
       <div className="project-actions">
         <button className="btn-secondary btn-sm" onClick={e => { e.stopPropagation(); navigate(`/admin/${project.id}`) }}>
           Editer
+        </button>
+        <button
+          className="btn-icon btn-sm"
+          onClick={e => { e.stopPropagation(); onDuplicate() }}
+          disabled={duplicateDisabled}
+          title="Dupliquer (copie insérée juste à côté)"
+        >
+          {duplicating ? '…' : '⧉'}
         </button>
         <button className="btn-icon btn-sm" onClick={e => { e.stopPropagation(); onRemove() }} title="Retirer du livre">
           ⨯

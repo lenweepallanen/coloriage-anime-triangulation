@@ -23,6 +23,23 @@ function getCtx(): AudioContext {
   return sharedCtx;
 }
 
+/**
+ * Suspend l'AudioContext partagé (pause film) : gèle l'horloge et la lecture des
+ * BufferSource en cours SANS déclencher leur `onended`. Reprise via
+ * `resumeMouthAudioContext`. No-op si aucun contexte n'a été créé.
+ */
+export async function suspendMouthAudioContext(): Promise<void> {
+  if (sharedCtx && sharedCtx.state === 'running') {
+    try { await sharedCtx.suspend(); } catch { /* */ }
+  }
+}
+
+export async function resumeMouthAudioContext(): Promise<void> {
+  if (sharedCtx && sharedCtx.state === 'suspended') {
+    try { await sharedCtx.resume(); } catch { /* */ }
+  }
+}
+
 export interface MouthAudioPlayer {
   /** Démarre la lecture. Re-crée un BufferSource à chaque appel. Résout dès le démarrage. */
   play: () => Promise<void>;
@@ -47,6 +64,8 @@ interface LoadOptions {
   gain?: number;
   /** Volume de sortie [0,1]. Défaut 1. */
   volume?: number;
+  /** Vitesse de lecture (playbackRate, défaut 1). Affecte aussi la hauteur. */
+  rate?: number;
   /** Callback de fin de lecture (source onended). */
   onEnded?: () => void;
 }
@@ -113,6 +132,7 @@ export async function loadMouthAudio(
       }
       const src = ctx.createBufferSource();
       src.buffer = audioBuffer;
+      src.playbackRate.value = opts.rate ?? 1;
       src.connect(analyser);
       src.onended = () => {
         if (currentSource === src) {

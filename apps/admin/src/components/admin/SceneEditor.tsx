@@ -4,6 +4,7 @@ import type { UploadHint } from '../../db/projectsStore'
 import SceneTimeline, { type TimelineSelection } from './SceneTimeline'
 import SceneConfigPanel from './SceneConfigPanel'
 import SceneWalkZoneEditor from './SceneWalkZoneEditor'
+import SceneFilmEditor from './SceneFilmEditor'
 import CharacterOriginEditor from './CharacterOriginEditor'
 import ScenePlayer from '../scan/ScenePlayer'
 import { PreviewModalShell } from './PreviewModal'
@@ -355,6 +356,33 @@ export default function SceneEditor({ project, onSave }: Props) {
   const canPreview = hasScene && project.originalImageBlob != null
     && project.animations.some(animationHasFrames)
 
+  // Mode de la scène : INTERACTIF (UI de base) ou FILM (UI dédiée au séquenceur).
+  // Les deux états sont conservés dans `scene` — basculer ne perd rien.
+  const filmMode = scene.film?.enabled === true
+  const handleSceneModeChange = useCallback((mode: 'interactive' | 'film') => {
+    setScene(prev => {
+      if (mode === 'film') {
+        // Préserve un film v2 existant ; sinon crée un film vide par défaut.
+        if (prev.film && Array.isArray(prev.film.points)) {
+          return { ...prev, film: { ...prev.film, enabled: true } }
+        }
+        return {
+          ...prev,
+          film: {
+            enabled: true,
+            entrySide: 'left',
+            points: [],
+            ending: { kind: 'stay' },
+            cameraX: Math.round((prev.background?.width ?? 0) / 2),
+            moveSpeedPxPerSec: 260,
+            endBehavior: 'menu',
+          },
+        }
+      }
+      return prev.film ? { ...prev, film: { ...prev.film, enabled: false } } : prev
+    })
+  }, [])
+
   return (
     <div className="scene-editor">
       <div className="scene-editor-header">
@@ -375,6 +403,51 @@ export default function SceneEditor({ project, onSave }: Props) {
           </button>
         </div>
       </div>
+
+      {/* Sélecteur de mode : Interactif (UI de base) / Film (UI dédiée) */}
+      {hasScene && (
+        <div className="scene-editor-section-card">
+          <h4 className="scene-editor-section-title">Mode de la scène</h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div className="scene-config-panel-type-toggle">
+              <button
+                className={`btn-sm ${!filmMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleSceneModeChange('interactive')}
+                title="Scène interactive : boutons action/discours, marche au clic"
+              >🕹 Interactif</button>
+              <button
+                className={`btn-sm ${filmMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleSceneModeChange('film')}
+                title="Film : la scène se joue seule comme une vidéo"
+              >🎬 Film</button>
+            </div>
+            <span style={{ fontSize: 12, opacity: 0.7 }}>
+              {filmMode
+                ? 'La configuration interactive reste sauvegardée — repassez en Interactif pour la retrouver.'
+                : 'Le film reste sauvegardé — repassez en Film pour le retrouver.'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* MODE FILM : chemin de points, UI dédiée */}
+      {hasScene && filmMode && (
+        <div className="scene-editor-section-card">
+          <h4 className="scene-editor-section-title">🎬 Film — chemin</h4>
+          <SceneFilmEditor
+            scene={scene}
+            animations={project.animations}
+            backgroundUrl={bgImageUrl}
+            layerWidth={refDims.width}
+            layerHeight={refDims.height}
+            characterImageUrl={charImageUrl}
+            characterImageSize={charImageSize}
+            onChange={(film) => setScene(prev => ({ ...prev, film }))}
+            onSceneSoundImported={handleSceneSoundImported}
+            onSceneSoundDeleted={handleSceneSoundDeleted}
+          />
+        </div>
+      )}
 
       <div className="scene-editor-toolbar">
         <div className="scene-layers-section">
@@ -560,8 +633,8 @@ export default function SceneEditor({ project, onSave }: Props) {
         </div>
       )}
 
-      {/* Section Entrée — carte dédiée */}
-      {hasScene && (
+      {/* Section Entrée — carte dédiée (interactif uniquement : en film, l'entrée est un bloc du chemin) */}
+      {hasScene && !filmMode && (
         <div className="scene-editor-section-card">
           <h4 className="scene-editor-section-title">Entrée</h4>
           <div className="scene-editor-section-grid">
@@ -622,8 +695,8 @@ export default function SceneEditor({ project, onSave }: Props) {
         </div>
       )}
 
-      {/* Section Marche libre — carte dédiée */}
-      {hasScene && (
+      {/* Section Marche libre — carte dédiée (interactif uniquement : le film ne dépend pas du trapèze) */}
+      {hasScene && !filmMode && (
         <div className="scene-editor-section-card">
           <h4 className="scene-editor-section-title">Zone de marche</h4>
           <SceneWalkZoneEditor
@@ -650,7 +723,7 @@ export default function SceneEditor({ project, onSave }: Props) {
         </div>
       )}
 
-      {hasScene && (
+      {hasScene && !filmMode && (
         <SceneTimeline
           backgroundImageUrl={bgImageUrl}
           backgroundWidth={refDims.width}
@@ -670,7 +743,8 @@ export default function SceneEditor({ project, onSave }: Props) {
         />
       )}
 
-      {selection && (
+      {/* Panneau rest point (actions, discours, présentation, zones…) : interactif uniquement */}
+      {!filmMode && selection && (
         <SceneConfigPanel
           restPoint={scene.restPoint}
           animations={project.animations}

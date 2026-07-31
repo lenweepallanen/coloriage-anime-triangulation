@@ -28,5 +28,11 @@ export function useProject(projectId: string | null | undefined) {
     setProject(updated)
   }, [])
 
-  return { project, loading, save }
+  /** Mise à jour LOCALE de l'état (sans écriture Firestore/Storage). À utiliser quand
+   *  la persistance a déjà été faite par un chemin dédié (ex. setProjectPublished). */
+  const patchLocal = useCallback((partial: Partial<Project>) => {
+    setProject(prev => (prev ? { ...prev, ...partial } : prev))
+  }, [])
+
+  return { project, loading, save, patchLocal }
 }

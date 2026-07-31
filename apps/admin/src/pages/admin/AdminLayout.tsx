@@ -8,6 +8,8 @@ import { getBook } from '../../db/booksStore'
 export interface AdminContext {
   project: Project
   save: (updated: Project, hints?: UploadHint[]) => Promise<void>
+  /** Mise à jour locale de l'état projet (sans persistance — cf. useProject.patchLocal). */
+  patchLocal: (partial: Partial<Project>) => void
   canPreview: boolean
   canEditScene: boolean
 }
@@ -18,7 +20,7 @@ export function useAdminContext() {
 
 export default function AdminLayout() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { project, loading, save } = useProject(projectId!)
+  const { project, loading, save, patchLocal } = useProject(projectId!)
 
   if (loading) return <div className="loading">Chargement du projet...</div>
   if (!project) return <Navigate to="/" replace />
@@ -27,7 +29,7 @@ export default function AdminLayout() {
   const canPreview = project.animations.some(animationHasFrames)
   const canEditScene = canPreview
 
-  const context: AdminContext = { project, save, canPreview, canEditScene }
+  const context: AdminContext = { project, save, patchLocal, canPreview, canEditScene }
 
   return (
     <div className="admin-layout">

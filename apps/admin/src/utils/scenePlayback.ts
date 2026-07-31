@@ -8,6 +8,22 @@ function smoothstep(t: number): number {
 
 export type SceneState = 'entering' | 'interaction' | 'blend' | 'walking'
 
+/** Options d'un trajet de film (mode film v2 — chemin de points, sans trapèze). */
+export interface FilmTravelOpts {
+  speedPxPerSec: number
+  /** Échelle du perso au départ / à l'arrivée (interpolée par distance parcourue). */
+  scaleFrom: number
+  scaleTo: number
+  /** Animation de déplacement (déjà résolue : trajet ?? défaut film). */
+  animationId?: string
+  /** Multiplicateur de vitesse de lecture de l'animation de déplacement (défaut 1). */
+  animSpeedMul?: number
+  /** Téléporte d'abord le perso hors-champ de ce côté (entrée de film). */
+  offscreenStart?: 'left' | 'right'
+  /** Cible = hors-champ de ce côté (sortie). Trajet TERMINAL : reste figé, isExited=true. */
+  offscreenEnd?: 'left' | 'right'
+}
+
 export interface ScenePlaybackConfig {
   scene: Scene
   viewportWidth: number
@@ -22,6 +38,12 @@ export interface ScenePlaybackConfig {
   characterBaseWidthBg?: number
   /** Origine U normalisée [0,1] du personnage dans l'image (0 = bord gauche, 1 = bord droit). */
   characterOriginU?: number
+  /** MODE FILM : centre du cadre caméra FIXE (coords background). Si défini :
+   *  caméra jamais déplacée, entrée `scene.entry` bypassée (le film gère la sienne),
+   *  position initiale hors-champ (cf. filmInitial). */
+  filmCameraX?: number
+  /** Position initiale du perso en mode film : hors-champ côté `side`, à `y`, échelle `scale`. */
+  filmInitial?: { side: 'left' | 'right'; y: number; scale: number }
 }
 
 /**
@@ -70,6 +92,26 @@ export class ScenePlayback {
   private blendProgress: number = 0
   private blendDuration: number = 7 / 24
 
+  /** Mode sortie de champ (film) : le trajet en cours est terminal, pas de retour au rest point. */
+  private _exitMode: boolean = false
+  /** true quand le trajet de sortie est terminé (perso hors écran, immobile). */
+  private _exited: boolean = false
+
+  // --- Mode film v2 (chemin de points, caméra fixe, échelle par point) ---
+  private _filmMode: boolean = false
+  /** Échelle courante du perso (échelle du dernier point atteint, interpolée en trajet). */
+  private _filmScale: number = 1
+  /** Trajet film en cours (null hors trajet). */
+  private _filmTravel: {
+    speed: number
+    scaleFrom: number
+    scaleTo: number
+    totalDist: number
+    coveredDist: number
+    animId?: string
+    animSpeedMul?: number
+  } | null = null
+
   private onRestPointArrival?: (restPoint: SceneRestPoint) => void
   private onWalkStateChange?: (walking: boolean) => void
   private characterBaseWidthBg: number = 0
@@ -82,6 +124,22 @@ export class ScenePlayback {
     this.onWalkStateChange = config.onWalkStateChange
     this.characterBaseWidthBg = config.characterBaseWidthBg ?? 0
     this.characterOriginU = config.characterOriginU ?? 0.5
+
+    // MODE FILM : caméra fixe (jamais déplacée) + position initiale hors-champ.
+    // L'entrée `scene.entry` et le snap trapèze sont bypassés — le film gère son
+    // propre chemin (FilmDirector → startFilmTravel).
+    if (config.filmCameraX != null) {
+      this._filmMode = true
+      this._filmScale = config.filmInitial?.scale ?? 1
+      this._backgroundOffsetX = this.clampOffset(config.filmCameraX - this.viewportWidth / 2)
+      this._currentY = config.filmInitial?.y ?? config.initialFeetBgY ?? 0
+      this._baseY = this._currentY
+      this._currentX = this.filmOffscreenX(config.filmInitial?.side ?? 'left', this._filmScale)
+      this._state = 'interaction'
+      this._lastFlipX = 1
+      this.recomputeWalkVisuals()
+      return
+    }
 
     const rp = this.scene.restPoint
     if (!rp) return
@@ -220,6 +278,68 @@ export class ScenePlayback {
     return true
   }
 
+  /** X hors-champ tel que le perso (à l'échelle donnée) soit tout juste hors du cadre fixe. */
+  private filmOffscreenX(side: 'left' | 'right', scale: number): number {
+    const viewLeftBg = this._backgroundOffsetX
+    const viewRightBg = this._backgroundOffsetX + this.viewportWidth
+    const eps = 2
+    const charW = this.characterBaseWidthBg * scale
+    const u = this.characterOriginU
+    return side === 'left'
+      ? viewLeftBg - (1 - u) * charW - eps
+      : viewRightBg + u * charW + eps
+  }
+
+  /**
+   * Démarre un trajet de film (mode film v2) : déplacement rectiligne vers `target`
+   * (coords background), sans trapèze — vitesse et animation fournies, échelle
+   * interpolée `scaleFrom → scaleTo` par distance parcourue.
+   * - `offscreenStart` : téléporte d'abord le perso hors-champ de ce côté (entrée).
+   * - `offscreenEnd` : la cible devient hors-champ de ce côté ; trajet TERMINAL
+   *   (le perso reste figé hors écran, `isExited` passe à true).
+   */
+  startFilmTravel(target: Point2D | null, opts: FilmTravelOpts): void {
+    this._exited = false
+    this._exitMode = false
+    if (opts.offscreenStart) {
+      if (target) this._currentY = target.y
+      this._currentX = this.filmOffscreenX(opts.offscreenStart, opts.scaleFrom)
+    }
+    let tx: number
+    let ty: number
+    if (opts.offscreenEnd) {
+      tx = this.filmOffscreenX(opts.offscreenEnd, opts.scaleTo)
+      ty = this._currentY
+      this._exitMode = true
+    } else if (target) {
+      tx = target.x
+      ty = target.y
+    } else {
+      return
+    }
+    this._filmScale = opts.scaleFrom
+    this._filmTravel = {
+      speed: Math.max(1, opts.speedPxPerSec),
+      scaleFrom: opts.scaleFrom,
+      scaleTo: opts.scaleTo,
+      totalDist: Math.hypot(tx - this._currentX, ty - this._currentY),
+      coveredDist: 0,
+      ...(opts.animationId != null && { animId: opts.animationId }),
+      ...(opts.animSpeedMul != null && { animSpeedMul: opts.animSpeedMul }),
+    }
+    this.walkPath = [{ x: tx, y: ty }]
+    this.walkTargetX = tx
+    this.walkTargetY = ty
+    if (this._state !== 'walking') {
+      const wasInteracting = this._state === 'interaction' || this._state === 'blend'
+      this._state = 'walking'
+      this.blendProgress = 0
+      this._walkAlpha = 1
+      this._pauseSec = 0
+      if (wasInteracting) this.onWalkStateChange?.(true)
+    }
+  }
+
   update(deltaSeconds: number): void {
     switch (this._state) {
       case 'interaction':
@@ -248,7 +368,7 @@ export class ScenePlayback {
 
       case 'walking': {
         const trap = this.scene.walkTrapezoid
-        if (!trap) { this.arriveAtRestPoint(); break }
+        if (!trap && !this._filmTravel) { this.arriveAtRestPoint(); break }
 
         // Pause hors écran (après un téléport).
         if (this._pauseSec > 0) {
@@ -282,7 +402,8 @@ export class ScenePlayback {
         const dx = this.walkTargetX - this._currentX
         const dy = this.walkTargetY - this._currentY
         const dist = Math.hypot(dx, dy)
-        const step = Math.max(1, trap.walkSpeedPxPerSec) * deltaSeconds
+        const speed = this._filmTravel ? this._filmTravel.speed : Math.max(1, trap!.walkSpeedPxPerSec)
+        const step = speed * deltaSeconds
         let vx = 0, vy = 0
         if (dist <= step || dist < 0.5) {
           this._currentX = this.walkTargetX
@@ -294,7 +415,16 @@ export class ScenePlayback {
             this.walkTargetY = next.y
           } else {
             this.recomputeWalkVisualsFromVelocity(0, 0)
-            this.arriveAtRestPoint()
+            if (this._exitMode) {
+              // Sortie de champ (film) : trajet terminal, on reste figé en 'walking'.
+              if (this._filmTravel) this._filmScale = this._filmTravel.scaleTo
+              this._filmTravel = null
+              this._exited = true
+            } else if (this._filmTravel) {
+              this.filmArrive()
+            } else {
+              this.arriveAtRestPoint()
+            }
           }
           break
         }
@@ -302,6 +432,12 @@ export class ScenePlayback {
         vy = dy / dist
         this._currentX += vx * step
         this._currentY += vy * step
+        if (this._filmTravel) {
+          const ft = this._filmTravel
+          ft.coveredDist += step
+          const t = ft.totalDist > 1e-6 ? Math.min(1, ft.coveredDist / ft.totalDist) : 1
+          this._filmScale = ft.scaleFrom + (ft.scaleTo - ft.scaleFrom) * t
+        }
         this.recomputeWalkVisualsFromVelocity(vx, vy)
         break
       }
@@ -326,7 +462,35 @@ export class ScenePlayback {
   /** No-op désormais (walkScaleMul est un getter live), gardé pour compat init. */
   private recomputePerspectiveAtCurrent(): void { /* */ }
 
+  /** Arrivée d'un trajet film : blend vers l'idle SANS re-snap au rest point
+   *  (le perso reste au point du chemin, l'échelle est figée à scaleTo). */
+  private filmArrive(): void {
+    this._filmScale = this._filmTravel?.scaleTo ?? this._filmScale
+    this._filmTravel = null
+    this.recomputeWalkVisuals()
+    this._walkAlpha = 1
+    this._pauseSec = 0
+    this.walkPath = []
+    this._state = 'blend'
+    this.blendProgress = 0
+    this.onWalkStateChange?.(false)
+  }
+
   private recomputeWalkVisualsFromVelocity(vx: number, vy: number): void {
+    // Mode film : flip auto selon la direction, pas de tilt/skew (pas de trapèze).
+    if (this._filmMode) {
+      if (Math.abs(vx) > 1e-3) {
+        const nativeRight = this.scene.characterFacing !== 'left'
+        const flip: 1 | -1 = ((vx >= 0) === nativeRight) ? 1 : -1
+        this._walkFlipX = flip
+        this._lastFlipX = flip
+      } else {
+        this._walkFlipX = this._lastFlipX
+      }
+      this._walkTiltRad = 0
+      this._walkSkewY = 0
+      return
+    }
     const trap = this.scene.walkTrapezoid
     if (!trap) { this.recomputeWalkVisuals(); return }
     if (Math.abs(vx) > 1e-3 || Math.abs(vy) > 1e-3) {
@@ -399,9 +563,10 @@ export class ScenePlayback {
     return this._currentY
   }
 
-  /** Multiplicateur d'échelle dû à la perspective. Dérivé en direct du Y courant
-   *  pour rester cohérent même au repos après une marche. */
+  /** Multiplicateur d'échelle. Mode film : échelle du point courant (interpolée en
+   *  trajet). Sinon : perspective trapèze dérivée du Y courant. */
   get walkScaleMul(): number {
+    if (this._filmMode) return this._filmScale
     const trap = this.scene.walkTrapezoid
     if (!trap) return 1
     return scaleAtY(this._currentY, trap)
@@ -426,6 +591,11 @@ export class ScenePlayback {
 
   get isWalking(): boolean {
     return this._state === 'walking'
+  }
+
+  /** true quand un trajet de sortie (requestExit) est terminé — perso hors écran. */
+  get isExited(): boolean {
+    return this._exited
   }
 
   get currentState(): SceneState {
@@ -454,9 +624,16 @@ export class ScenePlayback {
       return this.scene.entryAnimationId ?? this.scene.restPoint?.restAnimationId
     }
     if (this._state === 'walking') {
+      if (this._filmMode) return this._filmTravel?.animId
       return this.scene.walkTrapezoid?.walkAnimationId
     }
     return undefined
+  }
+
+  /** Multiplicateur de vitesse de LECTURE de l'animation du trajet film en cours (1 hors film). */
+  get currentSegmentAnimSpeedMul(): number {
+    if (this._filmMode && this._state === 'walking') return this._filmTravel?.animSpeedMul ?? 1
+    return 1
   }
 
   get interactionRestAnimationId(): string | undefined {

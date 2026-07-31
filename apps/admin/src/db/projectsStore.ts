@@ -188,12 +188,15 @@ interface SceneSoundMetaDoc {
   id: string
   name: string
   volume?: number
+  loop?: boolean
+  rate?: number
 }
 
 interface SceneActionStepDoc {
   animationId: string
   sound?: SceneSoundMetaDoc
   isSpoken?: boolean
+  animSpeedMul?: number
 }
 
 interface SceneActionDoc {
@@ -224,6 +227,38 @@ interface SceneRestPointDoc {
   availableAnimationIds?: string[]  // legacy fallback
   speakSoundIds?: string[]
   helpTexts?: string[]
+}
+
+interface FilmTravelDoc {
+  animationId?: string
+  speedPxPerSec?: number
+  animSpeedMul?: number
+  sound?: SceneSoundMetaDoc
+}
+
+interface FilmPointDoc {
+  id: string
+  x: number
+  y: number
+  scale: number
+  travel: FilmTravelDoc
+  action?: SceneActionDoc
+}
+
+type FilmEndingDoc =
+  | { kind: 'exit'; side: 'left' | 'right'; travel: FilmTravelDoc }
+  | { kind: 'stay' }
+
+interface SceneFilmDoc {
+  enabled: boolean
+  entrySide: 'left' | 'right'
+  points: FilmPointDoc[]
+  ending: FilmEndingDoc
+  cameraX: number
+  moveAnimationId?: string
+  moveSpeedPxPerSec: number
+  idleSpeedMul?: number
+  endBehavior: 'menu'
 }
 
 interface SceneSegmentDoc {
@@ -287,6 +322,8 @@ interface SceneDoc {
   ambientSound?: SceneSoundMetaDoc
   /** Zone de marche libre + perspective 2.5D. */
   walkTrapezoid?: import('../types/project').SceneWalkTrapezoid | null
+  /** Mode film (séquence de blocs auto-jouée). */
+  film?: SceneFilmDoc
   /** Orientation native du coloriage (toggle admin). */
   characterFacing?: 'right' | 'left'
   /** Origine du personnage normalisée (0..1). */
@@ -411,6 +448,33 @@ function projectRef(id: string) {
   return doc(db, 'projects', id)
 }
 
+/** Itère tous les SceneSound d'un film v2 : sons d'action des points (son global +
+ *  sons de steps) + sons de trajet (points + sortie). */
+function* iterateFilmSounds(film: import('../types/project').SceneFilm | undefined): Generator<import('../types/project').SceneSound> {
+  if (!film) return
+  for (const p of film.points ?? []) {
+    if (p.travel?.sound) yield p.travel.sound
+    if (p.action) {
+      if (p.action.sound) yield p.action.sound
+      for (const s of p.action.steps ?? []) if (s.sound) yield s.sound
+    }
+  }
+  if (film.ending?.kind === 'exit' && film.ending.travel?.sound) yield film.ending.travel.sound
+}
+
+/** Même traversée côté doc Firestore (métadonnées, sans blobs). */
+function collectFilmDocSoundMetas(filmDoc: SceneFilmDoc | undefined): SceneSoundMetaDoc[] {
+  if (!filmDoc || !Array.isArray(filmDoc.points)) return []
+  const out: SceneSoundMetaDoc[] = []
+  for (const p of filmDoc.points) {
+    if (p.travel?.sound) out.push(p.travel.sound)
+    if (p.action?.sound) out.push(p.action.sound)
+    for (const s of p.action?.steps ?? []) if (s.sound) out.push(s.sound)
+  }
+  if (filmDoc.ending?.kind === 'exit' && filmDoc.ending.travel?.sound) out.push(filmDoc.ending.travel.sound)
+  return out
+}
+
 function collectSceneSoundIds(scene: Scene | null | undefined): string[] {
   if (!scene) return []
   const ids = new Set<string>()
@@ -424,6 +488,7 @@ function collectSceneSoundIds(scene: Scene | null | undefined): string[] {
     }
     for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
   }
+  for (const snd of iterateFilmSounds(scene.film)) ids.add(snd.id)
   return [...ids]
 }
 
@@ -433,14 +498,17 @@ function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
   if (scene.entrySound?.id === soundId && scene.entrySound.blob) return scene.entrySound.blob
   if (scene.ambientSound?.id === soundId && scene.ambientSound.blob) return scene.ambientSound.blob
   const rp = scene.restPoint
-  if (!rp) return null
-  for (const a of [...(rp.actions ?? []), ...(rp.speeches ?? []), ...(rp.presentation ? [rp.presentation] : [])]) {
+  const rpActions = rp ? [...(rp.actions ?? []), ...(rp.speeches ?? []), ...(rp.presentation ? [rp.presentation] : [])] : []
+  for (const a of rpActions) {
     if (a.sound?.id === soundId && a.sound.blob) return a.sound.blob
     for (const s of a.steps ?? []) {
       if (s.sound?.id === soundId && s.sound.blob) return s.sound.blob
     }
   }
-  for (const arr of rp.randomAnimationSounds ?? []) {
+  for (const snd of iterateFilmSounds(scene.film)) {
+    if (snd.id === soundId && snd.blob) return snd.blob
+  }
+  for (const arr of rp?.randomAnimationSounds ?? []) {
     const found = arr.find(s => s.id === soundId)
     if (found?.blob) return found.blob
   }
@@ -897,23 +965,66 @@ function animToDoc(anim: Animation): AnimationDoc {
   }
 }
 
-/** Helper : meta doc d'un SceneSound (id, name, volume optionnel — pas le blob). */
-function sceneSoundMetaToDoc(s: { id: string; name: string; volume?: number }): SceneSoundMetaDoc {
-  return { id: s.id, name: s.name, ...(s.volume != null && { volume: s.volume }) }
+/** Helper : meta doc d'un SceneSound (id, name, volume/loop/rate optionnels — pas le blob). */
+function sceneSoundMetaToDoc(s: { id: string; name: string; volume?: number; loop?: boolean; rate?: number }): SceneSoundMetaDoc {
+  return {
+    id: s.id,
+    name: s.name,
+    ...(s.volume != null && { volume: s.volume }),
+    ...(s.loop && { loop: true }),
+    ...(s.rate != null && { rate: s.rate }),
+  }
 }
 
-function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRestPointDoc {
-  const actionToDoc = (a: import('../types/project').SceneAction): SceneActionDoc => ({
+/** Sérialise un SceneAction (strippe les blobs des sons via sceneSoundMetaToDoc). */
+function actionToDoc(a: import('../types/project').SceneAction): SceneActionDoc {
+  return {
     id: a.id,
     name: a.name,
     steps: a.steps.map(s => ({
       animationId: s.animationId,
       ...(s.sound != null && { sound: sceneSoundMetaToDoc(s.sound) }),
       ...(s.isSpoken && { isSpoken: true }),
+      ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
     })),
     ...(a.sound != null && { sound: sceneSoundMetaToDoc(a.sound) }),
     ...(a.isSpoken && { isSpoken: true }),
-  })
+  }
+}
+
+function filmTravelToDoc(t: import('../types/project').FilmTravel): FilmTravelDoc {
+  return {
+    ...(t.animationId != null && { animationId: t.animationId }),
+    ...(t.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
+    ...(t.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
+    ...(t.sound != null && { sound: sceneSoundMetaToDoc(t.sound) }),
+  }
+}
+
+function filmToDoc(film: import('../types/project').SceneFilm): SceneFilmDoc {
+  return {
+    enabled: film.enabled,
+    entrySide: film.entrySide,
+    points: film.points.map((p): FilmPointDoc => ({
+      id: p.id,
+      x: p.x,
+      y: p.y,
+      scale: p.scale,
+      travel: filmTravelToDoc(p.travel),
+      ...(p.action != null && { action: actionToDoc(p.action) }),
+    })),
+    ending: film.ending.kind === 'exit'
+      ? { kind: 'exit', side: film.ending.side, travel: filmTravelToDoc(film.ending.travel) }
+      : { kind: 'stay' },
+    cameraX: film.cameraX,
+    ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
+    moveSpeedPxPerSec: film.moveSpeedPxPerSec,
+    ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
+    endBehavior: film.endBehavior,
+  }
+}
+
+function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRestPointDoc {
   return {
     id: rp.id,
     backgroundX: rp.backgroundX,
@@ -956,6 +1067,7 @@ function sceneToDoc(scene: Scene): SceneDoc {
     ...(scene.entrySound != null && { entrySound: sceneSoundMetaToDoc(scene.entrySound) }),
     ...(scene.ambientSound != null && { ambientSound: sceneSoundMetaToDoc(scene.ambientSound) }),
     ...(scene.walkTrapezoid != null && { walkTrapezoid: scene.walkTrapezoid }),
+    ...(scene.film != null && { film: filmToDoc(scene.film) }),
     ...(scene.characterFacing != null && { characterFacing: scene.characterFacing }),
     ...(scene.characterOriginU != null && { characterOriginU: scene.characterOriginU }),
     ...(scene.characterOriginV != null && { characterOriginV: scene.characterOriginV }),
@@ -1330,6 +1442,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       }
       for (const arr of rpDoc.randomAnimationSounds ?? []) for (const s of arr) ids.add(s.id)
     }
+    for (const meta of collectFilmDocSoundMetas(projDoc.scene.film)) ids.add(meta.id)
     const idList = [...ids]
     const blobs = await Promise.all(
       idList.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`))
@@ -1340,28 +1453,62 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   const hydrateSounds = (metas: SceneSoundMetaDoc[] | undefined): import('../types/project').SceneSound[] =>
     (metas ?? []).map(m => ({ id: m.id, name: m.name, volume: m.volume, blob: sceneSoundBlobs.get(m.id) ?? null }))
 
+  const docToAction = (a: SceneActionDoc): import('../types/project').SceneAction => {
+    // Migration intra-action : ancien format `animationIds: string[]` → `steps`.
+    const steps = a.steps
+      ? a.steps.map(s => ({
+          animationId: s.animationId,
+          ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, loop: s.sound.loop, rate: s.sound.rate, blob: sceneSoundBlobs.get(s.sound.id) ?? null } }),
+          ...(s.isSpoken && { isSpoken: true }),
+          ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
+        }))
+      : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
+    return {
+      id: a.id,
+      name: a.name,
+      steps,
+      ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, loop: a.sound.loop, rate: a.sound.rate, blob: sceneSoundBlobs.get(a.sound.id) ?? null } }),
+      ...(a.isSpoken && { isSpoken: true }),
+    }
+  }
+
+  const docToFilmTravel = (t: FilmTravelDoc | undefined): import('../types/project').FilmTravel => ({
+    ...(t?.animationId != null && { animationId: t.animationId }),
+    ...(t?.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
+    ...(t?.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
+    ...(t?.sound != null && { sound: { id: t.sound.id, name: t.sound.name, volume: t.sound.volume, loop: t.sound.loop, rate: t.sound.rate, blob: sceneSoundBlobs.get(t.sound.id) ?? null } }),
+  })
+
+  // Garde de compat : les docs film v1 (format `steps`) sont ignorés (jamais en prod).
+  const docToFilm = (filmDoc: SceneFilmDoc): import('../types/project').SceneFilm | undefined => {
+    if (!Array.isArray(filmDoc.points)) return undefined
+    return {
+      enabled: filmDoc.enabled,
+      entrySide: filmDoc.entrySide ?? 'left',
+      points: filmDoc.points.map((p): import('../types/project').FilmPoint => ({
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        scale: p.scale ?? 1,
+        travel: docToFilmTravel(p.travel),
+        ...(p.action != null && { action: docToAction(p.action) }),
+      })),
+      ending: filmDoc.ending?.kind === 'exit'
+        ? { kind: 'exit', side: filmDoc.ending.side, travel: docToFilmTravel(filmDoc.ending.travel) }
+        : { kind: 'stay' },
+      cameraX: filmDoc.cameraX ?? 0,
+      ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
+      moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
+      ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
+      endBehavior: filmDoc.endBehavior ?? 'menu',
+    }
+  }
+
   /**
    * Migre un rest point legacy : si `actions` est absent et `randomAnimationIds` présent,
    * créer une action 1-étape par animation, avec le 1ᵉʳ son legacy comme son d'action.
    */
   const docToRestPoint = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
-    const docToAction = (a: SceneActionDoc): import('../types/project').SceneAction => {
-      // Migration intra-action : ancien format `animationIds: string[]` → `steps`.
-      const steps = a.steps
-        ? a.steps.map(s => ({
-            animationId: s.animationId,
-            ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, blob: sceneSoundBlobs.get(s.sound.id) ?? null } }),
-            ...(s.isSpoken && { isSpoken: true }),
-          }))
-        : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
-      return {
-        id: a.id,
-        name: a.name,
-        steps,
-        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, blob: sceneSoundBlobs.get(a.sound.id) ?? null } }),
-        ...(a.isSpoken && { isSpoken: true }),
-      }
-    }
     let actions = rp.actions?.map(docToAction)
     if (!actions || actions.length === 0) {
       const legacyIds = rp.randomAnimationIds ?? rp.availableAnimationIds ?? []
@@ -1456,6 +1603,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       ? docToRestPoint(rpDoc)
       : { id: crypto.randomUUID(), backgroundX: 0 }
 
+    const filmV2 = projDoc.scene.film ? docToFilm(projDoc.scene.film) : undefined
+
     // Migration entry/entryStartX depuis l'ancien startMode
     let entry: 'fixed' | 'moving' = projDoc.scene.entry ?? 'fixed'
     let entryStartX = projDoc.scene.entryStartX
@@ -1481,6 +1630,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, volume: projDoc.scene.entrySound.volume, blob: sceneSoundBlobs.get(projDoc.scene.entrySound.id) ?? null } }),
       ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, volume: projDoc.scene.ambientSound.volume, blob: sceneSoundBlobs.get(projDoc.scene.ambientSound.id) ?? null } }),
       ...(projDoc.scene.walkTrapezoid != null && { walkTrapezoid: projDoc.scene.walkTrapezoid }),
+      ...(filmV2 != null && { film: filmV2 }),
       ...(projDoc.scene.characterFacing != null && { characterFacing: projDoc.scene.characterFacing }),
       ...(projDoc.scene.characterOriginU != null && { characterOriginU: projDoc.scene.characterOriginU }),
       ...(projDoc.scene.characterOriginV != null && { characterOriginV: projDoc.scene.characterOriginV }),
@@ -2032,6 +2182,7 @@ export async function deleteProject(id: string): Promise<void> {
     }
     for (const t of sceneDoc?.transitions ?? []) collectFromTransitionDoc(t)
     collectFromTransitionDoc(sceneDoc?.startTransition)
+    for (const meta of collectFilmDocSoundMetas(sceneDoc?.film)) sceneSoundIds.add(meta.id)
     for (const sid of sceneSoundIds) {
       deletions.push(deleteObject(ref(storage, `projects/${id}/scene/sounds/${sid}`)).catch(() => {}))
     }
@@ -2079,6 +2230,10 @@ export async function deleteProject(id: string): Promise<void> {
   await logAudit('project.delete', id)
 }
 
+// ⚠ Doit couvrir TOUS les champs JSON de AnimationUploadField : c'est la liste des
+// fichiers Storage copiés par duplicateProject. Un champ manquant ici = données
+// silencieusement perdues à la duplication (le doc annonce has*=true mais le
+// fichier n'existe pas sur le nouveau projet).
 const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'video', 'audio', 'contourOriginKeyframes', 'contourOriginFrames',
   'contourAnchorKeyframes', 'contourAnchorFrames',
@@ -2089,12 +2244,66 @@ const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
   'sam2MasksRLE',
   'sam2Contours', 'sam2ContourOriginFrames', 'sam2ContourAnchorFrames', 'sam2ContourSubdivisionFrames',
   'sam2SmoothedAnchorFrames', 'sam2SmoothedSubdivisionFrames', 'sam2SmoothedContourOriginFrames',
+  'cotrackerFrames', 'cotrackerFramesRaw', 'cotrackerVisibility',
 ]
 
 export interface DuplicateProjectOverrides {
   name?: string
   bookId?: string | null
   bookOrder?: number
+}
+
+/**
+ * Remappe toutes les références d'animations d'une scène vers les nouveaux ids
+ * générés par la duplication (rest point, actions/discours/présentation, zones,
+ * entrée, trapèze de marche, film). Sans ce remap, la scène du duplicata pointe
+ * vers les animations de l'ANCIEN projet → références cassées (idle invisible,
+ * boutons inertes, trajets sans animation).
+ */
+function remapSceneAnimationIds(scene: Scene | null, idMap: Map<string, string>): Scene | null {
+  if (!scene) return scene
+  const mapId = (id: string) => idMap.get(id) ?? id
+  const mapAction = (a: import('../types/project').SceneAction): import('../types/project').SceneAction => ({
+    ...a,
+    steps: a.steps.map(s => ({ ...s, animationId: mapId(s.animationId) })),
+  })
+  const mapTravel = (t: import('../types/project').FilmTravel): import('../types/project').FilmTravel => ({
+    ...t,
+    ...(t.animationId != null && { animationId: mapId(t.animationId) }),
+  })
+  const rp = scene.restPoint
+  return {
+    ...scene,
+    restPoint: rp
+      ? {
+          ...rp,
+          ...(rp.restAnimationId != null && { restAnimationId: mapId(rp.restAnimationId) }),
+          ...(rp.actions != null && { actions: rp.actions.map(mapAction) }),
+          ...(rp.speeches != null && { speeches: rp.speeches.map(mapAction) }),
+          ...(rp.presentation != null && { presentation: mapAction(rp.presentation) }),
+          ...(rp.zoneAnimationMappings != null && { zoneAnimationMappings: rp.zoneAnimationMappings.map(m => ({ ...m, animationId: mapId(m.animationId) })) }),
+          ...(rp.randomAnimationIds != null && { randomAnimationIds: rp.randomAnimationIds.map(mapId) }),
+        }
+      : rp,
+    ...(scene.entryAnimationId != null && { entryAnimationId: mapId(scene.entryAnimationId) }),
+    ...(scene.walkTrapezoid != null && {
+      walkTrapezoid: { ...scene.walkTrapezoid, walkAnimationId: mapId(scene.walkTrapezoid.walkAnimationId) },
+    }),
+    ...(scene.film != null && {
+      film: {
+        ...scene.film,
+        ...(scene.film.moveAnimationId != null && { moveAnimationId: mapId(scene.film.moveAnimationId) }),
+        points: scene.film.points.map(p => ({
+          ...p,
+          travel: mapTravel(p.travel),
+          ...(p.action != null && { action: mapAction(p.action) }),
+        })),
+        ending: scene.film.ending.kind === 'exit'
+          ? { ...scene.film.ending, travel: mapTravel(scene.film.ending.travel) }
+          : scene.film.ending,
+      },
+    }),
+  }
 }
 
 export async function duplicateProject(sourceId: string, overrides?: DuplicateProjectOverrides): Promise<Project> {
@@ -2118,6 +2327,7 @@ export async function duplicateProject(sourceId: string, overrides?: DuplicatePr
       id: animIdMap.get(a.id)!,
       createdAt: Date.now(),
     })),
+    scene: remapSceneAnimationIds(source.scene, animIdMap),
     bookId: overrides?.bookId !== undefined ? overrides.bookId : source.bookId,
     bookOrder: overrides?.bookOrder !== undefined ? overrides.bookOrder : Date.now(),
     published: false,
@@ -2375,23 +2585,58 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
         }
       : null
 
-    const docToRestPointEssentials = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
-      const docToAction = (a: SceneActionDoc): import('../types/project').SceneAction => {
-        const steps = a.steps
-          ? a.steps.map(s => ({
-              animationId: s.animationId,
-              ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, blob: null } }),
-              ...(s.isSpoken && { isSpoken: true }),
-            }))
-          : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
-        return {
-          id: a.id,
-          name: a.name,
-          steps,
-          ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, blob: null } }),
-          ...(a.isSpoken && { isSpoken: true }),
-        }
+    const docToActionEssentials = (a: SceneActionDoc): import('../types/project').SceneAction => {
+      const steps = a.steps
+        ? a.steps.map(s => ({
+            animationId: s.animationId,
+            ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, loop: s.sound.loop, rate: s.sound.rate, blob: null } }),
+            ...(s.isSpoken && { isSpoken: true }),
+            ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
+          }))
+        : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
+      return {
+        id: a.id,
+        name: a.name,
+        steps,
+        ...(a.sound != null && { sound: { id: a.sound.id, name: a.sound.name, volume: a.sound.volume, loop: a.sound.loop, rate: a.sound.rate, blob: null } }),
+        ...(a.isSpoken && { isSpoken: true }),
       }
+    }
+
+    const docToFilmTravelEssentials = (t: FilmTravelDoc | undefined): import('../types/project').FilmTravel => ({
+      ...(t?.animationId != null && { animationId: t.animationId }),
+      ...(t?.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
+      ...(t?.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
+      ...(t?.sound != null && { sound: { id: t.sound.id, name: t.sound.name, volume: t.sound.volume, loop: t.sound.loop, rate: t.sound.rate, blob: null } }),
+    })
+
+    // Garde de compat : docs film v1 (format `steps`) ignorés.
+    const docToFilmEssentials = (filmDoc: SceneFilmDoc): import('../types/project').SceneFilm | undefined => {
+      if (!Array.isArray(filmDoc.points)) return undefined
+      return {
+        enabled: filmDoc.enabled,
+        entrySide: filmDoc.entrySide ?? 'left',
+        points: filmDoc.points.map((p): import('../types/project').FilmPoint => ({
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          scale: p.scale ?? 1,
+          travel: docToFilmTravelEssentials(p.travel),
+          ...(p.action != null && { action: docToActionEssentials(p.action) }),
+        })),
+        ending: filmDoc.ending?.kind === 'exit'
+          ? { kind: 'exit', side: filmDoc.ending.side, travel: docToFilmTravelEssentials(filmDoc.ending.travel) }
+          : { kind: 'stay' },
+        cameraX: filmDoc.cameraX ?? 0,
+        ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
+        moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
+        ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
+        endBehavior: filmDoc.endBehavior ?? 'menu',
+      }
+    }
+
+    const docToRestPointEssentials = (rp: SceneRestPointDoc): import('../types/project').SceneRestPoint => {
+      const docToAction = docToActionEssentials
       let actions = rp.actions?.map(docToAction)
       if (!actions || actions.length === 0) {
         const legacyIds = rp.randomAnimationIds ?? rp.availableAnimationIds ?? []
@@ -2438,6 +2683,8 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       }
     }
 
+    const filmEssentials = projDoc.scene.film ? docToFilmEssentials(projDoc.scene.film) : undefined
+
     scene = {
       id: projDoc.scene.id,
       name: projDoc.scene.name,
@@ -2453,6 +2700,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       ...(projDoc.scene.entrySound != null && { entrySound: { id: projDoc.scene.entrySound.id, name: projDoc.scene.entrySound.name, volume: projDoc.scene.entrySound.volume, blob: null } }),
       ...(projDoc.scene.ambientSound != null && { ambientSound: { id: projDoc.scene.ambientSound.id, name: projDoc.scene.ambientSound.name, volume: projDoc.scene.ambientSound.volume, blob: null } }),
       ...(projDoc.scene.walkTrapezoid != null && { walkTrapezoid: projDoc.scene.walkTrapezoid }),
+      ...(filmEssentials != null && { film: filmEssentials }),
       ...(projDoc.scene.characterFacing != null && { characterFacing: projDoc.scene.characterFacing }),
       ...(projDoc.scene.characterOriginU != null && { characterOriginU: projDoc.scene.characterOriginU }),
       ...(projDoc.scene.characterOriginV != null && { characterOriginV: projDoc.scene.characterOriginV }),
@@ -2561,6 +2809,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
       }
       for (const arr of rp.randomAnimationSounds ?? []) for (const s of arr) soundIds.add(s.id)
     }
+    for (const snd of iterateFilmSounds(scene.film)) soundIds.add(snd.id)
     const ids = [...soundIds]
     const sceneSoundBlobs = await Promise.all(ids.map(sid => downloadBlob(`projects/${id}/scene/sounds/${sid}`).catch(() => null)))
     const sceneSoundMap = new Map(ids.map((sid, i) => [sid, sceneSoundBlobs[i]]))
@@ -2571,6 +2820,10 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
         ...s,
         ...(s.sound != null && { sound: { ...s.sound, blob: sceneSoundMap.get(s.sound.id) ?? s.sound.blob ?? null } }),
       })),
+    })
+    const hydrateTravelBlob = (t: import('../types/project').FilmTravel): import('../types/project').FilmTravel => ({
+      ...t,
+      ...(t.sound != null && { sound: { ...t.sound, blob: sceneSoundMap.get(t.sound.id) ?? t.sound.blob ?? null } }),
     })
 
     scene = {
@@ -2603,6 +2856,19 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
           presentation: hydrateActionBlobs(scene.restPoint.presentation),
         }),
       },
+      ...(scene.film != null && {
+        film: {
+          ...scene.film,
+          points: scene.film.points.map(p => ({
+            ...p,
+            travel: hydrateTravelBlob(p.travel),
+            ...(p.action != null && { action: hydrateActionBlobs(p.action) }),
+          })),
+          ending: scene.film.ending.kind === 'exit'
+            ? { ...scene.film.ending, travel: hydrateTravelBlob(scene.film.ending.travel) }
+            : scene.film.ending,
+        },
+      }),
       speakSoundBlobs,
     }
   }

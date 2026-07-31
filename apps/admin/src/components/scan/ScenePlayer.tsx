@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneAction, type SceneActionStep } from '../../types/project'
+import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -16,7 +16,9 @@ import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan, imageToScanPixel } from '../../utils/hiddenFaceTexture'
 import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
-import { loadMouthAudio, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
+import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
+import { FilmDirector } from '../../utils/filmDirector'
+import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -56,19 +58,6 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-/** Lit la durée (ms) d'un blob audio via ses métadonnées. 0 si indéterminé. */
-function getAudioDurationMs(blob: Blob): Promise<number> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(blob)
-    const a = new Audio()
-    a.preload = 'metadata'
-    const done = (ms: number) => { try { URL.revokeObjectURL(url) } catch { /* */ } resolve(ms) }
-    a.onloadedmetadata = () => done(Number.isFinite(a.duration) ? a.duration * 1000 : 0)
-    a.onerror = () => done(0)
-    a.src = url
-  })
-}
-
 export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
@@ -97,14 +86,21 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // Vrai tant qu'une action/discours est en cours (anim + audio). Lu par le ticker
   // PIXI pour bloquer la marche libre pendant qu'une animation joue.
   const actionPlayingRef = useRef(false)
+  // Gel du timer d'action pendant la pause film (posé/levé par le bloc pause du
+  // ticker, mode film uniquement) : sans gel, l'action « expirerait » en pause.
+  const btnTimerFrozenRef = useRef(false)
   const startBtnTimer = useCallback((id: string, durationMs: number, onComplete?: () => void) => {
     if (btnRafRef.current) cancelAnimationFrame(btnRafRef.current)
     if (durationMs <= 0) { setActiveBtn(null); setBtnProgress(0); onComplete?.(); return }
     setActiveBtn(id)
     setBtnProgress(0)
-    const start = performance.now()
+    let elapsed = 0
+    let last = performance.now()
     const tick = () => {
-      const t = Math.min(1, (performance.now() - start) / durationMs)
+      const now = performance.now()
+      if (!btnTimerFrozenRef.current) elapsed += now - last
+      last = now
+      const t = Math.min(1, elapsed / durationMs)
       setBtnProgress(t)
       if (t >= 1) { setActiveBtn(null); btnRafRef.current = null; onComplete?.(); return }
       btnRafRef.current = requestAnimationFrame(tick)
@@ -114,6 +110,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   useEffect(() => () => { if (btnRafRef.current) cancelAnimationFrame(btnRafRef.current) }, [])
   // Active overlapping audio instances for attached scene animation sounds.
   const animSoundAudiosRef = useRef<HTMLAudioElement[]>([])
+  // Sons d'action/step en LOOP (sous-ensemble de animSoundAudiosRef) : coupés à la
+  // fin de l'action (expiration du timer) au lieu de se terminer d'eux-mêmes.
+  const loopingActionAudiosRef = useRef<HTMLAudioElement[]>([])
   // Lecteur WebAudio pour la bouche animée (RMS lip-sync).
   const mouthAudioRef = useRef<MouthAudioPlayer | null>(null)
   // RMS courant lu par le ticker PIXI (0 si aucun speak en cours).
@@ -128,6 +127,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const playSceneActionRef = useRef<((action: SceneAction | undefined, btnId: string) => void) | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+
+  // --- Mode film ---
+  // Écran « Fin » affiché quand le film est terminé (garde ref pour le "once" côté director).
+  const filmEndedRef = useRef(false)
+  const [filmEnded, setFilmEnded] = useState(false)
+  // Compteur « Revoir » : incrémenté pour remonter tout l'effect PIXI (rejoue entrée + film).
+  const [filmRunId, setFilmRunId] = useState(0)
+  // Progression film [0..100], throttlée au demi-pourcent par le ticker.
+  const [filmProgressPct, setFilmProgressPct] = useState(0)
 
   useEffect(() => { playingRef.current = playing }, [playing])
 
@@ -149,6 +157,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   }, [project.originalImageBlob])
 
   const scene = project.scene!
+  const film = scene.film
+  const filmEnabled = !!(film?.enabled && film.points.length > 0)
 
   // Mode play : layout PORTRAIT (canvas carré centré, titre + sortie en haut,
   // boutons 1/2/3 puis ⚙/⏸/? sous le canvas). Pas de plein écran ni de lock
@@ -164,6 +174,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [landscape, setLandscape] = useState(false)
   const bgAspectW = scene.background?.width
   const bgAspectH = scene.background?.height
+  // Format du CADRE de scène : horizontal 16:9 max (app native jouée en paysage
+  // plein écran). Si le décor est moins large que 16:9, on cale sur son ratio
+  // (tout le décor visible) — même formule que le cadre caméra de l'éditeur film.
+  const frameAspect = Math.min(bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9, 16 / 9)
   useEffect(() => {
     if (modal) return
     function compute() {
@@ -172,15 +186,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const isLs = vw > vh
         setLandscape(isLs)
         if (isLs) {
-          // Canvas RECTANGULAIRE (ratio de la scène) remplissant les 2/3 GAUCHE ;
-          // le 1/3 DROITE est réservé aux boutons.
-          const PAD = 14
-          const leftW = vw * (2 / 3) - PAD * 2
-          const availH = vh - PAD * 2
-          const aspect = bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9
-          let w = leftW
-          let h = w / aspect
-          if (h > availH) { h = availH; w = h * aspect }
+          // PLEIN ÉCRAN paysage : canvas au format du cadre (16:9 max), maximisé
+          // bord à bord et centré ; le HUD est superposé au canvas.
+          let w = vw
+          let h = w / frameAspect
+          if (h > vh) { h = vh; w = h * frameAspect }
           setCardSize({ w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) })
           return
         }
@@ -188,6 +198,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // « cover » zoome/rogne la vidéo pour remplir ce bandeau (plus haut que le
         // ratio du fond → rognage gauche/droite, perso centré/suivi). Cap de sécurité
         // pour garder ~260px aux 2 rangées de boutons + titre sur petits écrans.
+        // (Fallback : en natif, l'overlay « tourne ton téléphone » couvre ce cas.)
         const w = vw
         const h = Math.min(Math.round(vh * 0.5), Math.max(180, vh - 260))
         setCardSize({ w: Math.round(w), h })
@@ -195,17 +206,43 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
       const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
       const PAD = 14
-      const aspect = bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9
       const availW = Math.max(160, vw - SIDEBAR - PAD * 2)
       const availH = Math.max(120, vh - PAD * 2)
-      let h = availH, w = h * aspect
-      if (w > availW) { w = availW; h = w / aspect }
+      let h = availH, w = h * frameAspect
+      if (w > availW) { w = availW; h = w / frameAspect }
       setCardSize({ w: Math.round(w), h: Math.round(h) })
     }
     compute()
     window.addEventListener('resize', compute)
     return () => window.removeEventListener('resize', compute)
-  }, [modal, portrait, bgAspectW, bgAspectH])
+  }, [modal, portrait, frameAspect])
+
+  // Preview modal (admin) : canvas contraint au même cadre 16:9 que le play,
+  // pour que le cadrage caméra du film soit fidèle. Suit le resize de la modal.
+  useEffect(() => {
+    if (!modal) return
+    const el = playerRef.current
+    if (!el) return
+    // Débounce : cardSize est dans les deps de l'effect PIXI — sans débounce, le
+    // resize par drag de la modal reconstruirait toute la scène à chaque tick.
+    let timer: number | null = null
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const availW = Math.max(100, e.contentRect.width)
+        const availH = Math.max(80, e.contentRect.height)
+        let h = availH, w = h * frameAspect
+        if (w > availW) { w = availW; h = w / frameAspect }
+        const next = { w: Math.round(w), h: Math.round(h) }
+        if (timer != null) window.clearTimeout(timer)
+        timer = window.setTimeout(() => setCardSize(next), 120)
+      }
+    })
+    ro.observe(el)
+    return () => {
+      ro.disconnect()
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [modal, frameAspect])
   // Animation idle de la scène : on suit l'animation idle du rest point, sinon fallback.
   const restAnim = getIdleAnimation(project.animations, scene.restPoint?.restAnimationId)
     ?? getGeometryOwner(project.animations)
@@ -261,9 +298,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // AVANT de construire : évite un teardown/rebuild de toute la scène (flash + retour
     // scan) quand elles arrivent. `imgRefReady` passe true au chargement OU à l'échec.
     if (!imgRefReady) return
-    // Hors modal : attendre que la taille de la carte soit calculée (le canvas est
-    // dimensionné au format du fond, pas au viewport entier).
-    if (!modal && cardSize.w === 0) return
+    // Attendre que la taille de la carte soit calculée (le canvas est dimensionné
+    // au format du cadre 16:9, pas au viewport/modal entier).
+    if (cardSize.w === 0) return
 
     const mesh = restAnim.mesh as MeshData
     const allPoints = [
@@ -787,13 +824,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
      * MouthAudioPlayer pour piloter la bouche (lip-sync RMS) ; sinon HTMLAudio simple
      * empilé dans animSoundAudiosRef (cleanup au démontage ou au prochain ☆).
      */
-    const playSceneSound = async (blob: Blob, isSpoken: boolean, volume: number = 1) => {
+    const playSceneSound = async (snd: SceneSound, isSpoken: boolean) => {
+      if (!snd.blob) return
+      const volume = snd.volume ?? 1
+      const rate = snd.rate ?? 1
       if (isSpoken && project.projectMouth) {
         mouthAudioRef.current?.cleanup()
         mouthAudioRef.current = null
         try {
-          const player = await loadMouthAudio(blob, {
+          const player = await loadMouthAudio(snd.blob, {
             volume,
+            rate,
             onEnded: () => {
               mouthOpennessRef.current = 0
               mouthAudioRef.current?.cleanup()
@@ -808,10 +849,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         return
       }
       // Non parlé (ou pas de bouche définie) : HTMLAudio empilé
-      const url = URL.createObjectURL(blob)
+      const url = URL.createObjectURL(snd.blob)
       const audio = new Audio(url)
       audio.volume = volume
+      audio.playbackRate = rate
+      audio.loop = snd.loop === true
       animSoundAudiosRef.current.push(audio)
+      if (snd.loop === true) loopingActionAudiosRef.current.push(audio)
       audio.play().catch(() => {})
       audio.onended = () => {
         URL.revokeObjectURL(url)
@@ -841,7 +885,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       audio.play().catch(() => {})
       sceneAmbientAudio = audio
     }
-    if (scene.entrySound?.blob) {
+    // Son d'entrée (config interactive) : IGNORÉ en mode film — l'entrée du film est
+    // un trajet du chemin avec son propre son (panneau du point 1).
+    if (!filmEnabled && scene.entrySound?.blob) {
       const url = URL.createObjectURL(scene.entrySound.blob)
       const audio = new Audio(url)
       audio.volume = scene.entrySound.volume ?? 1
@@ -862,8 +908,80 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Largeur du personnage à scale=1 (sans perspective) en coords background.
       characterBaseWidthBg: (refW * baseCharScale) / bgScale,
       characterOriginU: originU,
+      // Mode film : caméra FIXE (cadrage) + départ hors-champ côté entrée.
+      ...(filmEnabled && film && {
+        filmCameraX: film.cameraX,
+        filmInitial: {
+          side: film.entrySide,
+          y: film.points[0]?.y ?? baselineOriginBgY ?? 0,
+          scale: film.points[0]?.scale ?? 1,
+        },
+      }),
     })
     scenePlaybackRef.current = scenePlayback
+
+    // --- Film director (mode film v2) : orchestrateur du chemin, avancé par le ticker ---
+    // Fade global de fin de film [0,1], appliqué sur app.stage.alpha.
+    let filmFadeAlpha = 1
+    // Edge-detector de pause pour la vraie pause film (audios/vidéos/timer).
+    let filmWasPlaying = true
+    let lastFilmPct = -1
+    // Sons de trajet en cours (sous-ensemble de animSoundAudiosRef → gelés par la pause film).
+    let travelAudios: HTMLAudioElement[] = []
+    let filmDirector: FilmDirector | null = null
+    if (filmEnabled && film) {
+      filmDirector = new FilmDirector(film, {
+        startTravel: (target, opts) => scenePlayback.startFilmTravel(target, opts),
+        playTravelSound: (sound) => {
+          if (!sound.blob) return
+          const url = URL.createObjectURL(sound.blob)
+          const audio = new Audio(url)
+          audio.volume = sound.volume ?? 1
+          audio.playbackRate = sound.rate ?? 1
+          // Loop : boucle pendant tout le trajet, coupé à l'arrivée (stopTravelSounds).
+          audio.loop = sound.loop === true
+          animSoundAudiosRef.current.push(audio)
+          travelAudios.push(audio)
+          audio.play().catch(() => {})
+          audio.onended = () => {
+            URL.revokeObjectURL(url)
+            animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+            travelAudios = travelAudios.filter(a => a !== audio)
+          }
+        },
+        stopTravelSounds: () => {
+          for (const audio of travelAudios) {
+            audio.pause()
+            try { URL.revokeObjectURL(audio.src) } catch { /* */ }
+            animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
+          }
+          travelAudios = []
+        },
+        playAction: (a, id) => { playSceneActionRef.current?.(a, id) },
+        isActionPlaying: () => actionPlayingRef.current,
+        isActionPlayable: (a) => a.steps.length > 0 && a.steps.every(s => {
+          const anim = project.animations.find(x => x.id === s.animationId)
+          return anim != null && (anim.mesh?.videoFramesMesh != null || (anim.mesh?.walkZoneFrames != null && anim.mesh?.walkBodyFrames != null))
+        }),
+        isPlaybackSettled: () => {
+          const mp = currentMultiPlaybackRef
+          const mpSettled = !mp || mp.currentState === 'rest' || mp.currentState === 'wait'
+          const zoneSettled = zoneOneshotBody == null || zoneOneshotBody.isFinished
+          return mpSettled && zoneSettled
+        },
+        getSceneState: () => scenePlayback.currentState,
+        isExited: () => scenePlayback.isExited,
+        setFilmFade: (a) => { filmFadeAlpha = a },
+        onEnd: () => {
+          if (filmEndedRef.current) return
+          filmEndedRef.current = true
+          setFilmEnded(true)
+        },
+      })
+      estimateFilmDurations(film, scene, project.animations)
+        .then(d => filmDirector?.setEstimatedDurations(d.segments))
+        .catch(() => {})
+    }
 
     // Now that scenePlayback exists, compute the correct initial charOffsetX
     charOffsetX = computeCharOffsetX(scenePlayback)
@@ -927,21 +1045,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // Create per-zone LoopPlayback
         const sep = anim.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
         if (!sep) return
+        // Multiplicateur de vitesse de lecture du trajet film en cours (1 hors film).
+        const moveAnimSpeedMul = scenePlayback.currentSegmentAnimSpeedMul
         // Capture les refs localement pour que la closure `currentAdvance` n'avance
         // QUE ses propres playbacks même après que `activeZonePlaybacks`/`activeBodyPlayback`
         // soient réassignés par un beginCrossfade ultérieur.
         const localZP = sep.zones.map(zone => ({
           zoneId: zone.id,
-          playback: new LoopPlayback(anim.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 }),
+          playback: new LoopPlayback(anim.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul }),
         }))
-        const localBP = new LoopPlayback(anim.mesh.walkBodyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 })
+        const localBP = new LoopPlayback(anim.mesh.walkBodyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul })
         activeZonePlaybacks = localZP
         activeBodyPlayback = localBP
 
         // currentGetPositions still returns legacy positions for blending/touch detection
         const legacyFrames = anim.mesh.videoFramesMesh
         if (legacyFrames && legacyFrames.length > 0) {
-          const legacyPb = new LoopPlayback(legacyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7 })
+          const legacyPb = new LoopPlayback(legacyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul })
           currentGetPositions = () => legacyPb.getPositions()
           currentAdvance = (delta) => {
             legacyPb.advance(delta)
@@ -968,17 +1088,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         currentAdvance = () => {}
         return
       }
-      const playback = new LoopPlayback(frames, { crossfadeFrames: anim?.mesh?.crossfadeFrames ?? 7 })
+      const playback = new LoopPlayback(frames, { crossfadeFrames: anim?.mesh?.crossfadeFrames ?? 7, speed: scenePlayback.currentSegmentAnimSpeedMul })
       currentGetPositions = () => playback.getPositions()
       currentAdvance = (delta) => playback.advance(delta)
     }
 
     function setupInteractionAnimation(restAnimId: string | undefined, availableAnimIds: string[]) {
       const restId = restAnimId || restAnim?.id
-      const rest = restId ? animMap.current.get(restId) : null
+      // Robustesse : si l'id demandé ne résout pas (référence cassée, ex. projet
+      // dupliqué avant le remap des ids), retombe sur l'idle auto plutôt que
+      // d'afficher un mesh vide (corps invisible).
+      const rest = (restId ? animMap.current.get(restId) : null)
+        ?? (restAnim ? animMap.current.get(restAnim.id) : null)
+        ?? null
 
       // Cas zone-based (walk / members-bones-v*) : utiliser walkBodyFrames + walkZoneFrames
       // exactement comme setupMovementAnimation. La main pixiMesh est cachée.
+      // Multiplicateur de vitesse de lecture de l'idle (réglage film, 1 en interactif).
+      const idleSpeedMul = filmEnabled ? (film?.idleSpeedMul ?? 1) : 1
+
       if (rest && rest.mesh?.walkZoneFrames && rest.mesh.walkBodyFrames && walkZoneMeshMap.has(rest.id)) {
         activateZoneMeshes(rest.id)
         pixiMesh.visible = false
@@ -987,9 +1115,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         if (!sep) return
         const localZP = sep.zones.map(zone => ({
           zoneId: zone.id,
-          playback: new LoopPlayback(rest.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 }),
+          playback: new LoopPlayback(rest.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul }),
         }))
-        const localBP = new LoopPlayback(rest.mesh.walkBodyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 })
+        const localBP = new LoopPlayback(rest.mesh.walkBodyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul })
         activeZonePlaybacks = localZP
         activeBodyPlayback = localBP
 
@@ -997,7 +1125,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // est zone-based, les overlays mesh classique ne s'alignent pas).
         const legacyFrames = rest.mesh.videoFramesMesh
         if (legacyFrames && legacyFrames.length > 0) {
-          const legacyPb = new LoopPlayback(legacyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7 })
+          const legacyPb = new LoopPlayback(legacyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul })
           currentGetPositions = () => legacyPb.getPositions()
           currentAdvance = (delta) => {
             legacyPb.advance(delta)
@@ -1048,7 +1176,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             const idx = actionStepIdxRef.current
             const step = steps[idx]
             if (step?.sound?.blob) {
-              playSceneSound(step.sound.blob, step.isSpoken ?? false, step.sound.volume ?? 1)
+              playSceneSound(step.sound, step.isSpoken ?? false)
             }
             actionStepIdxRef.current = idx + 1
             if (idx + 1 >= steps.length) {
@@ -1066,7 +1194,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         currentGetPositions = () => multiPlayback.getPositions()
         currentAdvance = (delta) => multiPlayback.advance(delta)
       } else {
-        const playback = new LoopPlayback(restFrames, { crossfadeFrames: rest?.mesh?.crossfadeFrames ?? 7 })
+        const playback = new LoopPlayback(restFrames, { crossfadeFrames: rest?.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul })
         currentGetPositions = () => playback.getPositions()
         currentAdvance = (delta) => playback.advance(delta)
         currentRestPlayback = playback
@@ -1142,6 +1270,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const s of rp.presentation?.steps ?? []) if (s.animationId) set.add(s.animationId)
       for (const m of rp.zoneAnimationMappings ?? []) if (m.animationId) set.add(m.animationId)
       for (const id of rp.randomAnimationIds ?? []) set.add(id) // legacy
+      // Mode film : les animations des actions des points doivent être enregistrées
+      // comme oneshots (requestSequence ignore silencieusement les ids inconnus).
+      if (filmEnabled && film) {
+        for (const p of film.points) {
+          for (const s of p.action?.steps ?? []) if (s.animationId) set.add(s.animationId)
+        }
+      }
       return Array.from(set)
     }
 
@@ -1151,6 +1286,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // qu'elle joue. `presentationStarted` garantit un seul déclenchement par scène.
     let presentationStarted = false
     function startPresentationIfNeeded() {
+      // Mode film : la présentation est remplacée par le film (l'admin peut la
+      // reproduire comme premier bloc « Action »). Deux playSceneAction simultanés
+      // se couperaient l'audio.
+      if (filmEnabled) return
       if (presentationStarted) return
       presentationStarted = true
       const pres = scene.restPoint?.presentation
@@ -1164,7 +1303,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
      * current rest point setup. Ignored if a oneshot is already in flight or the anim
      * is not zone-based / not ready.
      */
-    function triggerZoneOneshot(animId: string): boolean {
+    function triggerZoneOneshot(animId: string, playSpeedMul: number = 1): boolean {
       if (zoneOneshotBody) return false
       const anim = animMap.current.get(animId)
       if (!anim || !anim.mesh?.walkZoneFrames || !anim.mesh.walkBodyFrames || !walkZoneMeshMap.has(anim.id)) return false
@@ -1178,16 +1317,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const fps = 24
       const localZP = sep.zones.map(zone => ({
         zoneId: zone.id,
-        playback: new OncePlayback(anim.mesh!.walkZoneFrames![zone.id], { fps }),
+        playback: new OncePlayback(anim.mesh!.walkZoneFrames![zone.id], { fps, speed: playSpeedMul }),
       }))
-      const localBP = new OncePlayback(anim.mesh.walkBodyFrames, { fps })
+      const localBP = new OncePlayback(anim.mesh.walkBodyFrames, { fps, speed: playSpeedMul })
       activeZonePlaybacks = localZP
       activeBodyPlayback = localBP
       zoneOneshotBody = localBP
 
       const legacyFrames = anim.mesh.videoFramesMesh
       if (legacyFrames && legacyFrames.length > 0) {
-        const legacyPb = new OncePlayback(legacyFrames, { fps })
+        const legacyPb = new OncePlayback(legacyFrames, { fps, speed: playSpeedMul })
         currentGetPositions = () => legacyPb.getPositions()
         currentAdvance = (delta) => {
           legacyPb.advance(delta)
@@ -1232,6 +1371,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     // --- Pointer interactions (zones tactiles + clic pour marche libre) ---
     const onPointerDown = (e: PointerEvent) => {
+      // Mode film : aucune interaction (pas de zones tactiles ni de marche au clic).
+      if (filmEnabled) return
       // Marche en cours : on ignore complètement les clics jusqu'à l'arrivée.
       if (scenePlayback.currentState === 'walking') return
       if (scenePlayback.currentState !== 'interaction') return
@@ -1294,8 +1435,31 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         }
       }
 
+      // Mode film : vraie pause — gèle les audios d'action, le lip-sync WebAudio,
+      // le timer d'action et les vidéos bg/fg (le mode interactif garde son
+      // comportement actuel : seul l'avancement logique est gelé).
+      if (filmEnabled && filmWasPlaying !== playingRef.current) {
+        filmWasPlaying = playingRef.current
+        if (!filmWasPlaying) {
+          for (const a of animSoundAudiosRef.current) a.pause()
+          suspendMouthAudioContext()
+          btnTimerFrozenRef.current = true
+          for (const v of bgVideoElements) v.pause()
+        } else {
+          for (const a of animSoundAudiosRef.current) { if (!a.ended) a.play().catch(() => {}) }
+          resumeMouthAudioContext()
+          btnTimerFrozenRef.current = false
+          // Vidéos : relancées automatiquement par l'updater crossfade.
+        }
+      }
+
       if (playingRef.current) {
         scenePlayback.update(deltaSeconds)
+        if (filmDirector) {
+          filmDirector.update(deltaSeconds * 1000)
+          const pct = Math.round(filmDirector.progress.ratio * 200) / 2
+          if (pct !== lastFilmPct) { lastFilmPct = pct; setFilmProgressPct(pct) }
+        }
         const newState = scenePlayback.currentState
         const newSegAnimId = scenePlayback.currentSegmentAnimationId
         const segCrossfade = 400
@@ -1329,8 +1493,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           const easeInNew = prevSceneState === 'entering' && (newState === 'interaction' || newState === 'blend')
           switchAnimation(newState, durationMs, easeInNew)
           prevSceneState = newState
-          // Arrivée au rest point (fin de l'entrée/marche) → lance l'intro de présentation.
-          if (newState === 'interaction') startPresentationIfNeeded()
+          // Arrivée au rest point (fin de l'entrée/marche) → lance l'intro de
+          // présentation, ou le film s'il est activé (start idempotent).
+          if (newState === 'interaction') {
+            if (filmDirector) filmDirector.start()
+            else startPresentationIfNeeded()
+          }
         }
 
         // Track current segment metadata (for next-frame outgoing decision)
@@ -1397,8 +1565,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       charScale = baseCharScale * walkScaleMul
       charW = refW * charScale
       charH = refH * charScale
-      if (scene.walkTrapezoid) {
+      if (scene.walkTrapezoid || filmEnabled) {
         // currentY = position bg de l'ORIGINE → charOffsetY tel que originV*charH + charOffsetY = currentY*bgScale
+        // (mode film : positions du chemin de points, même convention que le trapèze)
         charOffsetY = scenePlayback.currentY * bgScale - originV * charH
       } else {
         charOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
@@ -1637,8 +1806,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       bgContainer.x = -offsetPx
       foregroundContainer.x = -offsetPx
       // Avance le crossfade seamless des vidéos de fond / avant-plan.
-      if (bgVideoUpdate) bgVideoUpdate()
-      if (fgVideoUpdate) fgVideoUpdate()
+      // En mode film, l'updater est gelé pendant la pause (sinon il relancerait
+      // activement les vidéos pausées via son auto-play).
+      if (playingRef.current || !filmEnabled) {
+        if (bgVideoUpdate) bgVideoUpdate()
+        if (fgVideoUpdate) fgVideoUpdate()
+      }
+
+      // Fade global de fin de film.
+      if (filmEnabled) app.stage.alpha = filmFadeAlpha
 
       // Outlines de zones
       outlineOverlay.clear()
@@ -1715,11 +1891,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     ;(scenePlaybackRef.current as unknown as { triggerZoneOneshot: typeof triggerZoneOneshot }).triggerZoneOneshot = triggerZoneOneshot
 
     // Entrée 'fixed' : la scène démarre directement en interaction (pas de marche).
-    // On déclenche alors l'intro de présentation maintenant que le multi-playback est prêt.
-    if (scenePlayback.currentState === 'interaction') startPresentationIfNeeded()
+    // On déclenche alors l'intro de présentation (ou le film) maintenant que le
+    // multi-playback est prêt.
+    if (scenePlayback.currentState === 'interaction') {
+      if (filmDirector) filmDirector.start()
+      else startPresentationIfNeeded()
+    }
 
     return () => {
       scenePlaybackRef.current = null
+      filmDirector = null
+      btnTimerFrozenRef.current = false
+      resumeMouthAudioContext()
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('resize', handleResize)
       for (const v of bgVideoElements) { v.pause(); v.src = ''; v.remove() }
@@ -1731,7 +1914,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
-  }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardSize.w, cardSize.h]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardSize.w, cardSize.h, filmRunId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const playSceneAction = useCallback(async (action: SceneAction | undefined, btnId: string) => {
     if (!action || action.steps.length === 0) return
@@ -1750,21 +1933,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       try { URL.revokeObjectURL(a.src) } catch { /* */ }
     }
     animSoundAudiosRef.current = []
+    loopingActionAudiosRef.current = []
     if (mouthAudioRef.current) {
       mouthAudioRef.current.cleanup()
       mouthAudioRef.current = null
       mouthOpennessRef.current = 0
     }
 
-    // Son d'action : lancé immédiatement, route lip-sync si isSpoken (et bouche définie)
-    if (action.sound?.blob) {
-      const blob = action.sound.blob
-      const isSpoken = action.isSpoken === true
-      const volume = action.sound.volume ?? 1
+    // Joue un son d'action/step : route lip-sync si isSpoken (et bouche définie).
+    // `loop` : boucle jusqu'à la fin de l'action (coupé par le timer). Ignoré si parlé.
+    // `rate` : vitesse de lecture (synchro son ↔ animation).
+    const playActionSound = async (snd: SceneSound, isSpoken: boolean) => {
+      if (!snd.blob) return
+      const volume = snd.volume ?? 1
+      const rate = snd.rate ?? 1
       if (isSpoken && project.projectMouth) {
         try {
-          const player = await loadMouthAudio(blob, {
+          const player = await loadMouthAudio(snd.blob, {
             volume,
+            rate,
             onEnded: () => {
               mouthOpennessRef.current = 0
               mouthAudioRef.current?.cleanup()
@@ -1777,16 +1964,24 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           console.error('[ScenePlayer] spoken action sound failed', err)
         }
       } else {
-        const url = URL.createObjectURL(blob)
+        const url = URL.createObjectURL(snd.blob)
         const audio = new Audio(url)
         audio.volume = volume
+        audio.playbackRate = rate
+        audio.loop = snd.loop === true
         animSoundAudiosRef.current.push(audio)
+        if (snd.loop === true) loopingActionAudiosRef.current.push(audio)
         audio.play().catch(() => {})
         audio.onended = () => {
           URL.revokeObjectURL(url)
           animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => a !== audio)
         }
       }
+    }
+
+    // Son d'action global : lancé immédiatement (t=0)
+    if (action.sound?.blob) {
+      await playActionSound(action.sound, action.isSpoken === true)
     }
 
     // Marque l'action active : chaque oneshot suivant consomme une étape
@@ -1796,39 +1991,39 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const animIds = action.steps.map(s => s.animationId)
     const sp = scenePlaybackRef.current as unknown as {
       getMultiPlayback?: () => MultiAnimationPlayback | null
-      triggerZoneOneshot?: (animId: string) => boolean
+      triggerZoneOneshot?: (animId: string, playSpeedMul?: number) => boolean
     }
     const mp = sp?.getMultiPlayback?.()
-    if (mp) mp.requestSequence(animIds)
-    else sp?.triggerZoneOneshot?.(animIds[0])
-
-    // Durée du curseur circulaire = durée TOTALE de l'action, c.-à-d. le max entre :
-    //  - la durée cumulée des animations (frames / 24 fps),
-    //  - la fin de l'audio général d'action (lancé à t=0),
-    //  - la fin du dernier audio d'étape (lancé au démarrage de son animation).
-    const fps = 24
-    let cumFrames = 0
-    const stepStartMs: number[] = []
-    for (const s of action.steps) {
-      stepStartMs.push((cumFrames / fps) * 1000)
-      const anim = project.animations.find(x => x.id === s.animationId)
-      const n = anim?.mesh?.videoFramesMesh?.length
-        ?? anim?.mesh?.walkBodyFrames?.length
-        ?? 0
-      cumFrames += n
+    if (mp) {
+      mp.requestSequence(animIds, action.steps.map(s => s.animSpeedMul ?? 1))
+    } else {
+      // Chemin zone-based (rest cotracker-bones / walk / members-bones) : une seule
+      // animation jouée via triggerZoneOneshot, et pas de callback onOneshotStart →
+      // on joue le son du 1er step ICI (sinon les sons de step restent muets).
+      sp?.triggerZoneOneshot?.(animIds[0], action.steps[0]?.animSpeedMul ?? 1)
+      const step0 = action.steps[0]
+      if (step0?.sound?.blob) {
+        void playActionSound(step0.sound, step0.isSpoken === true)
+      }
+      // Personne ne consommera les steps sur ce chemin : reset pour éviter qu'un
+      // oneshot ultérieur ne les consomme par erreur.
+      activeActionStepsRef.current = null
+      actionStepIdxRef.current = 0
     }
-    const animMs = (cumFrames / fps) * 1000
-    const [actionSoundMs, stepSoundEndsMs] = await Promise.all([
-      action.sound?.blob ? getAudioDurationMs(action.sound.blob) : Promise.resolve(0),
-      Promise.all(action.steps.map(async (s, i) => {
-        if (!s.sound?.blob) return 0
-        const d = await getAudioDurationMs(s.sound.blob)
-        return stepStartMs[i] + d
-      })),
-    ])
-    const lastStepAudioMs = stepSoundEndsMs.length ? Math.max(...stepSoundEndsMs) : 0
-    const totalMs = Math.max(animMs, actionSoundMs, lastStepAudioMs)
-    startBtnTimer(btnId, totalMs, () => { actionPlayingRef.current = false })
+
+    // Durée du curseur circulaire = durée TOTALE de l'action (max anims / audio
+    // d'action / dernier audio d'étape) — calcul partagé avec le mode film.
+    const totalMs = await estimateActionDurationMs(action, project.animations)
+    startBtnTimer(btnId, totalMs, () => {
+      actionPlayingRef.current = false
+      // Coupe les sons en LOOP de l'action (ils ne se terminent pas d'eux-mêmes).
+      for (const a of loopingActionAudiosRef.current) {
+        a.pause()
+        try { URL.revokeObjectURL(a.src) } catch { /* */ }
+      }
+      animSoundAudiosRef.current = animSoundAudiosRef.current.filter(a => !loopingActionAudiosRef.current.includes(a))
+      loopingActionAudiosRef.current = []
+    })
   }, [project.animations, project.projectMouth, startBtnTimer])
   // Expose au ticker PIXI pour déclencher l'intro de présentation à l'arrivée.
   useEffect(() => { playSceneActionRef.current = playSceneAction }, [playSceneAction])
@@ -1895,6 +2090,76 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       </svg>
     )
   }
+
+  // --- HUD film : barre de progression indicative (pas de scrubbing) ---
+  // Version compacte (layout portrait, en flux sous les contrôles).
+  const filmBar = filmEnabled && (
+    <div className="scene-player-film-bar" aria-hidden="true">
+      <div className="scene-player-film-track">
+        <div className="scene-player-film-fill" style={{ width: `${filmProgressPct}%` }} />
+      </div>
+    </div>
+  )
+
+  // HUD film plein écran (design app) : retour rond blanc (flèche violette) en haut
+  // à gauche + rangée basse ⏸/▶ blanc + barre violette avec curseur rond.
+  const filmExitBtn = filmEnabled && (
+    <button
+      className="scene-player-film-exit"
+      onClick={() => (onExit ?? onClose)()}
+      aria-label="Quitter"
+      title="Quitter"
+    >
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M19 12H5" />
+        <path d="m11 6-6 6 6 6" />
+      </svg>
+    </button>
+  )
+  const filmControls = filmEnabled && (
+    <div className="scene-player-film-controls">
+      <button
+        className="scene-player-film-playpause"
+        onClick={() => setPlaying(p => !p)}
+        aria-label={playing ? 'Pause' : 'Lecture'}
+      >
+        {playing ? (
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor" aria-hidden="true">
+            <rect x="5" y="4" width="5" height="16" rx="2" />
+            <rect x="14" y="4" width="5" height="16" rx="2" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor" aria-hidden="true">
+            <path d="M7 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
+          </svg>
+        )}
+      </button>
+      <div className="scene-player-film-track" aria-hidden="true">
+        <div className="scene-player-film-fill" style={{ width: `${filmProgressPct}%` }} />
+        <div className="scene-player-film-knob" style={{ left: `${filmProgressPct}%` }} />
+      </div>
+    </div>
+  )
+
+  // --- Écran « Fin » du film : Revoir (remonte l'effect PIXI) / Retour au menu ---
+  const handleFilmReplay = () => {
+    filmEndedRef.current = false
+    setFilmEnded(false)
+    setFilmProgressPct(0)
+    setPlaying(true)
+    setFilmRunId(n => n + 1)
+  }
+  const filmEndOverlay = filmEnabled && filmEnded && (
+    <div className="scene-player-film-end">
+      <div className="scene-player-film-end-card">
+        <div className="scene-player-film-end-title">Fin</div>
+        <div className="scene-player-film-end-actions">
+          <button className="btn-primary" onClick={handleFilmReplay}>↺ Revoir</button>
+          <button className="btn-secondary" onClick={() => (onExit ?? onClose)()}>Retour au menu</button>
+        </div>
+      </div>
+    </div>
+  )
 
   // Boutons HUD partagés entre layouts portrait et paysage :
   // 1 bouton ACTION (étoile dorée) + 3 boutons Discours numérotés 1/2/3.
@@ -1976,7 +2241,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         <button className="scene-player-playpause" onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
           {playing ? '⏸' : '▶'}
         </button>
-        {hasHelpTexts && (
+        {!filmEnabled && hasHelpTexts && (
           <button
             className="scene-player-help-btn"
             onClick={handleHelp}
@@ -2004,18 +2269,29 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       />
     )
 
-    // Paysage : canvas carré (bords arrondis) à gauche, colonne titre + boutons à droite.
+    // Paysage : PLEIN ÉCRAN — canvas 16:9 bord à bord centré, HUD superposé.
+    // Mode film : design app épuré (retour rond blanc + ⏸ blanc + barre violette).
+    // Mode interactif : porte + colonne de boutons à droite.
     if (landscape) {
       return (
-        <div className="animation-player scene-player scene-player--framed scene-player--landscape" ref={playerRef}>
-          <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
+        <div className="animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen" ref={playerRef}>
           {canvasEl}
-          <div className="scene-player-hud">
-            <div className="scene-player-title">{project.name}</div>
-            {actionsRow}
-            {controlsRow}
-          </div>
+          {filmEnabled ? (
+            <>
+              {filmExitBtn}
+              {filmControls}
+            </>
+          ) : (
+            <>
+              <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
+              <div className="scene-player-hud">
+                {actionsRow}
+                {controlsRow}
+              </div>
+            </>
+          )}
           {helpBubble}
+          {filmEndOverlay}
         </div>
       )
     }
@@ -2034,16 +2310,20 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         {/* Canvas carré (≈ tiers haut) */}
         {canvasEl}
 
-        {/* Boutons d'action 1/2/3 (+ parole) sous le canvas */}
-        {actionsRow}
+        {/* Boutons d'action 1/2/3 (+ parole) sous le canvas — masqués en mode film */}
+        {!filmEnabled && actionsRow}
 
         {/* Contrôles ⚙ / lecture / aide sous les boutons d'action */}
         {controlsRow}
+
+        {/* Barre de progression film (mode film uniquement) */}
+        {filmBar}
 
         {/* Espace flexible bas : équilibre (canvas reste vers le tiers haut) */}
         <div className="scene-player-spacer scene-player-spacer--bottom" />
 
         {helpBubble}
+        {filmEndOverlay}
       </div>
     )
   }
@@ -2053,7 +2333,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       <div
         ref={containerRef}
         className="animation-canvas"
-        style={!modal && cardSize.w ? { width: cardSize.w, height: cardSize.h } : undefined}
+        style={cardSize.w ? { width: cardSize.w, height: cardSize.h } : undefined}
       />
 
       {modal && (
@@ -2067,20 +2347,22 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             ⚙
           </button>
         )}
-        <div
-          className="scene-player-left-buttons"
-          style={{
-            opacity: buttonsVisible ? 1 : 0,
-            pointerEvents: isInteraction && !anyActive ? 'auto' : 'none',
-            transition: 'opacity 400ms ease',
-          }}
-        >
-        {sceneButtons}
-        </div>
+        {!filmEnabled && (
+          <div
+            className="scene-player-left-buttons"
+            style={{
+              opacity: buttonsVisible ? 1 : 0,
+              pointerEvents: isInteraction && !anyActive ? 'auto' : 'none',
+              transition: 'opacity 400ms ease',
+            }}
+          >
+            {sceneButtons}
+          </div>
+        )}
       </div>
 
       {/* RIGHT side - help button */}
-      {hasHelpTexts && (
+      {!filmEnabled && hasHelpTexts && (
         <button
           className="scene-player-help-btn"
           onClick={handleHelp}
@@ -2099,13 +2381,20 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         </div>
       )}
 
-      {/* Bottom center - play/pause */}
-      <button
-        className="scene-player-playpause"
-        onClick={() => setPlaying(p => !p)}
-      >
-        {playing ? '⏸' : '▶'}
-      </button>
+      {/* Bottom center - play/pause (interactif ; le film a ses propres contrôles) */}
+      {!filmEnabled && (
+        <button
+          className="scene-player-playpause"
+          onClick={() => setPlaying(p => !p)}
+        >
+          {playing ? '⏸' : '▶'}
+        </button>
+      )}
+
+      {/* Contrôles film (design app) : retour + ⏸/▶ + barre violette */}
+      {filmEnabled && filmExitBtn}
+      {filmEnabled && filmControls}
+      {filmEndOverlay}
     </div>
   )
 }

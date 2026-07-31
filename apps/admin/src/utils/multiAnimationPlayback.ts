@@ -47,6 +47,8 @@ export class MultiAnimationPlayback {
   private activeOneshotId: string | null = null
   /** Queue d'animations à enchaîner après l'oneshot courant (sans repasser par la rest). */
   private oneshotQueue: string[] = []
+  /** Multiplicateurs de vitesse de lecture par oneshot, posés à requestSequence (défaut 1). */
+  private oneshotPlaySpeeds: Map<string, number> = new Map()
 
   // Transition state
   private transitionFrames: number
@@ -120,10 +122,15 @@ export class MultiAnimationPlayback {
    * Le 1ᵉʳ id de la séquence peut être un overlay : dans ce cas il démarre
    *   immédiatement et les éventuelles suivantes sont ignorées (overlay ≠ séquence).
    */
-  requestSequence(animIds: string[]): void {
+  requestSequence(animIds: string[], playSpeeds?: number[]): void {
     if (animIds.length === 0) return
-    const validIds = animIds.filter(id => this.oneshotData.has(id))
-    if (validIds.length === 0) return
+    // `playSpeeds[i]` = multiplicateur de vitesse de lecture de animIds[i] (défaut 1).
+    const entries = animIds
+      .map((id, i) => ({ id, speed: playSpeeds?.[i] ?? 1 }))
+      .filter(e => this.oneshotData.has(e.id))
+    if (entries.length === 0) return
+    for (const e of entries) this.oneshotPlaySpeeds.set(e.id, e.speed)
+    const validIds = entries.map(e => e.id)
 
     const firstId = validIds[0]
 
@@ -154,7 +161,7 @@ export class MultiAnimationPlayback {
 
     // Advance overlay independently
     if (this.activeOverlayId) {
-      const advance = this.fps * this._speed * deltaSeconds
+      const advance = this.fps * this._speed * (this.oneshotPlaySpeeds.get(this.activeOverlayId) ?? 1) * deltaSeconds
       this.overlayCursor += advance
       if (this.overlayCursor >= this.overlayTotalFrames - 1) {
         this.activeOverlayId = null
@@ -192,7 +199,8 @@ export class MultiAnimationPlayback {
       }
 
       case 'oneshot': {
-        const advance = this.fps * this._speed * deltaSeconds
+        const playMul = this.activeOneshotId ? (this.oneshotPlaySpeeds.get(this.activeOneshotId) ?? 1) : 1
+        const advance = this.fps * this._speed * playMul * deltaSeconds
         this.oneshotCursor += advance
         if (this.oneshotCursor >= this.oneshotTotalFrames - 1) {
           this.oneshotCursor = this.oneshotTotalFrames - 1
