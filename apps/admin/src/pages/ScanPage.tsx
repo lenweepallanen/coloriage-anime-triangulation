@@ -133,7 +133,14 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       so.lock?.('portrait')?.catch?.(() => { try { so.unlock?.() } catch { /* ignore */ } })
     }
     if (lockedStage) {
-      so.lock?.('landscape')?.catch?.(() => { /* web : lock non supporté */ })
+      // Diagnostic : visible dans la console Xcode (Capacitor relaie les console.*).
+      const p = so.lock?.('landscape')
+      if (p?.then) {
+        p.then(() => console.log('[orientation] lock landscape OK'))
+          .catch((e: unknown) => console.warn('[orientation] lock landscape ÉCHEC :', e))
+      } else {
+        console.warn('[orientation] screen.orientation.lock indisponible (polyfill absent ?)')
+      }
     } else {
       backToPortrait()
     }

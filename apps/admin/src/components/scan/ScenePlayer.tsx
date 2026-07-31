@@ -172,6 +172,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // Play horizontal : canvas carré à gauche + HUD à droite (le user choisit en
   // tournant son téléphone ; pas de lock d'orientation).
   const [landscape, setLandscape] = useState(false)
+  // Paysage FORCÉ par rotation CSS 90° (WebView restée portrait — lock natif KO).
+  const [forcedRotate, setForcedRotate] = useState(false)
   const bgAspectW = scene.background?.width
   const bgAspectH = scene.background?.height
   // Format du CADRE de scène : horizontal 16:9 max (app native jouée en paysage
@@ -183,25 +185,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     function compute() {
       const vw = window.innerWidth, vh = window.innerHeight
       if (portrait) {
+        // HORIZONTAL OBLIGATOIRE (play) : toujours le layout paysage plein écran.
+        // Si la WebView est restée portrait (lock natif indisponible/échoué), le
+        // player est rendu TOURNÉ de 90° via CSS (fallback historique, fiable
+        // partout) — dimensions utiles inversées.
         const isLs = vw > vh
-        setLandscape(isLs)
-        if (isLs) {
-          // PLEIN ÉCRAN paysage : canvas au format du cadre (16:9 max), maximisé
-          // bord à bord et centré ; le HUD est superposé au canvas.
-          let w = vw
-          let h = w / frameAspect
-          if (h > vh) { h = vh; w = h * frameAspect }
-          setCardSize({ w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) })
-          return
-        }
-        // Bandeau pleine largeur (bord à bord), hauteur ≈ 1/2 de l'écran. Le rendu
-        // « cover » zoome/rogne la vidéo pour remplir ce bandeau (plus haut que le
-        // ratio du fond → rognage gauche/droite, perso centré/suivi). Cap de sécurité
-        // pour garder ~260px aux 2 rangées de boutons + titre sur petits écrans.
-        // (Fallback : en natif, l'overlay « tourne ton téléphone » couvre ce cas.)
-        const w = vw
-        const h = Math.min(Math.round(vh * 0.5), Math.max(180, vh - 260))
-        setCardSize({ w: Math.round(w), h })
+        setLandscape(true)
+        setForcedRotate(!isLs)
+        const availW = isLs ? vw : vh
+        const availH = isLs ? vh : vw
+        let w = availW
+        let h = w / frameAspect
+        if (h > availH) { h = availH; w = h * frameAspect }
+        setCardSize({ w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) })
         return
       }
       const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
@@ -2274,7 +2270,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // Mode interactif : porte + colonne de boutons à droite.
     if (landscape) {
       return (
-        <div className="animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen" ref={playerRef}>
+        <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
           {canvasEl}
           {filmEnabled ? (
             <>

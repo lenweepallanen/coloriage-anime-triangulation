@@ -3582,6 +3582,18 @@ code {
   justify-content: center;
 }
 
+/* Paysage FORCÉ : la WebView est restée portrait (lock d'orientation natif
+   indisponible ou en échec) — on tourne tout le player de 90° pour garantir
+   le rendu horizontal plein écran. Les hit-tests suivent la transformation. */
+.scene-player--rotated {
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
+}
+
 /* ─── HUD film plein écran (design app) ───
    Retour rond blanc (flèche violette) en haut à gauche + rangée basse :
    ⏸/▶ blanc + barre violette pleine largeur avec curseur rond blanc. */
