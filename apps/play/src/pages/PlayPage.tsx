@@ -4,8 +4,8 @@ import { useProjectForPlay } from '@shared/hooks/useProjectForPlay'
 import ScanPage from '@shared/pages/ScanPage'
 import { hasFilmVideo, saveFilmVideo } from '@shared/db/filmVideosStore'
 import type { FilmRecordingResult } from '@shared/utils/filmRecorder'
+import { generateVideoPoster } from '@shared/utils/videoPoster'
 import ScannedProjectPage from './ScannedProjectPage'
-import { saveVideoToGallery } from '../utils/saveToGallery'
 
 export default function PlayPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -18,15 +18,14 @@ export default function PlayPage() {
   const [forceScan, setForceScan] = useState(false)
   const handleNewScan = useCallback(() => setForceScan(true), [])
 
-  // Capture du film (1ʳᵉ lecture après scan) : sauvegarde locale (1 vidéo par
-  // coloriage, écrasement) + galerie Photos (natif ; no-op web, non bloquant).
+  // Capture du film (1ʳᵉ lecture après scan) : sauvegarde LOCALE uniquement
+  // (1 vidéo par coloriage, écrasement) + vignette extraite à 1/3 de la durée.
+  // Rien n'est écrit dans les Photos de l'iPhone — la galerie est celle de l'app.
   const handleFilmRecorded = useCallback(async (r: FilmRecordingResult) => {
     if (!projectId) return
-    await saveFilmVideo(projectId, r)
-    saveVideoToGallery(r, projectId).catch(err => {
-      console.warn('[gallery] enregistrement galerie échoué :', err)
-    })
-  }, [projectId])
+    const posterBlob = await generateVideoPoster(r.blob).catch(() => null)
+    await saveFilmVideo(projectId, { ...r, posterBlob, projectName: project?.name })
+  }, [projectId, project?.name])
 
   if (loading) return <div className="loading">Chargement…</div>
 

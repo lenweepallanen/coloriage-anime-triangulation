@@ -28,6 +28,7 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
   useEffect(() => {
     let cancelled = false
     let objUrl: string | null = null
+    let posterObjUrl: string | null = null
     getFilmVideo(project.id).then(rec => {
       if (cancelled) return
       setVideo(rec)
@@ -35,15 +36,22 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
         objUrl = URL.createObjectURL(rec.blob)
         setVideoUrl(objUrl)
       }
+      // Poster : vignette extraite à 1/3 de la vidéo (fallback : vignette du coloriage).
+      if (rec?.posterBlob) {
+        posterObjUrl = URL.createObjectURL(rec.posterBlob)
+        setPosterUrl(posterObjUrl)
+      }
       setLoading(false)
     })
     return () => {
       cancelled = true
       if (objUrl) URL.revokeObjectURL(objUrl)
+      if (posterObjUrl) URL.revokeObjectURL(posterObjUrl)
     }
   }, [project.id])
 
   useEffect(() => {
+    if (video?.posterBlob) return
     let cancelled = false
     let objUrl: string | null = null
     getProjectThumbnailBlob(project.id)
@@ -51,14 +59,14 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
       .then(b => {
         if (cancelled || !b) return
         objUrl = URL.createObjectURL(b)
-        setPosterUrl(objUrl)
+        setPosterUrl(prev => prev ?? objUrl)
       })
       .catch(() => {})
     return () => {
       cancelled = true
       if (objUrl) URL.revokeObjectURL(objUrl)
     }
-  }, [project.id])
+  }, [project.id, video?.posterBlob])
 
   // Vidéo introuvable (purgée / marqueur orphelin) : bascule directe sur le scan.
   useEffect(() => {

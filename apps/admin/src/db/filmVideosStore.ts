@@ -14,6 +14,10 @@ export interface FilmVideoRecord {
   mimeType: string
   durationMs: number
   blob: Blob
+  /** Vignette JPEG extraite à 1/3 de la durée (galerie, posters). */
+  posterBlob?: Blob | null
+  /** Nom du coloriage au moment de l'enregistrement (affichage galerie). */
+  projectName?: string
 }
 
 /** Miroir localStorage pour lecture SYNCHRONE (gates/badges) — pattern `scanned:`. */
@@ -41,7 +45,10 @@ function openDb(): Promise<IDBDatabase | null> {
   return dbPromise
 }
 
-export async function saveFilmVideo(projectId: string, video: { blob: Blob; mimeType: string; durationMs: number }): Promise<boolean> {
+export async function saveFilmVideo(
+  projectId: string,
+  video: { blob: Blob; mimeType: string; durationMs: number; posterBlob?: Blob | null; projectName?: string },
+): Promise<boolean> {
   const db = await openDb()
   if (!db) return false
   return new Promise(resolve => {
@@ -52,6 +59,8 @@ export async function saveFilmVideo(projectId: string, video: { blob: Blob; mime
         mimeType: video.mimeType,
         durationMs: video.durationMs,
         blob: video.blob,
+        posterBlob: video.posterBlob ?? null,
+        projectName: video.projectName,
       }
       const tx = db.transaction(STORE, 'readwrite')
       tx.objectStore(STORE).put(record)
@@ -88,6 +97,24 @@ export async function deleteFilmVideo(projectId: string): Promise<void> {
     db.transaction(STORE, 'readwrite').objectStore(STORE).delete(projectId)
   } catch { /* best-effort */ }
   try { localStorage.removeItem(markerKey(projectId)) } catch { /* */ }
+}
+
+/** Toutes les vidéos enregistrées (galerie de l'app), plus récentes d'abord. */
+export async function listAllFilmVideos(): Promise<FilmVideoRecord[]> {
+  const db = await openDb()
+  if (!db) return []
+  return new Promise(resolve => {
+    try {
+      const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll()
+      req.onsuccess = () => {
+        const list = (req.result as FilmVideoRecord[] | undefined) ?? []
+        resolve([...list].sort((a, b) => b.createdAt - a.createdAt))
+      }
+      req.onerror = () => resolve([])
+    } catch {
+      resolve([])
+    }
+  })
 }
 
 /** Test SYNCHRONE (miroir localStorage) — pour les gates au montage. */
