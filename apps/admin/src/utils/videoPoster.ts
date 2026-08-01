@@ -1,13 +1,18 @@
 /**
  * Extrait une vignette JPEG d'une vidéo (blob) à une fraction de sa durée
- * (défaut 1/3) — utilisée comme preview dans la galerie de l'app et comme
- * poster des lecteurs vidéo.
+ * (défaut 1/3 — ex. vidéo de 30 s → frame à 10 s). Utilisée comme preview
+ * dans la galerie de l'app et comme poster des lecteurs vidéo.
+ *
+ * Piège géré : les vidéos issues de MediaRecorder annoncent souvent
+ * `duration = Infinity` au chargement. Workaround standard : seek vers un
+ * temps immense → le navigateur résout alors la vraie durée → on seek au
+ * point voulu, puis on capture.
  */
 export function generateVideoPoster(
   videoBlob: Blob,
   fraction = 1 / 3,
   maxWidth = 640,
-  timeoutMs = 8000,
+  timeoutMs = 10000,
 ): Promise<Blob | null> {
   return new Promise(resolve => {
     const url = URL.createObjectURL(videoBlob)
@@ -16,6 +21,8 @@ export function generateVideoPoster(
     video.playsInline = true
     video.preload = 'auto'
     let done = false
+    /** 'resolving-duration' = seek immense en cours (durée Infinity). */
+    let phase: 'idle' | 'resolving-duration' | 'target' = 'idle'
 
     const finish = (blob: Blob | null) => {
       if (done) return
@@ -29,18 +36,7 @@ export function generateVideoPoster(
 
     const timer = window.setTimeout(() => finish(null), timeoutMs)
 
-    video.onerror = () => finish(null)
-    video.onloadedmetadata = () => {
-      const duration = Number.isFinite(video.duration) ? video.duration : 0
-      // Certains WebM MediaRecorder annoncent duration=Infinity : fallback 1 s.
-      const target = duration > 0 ? duration * fraction : 1
-      try {
-        video.currentTime = target
-      } catch {
-        finish(null)
-      }
-    }
-    video.onseeked = () => {
+    const capture = () => {
       try {
         const w = video.videoWidth
         const h = video.videoHeight
@@ -55,6 +51,45 @@ export function generateVideoPoster(
         canvas.toBlob(b => finish(b), 'image/jpeg', 0.82)
       } catch {
         finish(null)
+      }
+    }
+
+    const seekToTarget = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0
+      if (duration <= 0) { capture(); return }
+      phase = 'target'
+      const target = duration * fraction
+      if (Math.abs(video.currentTime - target) < 0.05) {
+        capture()
+        return
+      }
+      try {
+        video.currentTime = target
+      } catch {
+        capture()
+      }
+    }
+
+    video.onerror = () => finish(null)
+    video.onloadedmetadata = () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        seekToTarget()
+      } else {
+        // Durée inconnue (MediaRecorder) : seek immense pour la faire résoudre.
+        phase = 'resolving-duration'
+        try {
+          video.currentTime = 1e7
+        } catch {
+          finish(null)
+        }
+      }
+    }
+    video.onseeked = () => {
+      if (done) return
+      if (phase === 'resolving-duration') {
+        seekToTarget()
+      } else if (phase === 'target') {
+        capture()
       }
     }
 

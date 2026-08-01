@@ -99,6 +99,24 @@ export async function deleteFilmVideo(projectId: string): Promise<void> {
   try { localStorage.removeItem(markerKey(projectId)) } catch { /* */ }
 }
 
+/**
+ * Poster (frame à 1/3 de la durée) d'un enregistrement : retourne celui stocké,
+ * sinon le GÉNÈRE depuis la vidéo puis le persiste (couvre les vidéos
+ * enregistrées avant l'ajout des posters ou dont l'extraction avait échoué).
+ */
+export async function getFilmVideoPoster(record: FilmVideoRecord): Promise<Blob | null> {
+  if (record.posterBlob) return record.posterBlob
+  const { generateVideoPoster } = await import('../utils/videoPoster')
+  const poster = await generateVideoPoster(record.blob).catch(() => null)
+  if (!poster) return null
+  record.posterBlob = poster
+  const db = await openDb()
+  if (db) {
+    try { db.transaction(STORE, 'readwrite').objectStore(STORE).put(record) } catch { /* best-effort */ }
+  }
+  return poster
+}
+
 /** Toutes les vidéos enregistrées (galerie de l'app), plus récentes d'abord. */
 export async function listAllFilmVideos(): Promise<FilmVideoRecord[]> {
   const db = await openDb()

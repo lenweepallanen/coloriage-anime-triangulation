@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { Project } from '@shared/types/project'
-import { getFilmVideo, type FilmVideoRecord } from '@shared/db/filmVideosStore'
+import { getFilmVideo, getFilmVideoPoster, type FilmVideoRecord } from '@shared/db/filmVideosStore'
 import { getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
 
 interface Props {
@@ -29,16 +29,25 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
     let cancelled = false
     let objUrl: string | null = null
     let posterObjUrl: string | null = null
-    getFilmVideo(project.id).then(rec => {
+    getFilmVideo(project.id).then(async rec => {
       if (cancelled) return
       setVideo(rec)
       if (rec?.blob) {
         objUrl = URL.createObjectURL(rec.blob)
         setVideoUrl(objUrl)
       }
-      // Poster : vignette extraite à 1/3 de la vidéo (fallback : vignette du coloriage).
-      if (rec?.posterBlob) {
-        posterObjUrl = URL.createObjectURL(rec.posterBlob)
+      // Poster = frame à 1/3 de la durée (générée + persistée si absente),
+      // fallback : vignette du coloriage.
+      const poster = rec
+        ? await getFilmVideoPoster(rec).catch(() => null)
+        : null
+      const fallback = poster
+        ? null
+        : await getProjectThumbnailBlob(project.id).then(b => b ?? getProjectThumbnail(project.id)).catch(() => null)
+      if (cancelled) return
+      const posterSource = poster ?? fallback
+      if (posterSource) {
+        posterObjUrl = URL.createObjectURL(posterSource)
         setPosterUrl(posterObjUrl)
       }
       setLoading(false)
@@ -49,24 +58,6 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
       if (posterObjUrl) URL.revokeObjectURL(posterObjUrl)
     }
   }, [project.id])
-
-  useEffect(() => {
-    if (video?.posterBlob) return
-    let cancelled = false
-    let objUrl: string | null = null
-    getProjectThumbnailBlob(project.id)
-      .then(b => b ?? getProjectThumbnail(project.id))
-      .then(b => {
-        if (cancelled || !b) return
-        objUrl = URL.createObjectURL(b)
-        setPosterUrl(prev => prev ?? objUrl)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-      if (objUrl) URL.revokeObjectURL(objUrl)
-    }
-  }, [project.id, video?.posterBlob])
 
   // Vidéo introuvable (purgée / marqueur orphelin) : bascule directe sur le scan.
   useEffect(() => {

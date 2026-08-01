@@ -2,22 +2,22 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Book, Project } from '@shared/types/project'
 import { getPublishedBooks } from '@shared/db/booksStore'
-import { getProjectsByBook, getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
-import { listAllFilmVideos, type FilmVideoRecord } from '@shared/db/filmVideosStore'
+import { getProjectsByBook } from '@shared/db/projectsStore'
+import { listAllFilmVideos, getFilmVideoPoster, type FilmVideoRecord } from '@shared/db/filmVideosStore'
 import { isBookDownloaded } from '../utils/bookDownload'
 
 interface GalleryEntry {
-  project: Project
-  book: Book
-  indexInBook: number
-  video: FilmVideoRecord | null
+  video: FilmVideoRecord
+  /** Nom affiché : nom du coloriage (record, sinon projet résolu). */
+  name: string
+  /** Livre d'appartenance si résolu (filtre + navigation avec ?book). */
+  bookId: string | null
 }
 
 /**
- * Onglet Galerie de l'app : tous les coloriages des livres possédés, avec la
- * vidéo enregistrée (vignette extraite à 1/3 de la durée + ▶) pour ceux qui ont
- * pris vie, la vignette du coloriage + « À scanner » pour les autres.
- * Tout est local à l'appareil — rien ne vient ni ne va vers les Photos iPhone.
+ * Onglet Galerie de l'app : UNIQUEMENT les vidéos des coloriages déjà scannés
+ * (une par coloriage), vignette = frame à 1/3 de la durée. Tout est local à
+ * l'appareil — aucun lien avec les Photos de l'iPhone.
  */
 export default function GaleriePage() {
   const navigate = useNavigate()
@@ -30,23 +30,32 @@ export default function GaleriePage() {
     let cancelled = false
     async function load() {
       try {
-        const [allBooks, videos] = await Promise.all([getPublishedBooks(), listAllFilmVideos()])
+        const videos = await listAllFilmVideos()
+        if (videos.length === 0) {
+          if (!cancelled) setEntries([])
+          return
+        }
+        // Résout livre + nom pour chaque vidéo (best-effort : une vidéo dont le
+        // projet n'est plus listé reste affichée avec le nom stocké).
+        const allBooks = await getPublishedBooks().catch(() => [] as Book[])
         const owned = allBooks.filter(isBookDownloaded)
-        const videoByProject = new Map(videos.map(v => [v.projectId, v]))
-        const perBook = await Promise.all(
+        const projectMeta = new Map<string, { name: string; bookId: string }>()
+        await Promise.all(
           owned.map(async book => {
             const projects = await getProjectsByBook(book.id, true).catch(() => [] as Project[])
-            return projects.map((project, i): GalleryEntry => ({
-              project,
-              book,
-              indexInBook: i,
-              video: videoByProject.get(project.id) ?? null,
-            }))
+            for (const p of projects) projectMeta.set(p.id, { name: p.name, bookId: book.id })
           }),
         )
         if (cancelled) return
         setBooks(owned)
-        setEntries(perBook.flat())
+        setEntries(videos.map(video => {
+          const meta = projectMeta.get(video.projectId)
+          return {
+            video,
+            name: meta?.name ?? video.projectName ?? 'Coloriage',
+            bookId: meta?.bookId ?? null,
+          }
+        }))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -56,7 +65,7 @@ export default function GaleriePage() {
   }, [])
 
   const visible = useMemo(
-    () => (bookFilter === 'all' ? entries : entries.filter(e => e.book.id === bookFilter)),
+    () => (bookFilter === 'all' ? entries : entries.filter(e => e.bookId === bookFilter)),
     [entries, bookFilter],
   )
 
@@ -65,7 +74,7 @@ export default function GaleriePage() {
       <h1 className="book-title">Galerie</h1>
       <p className="book-subtitle">Retrouve tous tes coloriages qui ont pris vie !</p>
 
-      {books.length > 1 && (
+      {books.length > 1 && entries.length > 0 && (
         <div className="galerie-filters">
           <select
             className="galerie-filter-select"
@@ -86,18 +95,18 @@ export default function GaleriePage() {
       ) : visible.length === 0 ? (
         <div className="placeholder-card soft-card galerie-empty">
           <p>
-            {books.length === 0
-              ? 'Ajoute un livre depuis l’accueil pour voir tes coloriages ici.'
-              : 'Aucun coloriage dans ce livre.'}
+            {entries.length === 0
+              ? 'Aucune vidéo pour l’instant — scanne ton premier coloriage pour le voir prendre vie !'
+              : 'Aucune vidéo dans ce livre.'}
           </p>
         </div>
       ) : (
         <div className="galerie-grid">
           {visible.map(entry => (
             <GalleryCard
-              key={entry.project.id}
+              key={entry.video.projectId}
               entry={entry}
-              onOpen={() => navigate(`/p/${entry.project.id}?book=${entry.book.id}`)}
+              onOpen={() => navigate(`/p/${entry.video.projectId}${entry.bookId ? `?book=${entry.bookId}` : ''}`)}
             />
           ))}
         </div>
@@ -107,17 +116,14 @@ export default function GaleriePage() {
 }
 
 function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => void }) {
-  const { project, indexInBook, video } = entry
+  const { video, name } = entry
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
 
-  // Vignette : frame à 1/3 de la vidéo si elle existe, sinon vignette du coloriage.
+  // Vignette = frame à 1/3 de la durée (générée + persistée si absente).
   useEffect(() => {
     let cancelled = false
     let objUrl: string | null = null
-    const source: Promise<Blob | null> = video?.posterBlob
-      ? Promise.resolve(video.posterBlob)
-      : getProjectThumbnailBlob(project.id).then(b => b ?? getProjectThumbnail(project.id)).catch(() => null)
-    void source.then(b => {
+    void getFilmVideoPoster(video).then(b => {
       if (cancelled || !b) return
       objUrl = URL.createObjectURL(b)
       setThumbUrl(objUrl)
@@ -126,15 +132,13 @@ function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => voi
       cancelled = true
       if (objUrl) URL.revokeObjectURL(objUrl)
     }
-  }, [project.id, video?.posterBlob])
+  }, [video])
 
-  const scannedDate = video
-    ? new Date(video.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
-    : null
+  const scannedDate = new Date(video.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
 
   return (
     <div
-      className={`galerie-card soft-card${video ? ' galerie-card--video' : ''}`}
+      className="galerie-card soft-card galerie-card--video"
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -142,23 +146,19 @@ function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => voi
     >
       <div className="galerie-card-thumb">
         {thumbUrl ? (
-          <img src={thumbUrl} alt={project.name} loading="lazy" />
+          <img src={thumbUrl} alt={name} loading="lazy" />
         ) : (
-          <span className="galerie-card-thumb-fallback" aria-hidden="true">🖍️</span>
+          <span className="galerie-card-thumb-fallback" aria-hidden="true">🎬</span>
         )}
-        {video && (
-          <span className="galerie-card-play" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor">
-              <path d="M8 5.5c0-1.1 1.2-1.8 2.1-1.2l9.4 6.5c.8.6.8 1.8 0 2.4l-9.4 6.5c-.9.6-2.1-.1-2.1-1.2V5.5z" />
-            </svg>
-          </span>
-        )}
+        <span className="galerie-card-play" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor">
+            <path d="M8 5.5c0-1.1 1.2-1.8 2.1-1.2l9.4 6.5c.8.6.8 1.8 0 2.4l-9.4 6.5c-.9.6-2.1-.1-2.1-1.2V5.5z" />
+          </svg>
+        </span>
       </div>
       <div className="galerie-card-texts">
-        <span className="galerie-card-name">{indexInBook + 1}. {project.name}</span>
-        <span className={`galerie-card-status${video ? ' galerie-card-status--done' : ''}`}>
-          {video ? `Scanné le ${scannedDate}` : 'À scanner'}
-        </span>
+        <span className="galerie-card-name">{name}</span>
+        <span className="galerie-card-status galerie-card-status--done">Scanné le {scannedDate}</span>
       </div>
     </div>
   )
