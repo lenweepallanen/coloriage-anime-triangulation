@@ -2639,6 +2639,30 @@ body.play-app .galerie-card-status--done {
   color: var(--accent-violet, #8b7cf0);
   font-weight: 600;
 }
+body.play-app .galerie-card {
+  position: relative;
+}
+body.play-app .galerie-card-share {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-violet, #8b7cf0);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+body.play-app .galerie-card-share:disabled {
+  opacity: 0.6;
+}
 body.play-app .galerie-empty {
   max-width: 480px;
   margin: 24px auto;

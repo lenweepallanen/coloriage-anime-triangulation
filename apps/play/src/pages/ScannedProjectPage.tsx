@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { Project } from '@shared/types/project'
 import { getFilmVideo, getFilmVideoPoster, type FilmVideoRecord } from '@shared/db/filmVideosStore'
 import { getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
+import { shareFilmVideo } from '../utils/shareFilmVideo'
 
 interface Props {
   project: Project
@@ -24,6 +25,18 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [sharing, setSharing] = useState(false)
+
+  const handleShare = async () => {
+    if (!video || sharing) return
+    setSharing(true)
+    try {
+      const ok = await shareFilmVideo(video)
+      if (!ok) alert('Le partage n’est pas disponible sur cet appareil.')
+    } finally {
+      setSharing(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -101,6 +114,9 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
       </div>
 
       <div className="scanned-project-rescan">
+        <button className="btn-secondary btn-lg scanned-project-share" onClick={() => { void handleShare() }} disabled={sharing}>
+          {sharing ? 'Préparation…' : '↗ Partager ma vidéo'}
+        </button>
         <button className="btn-primary btn-lg" onClick={onNewScan}>
           ⌜⌟ Nouveau scan
         </button>

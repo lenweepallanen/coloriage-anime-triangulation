@@ -5,6 +5,7 @@ import { getPublishedBooks } from '@shared/db/booksStore'
 import { getProjectsByBook } from '@shared/db/projectsStore'
 import { listAllFilmVideos, getFilmVideoPoster, type FilmVideoRecord } from '@shared/db/filmVideosStore'
 import { isBookDownloaded } from '../utils/bookDownload'
+import { shareFilmVideo } from '../utils/shareFilmVideo'
 
 interface GalleryEntry {
   video: FilmVideoRecord
@@ -118,6 +119,18 @@ export default function GaleriePage() {
 function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => void }) {
   const { video, name } = entry
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+  const [sharing, setSharing] = useState(false)
+
+  const handleShare = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (sharing) return
+    setSharing(true)
+    try {
+      await shareFilmVideo(video)
+    } finally {
+      setSharing(false)
+    }
+  }
 
   // Vignette = frame à 1/3 de la durée (générée + persistée si absente).
   useEffect(() => {
@@ -160,6 +173,14 @@ function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => voi
         <span className="galerie-card-name">{name}</span>
         <span className="galerie-card-status galerie-card-status--done">Scanné le {scannedDate}</span>
       </div>
+      <button
+        className="galerie-card-share"
+        onClick={e => { void handleShare(e) }}
+        disabled={sharing}
+        aria-label={`Partager la vidéo de ${name}`}
+      >
+        {sharing ? '…' : '↗'}
+      </button>
     </div>
   )
 }

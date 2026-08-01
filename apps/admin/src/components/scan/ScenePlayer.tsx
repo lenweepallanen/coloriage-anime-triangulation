@@ -21,6 +21,7 @@ import { FilmDirector } from '../../utils/filmDirector'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
+import watermarkUrl from '../../assets/picopop-watermark.png'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -821,6 +822,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // (les HTMLAudio créés ensuite y sont routés en parallèle de la sortie).
     const shouldRecord = filmEnabled && recordFilm === true && filmRunId === 0
     if (shouldRecord) enableRecordingBus()
+    // Filigrane PicoPop incrusté dans la vidéo : sprite ajouté au stage (donc
+    // capturé par captureStream) uniquement pendant la lecture enregistrée.
+    if (shouldRecord) {
+      const wmTexture = PIXI.Texture.from(watermarkUrl)
+      const wmSprite = new PIXI.Sprite(wmTexture)
+      const placeWatermark = () => {
+        const wmWidth = viewW * 0.13
+        wmSprite.width = wmWidth
+        wmSprite.height = wmWidth * (wmTexture.height / wmTexture.width)
+        wmSprite.x = viewW - wmWidth - viewW * 0.02
+        wmSprite.y = viewW * 0.02
+      }
+      if (wmTexture.baseTexture.valid) placeWatermark()
+      else wmTexture.baseTexture.once('loaded', placeWatermark)
+      wmSprite.alpha = 0.95
+      app.stage.addChild(wmSprite)
+    }
     let filmRecording: FilmRecording | null = null
     let filmRecordingStarted = false
     const maybeStartFilmRecording = () => {
