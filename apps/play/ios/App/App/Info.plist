@@ -28,6 +28,10 @@
 	<string>La caméra sert à scanner ton coloriage pour lui donner vie en animation.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Le gyroscope crée un effet de profondeur (parallaxe) pendant l&#8217;animation.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Enregistre les films de tes coloriages dans ta galerie.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Enregistre les films de tes coloriages dans ta galerie.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

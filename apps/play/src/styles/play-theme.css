@@ -2546,6 +2546,61 @@ body.play-app .scan-validate--landscape .scan-validate-bar {
   background: none;
 }
 
+/* ---- Écran « coloriage déjà scanné » (revoir la vidéo sans scanner) ---- */
+body.play-app .scanned-project-page {
+  padding-bottom: 120px;
+}
+body.play-app .scanned-project-headline {
+  margin: 18px 0 2px;
+  text-align: center;
+  font-size: 1.35rem;
+  color: var(--ink, #2d2a6e);
+}
+body.play-app .scanned-project-sub {
+  margin: 0 0 14px;
+  text-align: center;
+  color: var(--accent-violet, #8b7cf0);
+}
+body.play-app .scanned-project-video-card {
+  padding: 10px;
+  margin: 0 auto 16px;
+  max-width: 680px;
+}
+body.play-app .scanned-project-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 16px;
+  background: #000;
+  object-fit: contain;
+}
+body.play-app .scanned-project-bravo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 680px;
+  margin: 0 auto 22px;
+  padding: 14px 18px;
+}
+body.play-app .scanned-project-bravo p {
+  margin: 4px 0 0;
+}
+body.play-app .scanned-project-bravo-star {
+  font-size: 2rem;
+}
+body.play-app .scanned-project-rescan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+body.play-app .scanned-project-rescan-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--ink-soft, #6b679c);
+  text-align: center;
+}
+
 /* ---- 3) Écran SCÈNE : classe React .scene-player--landscape ---- */
 /* PLEIN ÉCRAN paysage : canvas 16:9 bord à bord centré sur fond noir,
    HUD superposé (porte en haut à gauche, boutons à droite, barre film en bas). */

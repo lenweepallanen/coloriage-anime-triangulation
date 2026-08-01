@@ -3582,6 +3582,22 @@ code {
   justify-content: center;
 }
 
+.scene-player-film-end-note {
+  font-size: var(--text-base);
+  color: #fff;
+  text-align: center;
+}
+
+.scene-player-film-end-replace {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-lg);
+}
+
 /* Paysage FORCÉ : la WebView est restée portrait (lock d'orientation natif
    indisponible ou en échec) — on tourne tout le player de 90° pour garantir
    le rendu horizontal plein écran. Les hit-tests suivent la transformation. */

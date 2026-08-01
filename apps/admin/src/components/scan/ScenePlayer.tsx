@@ -19,6 +19,8 @@ import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverla
 import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import { FilmDirector } from '../../utils/filmDirector'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
+import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
+import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -51,6 +53,14 @@ interface Props {
   onExit?: () => void
   /** Pause forcée de l'extérieur (ex. overlay « tourne ton téléphone » du mode natif). */
   forcePaused?: boolean
+  /** Mode film : enregistrer la 1ʳᵉ lecture en vidéo (canvas + audio). Play uniquement. */
+  recordFilm?: boolean
+  /** Appelé avec le fichier vidéo quand la capture est ACCEPTÉE (1er scan : auto ;
+   *  rescan : après confirmation « Remplacer »). */
+  onFilmRecorded?: (r: FilmRecordingResult) => void
+  /** true = une vidéo existe déjà pour ce coloriage → l'écran Fin demande
+   *  « Remplacer la vidéo précédente ? » avant d'appeler onFilmRecorded. */
+  confirmReplaceOnEnd?: boolean
 }
 
 function smoothstep(t: number): number {
@@ -58,7 +68,7 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused }: Props) {
+export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -136,6 +146,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [filmRunId, setFilmRunId] = useState(0)
   // Progression film [0..100], throttlée au demi-pourcent par le ticker.
   const [filmProgressPct, setFilmProgressPct] = useState(0)
+  // --- Capture vidéo du film (1ʳᵉ lecture uniquement) ---
+  // Capture terminée, en attente de décision (rescan) ou déjà sauvée (1er scan).
+  const [pendingRecording, setPendingRecording] = useState<FilmRecordingResult | null>(null)
+  const [recordingSaved, setRecordingSaved] = useState(false)
+  const [recordingDiscarded, setRecordingDiscarded] = useState(false)
+  const onFilmRecordedRef = useRef(onFilmRecorded)
+  useEffect(() => { onFilmRecordedRef.current = onFilmRecorded }, [onFilmRecorded])
 
   useEffect(() => { playingRef.current = playing }, [playing])
 
@@ -799,6 +816,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // Track which walk zone mesh is currently active
     let activeWalkZoneAnimId: string | null = null
 
+    // --- Capture vidéo du film (1ʳᵉ lecture après un scan uniquement) ---
+    // Le bus audio d'enregistrement doit être actif AVANT la création des sons
+    // (les HTMLAudio créés ensuite y sont routés en parallèle de la sortie).
+    const shouldRecord = filmEnabled && recordFilm === true && filmRunId === 0
+    if (shouldRecord) enableRecordingBus()
+    let filmRecording: FilmRecording | null = null
+    let filmRecordingStarted = false
+    const maybeStartFilmRecording = () => {
+      if (!shouldRecord || filmRecordingStarted) return
+      filmRecordingStarted = true
+      filmRecording = startFilmRecording(app.view as HTMLCanvasElement)
+    }
+
     // --- Audio elements for animation sounds ---
     const animAudioElements = new Map<string, HTMLAudioElement>()
     const animAudioUrls: string[] = []
@@ -807,6 +837,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const url = URL.createObjectURL(anim.audioBlob)
         animAudioUrls.push(url)
         const audio = new Audio(url)
+        routeElementForRecording(audio)
         animAudioElements.set(anim.id, audio)
       }
     }
@@ -850,6 +881,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       audio.volume = volume
       audio.playbackRate = rate
       audio.loop = snd.loop === true
+      routeElementForRecording(audio)
       animSoundAudiosRef.current.push(audio)
       if (snd.loop === true) loopingActionAudiosRef.current.push(audio)
       audio.play().catch(() => {})
@@ -878,6 +910,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const audio = new Audio(url)
       audio.loop = true
       audio.volume = scene.ambientSound.volume ?? 1
+      routeElementForRecording(audio)
       audio.play().catch(() => {})
       sceneAmbientAudio = audio
     }
@@ -887,6 +920,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const url = URL.createObjectURL(scene.entrySound.blob)
       const audio = new Audio(url)
       audio.volume = scene.entrySound.volume ?? 1
+      routeElementForRecording(audio)
       animSoundAudiosRef.current.push(audio)
       audio.play().catch(() => {})
       audio.onended = () => {
@@ -936,6 +970,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           audio.playbackRate = sound.rate ?? 1
           // Loop : boucle pendant tout le trajet, coupé à l'arrivée (stopTravelSounds).
           audio.loop = sound.loop === true
+          routeElementForRecording(audio)
           animSoundAudiosRef.current.push(audio)
           travelAudios.push(audio)
           audio.play().catch(() => {})
@@ -972,6 +1007,20 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           if (filmEndedRef.current) return
           filmEndedRef.current = true
           setFilmEnded(true)
+          // Finalise la capture vidéo (1ʳᵉ lecture). 1er scan : sauvegarde directe ;
+          // rescan (confirmReplaceOnEnd) : mise en attente, l'écran Fin demande.
+          if (filmRecording) {
+            const rec = filmRecording
+            filmRecording = null
+            rec.stop().then(r => {
+              if (!r.blob || r.blob.size === 0) return
+              setPendingRecording(r)
+              if (!confirmReplaceOnEnd) {
+                onFilmRecordedRef.current?.(r)
+                setRecordingSaved(true)
+              }
+            }).catch(() => {})
+          }
         },
       })
       estimateFilmDurations(film, scene, project.animations)
@@ -1441,10 +1490,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           suspendMouthAudioContext()
           btnTimerFrozenRef.current = true
           for (const v of bgVideoElements) v.pause()
+          filmRecording?.pause()
         } else {
           for (const a of animSoundAudiosRef.current) { if (!a.ended) a.play().catch(() => {}) }
           resumeMouthAudioContext()
           btnTimerFrozenRef.current = false
+          filmRecording?.resume()
           // Vidéos : relancées automatiquement par l'updater crossfade.
         }
       }
@@ -1492,8 +1543,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           // Arrivée au rest point (fin de l'entrée/marche) → lance l'intro de
           // présentation, ou le film s'il est activé (start idempotent).
           if (newState === 'interaction') {
-            if (filmDirector) filmDirector.start()
-            else startPresentationIfNeeded()
+            if (filmDirector) {
+              maybeStartFilmRecording()
+              filmDirector.start()
+            } else {
+              startPresentationIfNeeded()
+            }
           }
         }
 
@@ -1890,14 +1945,22 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // On déclenche alors l'intro de présentation (ou le film) maintenant que le
     // multi-playback est prêt.
     if (scenePlayback.currentState === 'interaction') {
-      if (filmDirector) filmDirector.start()
-      else startPresentationIfNeeded()
+      if (filmDirector) {
+        maybeStartFilmRecording()
+        filmDirector.start()
+      } else {
+        startPresentationIfNeeded()
+      }
     }
 
     return () => {
       scenePlaybackRef.current = null
       filmDirector = null
       btnTimerFrozenRef.current = false
+      // Capture en cours (sortie avant la fin du film) : jetée proprement.
+      filmRecording?.abort()
+      filmRecording = null
+      if (shouldRecord) disableRecordingBus()
       resumeMouthAudioContext()
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('resize', handleResize)
@@ -1965,6 +2028,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         audio.volume = volume
         audio.playbackRate = rate
         audio.loop = snd.loop === true
+        routeElementForRecording(audio)
         animSoundAudiosRef.current.push(audio)
         if (snd.loop === true) loopingActionAudiosRef.current.push(audio)
         audio.play().catch(() => {})
@@ -2149,6 +2213,34 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     <div className="scene-player-film-end">
       <div className="scene-player-film-end-card">
         <div className="scene-player-film-end-title">Fin</div>
+        {recordingSaved && (
+          <div className="scene-player-film-end-note">🎬 Vidéo enregistrée !</div>
+        )}
+        {confirmReplaceOnEnd && pendingRecording && !recordingSaved && !recordingDiscarded && (
+          <div className="scene-player-film-end-replace">
+            <div className="scene-player-film-end-note">Remplacer la vidéo précédente ?</div>
+            <div className="scene-player-film-end-actions">
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  onFilmRecordedRef.current?.(pendingRecording)
+                  setRecordingSaved(true)
+                }}
+              >
+                Oui, remplacer
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  setPendingRecording(null)
+                  setRecordingDiscarded(true)
+                }}
+              >
+                Non, garder l'ancienne
+              </button>
+            </div>
+          </div>
+        )}
         <div className="scene-player-film-end-actions">
           <button className="btn-primary" onClick={handleFilmReplay}>↺ Revoir</button>
           <button className="btn-secondary" onClick={() => (onExit ?? onClose)()}>Retour au menu</button>

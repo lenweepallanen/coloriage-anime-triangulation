@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
 import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
+import { hasFilmVideo } from '../db/filmVideosStore'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
 import CornerAdjustment from '../components/scan/CornerAdjustment'
@@ -29,9 +30,12 @@ interface ScanPageProps {
   /** 'admin' (défaut) : flux complet avec écran debug. 'play' : flux simplifié
    *  (calcul en arrière-plan + écran de validation frame 0, sans étapes intermédiaires). */
   mode?: 'admin' | 'play'
+  /** Play : reçoit la vidéo du film capturée pendant la 1ʳᵉ lecture (injecté par
+   *  PlayPage, qui compose sauvegarde locale + galerie). Active la capture. */
+  onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void
 }
 
-export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin' }: ScanPageProps = {}) {
+export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
   const fallback = useProject(projectProp === undefined ? projectId : null)
   const project = projectProp !== undefined ? projectProp : fallback.project
@@ -62,10 +66,10 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
     )
   }
 
-  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} />
+  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} />
 }
 
-function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play' }) {
+function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
@@ -226,6 +230,14 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
       } catch { /* ignore */ }
     }
   }, [stage, project.id])
+
+  // Une vidéo de film existe déjà pour ce coloriage ? Calculé à l'ENTRÉE du stage
+  // animation (avant que la nouvelle capture ne soit sauvée) → l'écran Fin du film
+  // demandera « Remplacer la vidéo précédente ? » au lieu d'écraser silencieusement.
+  const filmReplaceOnEnd = useMemo(
+    () => (mode === 'play' && stage === 'animation' ? hasFilmVideo(project.id) : false),
+    [mode, stage, project.id],
+  )
 
   // Trigger LaMa inpainting after rectified canvas is ready
   useEffect(() => {
@@ -661,6 +673,9 @@ function ScanFlow({ project, deferredLoaded, mode }: { project: Project; deferre
                 onClose={handleRetake}
                 onSettings={() => setPaused(true)}
                 onExit={handleBack}
+                recordFilm={mode === 'play' && onFilmRecorded != null}
+                onFilmRecorded={onFilmRecorded}
+                confirmReplaceOnEnd={filmReplaceOnEnd}
               />
             : <AnimationPlayer
                 project={project}

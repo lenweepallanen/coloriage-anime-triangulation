@@ -40,6 +40,11 @@ export async function resumeMouthAudioContext(): Promise<void> {
   }
 }
 
+/** AudioContext partagé de l'app (lazy). Utilisé par le bus d'enregistrement vidéo. */
+export function getSharedAudioContext(): AudioContext {
+  return getCtx();
+}
+
 export interface MouthAudioPlayer {
   /** Démarre la lecture. Re-crée un BufferSource à chaque appel. Résout dès le démarrage. */
   play: () => Promise<void>;
@@ -115,6 +120,15 @@ export async function loadMouthAudio(
   gainNode.gain.value = opts.volume ?? 1;
   analyser.connect(gainNode);
   gainNode.connect(ctx.destination);
+  // Tap parallèle vers le bus d'enregistrement vidéo s'il est actif (le RMS,
+  // lu en amont sur l'analyser, n'est pas affecté). Import dynamique pour
+  // éviter un cycle recordingAudioBus ↔ mouthAudioAnalyser.
+  void import('./recordingAudioBus').then(({ getRecordingDestination }) => {
+    const recDest = getRecordingDestination();
+    if (recDest) {
+      try { gainNode.connect(recDest); } catch { /* */ }
+    }
+  });
 
   const buf = new Uint8Array(analyser.fftSize);
   let smoothed = 0;
