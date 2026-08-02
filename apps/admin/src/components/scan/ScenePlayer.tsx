@@ -828,11 +828,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const wmTexture = PIXI.Texture.from(watermarkUrl)
       const wmSprite = new PIXI.Sprite(wmTexture)
       const placeWatermark = () => {
-        const wmWidth = viewW * 0.13
+        const wmWidth = viewW * 0.078
         wmSprite.width = wmWidth
         wmSprite.height = wmWidth * (wmTexture.height / wmTexture.width)
-        wmSprite.x = viewW - wmWidth - viewW * 0.02
-        wmSprite.y = viewW * 0.02
+        wmSprite.x = viewW - wmWidth - viewW * 0.005
+        wmSprite.y = viewW * 0.005
       }
       if (wmTexture.baseTexture.valid) placeWatermark()
       else wmTexture.baseTexture.once('loaded', placeWatermark)
