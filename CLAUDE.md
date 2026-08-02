@@ -2,6 +2,11 @@
 
 Application web de livres de coloriage animés avec triangulation de maillage et suivi vidéo.
 
+**⚠️ DA / UX de l'app PLAY (PicoPop)** : toute UI visible côté play (pages `apps/play/src`
+ET composants partagés `apps/admin/src/components/scan/*`) doit respecter la charte
+graphique **`apps/play/CLAUDE.md`** — couleurs pastel tokens, Fredoka/Andika, titres ✦,
+boutons pilule par fonction, cartes soft, safe areas. Ne jamais improviser de style custom.
+
 ## Monorepo (npm workspaces)
 
 Le projet est splitté en **deux applications** déployées sur deux domaines distincts, partageant un **seul backend Firebase** (`coloriage-anime-prod`).

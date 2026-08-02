@@ -1,5 +1,9 @@
 # Scan — Détection, Correction Perspective, Animation
 
+**DA / UX** : ces composants sont rendus dans l'app PLAY. Avant tout ajout ou
+modification d'UI visible côté play, lire et respecter la charte
+`apps/play/CLAUDE.md` (couleurs, fontes, titres ✦, pilules, cartes soft, safe areas).
+
 Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traitement → debug → animation.
 
 **Orientation forcée** : `ScanPage` verrouille l'écran en paysage via `screen.orientation.lock('landscape')` au montage (unlock au démontage). Fallback CSS : `.scan-page` est rotationné de 90° en portrait via `@media (orientation: portrait)`. La page entière est `position: fixed` plein écran.
