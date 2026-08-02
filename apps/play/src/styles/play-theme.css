@@ -2550,20 +2550,53 @@ body.play-app .scan-validate--landscape .scan-validate-bar {
 body.play-app .galerie-page {
   padding-bottom: 120px;
 }
-body.play-app .galerie-filters {
-  display: flex;
-  justify-content: center;
-  margin: 4px 0 16px;
-}
-body.play-app .galerie-filter-select {
-  appearance: none;
-  border: 2px solid var(--accent-violet, #8b7cf0);
-  border-radius: 999px;
-  background: #fff;
+body.play-app .galerie-sub {
+  margin: -6px 0 18px;
+  text-align: center;
   color: var(--ink, #2d2a6e);
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 1.08rem;
+  line-height: 1.35;
+}
+/* Barre de tri : container blanc arrondi, pills « Tous » + un par livre. */
+body.play-app .galerie-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px;
+  margin: 0 auto 18px;
+  max-width: 760px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  box-shadow: 0 4px 14px rgba(45, 42, 110, 0.08);
+}
+body.play-app .galerie-filterbar::-webkit-scrollbar {
+  display: none;
+}
+body.play-app .galerie-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink, #2d2a6e);
+  font-weight: 700;
+  font-size: 0.98rem;
   padding: 10px 18px;
-  font-size: 0.95rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+body.play-app .galerie-pill--active {
+  background: var(--accent-violet, #8b7cf0);
+  color: #fff;
+}
+body.play-app .galerie-pill-icon {
+  font-size: 1.05em;
+  line-height: 1;
 }
 body.play-app .galerie-grid {
   display: grid;
@@ -2644,21 +2677,22 @@ body.play-app .galerie-card {
 }
 body.play-app .galerie-card-share {
   position: absolute;
-  right: 12px;
-  bottom: 10px;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+  right: 14px;
+  top: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
   border: none;
   background: var(--accent-violet, #8b7cf0);
   color: #fff;
-  font-size: 1rem;
+  font-size: 1.05rem;
   font-weight: 700;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  z-index: 1;
 }
 body.play-app .galerie-card-share:disabled {
   opacity: 0.6;

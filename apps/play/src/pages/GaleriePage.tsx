@@ -72,22 +72,35 @@ export default function GaleriePage() {
 
   return (
     <div className="book-page galerie-page">
-      <h1 className="book-title">Galerie</h1>
-      <p className="book-subtitle">Retrouve tous tes coloriages qui ont pris vie !</p>
+      <h1 className="section-title">GALERIE</h1>
+      <p className="galerie-sub">Retrouve tous tes coloriages<br />qui ont pris vie !</p>
 
-      {books.length > 1 && entries.length > 0 && (
-        <div className="galerie-filters">
-          <select
-            className="galerie-filter-select"
-            value={bookFilter}
-            onChange={e => setBookFilter(e.target.value)}
-            aria-label="Filtrer par livre"
+      {books.length > 0 && entries.length > 0 && (
+        <div className="galerie-filterbar" role="tablist" aria-label="Filtrer par livre">
+          <button
+            className={`galerie-pill${bookFilter === 'all' ? ' galerie-pill--active' : ''}`}
+            role="tab"
+            aria-selected={bookFilter === 'all'}
+            onClick={() => setBookFilter('all')}
           >
-            <option value="all">📚 Tous les livres</option>
-            {books.map(b => (
-              <option key={b.id} value={b.id}>📖 {b.name}</option>
-            ))}
-          </select>
+            <span className="galerie-pill-icon" aria-hidden="true">▦</span>
+            Tous ({entries.length})
+          </button>
+          {books.map(b => {
+            const count = entries.filter(e => e.bookId === b.id).length
+            return (
+              <button
+                key={b.id}
+                className={`galerie-pill${bookFilter === b.id ? ' galerie-pill--active' : ''}`}
+                role="tab"
+                aria-selected={bookFilter === b.id}
+                onClick={() => setBookFilter(b.id)}
+              >
+                <span className="galerie-pill-icon" aria-hidden="true">📖</span>
+                {b.name} ({count})
+              </button>
+            )
+          })}
         </div>
       )}
 
