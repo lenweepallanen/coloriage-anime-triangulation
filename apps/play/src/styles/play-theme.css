@@ -47,6 +47,9 @@ body.play-app {
   --accent-rose: #ff8fae;
   --accent-violet: #8b7cf0;
   --cream: #fff2de;
+  /* Fond sombre des cadres caméra/vidéo (exception charte assumée : un flux
+     vidéo letterboxé a besoin d'un fond sombre — teinte encre, pas de noir pur). */
+  --camera-bg: #1e1b2e;
   --sticker-shadow: 0 4px 12px rgba(90, 80, 140, 0.2);
   --sticker-shadow-lg: 0 8px 20px rgba(90, 80, 140, 0.24);
 
@@ -54,7 +57,7 @@ body.play-app {
      fond fixed casse la composition GPU et rend les <video> (caméra) blanches. */
   background: var(--cream);
   color: var(--ink);
-  font-family: 'Andika', 'Segoe UI', sans-serif;
+  font-family: 'Andika', sans-serif;
 }
 
 body.play-app h1,
@@ -260,7 +263,7 @@ body.play-app .shell-menu-item:active {
   background: #f3eefe;
 }
 body.play-app .shell-menu-sep {
-  border-top: 2px dashed rgba(58, 53, 48, 0.15);
+  border-top: 2px dashed #cfc0f1;
   margin: 6px 8px;
 }
 body.play-app .shell-menu-lang {
@@ -282,7 +285,7 @@ body.play-app .shell-lang-btn {
   font-weight: 600;
   font-size: 0.92rem;
   border: 2px solid transparent;
-  background: #f5f2ea;
+  background: #f3eefe;
   border-radius: 999px;
   padding: 6px 10px;
   cursor: pointer;
@@ -468,7 +471,7 @@ body.play-app .boot-spinner {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  border: 4px solid rgba(58, 53, 48, 0.15);
+  border: 4px solid rgba(90, 80, 140, 0.15);
   border-top-color: var(--accent-sun);
   animation: boot-spin 0.9s linear infinite;
 }
@@ -486,7 +489,7 @@ body.play-app .boot-spinner--small {
    ------------------------------------------------------------------- */
 body.play-app .home-page {
   min-height: 100vh;
-  padding: 0 18px;
+  padding: 0 16px;
   max-width: 680px;
   margin: 0 auto;
 }
@@ -570,7 +573,7 @@ body.play-app .book-card-fallback {
   justify-content: center;
   gap: 8px;
   font-size: 2.6rem;
-  background: #fdf6e3;
+  background: var(--cream);
 }
 body.play-app .book-card-fallback-name {
   font-family: 'Fredoka', sans-serif;
@@ -727,7 +730,7 @@ body.play-app .scanner-camera-card {
   height: var(--scan-square);
   box-sizing: border-box;
   margin: 0 auto;
-  background: #1e1b2e;
+  background: var(--camera-bg);
   border: 6px solid #ffffff;
   border-radius: 22px;
 }
@@ -793,7 +796,7 @@ body.play-app .scanner-confirm-fallback {
 body.play-app .scanner-confirm-title {
   font-family: 'Fredoka', sans-serif;
   font-weight: 700;
-  font-size: 1.2rem;
+  font-size: clamp(1.1rem, 4vw, 1.3rem);
   color: var(--ink);
   line-height: 1.3;
 }
@@ -811,6 +814,10 @@ body.play-app .scanner-confirm-actions {
 }
 body.play-app .scanner-confirm-actions .soft-btn {
   flex: 1;
+}
+body.play-app .scanner-confirm-actions .soft-btn:not(.soft-btn--ghost) {
+  background: var(--accent-mint);
+  box-shadow: 0 4px 12px rgba(87, 200, 163, 0.45);
 }
 body.play-app .soft-btn--ghost {
   background: #ffffff;
@@ -883,7 +890,23 @@ body.play-app .placeholder-icon {
 }
 body.play-app .placeholder-card h1 {
   margin: 0;
-  font-size: 1.7rem;
+  font-size: clamp(1.4rem, 5vw, 1.7rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-weight: 700;
+}
+body.play-app .placeholder-card h1::before,
+body.play-app .placeholder-card h1::after {
+  content: '✦';
+  font-size: 0.7em;
+  color: #ff8fae;
+  transform: rotate(-12deg);
+}
+body.play-app .placeholder-card h1::after {
+  color: #ffcf3f;
+  transform: rotate(12deg);
 }
 body.play-app .placeholder-card p {
   margin: 0;
@@ -954,7 +977,7 @@ body.play-app .colo-card-thumb {
   aspect-ratio: 4 / 3;
   border-radius: 14px;
   overflow: hidden;
-  background: #faf6ec;
+  background: var(--cream);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1151,7 +1174,7 @@ body.play-app .collection-card-cover {
   aspect-ratio: 1 / 1;
   border-radius: 14px;
   overflow: hidden;
-  background: #faf6ec;
+  background: var(--cream);
 }
 body.play-app .collection-card-cover img {
   width: 100%;
@@ -1207,7 +1230,7 @@ body.play-app .collection-amazon-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  border: 1.5px solid #e8e2f6;
+  border: none;
   border-radius: 999px;
   background: #ffffff;
   padding: 7px 18px 5px;
@@ -1218,6 +1241,7 @@ body.play-app .collection-amazon-btn {
 body.play-app .collection-amazon-btn:active {
   transform: scale(0.96);
 }
+/* Mot-symbole Amazon : noir de marque (exception charte assumée) */
 body.play-app .collection-amazon-word {
   font-family: 'Fredoka', sans-serif;
   font-weight: 700;
@@ -1245,11 +1269,11 @@ body.play-app .book-bonus-card {
   box-shadow: 0 12px 30px rgba(90, 80, 140, 0.26);
 }
 body.play-app .book-bonus-inner {
-  background: #fdf3d7;
-  border: 2.5px dashed #e8cf8f;
+  background: var(--cream);
+  border: 2.5px dashed var(--accent-sun);
   border-radius: 20px;
   padding: 24px 14px 14px;
-  box-shadow: inset 0 3px 10px rgba(140, 110, 60, 0.14);
+  box-shadow: inset 0 3px 10px rgba(90, 80, 140, 0.14);
 }
 body.play-app .book-bonus-badge {
   position: absolute;
@@ -1263,10 +1287,10 @@ body.play-app .book-bonus-badge {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #ffffff;
-  background: #f987ae;
+  background: var(--accent-rose);
   border-radius: 999px;
   padding: 7px 18px;
-  box-shadow: 0 4px 10px rgba(249, 135, 174, 0.4);
+  box-shadow: 0 4px 10px rgba(255, 143, 174, 0.4);
 }
 body.play-app .book-bonus-body {
   display: flex;
@@ -1313,10 +1337,10 @@ body.play-app .book-bonus-btn {
   font-weight: 700;
   font-size: clamp(0.95rem, 3.4vw, 1.1rem);
   color: #ffffff;
-  background: #4cbb8f;
+  background: var(--accent-mint);
   border: none;
-  border-radius: 14px;
-  box-shadow: 0 4px 12px rgba(76, 187, 143, 0.4);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(87, 200, 163, 0.45);
   padding: 11px 18px;
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
@@ -1573,7 +1597,7 @@ body.play-app .camera-warming {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #1e1b2e;
+  background: var(--camera-bg);
   border-radius: 16px;
 }
 body.play-app .camera-warming-spinner {
@@ -1598,7 +1622,7 @@ body.play-app .camera-corners i {
   height: 34px;
   border: 5px solid #ffffff;
   border-radius: 4px;
-  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.3));
+  filter: drop-shadow(0 1px 4px rgba(90, 80, 140, 0.35));
 }
 body.play-app .camera-corners i:nth-child(1) { top: 0; left: 0; border-right: none; border-bottom: none; border-top-left-radius: 12px; }
 body.play-app .camera-corners i:nth-child(2) { top: 0; right: 0; border-left: none; border-bottom: none; border-top-right-radius: 12px; }
@@ -1679,8 +1703,8 @@ body.play-app .camera-buttons-row--active .btn-torch {
   color: #7a5b00;
 }
 body.play-app .camera-buttons-row--active .btn-torch--on {
-  background: #ffb52e;
-  color: #5d4300;
+  background: var(--accent-sun);
+  color: #7a5b00;
   box-shadow: 0 0 0 4px rgba(255, 207, 63, 0.45);
 }
 body.play-app .btn-gallery:active,
@@ -1828,6 +1852,23 @@ body.play-app .camera-status-bar {
   font-family: 'Fredoka', sans-serif;
   font-weight: 500;
   border-radius: 999px;
+}
+/* Variantes fonctionnelles pastel (surcharge des couleurs admin de global.css) */
+body.play-app .camera-status-bar--default {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--ink);
+}
+body.play-app .camera-status-bar--success {
+  background: var(--accent-mint);
+  color: #ffffff;
+}
+body.play-app .camera-status-bar--warning {
+  background: var(--accent-sun);
+  color: #7a5b00;
+}
+body.play-app .camera-status-bar--error {
+  background: var(--accent-rose);
+  color: #ffffff;
 }
 
 /* Stage preview « Tu valides la photo ? » : titre + voile adouci */
@@ -1977,7 +2018,7 @@ body.play-app .scan-validate-actions {
 /* CTA « Voir mon coloriage prendre vie ! » : dégradé violet pleine largeur */
 body.play-app .scan-validate-actions .btn-primary {
   width: 100%;
-  background: linear-gradient(135deg, #9d8df5, #7a67e8);
+  background: var(--accent-violet);
   color: #ffffff;
   font-size: 1.1rem;
   padding: 0.9em 1.2em;
@@ -2027,6 +2068,18 @@ body.play-app .rotate-overlay-title {
   color: var(--ink);
   margin: 10px 0 0;
 }
+body.play-app .rotate-overlay-title::before,
+body.play-app .rotate-overlay-title::after {
+  content: '✦';
+  font-size: 0.7em;
+  color: #ff8fae;
+  transform: rotate(-12deg);
+  margin: 0 10px;
+  display: inline-block;
+}
+body.play-app .rotate-overlay-title::after {
+  transform: rotate(12deg);
+}
 body.play-app .rotate-overlay-sub {
   font-family: 'Andika', sans-serif;
   font-size: 1.05rem;
@@ -2053,7 +2106,7 @@ body.play-app .scan-processing-frame {
   border: 6px solid #ffffff;
   border-radius: 18px;
   overflow: hidden;
-  background: #1e1b2e;
+  background: var(--camera-bg);
   box-shadow: var(--sticker-shadow-lg);
 }
 body.play-app .scan-processing-frame img {
@@ -2262,23 +2315,10 @@ body.play-app .play-panel p {
 }
 
 /* =====================================================================
-   Scène play en PORTRAIT : canvas carré centré, titre + sortie en haut,
-   boutons 1/2/3 puis ⚙/⏸/? sous le canvas. Pas de plein écran ni de lock
-   d'orientation (fiable sur iOS). Activé par la classe scene-player--portrait.
+   Scène play : éléments partagés du HUD (la scène se joue UNIQUEMENT en
+   plein écran paysage — l'ancien layout portrait « bandeau » a été supprimé).
    ===================================================================== */
-body.play-app .scene-player--portrait {
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: clamp(8px, 1.8vmin, 14px);
-  /* Pas de padding latéral : le canvas-bandeau va bord à bord. Les rangées de
-     boutons et la ligne sortie portent leur propre marge horizontale. */
-  padding: calc(8px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom));
-  overflow-x: hidden;
-  background: var(--cream);
-}
-
-/* Ligne du bouton sortie : seule, tout en haut (porte rouge à gauche) */
+/* Ligne du bouton sortie (porte, haut gauche) */
 body.play-app .scene-player-exit-row {
   width: 100%;
   display: flex;
@@ -2289,27 +2329,6 @@ body.play-app .scene-player-exit-row {
   box-sizing: border-box;
 }
 
-/* Espaces flexibles : positionnent le canvas vers le tiers haut (1 part au-dessus,
-   ~1.7 part en dessous → bloc titre+canvas dans le tiers supérieur). */
-body.play-app .scene-player-spacer {
-  width: 1px;
-  pointer-events: none;
-}
-body.play-app .scene-player-spacer--top { flex: 1 1 0; min-height: 4px; }
-body.play-app .scene-player-spacer--bottom { flex: 1.7 1 0; min-height: 8px; }
-body.play-app .scene-player-title {
-  font-family: 'Fredoka', sans-serif;
-  font-weight: 700;
-  font-size: clamp(1.4rem, 5.5vw, 2.1rem);
-  color: var(--ink);
-  text-shadow: 0 2px 6px rgba(255, 255, 255, 0.6);
-  padding: 0;
-  margin-bottom: clamp(8px, 2.5vw, 18px);
-  max-width: 80%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 /* Bouton sortie : porte rose, pastille blanche soft */
 body.play-app .scene-player-exit-btn {
@@ -2327,22 +2346,10 @@ body.play-app .scene-player-exit-btn {
   cursor: pointer;
   transition: transform 0.08s ease, background 0.12s ease;
 }
-body.play-app .scene-player-exit-btn:hover { background: #fff5f8; }
+body.play-app .scene-player-exit-btn:hover { background: rgba(255, 143, 174, 0.12); }
 body.play-app .scene-player-exit-btn:active { transform: scale(0.93); }
 body.play-app .scene-player-exit-btn svg { width: 100%; height: 100%; }
 
-/* Canvas-bandeau : pleine largeur bord à bord, liserés blancs EN HAUT et EN BAS
-   uniquement (pas de bords gauche/droit, pas d'arrondi). */
-body.play-app .scene-player--portrait .animation-canvas {
-  flex: 0 0 auto;
-  border: none;
-  border-top: 4px solid #ffffff;
-  border-bottom: 4px solid #ffffff;
-  border-radius: 0;
-  overflow: hidden;
-  background: transparent;
-  box-shadow: 0 6px 18px rgba(90, 80, 140, 0.16);
-}
 
 /* Rangées de boutons sous le canvas */
 body.play-app .scene-player-actions-row,
@@ -2358,48 +2365,6 @@ body.play-app .scene-player-controls-row {
   box-sizing: border-box;
 }
 
-/* Contrôles ⚙ / ⏸ remis dans le flux (plus d'absolute du layout plein écran) */
-body.play-app .scene-player--portrait .scene-player-settings-btn,
-body.play-app .scene-player--portrait .scene-player-playpause {
-  position: static;
-  top: auto;
-  left: auto;
-  right: auto;
-  bottom: auto;
-  transform: none;
-}
-/* Aide : relative (pour son anneau), sans offsets plein écran */
-body.play-app .scene-player--portrait .scene-player-help-btn {
-  position: relative;
-  inset: auto;
-  transform: none;
-}
-
-/* Tailles portrait */
-body.play-app .scene-player--portrait .scene-player-action-btn {
-  width: clamp(52px, 16vw, 84px);
-  height: clamp(52px, 16vw, 84px);
-}
-/* Rangée 1/2/3 descendue d'un cran sous le canvas */
-body.play-app .scene-player--portrait .scene-player-actions-row {
-  margin-top: clamp(6px, 2vw, 14px);
-}
-body.play-app .scene-player--portrait .scene-player-settings-btn,
-body.play-app .scene-player--portrait .scene-player-playpause,
-body.play-app .scene-player--portrait .scene-player-help-btn {
-  width: clamp(46px, 13vw, 66px);
-  height: clamp(46px, 13vw, 66px);
-  font-size: clamp(1.1rem, 4.5vw, 1.6rem);
-}
-
-/* Bulle d'aide centrée au-dessus des contrôles */
-body.play-app .scene-player--portrait .scene-player-help-bubble {
-  left: 50%;
-  right: auto;
-  top: auto;
-  bottom: clamp(80px, 22vw, 140px);
-  transform: translateX(-50%);
-}
 
 /* =====================================================================
    Boutons du HUD scène : cercles parfaits, style soft uniforme
@@ -2548,14 +2513,19 @@ body.play-app .scan-validate--landscape .scan-validate-bar {
 
 /* ---- Onglet GALERIE : coloriages qui ont pris vie (vidéos locales) ---- */
 body.play-app .galerie-page {
-  padding-bottom: 120px;
+  padding: calc(20px + env(safe-area-inset-top)) 16px 120px;
+}
+/* Logo PicoPop centré en tête de page (même rythme que l'accueil) */
+body.play-app .galerie-logo-row {
+  text-align: center;
+  margin-bottom: 4px;
 }
 body.play-app .galerie-sub {
   margin: -6px 0 18px;
   text-align: center;
-  color: var(--ink, #2d2a6e);
+  color: var(--ink);
   font-weight: 700;
-  font-size: 1.08rem;
+  font-size: clamp(0.98rem, 3.4vw, 1.15rem);
   line-height: 1.35;
 }
 /* Barre de tri : container blanc arrondi, pills « Tous » + un par livre. */
@@ -2570,7 +2540,7 @@ body.play-app .galerie-filterbar {
   max-width: 760px;
   overflow-x: auto;
   scrollbar-width: none;
-  box-shadow: 0 4px 14px rgba(45, 42, 110, 0.08);
+  box-shadow: 0 4px 14px rgba(90, 80, 140, 0.12);
 }
 body.play-app .galerie-filterbar::-webkit-scrollbar {
   display: none;
@@ -2581,7 +2551,7 @@ body.play-app .galerie-pill {
   gap: 8px;
   border: none;
   background: transparent;
-  color: var(--ink, #2d2a6e);
+  color: var(--ink);
   font-weight: 700;
   font-size: 0.98rem;
   padding: 10px 18px;
@@ -2622,7 +2592,7 @@ body.play-app .galerie-card-thumb {
   aspect-ratio: 16 / 10;
   border-radius: 14px;
   overflow: hidden;
-  background: #f2eefc;
+  background: #f3eefe;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2647,7 +2617,7 @@ body.play-app .galerie-card-play {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 3px 10px rgba(90, 80, 140, 0.28);
   padding-left: 3px;
 }
 body.play-app .galerie-card-texts {
@@ -2658,7 +2628,7 @@ body.play-app .galerie-card-texts {
 }
 body.play-app .galerie-card-name {
   font-weight: 700;
-  color: var(--ink, #2d2a6e);
+  color: var(--ink);
   font-size: 0.95rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2666,7 +2636,7 @@ body.play-app .galerie-card-name {
 }
 body.play-app .galerie-card-status {
   font-size: 0.82rem;
-  color: var(--ink-soft, #6b679c);
+  color: var(--ink-soft);
 }
 body.play-app .galerie-card-status--done {
   color: var(--accent-violet, #8b7cf0);
@@ -2681,7 +2651,7 @@ body.play-app .galerie-card-share {
   top: 14px;
   width: 36px;
   height: 36px;
-  border-radius: 12px;
+  border-radius: 50%;
   border: none;
   background: var(--accent-violet, #8b7cf0);
   color: #fff;
@@ -2691,7 +2661,7 @@ body.play-app .galerie-card-share {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 2px 8px rgba(139, 124, 240, 0.4);
   z-index: 1;
 }
 body.play-app .galerie-card-share:disabled {
@@ -2710,8 +2680,20 @@ body.play-app .scanned-project-page {
 body.play-app .scanned-project-headline {
   margin: 18px 0 2px;
   text-align: center;
-  font-size: 1.35rem;
-  color: var(--ink, #2d2a6e);
+  font-size: clamp(1.25rem, 4.6vw, 1.5rem);
+  color: var(--ink);
+}
+body.play-app .scanned-project-headline::before,
+body.play-app .scanned-project-headline::after {
+  content: '✦';
+  font-size: 0.7em;
+  color: #ff8fae;
+  margin: 0 10px;
+  display: inline-block;
+  transform: rotate(-12deg);
+}
+body.play-app .scanned-project-headline::after {
+  transform: rotate(12deg);
 }
 body.play-app .scanned-project-sub {
   margin: 0 0 14px;
@@ -2728,7 +2710,7 @@ body.play-app .scanned-project-video {
   width: 100%;
   aspect-ratio: 16 / 9;
   border-radius: 16px;
-  background: #000;
+  background: var(--camera-bg);
   object-fit: contain;
 }
 body.play-app .scanned-project-bravo {
@@ -2754,13 +2736,15 @@ body.play-app .scanned-project-rescan {
 body.play-app .scanned-project-rescan-hint {
   margin: 0;
   font-size: 0.9rem;
-  color: var(--ink-soft, #6b679c);
+  color: var(--ink-soft);
   text-align: center;
 }
 
 /* ---- 3) Écran SCÈNE : classe React .scene-player--landscape ---- */
 /* PLEIN ÉCRAN paysage : canvas 16:9 bord à bord centré sur fond noir,
    HUD superposé (porte en haut à gauche, boutons à droite, barre film en bas). */
+/* Fond noir cinéma du player plein écran : exception charte assumée
+   (immersion vidéo — le canvas 16:9 est letterboxé sur les côtés). */
 body.play-app .scene-player--landscape.scene-player--fullscreen {
   display: flex;
   align-items: center;
@@ -2790,16 +2774,6 @@ body.play-app .scene-player--fullscreen .scene-player-hud {
   isolation: isolate;
   z-index: 25;
 }
-/* Barre de progression film : superposée en bas au centre. */
-body.play-app .scene-player--fullscreen .scene-player-film-bar {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(12px + env(safe-area-inset-bottom));
-  width: min(50%, 420px);
-  margin: 0;
-  z-index: 25;
-}
 /* Colonne HUD à droite : titre puis boutons empilés */
 body.play-app .scene-player-hud {
   display: flex;
@@ -2809,9 +2783,6 @@ body.play-app .scene-player-hud {
   gap: clamp(12px, 2.6vh, 26px);
   flex: 0 0 auto;
   min-width: 0;
-}
-body.play-app .scene-player--landscape .scene-player-title {
-  margin-bottom: 0;
 }
 /* Boutons d'action / contrôles : tailles adaptées à la hauteur en paysage */
 body.play-app .scene-player--landscape .scene-player-action-btn {
@@ -2853,4 +2824,217 @@ body.play-app .scene-player--landscape .scene-player-exit-btn {
 body.play-app .scene-player--landscape .scene-player-exit-btn svg {
   width: clamp(20px, 4.6vh, 30px);
   height: clamp(20px, 4.6vh, 30px);
+}
+
+/* ---------------------------------------------------------------------
+   HUD film & écran « Fin » — surcharges pastel des styles admin (global.css)
+   ------------------------------------------------------------------- */
+body.play-app .scene-player-film-exit {
+  color: var(--accent-violet);
+  box-shadow: var(--sticker-shadow);
+}
+/* Pause/lecture : cercle blanc sticker (icône violette) au lieu de l'icône nue */
+body.play-app .scene-player-film-playpause {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: var(--accent-violet);
+  box-shadow: var(--sticker-shadow);
+  filter: none;
+}
+body.play-app .scene-player-film-playpause:active {
+  transform: scale(0.94);
+}
+body.play-app .scene-player-film-controls .scene-player-film-track {
+  box-shadow: 0 1px 6px rgba(90, 80, 140, 0.25);
+}
+body.play-app .scene-player-film-controls .scene-player-film-fill {
+  background: var(--accent-violet);
+}
+body.play-app .scene-player-film-knob {
+  box-shadow: 0 1px 6px rgba(90, 80, 140, 0.35);
+}
+/* Écran « Fin » : voile encre + carte blanche sticker, affiché en PORTRAIT
+   plein écran via un portail hors du player (qui peut être tourné en CSS).
+   L'overlay scrolle si la carte est plus haute que l'écran (cas « Remplacer ? ») ;
+   le padding haut réserve la place du débord de l'étoile. */
+body.play-app .scene-player-film-end {
+  background: rgba(46, 42, 94, 0.55);
+  padding: calc(84px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  overflow-y: auto;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+body.play-app .scene-player-film-end--portal {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+}
+body.play-app .scene-player-film-end-card {
+  background: #ffffff;
+  border: none;
+  border-radius: 24px;
+  box-shadow: 0 8px 24px rgba(90, 80, 140, 0.24);
+  padding: 24px 28px 22px;
+  gap: 14px;
+  width: min(88vw, 420px);
+  overflow: visible;
+  box-sizing: border-box;
+  /* margin auto : centré quand ça tient, scroll naturel de l'overlay sinon */
+  margin: auto;
+}
+body.play-app .scene-player-film-end-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.5rem, 6vw, 1.9rem);
+  letter-spacing: 2px;
+  color: #7a52c7;
+}
+body.play-app .scene-player-film-end-title::before,
+body.play-app .scene-player-film-end-title::after {
+  content: '✦';
+  font-size: 0.7em;
+  color: #ff8fae;
+  transform: rotate(-12deg);
+}
+body.play-app .scene-player-film-end-title::after {
+  transform: rotate(12deg);
+}
+body.play-app .scene-player-film-end-note {
+  font-family: 'Andika', sans-serif;
+  font-size: 1.02rem;
+  color: var(--ink);
+}
+body.play-app .scene-player-film-end-replace {
+  border: 2.5px dashed #c9bdf2;
+  border-radius: 18px;
+  padding: 12px 16px;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 10px;
+}
+/* Étoile PicoPop débordant au-dessus de la carte (comme la maquette) —
+   l'espace est réservé par le padding-top de l'overlay. */
+body.play-app .scene-player-film-end-star {
+  width: clamp(70px, 20vw, 96px);
+  margin: -74px 0 -8px;
+  filter: drop-shadow(0 4px 10px rgba(90, 80, 140, 0.25));
+}
+/* Boutons empilés : pilules Fredoka par fonction (violet / mint / blanc) */
+body.play-app .film-end-btn {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  padding: 13px 24px;
+  transition: transform 0.1s ease;
+}
+body.play-app .film-end-btn:active {
+  transform: scale(0.96);
+}
+body.play-app .film-end-btn--replay {
+  background: var(--accent-violet);
+  box-shadow: 0 5px 14px rgba(139, 124, 240, 0.45);
+}
+body.play-app .film-end-btn--share {
+  background: var(--accent-mint);
+  box-shadow: 0 5px 14px rgba(87, 200, 163, 0.45);
+}
+body.play-app .film-end-btn--back {
+  background: #ffffff;
+  color: var(--accent-violet);
+  box-shadow: var(--sticker-shadow);
+}
+body.play-app .scene-player-film-end-actions--stack {
+  gap: 12px;
+}
+
+/* ---------------------------------------------------------------------
+   Utilitaires charte (remplacent les styles inline dispersés)
+   ------------------------------------------------------------------- */
+/* Grand bouton pilule (écran replay) */
+body.play-app .btn-lg {
+  font-size: 1.12rem;
+  padding: 0.85em 1.7em;
+}
+body.play-app .btn-lg svg {
+  vertical-align: -3px;
+  margin-right: 6px;
+}
+/* Texte multi-lignes issu de chaînes avec \n */
+body.play-app .text-preline {
+  white-space: pre-line;
+}
+/* Carte d'erreur caméra du scanner QR (ex-styles inline) */
+body.play-app .scanner-error-card {
+  margin: 24px auto;
+  max-width: 380px;
+}
+
+/* ---------------------------------------------------------------------
+   Popup « Partage en cours de création » : étoile PicoPop + anneau tournant
+   ------------------------------------------------------------------- */
+body.play-app .share-loading-backdrop {
+  z-index: 1300;
+}
+body.play-app .share-loading-card {
+  gap: 14px;
+  padding: 30px 26px;
+}
+body.play-app .share-loading-spinner {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+body.play-app .share-loading-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 5px solid #e9e2fb;
+  border-top-color: var(--accent-violet);
+  animation: boot-spin 0.9s linear infinite;
+}
+body.play-app .share-loading-star {
+  width: 62px;
+  height: auto;
+}
+body.play-app .share-loading-title {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.15rem, 4.4vw, 1.35rem);
+  color: var(--ink);
+  line-height: 1.3;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .share-loading-ring { animation: none; }
+}
+
+/* ---------------------------------------------------------------------
+   Écran de chargement générique : étoile PicoPop + anneau tournant, centré
+   (utilisé par toutes les pages à la place des « Chargement… » discrets)
+   ------------------------------------------------------------------- */
+body.play-app .loading-screen {
+  min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: calc(20px + env(safe-area-inset-top)) 16px calc(130px + env(safe-area-inset-bottom));
+  text-align: center;
+}
+body.play-app .loading-screen-text {
+  margin: 0;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(0.98rem, 3.4vw, 1.15rem);
+  color: var(--ink-soft);
 }

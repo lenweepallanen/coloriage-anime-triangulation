@@ -6,6 +6,10 @@ import { getProjectsByBook } from '@shared/db/projectsStore'
 import { listAllFilmVideos, getFilmVideoPoster, type FilmVideoRecord } from '@shared/db/filmVideosStore'
 import { isBookDownloaded } from '../utils/bookDownload'
 import { shareFilmVideo } from '../utils/shareFilmVideo'
+import { useI18n } from '../i18n'
+import SharePreparingOverlay from '../components/SharePreparingOverlay'
+import LoadingScreen from '../components/LoadingScreen'
+import logoUrl from '../assets/picopop-logo.png'
 
 interface GalleryEntry {
   video: FilmVideoRecord
@@ -21,6 +25,7 @@ interface GalleryEntry {
  * l'appareil — aucun lien avec les Photos de l'iPhone.
  */
 export default function GaleriePage() {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [books, setBooks] = useState<Book[]>([])
@@ -53,7 +58,7 @@ export default function GaleriePage() {
           const meta = projectMeta.get(video.projectId)
           return {
             video,
-            name: meta?.name ?? video.projectName ?? 'Coloriage',
+            name: meta?.name ?? video.projectName ?? t('common.coloring'),
             bookId: meta?.bookId ?? null,
           }
         }))
@@ -72,19 +77,29 @@ export default function GaleriePage() {
 
   return (
     <div className="book-page galerie-page">
-      <h1 className="section-title">GALERIE</h1>
-      <p className="galerie-sub">Retrouve tous tes coloriages<br />qui ont pris vie !</p>
+      <div className="galerie-logo-row">
+        <img className="home-logo" src={logoUrl} alt="PicoPop" />
+      </div>
+      <h1 className="section-title">{t('gallery.title')}</h1>
+      <p className="galerie-sub">{t('gallery.sub1')}<br />{t('gallery.sub2')}</p>
 
       {books.length > 0 && entries.length > 0 && (
-        <div className="galerie-filterbar" role="tablist" aria-label="Filtrer par livre">
+        <div className="galerie-filterbar" role="tablist" aria-label={t('gallery.filterAria')}>
           <button
             className={`galerie-pill${bookFilter === 'all' ? ' galerie-pill--active' : ''}`}
             role="tab"
             aria-selected={bookFilter === 'all'}
             onClick={() => setBookFilter('all')}
           >
-            <span className="galerie-pill-icon" aria-hidden="true">▦</span>
-            Tous ({entries.length})
+            <span className="galerie-pill-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="4" width="7" height="7" rx="2" />
+                <rect x="13" y="4" width="7" height="7" rx="2" />
+                <rect x="4" y="13" width="7" height="7" rx="2" />
+                <rect x="13" y="13" width="7" height="7" rx="2" />
+              </svg>
+            </span>
+            {t('gallery.all')} ({entries.length})
           </button>
           {books.map(b => {
             const count = entries.filter(e => e.bookId === b.id).length
@@ -96,7 +111,12 @@ export default function GaleriePage() {
                 aria-selected={bookFilter === b.id}
                 onClick={() => setBookFilter(b.id)}
               >
-                <span className="galerie-pill-icon" aria-hidden="true">📖</span>
+                <span className="galerie-pill-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 6.5C10.5 4.8 8 4 5 4v14c3 0 5.5.8 7 2.5 1.5-1.7 4-2.5 7-2.5V4c-3 0-5.5.8-7 2.5Z" />
+                    <path d="M12 6.5V20.5" />
+                  </svg>
+                </span>
                 {b.name} ({count})
               </button>
             )
@@ -105,13 +125,11 @@ export default function GaleriePage() {
       )}
 
       {loading ? (
-        <div className="loading">Chargement…</div>
+        <LoadingScreen />
       ) : visible.length === 0 ? (
         <div className="placeholder-card soft-card galerie-empty">
           <p>
-            {entries.length === 0
-              ? 'Aucune vidéo pour l’instant — scanne ton premier coloriage pour le voir prendre vie !'
-              : 'Aucune vidéo dans ce livre.'}
+            {entries.length === 0 ? t('gallery.empty') : t('gallery.emptyBook')}
           </p>
         </div>
       ) : (
@@ -130,6 +148,7 @@ export default function GaleriePage() {
 }
 
 function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => void }) {
+  const { t } = useI18n()
   const { video, name } = entry
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
   const [sharing, setSharing] = useState(false)
@@ -160,11 +179,11 @@ function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => voi
     }
   }, [video])
 
-  const scannedDate = new Date(video.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+  const scannedDate = new Date(video.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
 
   return (
     <div
-      className="galerie-card soft-card galerie-card--video"
+      className="galerie-card soft-card"
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -184,16 +203,21 @@ function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => voi
       </div>
       <div className="galerie-card-texts">
         <span className="galerie-card-name">{name}</span>
-        <span className="galerie-card-status galerie-card-status--done">Scanné le {scannedDate}</span>
+        <span className="galerie-card-status galerie-card-status--done">{t('gallery.scannedOn')} {scannedDate}</span>
       </div>
       <button
         className="galerie-card-share"
         onClick={e => { void handleShare(e) }}
         disabled={sharing}
-        aria-label={`Partager la vidéo de ${name}`}
+        aria-label={`${t('gallery.share')} ${name}`}
       >
-        {sharing ? '…' : '↗'}
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 15V4" />
+          <path d="m7.5 8 4.5-4.5L16.5 8" />
+          <path d="M5 13v6a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6" />
+        </svg>
       </button>
+      {sharing && <SharePreparingOverlay />}
     </div>
   )
 }

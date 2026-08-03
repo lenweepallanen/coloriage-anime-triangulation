@@ -1,10 +1,12 @@
+import { playT } from '../../utils/playI18n'
+
 interface Props {
   onContinue: () => void
   onBack: () => void
   backLabel?: string
 }
 
-export default function PauseOverlay({ onContinue, onBack, backLabel = 'Revenir aux coloriages' }: Props) {
+export default function PauseOverlay({ onContinue, onBack, backLabel }: Props) {
   return (
     <div
       style={{
@@ -29,12 +31,12 @@ export default function PauseOverlay({ onContinue, onBack, backLabel = 'Revenir 
           alignItems: 'stretch',
         }}
       >
-        <h2 style={{ margin: 0, textAlign: 'center' }}>Pause</h2>
+        <h2 style={{ margin: 0, textAlign: 'center' }}>{playT('pause.title')}</h2>
         <button className="btn-primary" onClick={onContinue} style={{ fontSize: 18, padding: '12px 16px' }}>
-          Continuer
+          {playT('pause.continue')}
         </button>
         <button className="btn-secondary" onClick={onBack} style={{ fontSize: 16, padding: '10px 16px' }}>
-          {backLabel}
+          {backLabel ?? playT('pause.backColorings')}
         </button>
       </div>
     </div>

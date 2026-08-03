@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import picopopLogoUrl from '../../assets/picopop-logo.png'
+import { playT } from '../../utils/playI18n'
 import { loadOpenCVWorker, detectFrame, setDetectCallback } from '../../utils/perspectiveCorrection'
 import type { Point2D } from '../../types/project'
 
@@ -64,13 +65,7 @@ function analyzeImageQuality(imageData: ImageData) {
   return { brightness, contrast, glareRatio, sharpness, issues }
 }
 
-const ISSUE_MESSAGES: Record<QualityIssue, string> = {
-  tooDark: 'Eclairez mieux — image trop sombre',
-  tooBright: 'Trop de lumiere — eloignez la source',
-  glare: 'Reflet detecte — inclinez le telephone',
-  blurry: 'Image floue — stabilisez le telephone',
-  lowContrast: 'Coins peu visibles — ameliorez l\'eclairage',
-}
+const issueMessage = (issue: QualityIssue): string => playT(`camera.issue.${issue}`)
 
 interface Props {
   /** Démarre la caméra dès le montage (arrivée depuis le scanner QR : elle était déjà ouverte). */
@@ -227,7 +222,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       }
     } catch (err) {
       console.error('Erreur acces camera:', err)
-      setError('Impossible d\'acceder a la camera. Verifiez les permissions.')
+      setError(playT('camera.error'))
     }
   }
 
@@ -532,23 +527,23 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   }, [isCameraActive, drawOverlay, getGuidePositions, getSquareCrop, opencvLoading])
 
   const getStatusText = () => {
-    if (opencvLoading) return 'Chargement de la detection...'
-    if (allStable && !qualityIssue) return 'Pret — appuyez sur Capturer'
+    if (opencvLoading) return playT('camera.status.loading')
+    if (allStable && !qualityIssue) return playT('camera.status.ready')
 
     if (qualityIssue === 'tooDark' || qualityIssue === 'tooBright' || qualityIssue === 'glare') {
-      return ISSUE_MESSAGES[qualityIssue]
+      return issueMessage(qualityIssue)
     }
 
     if (allStable && qualityIssue) {
-      return `Coins OK — ${ISSUE_MESSAGES[qualityIssue]}`
+      return `${playT('camera.status.cornersOk')} — ${issueMessage(qualityIssue)}`
     }
     if (matchedCount > 0) {
-      const suffix = qualityIssue ? ` — ${ISSUE_MESSAGES[qualityIssue]}` : ''
-      return `${matchedCount}/4 coins alignes...${suffix}`
+      const suffix = qualityIssue ? ` — ${issueMessage(qualityIssue)}` : ''
+      return `${matchedCount}/4 ${playT('camera.status.corners')}${suffix}`
     }
 
-    if (qualityIssue) return ISSUE_MESSAGES[qualityIssue]
-    return 'Alignez les coins du coloriage avec les guides'
+    if (qualityIssue) return issueMessage(qualityIssue)
+    return playT('camera.status.align')
   }
 
   const getStatusClass = () => {
@@ -580,7 +575,6 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
 
         {isCameraActive && (
           <div className={`camera-status-bar ${getStatusClass()}`}>
-            {(allStable && !qualityIssue) && <span style={{ marginRight: 4 }}>&#10003;</span>}
             {getStatusText()}
           </div>
         )}
@@ -597,13 +591,13 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
                 <circle cx="51" cy="21" r="2.5" fill="#ffffff" />
               </svg>
             </div>
-            <p className="camera-idle-text">Nous ouvrons la caméra<br />pour scanner ton coloriage.</p>
-            <p className="camera-idle-sub">Assure-toi que ton coloriage est bien à plat et entièrement visible.</p>
+            <p className="camera-idle-text text-preline">{playT('camera.idle.text')}</p>
+            <p className="camera-idle-sub">{playT('camera.idle.sub')}</p>
             <div className="camera-tip-card">
               <span className="camera-tip-icon" aria-hidden="true">💡</span>
               <div>
-                <strong>Conseil</strong>
-                <p>Bonne lumière et plan stable pour un meilleur résultat !</p>
+                <strong>{playT('camera.tip.title')}</strong>
+                <p>{playT('camera.tip.text')}</p>
               </div>
             </div>
           </div>
@@ -646,11 +640,11 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
                     <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7H7l2-3h6l2 3h2.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5Z" />
                     <circle cx="12" cy="13" r="3.5" />
                   </svg>
-                  Ouvrir la caméra
+                  {playT('camera.open')}
                 </button>
               </span>
               <button onClick={() => fileInputRef.current?.click()} className="btn-import">
-                Importer une image
+                {playT('camera.import')}
               </button>
             </div>
             <div className="camera-tips">
@@ -680,7 +674,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
               className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
               aria-label="Capturer"
             >
-              <span className="btn-capture-label">Capturer</span>
+              <span className="btn-capture-label">{playT('camera.capture')}</span>
             </button>
             {torchSupported && (
               <button
@@ -695,7 +689,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             )}
             {!torchSupported && <span className="camera-controls-spacer" aria-hidden="true" />}
             <button onClick={stopCamera} className="btn-cancel">
-              Annuler
+              {playT('camera.cancel')}
             </button>
           </div>
         )}

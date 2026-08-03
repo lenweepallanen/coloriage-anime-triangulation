@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
 import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
+import { playT } from '../utils/playI18n'
 import { hasFilmVideo } from '../db/filmVideosStore'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
@@ -33,9 +34,12 @@ interface ScanPageProps {
   /** Play : reçoit la vidéo du film capturée pendant la 1ʳᵉ lecture (injecté par
    *  PlayPage, qui compose sauvegarde locale + galerie). Active la capture. */
   onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void
+  /** Play : partage la vidéo enregistrée (bouton « Partager la vidéo » de
+   *  l'écran Fin du ScenePlayer). */
+  onShareFilm?: () => void | Promise<void>
 }
 
-export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded }: ScanPageProps = {}) {
+export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded, onShareFilm }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
   const fallback = useProject(projectProp === undefined ? projectId : null)
   const project = projectProp !== undefined ? projectProp : fallback.project
@@ -54,6 +58,15 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
   const skipImageCheck = deferredLoaded === false
 
   if ((!skipImageCheck && !project.originalImageBlob) || !hasMesh) {
+    // Côté play (enfant) : message doux sans jargon admin.
+    if (mode === 'play') {
+      return (
+        <div className="scan-page">
+          <h2>{project.name}</h2>
+          <div className="placeholder">{playT('scan.notReady')}</div>
+        </div>
+      )
+    }
     return (
       <div className="scan-page">
         <h2>{project.name} — Mode Coloriage</h2>
@@ -66,10 +79,10 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
     )
   }
 
-  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} />
+  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} onShareFilm={onShareFilm} />
 }
 
-function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void }) {
+function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void; onShareFilm?: () => void | Promise<void> }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
@@ -116,7 +129,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
   const [stage, setStage] = useState<ScanStage>('camera')
   // Squelette d'UI partagé : le shell (barre d'onglets, menu) lit l'étape du
   // scan sur <body> pour masquer son chrome pendant l'animation plein écran.
-  useEffect(() => {
+  // useLayoutEffect (avant paint) : évite 1 frame avec le chrome de l'étape
+  // précédente (tabbar/padding) au passage en animation plein écran.
+  useLayoutEffect(() => {
     if (mode !== 'play') return
     document.body.dataset.scanStage = stage
     return () => { delete document.body.dataset.scanStage }
@@ -394,7 +409,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
     <div className="scan-page">
       {mode === 'play' && stage !== 'animation' && (
         <button className="scan-back-bar" onClick={() => window.history.back()}>
-          ← Retour
+          ← {playT('scan.back')}
         </button>
       )}
       {stage !== 'animation' && (mode === 'play' || stage !== 'preview') && (
@@ -402,17 +417,17 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
           <header className="scan-header">
             <h2 className="scan-header-title">
               {stage === 'camera'
-                ? (cameraActive || autoCam ? 'Scan en cours…' : 'Prêt à scanner !')
+                ? (cameraActive || autoCam ? playT('scan.title.scanning') : playT('scan.title.ready'))
                 : stage === 'adjust'
                   ? 'Ajuste les coins'
                   : stage === 'preview'
-                    ? 'Scan réussi !'
-                    : 'Scan en cours…'}
+                    ? playT('scan.title.success')
+                    : playT('scan.title.scanning')}
             </h2>
             {(stage === 'camera' && (cameraActive || autoCam)) || stage === 'processing' ? (
-              <p className="scan-header-sub">Garde ton coloriage bien dans le cadre.</p>
+              <p className="scan-header-sub">{playT('scan.sub.keepFrame')}</p>
             ) : stage === 'preview' ? (
-              <p className="scan-header-sub">Ton coloriage est prêt à prendre vie ✨</p>
+              <p className="scan-header-sub">{playT('scan.sub.ready')}</p>
             ) : stage === 'adjust' ? (
               <p className="scan-header-sub">Ajuste les coins de ton coloriage</p>
             ) : null}
@@ -447,12 +462,12 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
           {mode === 'play' && !processor.error ? (
             <div className="scan-progress-pill">
               <span className="scan-progress-star" aria-hidden="true">⭐</span>
-              Tiens bon ! On détecte les couleurs et les formes de ton coloriage…
+              {playT('scan.progress')}
             </div>
           ) : (
             <div className="loading">
               {processor.error
-                ? `Erreur : ${processor.error}`
+                ? (mode === 'play' ? playT('scan.error') : `Erreur : ${processor.error}`)
                 : processor.processing
                   ? 'Traitement du scan...'
                   : 'Préparation...'}
@@ -460,7 +475,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
           )}
           {processor.error && (
             <button className="sketch-btn sketch-btn--go" onClick={handleRetake} style={{ marginTop: 16 }}>
-              Réessayer
+              {playT('scan.retry')}
             </button>
           )}
         </div>
@@ -619,7 +634,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
           <div className="scan-validate-name">{project.name}</div>
           <div className="scan-validate-bar">
             <h2 className="scan-validate-title">
-              {mode === 'play' ? 'Ton coloriage a bien été reconnu. Veux-tu le voir s\u2019animer ?' : 'Tu valides la photo ?'}
+              {mode === 'play' ? playT('validate.q') : 'Tu valides la photo ?'}
             </h2>
             <div className="scan-validate-actions">
               <button
@@ -627,10 +642,10 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
                 onClick={() => setStage('animation')}
                 disabled={deferredLoaded === false}
               >
-                {deferredLoaded === false ? 'Chargement…' : mode === 'play' ? 'Voir l\u2019animation' : 'Oui'}
+                {deferredLoaded === false ? playT('validate.loading') : mode === 'play' ? playT('validate.see') : 'Oui'}
               </button>
               <button className="btn-secondary btn-lg" onClick={handleRetake}>
-                {mode === 'play' ? 'Recommencer' : 'Non, je reprends'}
+                {mode === 'play' ? playT('validate.retry') : 'Non, je reprends'}
               </button>
             </div>
           </div>
@@ -650,7 +665,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
             <PauseOverlay
               onContinue={() => setPaused(false)}
               onBack={handleBack}
-              backLabel={bookId ? 'Revenir aux coloriages' : 'Quitter'}
+              backLabel={bookId ? playT('pause.backColorings') : playT('pause.quit')}
             />
           )}
         </>
@@ -676,6 +691,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
                 recordFilm={mode === 'play' && onFilmRecorded != null}
                 onFilmRecorded={onFilmRecorded}
                 confirmReplaceOnEnd={filmReplaceOnEnd}
+                onShareFilm={onShareFilm}
               />
             : <AnimationPlayer
                 project={project}
@@ -694,8 +710,8 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded }: { project: 
             <path d="M38 24c0 7.7-6.3 14-14 14" />
             <path d="m34.5 34 3.5 4 4-3.5" />
           </svg>
-          <p className="rotate-overlay-title">Tourne ton téléphone&nbsp;!</p>
-          <p className="rotate-overlay-sub">Ton coloriage s'anime en mode paysage.</p>
+          <p className="rotate-overlay-title">{playT('rotate.title')}</p>
+          <p className="rotate-overlay-sub">{playT('rotate.sub')}</p>
         </div>
       )}
     </div>

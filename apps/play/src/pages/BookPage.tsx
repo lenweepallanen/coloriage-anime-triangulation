@@ -5,6 +5,7 @@ import { getProjectsByBook, getProjectThumbnailBlob, getProjectThumbnail } from 
 import type { Book, Project } from '@shared/types/project'
 import { useI18n } from '../i18n'
 import { removeBook } from '../utils/bookDownload'
+import LoadingScreen from '../components/LoadingScreen'
 
 /** Préfixe https:// si l'URL n'a pas de schéma (ex. "amazon.com" → "https://amazon.com"). */
 function normalizeUrl(u: string): string {
@@ -22,6 +23,7 @@ export default function BookPage() {
   const [otherBooks, setOtherBooks] = useState<Book[]>([])
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [bonusImgUrl, setBonusImgUrl] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState(false)
   const [loading, setLoading] = useState(true)
   const [notAvailable, setNotAvailable] = useState(false)
 
@@ -67,12 +69,12 @@ export default function BookPage() {
     return () => { if (revokeBonus) URL.revokeObjectURL(revokeBonus) }
   }, [bookId])
 
-  if (loading) return <div className="loading">{t('loading')}</div>
+  if (loading) return <LoadingScreen />
   if (notAvailable || !book) {
     return (
       <div className="play-panel">
         <div className="paper-card">
-          <h1>{t('book.unavailable.title')}</h1>
+          <h1 className="book-title">{t('book.unavailable.title')}</h1>
           <p>{t('book.unavailable.text')}</p>
         </div>
       </div>
@@ -135,12 +137,7 @@ export default function BookPage() {
       <div className="book-remove-row">
         <button
           className="book-remove-btn"
-          onClick={() => {
-            if (window.confirm(t('book.removeConfirm'))) {
-              removeBook(book.id)
-              navigate('/')
-            }
-          }}
+          onClick={() => setConfirmRemove(true)}
         >
           {t('book.remove')}
         </button>
@@ -155,6 +152,28 @@ export default function BookPage() {
             ))}
           </div>
         </>
+      )}
+
+      {confirmRemove && (
+        <div className="scanner-confirm-backdrop" onClick={() => setConfirmRemove(false)}>
+          <div className="scanner-confirm soft-card" onClick={e => e.stopPropagation()}>
+            <p className="scanner-confirm-q">{t('book.removeConfirm')}</p>
+            <div className="scanner-confirm-actions">
+              <button
+                className="soft-btn"
+                onClick={() => {
+                  removeBook(book.id)
+                  navigate('/')
+                }}
+              >
+                {t('common.yes')}
+              </button>
+              <button className="soft-btn soft-btn--ghost" onClick={() => setConfirmRemove(false)}>
+                {t('common.no')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

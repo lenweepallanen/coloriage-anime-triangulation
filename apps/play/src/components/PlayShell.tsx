@@ -82,7 +82,7 @@ function TopMenu() {
 function TabBar() {
   const { t } = useI18n()
   const bubbleClass = (extra: string) => ({ isActive }: { isActive: boolean }) =>
-    `shell-tab ${extra} ${isActive ? 'shell-tab--active' : ''}`
+    ['shell-tab', extra, isActive ? 'shell-tab--active' : ''].filter(Boolean).join(' ')
 
   return (
     <nav className="shell-tabbar">
@@ -90,7 +90,7 @@ function TabBar() {
         <path d="M0 26 L0 16 C 55 4 120 22 188 12 C 255 4 320 20 375 9 L375 26 Z" fill="#cfc0f1" />
       </svg>
       <div className="shell-tabbar-inner">
-        <NavLink to="/" end className={bubbleClass('shell-tab--bubble')} aria-label={t('tabs.home')}>
+        <NavLink to="/" end className={bubbleClass('')} aria-label={t('tabs.home')}>
           <span className="tab-bubble tab-bubble--home">
             <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 11.5 12 4l9 7.5" />
@@ -110,7 +110,7 @@ function TabBar() {
             <span className="tab-scan-label">{t('tabs.scanner').toUpperCase()}</span>
           </span>
         </NavLink>
-        <NavLink to="/galerie" className={bubbleClass('shell-tab--bubble')} aria-label={t('tabs.gallery')}>
+        <NavLink to="/galerie" className={bubbleClass('')} aria-label={t('tabs.gallery')}>
           <span className="tab-bubble tab-bubble--gallery">
             <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="none">
               <path d="M12 3.2 14.5 8.6 20.4 9.3 16 13.3 17.2 19.1 12 16.2 6.8 19.1 8 13.3 3.6 9.3 9.5 8.6Z" />

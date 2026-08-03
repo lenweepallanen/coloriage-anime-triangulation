@@ -245,9 +245,9 @@ export default function ScannerPage() {
       </div>
 
       {status.kind === 'camera-error' ? (
-        <div className="placeholder-card soft-card" style={{ margin: '24px auto', maxWidth: 380 }}>
+        <div className="placeholder-card soft-card scanner-error-card">
           <span className="placeholder-icon" aria-hidden="true">📷</span>
-          <p style={{ whiteSpace: 'pre-line' }}>{t('scanner.camera.error')}</p>
+          <p className="text-preline">{t('scanner.camera.error')}</p>
         </div>
       ) : (
         <>

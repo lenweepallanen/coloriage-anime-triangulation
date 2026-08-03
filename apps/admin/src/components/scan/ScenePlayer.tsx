@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import * as PIXI from 'pixi.js'
 import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
@@ -22,6 +23,8 @@ import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sce
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
 import watermarkUrl from '../../assets/picopop-watermark.png'
+import picopopStarUrl from '../../assets/picopop-logo.png'
+import { playT } from '../../utils/playI18n'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -62,6 +65,9 @@ interface Props {
   /** true = une vidéo existe déjà pour ce coloriage → l'écran Fin demande
    *  « Remplacer la vidéo précédente ? » avant d'appeler onFilmRecorded. */
   confirmReplaceOnEnd?: boolean
+  /** Partage de la vidéo enregistrée (bouton « Partager la vidéo » de l'écran
+   *  Fin). Fourni par l'app play uniquement — absent = bouton masqué. */
+  onShareFilm?: () => void | Promise<void>
 }
 
 function smoothstep(t: number): number {
@@ -69,7 +75,7 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd }: Props) {
+export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd, onShareFilm }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -183,39 +189,41 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // d'orientation (résout les soucis iOS). Détecté via la classe body.play-app.
   const portrait = !modal && typeof document !== 'undefined' && document.body.classList.contains('play-app')
 
-  // Carte scène (mode play/scan, hors modal) : en play, canvas CARRÉ qui recadre le
-  // fond 16:9 et suit le perso (offset horizontal). En admin/scan paysage, on garde
-  // le format du fond avec une marge gauche pour la colonne de boutons.
-  const [cardSize, setCardSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
-  // Play horizontal : canvas carré à gauche + HUD à droite (le user choisit en
-  // tournant son téléphone ; pas de lock d'orientation).
-  const [landscape, setLandscape] = useState(false)
-  // Paysage FORCÉ par rotation CSS 90° (WebView restée portrait — lock natif KO).
-  const [forcedRotate, setForcedRotate] = useState(false)
   const bgAspectW = scene.background?.width
   const bgAspectH = scene.background?.height
   // Format du CADRE de scène : horizontal 16:9 max (app native jouée en paysage
   // plein écran). Si le décor est moins large que 16:9, on cale sur son ratio
   // (tout le décor visible) — même formule que le cadre caméra de l'éditeur film.
   const frameAspect = Math.min(bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9, 16 / 9)
+  // Taille du canvas plein écran paysage (dimensions utiles inversées si la
+  // WebView est restée portrait — le player sera alors tourné de 90° via CSS).
+  const computePlayCardSize = () => {
+    const vw = window.innerWidth, vh = window.innerHeight
+    const isLs = vw > vh
+    const availW = isLs ? vw : vh
+    const availH = isLs ? vh : vw
+    let w = availW
+    let h = w / frameAspect
+    if (h > availH) { h = availH; w = h * frameAspect }
+    return { w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) }
+  }
+  // Carte scène (mode play/scan, hors modal) : en play, PLEIN ÉCRAN PAYSAGE dès le
+  // PREMIER rendu (taille calculée de façon synchrone — aucun flash de l'ancien
+  // layout portrait). En admin/scan paysage, format du fond + marge boutons.
+  const [cardSize, setCardSize] = useState<{ w: number; h: number }>(() =>
+    portrait && !modal && typeof window !== 'undefined' ? computePlayCardSize() : { w: 0, h: 0 })
+  // Paysage FORCÉ par rotation CSS 90° (WebView restée portrait — lock natif KO).
+  // Initialisé de façon synchrone pour la même raison (pas de frame en portrait).
+  const [forcedRotate, setForcedRotate] = useState(() =>
+    portrait && !modal && typeof window !== 'undefined' && window.innerWidth <= window.innerHeight)
   useEffect(() => {
     if (modal) return
     function compute() {
       const vw = window.innerWidth, vh = window.innerHeight
       if (portrait) {
-        // HORIZONTAL OBLIGATOIRE (play) : toujours le layout paysage plein écran.
-        // Si la WebView est restée portrait (lock natif indisponible/échoué), le
-        // player est rendu TOURNÉ de 90° via CSS (fallback historique, fiable
-        // partout) — dimensions utiles inversées.
-        const isLs = vw > vh
-        setLandscape(true)
-        setForcedRotate(!isLs)
-        const availW = isLs ? vw : vh
-        const availH = isLs ? vh : vw
-        let w = availW
-        let h = w / frameAspect
-        if (h > availH) { h = availH; w = h * frameAspect }
-        setCardSize({ w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) })
+        // HORIZONTAL OBLIGATOIRE (play) : recalcule taille + rotation au resize.
+        setForcedRotate(!(vw > vh))
+        setCardSize(computePlayCardSize())
         return
       }
       const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
@@ -2169,15 +2177,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     )
   }
 
-  // --- HUD film : barre de progression indicative (pas de scrubbing) ---
-  // Version compacte (layout portrait, en flux sous les contrôles).
-  const filmBar = filmEnabled && (
-    <div className="scene-player-film-bar" aria-hidden="true">
-      <div className="scene-player-film-track">
-        <div className="scene-player-film-fill" style={{ width: `${filmProgressPct}%` }} />
-      </div>
-    </div>
-  )
 
   // HUD film plein écran (design app) : retour rond blanc (flèche violette) en haut
   // à gauche + rangée basse ⏸/▶ blanc + barre violette avec curseur rond.
@@ -2227,16 +2226,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     setPlaying(true)
     setFilmRunId(n => n + 1)
   }
-  const filmEndOverlay = filmEnabled && filmEnded && (
-    <div className="scene-player-film-end">
+  // Fin du film (play) : l'écran Bravo est un écran PORTRAIT — on reverrouille
+  // l'orientation en portrait à la fin, et en paysage quand on relance (Revoir).
+  useEffect(() => {
+    if (!portrait || !filmEnabled || modal) return
+    const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
+    try { void so?.lock?.(filmEnded ? 'portrait' : 'landscape')?.catch(() => {}) } catch { /* */ }
+  }, [filmEnded, portrait, filmEnabled, modal])
+
+  const filmEndContent = filmEnabled && filmEnded && (
+    <div className={`scene-player-film-end${portrait ? ' scene-player-film-end--portal' : ''}`}>
       <div className="scene-player-film-end-card">
-        <div className="scene-player-film-end-title">Fin</div>
-        {recordingSaved && (
-          <div className="scene-player-film-end-note">🎬 Vidéo enregistrée !</div>
-        )}
+        <img className="scene-player-film-end-star" src={picopopStarUrl} alt="" aria-hidden="true" />
+        <div className="scene-player-film-end-title">{playT('film.bravo')}</div>
+        <div className="scene-player-film-end-note">{playT('film.subtitle')}</div>
         {confirmReplaceOnEnd && pendingRecording && !recordingSaved && !recordingDiscarded && (
           <div className="scene-player-film-end-replace">
-            <div className="scene-player-film-end-note">Remplacer la vidéo précédente ?</div>
+            <div className="scene-player-film-end-note">{playT('film.replaceQ')}</div>
             <div className="scene-player-film-end-actions">
               <button
                 className="btn-primary"
@@ -2245,7 +2251,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
                   setRecordingSaved(true)
                 }}
               >
-                Oui, remplacer
+                {playT('film.replaceYes')}
               </button>
               <button
                 className="btn-secondary"
@@ -2254,18 +2260,46 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
                   setRecordingDiscarded(true)
                 }}
               >
-                Non, garder l'ancienne
+                {playT('film.replaceNo')}
               </button>
             </div>
           </div>
         )}
-        <div className="scene-player-film-end-actions">
-          <button className="btn-primary" onClick={handleFilmReplay}>↺ Revoir</button>
-          <button className="btn-secondary" onClick={() => (onExit ?? onClose)()}>Retour au menu</button>
+        <div className="scene-player-film-end-actions scene-player-film-end-actions--stack">
+          <button className="film-end-btn film-end-btn--replay" onClick={handleFilmReplay}>
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M20 11a8 8 0 1 0 .4 4" />
+              <path d="M20 4v7h-7" />
+            </svg>
+            {playT('film.replay')}
+          </button>
+          {onShareFilm && (
+            <button className="film-end-btn film-end-btn--share" onClick={() => { void onShareFilm() }}>
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="6" cy="12" r="2.6" />
+                <circle cx="17.5" cy="5.5" r="2.6" />
+                <circle cx="17.5" cy="18.5" r="2.6" />
+                <path d="m8.3 10.8 6.9-4M8.3 13.2l6.9 4" />
+              </svg>
+              {playT('film.share')}
+            </button>
+          )}
+          <button className="film-end-btn film-end-btn--back" onClick={() => (onExit ?? onClose)()}>
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M19 12H5" />
+              <path d="m11 6-6 6 6 6" />
+            </svg>
+            {playT('film.back')}
+          </button>
         </div>
       </div>
     </div>
   )
+  // En play, la carte Fin est rendue en PORTAIL hors du player (qui peut être
+  // tourné de 90° en CSS) → elle s'affiche droite, en portrait plein écran.
+  const filmEndOverlay = portrait && filmEndContent
+    ? createPortal(filmEndContent, document.body)
+    : filmEndContent
 
   // Boutons HUD partagés entre layouts portrait et paysage :
   // 1 bouton ACTION (étoile dorée) + 3 boutons Discours numérotés 1/2/3.
@@ -2307,20 +2341,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // Éléments HUD réutilisés en portrait ET en paysage (canvas à gauche / HUD à droite).
     const exitBtn = onExit && (
       <button className="scene-player-exit-btn" onClick={onExit} title="Quitter" aria-label="Quitter">
-        {landscape ? (
-          // Paysage : icône PLEINE (fill) — les traits fins ne se composent pas au-dessus
-          // du <canvas> WebGL sur iOS Safari, les formes pleines si. Cadre de porte + flèche.
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M11 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2.2H6.2V5.2H11V3z" />
-            <path d="M20.5 11.2l-4.2-4.2-1.55 1.55 2.05 2.05H9v2.2h7.8l-2.05 2.05 1.55 1.55 4.2-4.2a1.1 1.1 0 0 0 0-1.55z" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
-            <path d="M10 17l-5-5 5-5" />
-            <path d="M15 12H5" />
-          </svg>
-        )}
+        {/* Icône PLEINE (fill) — les traits fins ne se composent pas au-dessus
+            du <canvas> WebGL sur iOS Safari, les formes pleines si. Porte + flèche. */}
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M11 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2.2H6.2V5.2H11V3z" />
+          <path d="M20.5 11.2l-4.2-4.2-1.55 1.55 2.05 2.05H9v2.2h7.8l-2.05 2.05 1.55 1.55 4.2-4.2a1.1 1.1 0 0 0 0-1.55z" />
+        </svg>
       </button>
     )
 
@@ -2375,59 +2401,27 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       />
     )
 
-    // Paysage : PLEIN ÉCRAN — canvas 16:9 bord à bord centré, HUD superposé.
+    // PLEIN ÉCRAN PAYSAGE — canvas 16:9 bord à bord centré, HUD superposé.
+    // (Seul layout play : l'ancien layout portrait « bandeau » a été supprimé.)
     // Mode film : design app épuré (retour rond blanc + ⏸ blanc + barre violette).
     // Mode interactif : porte + colonne de boutons à droite.
-    if (landscape) {
-      return (
-        <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
-          {canvasEl}
-          {filmEnabled ? (
-            <>
-              {filmExitBtn}
-              {filmControls}
-            </>
-          ) : (
-            <>
-              <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
-              <div className="scene-player-hud">
-                {actionsRow}
-                {controlsRow}
-              </div>
-            </>
-          )}
-          {helpBubble}
-          {filmEndOverlay}
-        </div>
-      )
-    }
-
     return (
-      <div className="animation-player scene-player scene-player--framed scene-player--portrait" ref={playerRef}>
-        {/* Bouton sortie (porte rouge) : seul, tout en haut à gauche */}
-        <div className="scene-player-exit-row">{exitBtn}</div>
-
-        {/* Espace flexible : pousse le canvas vers le tiers haut */}
-        <div className="scene-player-spacer scene-player-spacer--top" />
-
-        {/* Titre juste au-dessus du canvas */}
-        <div className="scene-player-title">{project.name}</div>
-
-        {/* Canvas carré (≈ tiers haut) */}
+      <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
         {canvasEl}
-
-        {/* Boutons d'action 1/2/3 (+ parole) sous le canvas — masqués en mode film */}
-        {!filmEnabled && actionsRow}
-
-        {/* Contrôles ⚙ / lecture / aide sous les boutons d'action */}
-        {controlsRow}
-
-        {/* Barre de progression film (mode film uniquement) */}
-        {filmBar}
-
-        {/* Espace flexible bas : équilibre (canvas reste vers le tiers haut) */}
-        <div className="scene-player-spacer scene-player-spacer--bottom" />
-
+        {filmEnabled ? (
+          <>
+            {filmExitBtn}
+            {filmControls}
+          </>
+        ) : (
+          <>
+            <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
+            <div className="scene-player-hud">
+              {actionsRow}
+              {controlsRow}
+            </div>
+          </>
+        )}
         {helpBubble}
         {filmEndOverlay}
       </div>

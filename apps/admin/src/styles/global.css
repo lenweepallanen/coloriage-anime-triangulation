@@ -3510,27 +3510,6 @@ code {
 
 /* ─── Mode Film (ScenePlayer) ─── */
 
-/* Barre de progression indicative (pas de scrubbing).
-   Layout admin/modal : absolue, juste au-dessus du bouton ⏸ (lui aussi en bas centré). */
-.scene-player-film-bar {
-  position: absolute;
-  bottom: calc(max(12px, 3vmin) + clamp(36px, 7vmin, 48px) + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(60%, 420px);
-  z-index: 109;
-  pointer-events: none;
-}
-
-/* Dans les layouts portrait/paysage (flux HUD), la barre est en flux normal */
-.scene-player--framed .scene-player-hud .scene-player-film-bar,
-.scene-player--portrait .scene-player-film-bar {
-  position: static;
-  transform: none;
-  width: min(80%, 420px);
-  margin: 8px auto 0;
-}
-
 .scene-player-film-track {
   height: 6px;
   border-radius: 3px;
@@ -3574,6 +3553,37 @@ code {
   font-weight: 700;
   color: #fff;
 }
+
+/* Étoile PicoPop qui déborde au-dessus de la carte Fin */
+.scene-player-film-end-star {
+  width: 76px;
+  height: auto;
+  margin: -70px 0 -6px;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
+}
+
+/* Boutons empilés pleine largeur de l'écran Fin */
+.scene-player-film-end-actions--stack {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: var(--space-3);
+}
+.film-end-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 24px;
+  font-weight: 600;
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+.film-end-btn--replay { background: #8b7cf0; color: #ffffff; }
+.film-end-btn--share { background: #57c8a3; color: #ffffff; }
+.film-end-btn--back { background: #ffffff; color: #8b7cf0; }
 
 .scene-player-film-end-actions {
   display: flex;

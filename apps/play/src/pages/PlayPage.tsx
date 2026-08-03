@@ -1,13 +1,18 @@
-import { useCallback, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useCallback, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useProjectForPlay } from '@shared/hooks/useProjectForPlay'
 import ScanPage from '@shared/pages/ScanPage'
-import { hasFilmVideo, saveFilmVideo } from '@shared/db/filmVideosStore'
+import { getFilmVideo, hasFilmVideo, saveFilmVideo } from '@shared/db/filmVideosStore'
 import type { FilmRecordingResult } from '@shared/utils/filmRecorder'
 import { generateVideoPoster } from '@shared/utils/videoPoster'
 import ScannedProjectPage from './ScannedProjectPage'
+import { shareFilmVideo } from '../utils/shareFilmVideo'
+import SharePreparingOverlay from '../components/SharePreparingOverlay'
+import LoadingScreen from '../components/LoadingScreen'
+import { useI18n } from '../i18n'
 
 export default function PlayPage() {
+  const { t } = useI18n()
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams] = useSearchParams()
   const { project, loading, deferredLoaded } = useProjectForPlay(projectId!)
@@ -18,23 +23,43 @@ export default function PlayPage() {
   const [forceScan, setForceScan] = useState(false)
   const handleNewScan = useCallback(() => setForceScan(true), [])
 
+  // Partage depuis l'écran Fin du film : popup de préparation + feuille native.
+  const [sharing, setSharing] = useState(false)
+  const [shareError, setShareError] = useState(false)
+
   // Capture du film (1ʳᵉ lecture après scan) : sauvegarde LOCALE uniquement
   // (1 vidéo par coloriage, écrasement) + vignette extraite à 1/3 de la durée.
   // Rien n'est écrit dans les Photos de l'iPhone — la galerie est celle de l'app.
+  const lastSaveRef = useRef<Promise<unknown> | null>(null)
   const handleFilmRecorded = useCallback(async (r: FilmRecordingResult) => {
     if (!projectId) return
-    const posterBlob = await generateVideoPoster(r.blob).catch(() => null)
-    await saveFilmVideo(projectId, { ...r, posterBlob, projectName: project?.name })
+    const save = (async () => {
+      const posterBlob = await generateVideoPoster(r.blob).catch(() => null)
+      await saveFilmVideo(projectId, { ...r, posterBlob, projectName: project?.name })
+    })()
+    lastSaveRef.current = save
+    await save
   }, [projectId, project?.name])
 
-  if (loading) return <div className="loading">Chargement…</div>
+  const handleShareFilm = useCallback(async () => {
+    if (!projectId || sharing) return
+    setSharing(true)
+    try {
+      // La sauvegarde (poster inclus) peut encore être en cours juste après la fin
+      // du film : on l'attend avant de lire l'enregistrement.
+      await lastSaveRef.current?.catch(() => {})
+      const rec = await getFilmVideo(projectId)
+      const ok = rec ? await shareFilmVideo(rec) : false
+      if (!ok) setShareError(true)
+    } finally {
+      setSharing(false)
+    }
+  }, [projectId, sharing])
 
-  if (!project) {
-    return <UnavailableMessage reason="not-found" />
-  }
+  if (loading) return <LoadingScreen />
 
-  if (project.published !== true) {
-    return <UnavailableMessage reason="not-published" />
+  if (!project || project.published !== true) {
+    return <UnavailableMessage />
   }
 
   const autocam = searchParams.get('autocam') === '1'
@@ -45,28 +70,43 @@ export default function PlayPage() {
   }
 
   return (
-    <ScanPage
-      project={project}
-      loading={false}
-      deferredLoaded={deferredLoaded}
-      mode="play"
-      onFilmRecorded={handleFilmRecorded}
-    />
+    <>
+      <ScanPage
+        project={project}
+        loading={false}
+        deferredLoaded={deferredLoaded}
+        mode="play"
+        onFilmRecorded={handleFilmRecorded}
+        onShareFilm={handleShareFilm}
+      />
+      {sharing && <SharePreparingOverlay />}
+      {shareError && (
+        <div className="scanner-confirm-backdrop" onClick={() => setShareError(false)}>
+          <div className="scanner-confirm soft-card" onClick={e => e.stopPropagation()}>
+            <p className="scanner-confirm-q">{t('scanned.shareError')}</p>
+            <div className="scanner-confirm-actions">
+              <button className="soft-btn" onClick={() => setShareError(false)}>{t('common.ok')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
-function UnavailableMessage({ reason }: { reason: 'not-found' | 'not-published' }) {
+function UnavailableMessage() {
+  const { t } = useI18n()
+  const navigate = useNavigate()
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 24, textAlign: 'center', fontFamily: 'system-ui, sans-serif' }}>
-      <h1>Coloriage indisponible</h1>
-      <p style={{ maxWidth: 480, color: '#555' }}>
-        {reason === 'not-found'
-          ? "Ce coloriage n'existe pas ou a été retiré."
-          : "Ce coloriage n'est pas encore publié."}
-      </p>
-      <p style={{ marginTop: 16 }}>
-        <a href="/">Retour à l'accueil</a>
-      </p>
+    <div className="placeholder-page">
+      <div className="placeholder-card soft-card">
+        <span className="placeholder-icon" aria-hidden="true">🎨</span>
+        <h1>{t('unavailable.title')}</h1>
+        <p className="text-preline">{t('unavailable.text')}</p>
+        <button className="book-home-btn" onClick={() => navigate('/')}>
+          ← {t('unavailable.home')}
+        </button>
+      </div>
     </div>
   )
 }
