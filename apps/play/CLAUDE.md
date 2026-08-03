@@ -107,6 +107,13 @@ Bouton retour : `.book-home-btn` (pilule blanche « ← Retour », texte violet)
 
 ## 8. Décorations & motifs signature
 
+- **Mascotte** : l'étoile PicoPop est REPRÉSENTÉE UNIQUEMENT par le composant
+  `Mascot` (`@shared/components/mascot/Mascot`) — plus jamais de ⭐/emoji/PNG.
+  Props : `size`, `mood` (normal/happy/excited/sleepy/oops), `gaze`
+  (pointer/ring/scan/none), `halo`. **UNE seule mascotte visible par écran** ;
+  pendant un chargement, uniquement celle du loader (l'écran derrière ne rend
+  pas la sienne). Exceptions non-mascotte : icône étoile de la tab galerie,
+  filigrane vidéo, badge ⭐ carte bonus.
 - ✦ étincelles rotées ±12° autour des titres (rose/ciel/soleil).
 - Effet sticker sur texte hero : `text-shadow` contour blanc 8 directions + ombre douce
   (cf. `.wordmark` — dont les lettres alternent rose/mint/violet/soleil/rouge).

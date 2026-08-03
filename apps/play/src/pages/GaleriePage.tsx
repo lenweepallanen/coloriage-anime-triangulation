@@ -9,7 +9,7 @@ import { shareFilmVideo } from '../utils/shareFilmVideo'
 import { useI18n } from '../i18n'
 import SharePreparingOverlay from '../components/SharePreparingOverlay'
 import LoadingScreen from '../components/LoadingScreen'
-import logoUrl from '../assets/picopop-logo.png'
+import Mascot from '@shared/components/mascot/Mascot'
 
 interface GalleryEntry {
   video: FilmVideoRecord
@@ -75,10 +75,14 @@ export default function GaleriePage() {
     [entries, bookFilter],
   )
 
+  // Règle charte : une seule mascotte par écran → pendant le chargement,
+  // uniquement celle du loader (pas de header).
+  if (loading) return <LoadingScreen />
+
   return (
     <div className="book-page galerie-page">
       <div className="galerie-logo-row">
-        <img className="home-logo" src={logoUrl} alt="PicoPop" />
+        <Mascot size={120} gaze="pointer" />
       </div>
       <h1 className="section-title">{t('gallery.title')}</h1>
       <p className="galerie-sub">{t('gallery.sub1')}<br />{t('gallery.sub2')}</p>
@@ -124,10 +128,9 @@ export default function GaleriePage() {
         </div>
       )}
 
-      {loading ? (
-        <LoadingScreen />
-      ) : visible.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="placeholder-card soft-card galerie-empty">
+          <Mascot size={80} mood="sleepy" />
           <p>
             {entries.length === 0 ? t('gallery.empty') : t('gallery.emptyBook')}
           </p>

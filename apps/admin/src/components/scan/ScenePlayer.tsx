@@ -23,7 +23,7 @@ import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sce
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
 import watermarkUrl from '../../assets/picopop-watermark.png'
-import picopopStarUrl from '../../assets/picopop-logo.png'
+import Mascot from '../mascot/Mascot'
 import { playT } from '../../utils/playI18n'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
@@ -2237,7 +2237,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const filmEndContent = filmEnabled && filmEnded && (
     <div className={`scene-player-film-end${portrait ? ' scene-player-film-end--portal' : ''}`}>
       <div className="scene-player-film-end-card">
-        <img className="scene-player-film-end-star" src={picopopStarUrl} alt="" aria-hidden="true" />
+        <Mascot className="scene-player-film-end-star" size={110} mood="happy" halo />
         <div className="scene-player-film-end-title">{playT('film.bravo')}</div>
         <div className="scene-player-film-end-note">{playT('film.subtitle')}</div>
         {confirmReplaceOnEnd && pendingRecording && !recordingSaved && !recordingDiscarded && (

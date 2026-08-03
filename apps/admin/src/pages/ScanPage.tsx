@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, laz
 import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
 import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
 import { playT } from '../utils/playI18n'
+import Mascot from '../components/mascot/Mascot'
 import { hasFilmVideo } from '../db/filmVideosStore'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
@@ -461,7 +462,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
           )}
           {mode === 'play' && !processor.error ? (
             <div className="scan-progress-pill">
-              <span className="scan-progress-star" aria-hidden="true">⭐</span>
+              <Mascot size={34} gaze="scan" />
               {playT('scan.progress')}
             </div>
           ) : (
@@ -633,6 +634,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
           </Suspense>
           <div className="scan-validate-name">{project.name}</div>
           <div className="scan-validate-bar">
+            {mode === 'play' && (
+              <div className="scan-validate-mascot"><Mascot size={64} mood="happy" gaze="pointer" /></div>
+            )}
             <h2 className="scan-validate-title">
               {mode === 'play' ? playT('validate.q') : 'Tu valides la photo ?'}
             </h2>

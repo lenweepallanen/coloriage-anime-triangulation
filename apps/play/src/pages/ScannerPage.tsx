@@ -5,6 +5,7 @@ import { getBook, getBookCover } from '@shared/db/booksStore'
 import type { Book } from '@shared/types/project'
 import { isBookDownloaded, startBackgroundBookDownload } from '../utils/bookDownload'
 import { useI18n } from '../i18n'
+import Mascot from '@shared/components/mascot/Mascot'
 
 /**
  * Onglet SCANNER : lecture des QR codes imprimés dans les livres papier.
@@ -190,6 +191,7 @@ export default function ScannerPage() {
   if (mode === 'choice') {
     return (
       <div className="scanner-page">
+        <div className="page-mascot-row"><Mascot size={84} gaze="pointer" /></div>
         <h1 className="section-title">{t('scanner.choice.title')}</h1>
         <div className="scanner-choices">
           <button className="scanner-choice soft-card" onClick={() => setMode('book')}>
@@ -246,7 +248,7 @@ export default function ScannerPage() {
 
       {status.kind === 'camera-error' ? (
         <div className="placeholder-card soft-card scanner-error-card">
-          <span className="placeholder-icon" aria-hidden="true">📷</span>
+          <Mascot size={80} mood="oops" />
           <p className="text-preline">{t('scanner.camera.error')}</p>
         </div>
       ) : (

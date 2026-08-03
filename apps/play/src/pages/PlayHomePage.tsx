@@ -5,6 +5,7 @@ import { getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import type { Book } from '@shared/types/project'
 import { isBookDownloaded, subscribeBookDownloads, getBookDownloadProgress } from '../utils/bookDownload'
 import { useI18n } from '../i18n'
+import Mascot from '@shared/components/mascot/Mascot'
 import logoUrl from '../assets/picopop-logo.png'
 
 const WORDMARK = ['P', 'i', 'c', 'o', 'P', 'o', 'p']
@@ -190,7 +191,7 @@ function HomeHeader() {
   const { t } = useI18n()
   return (
     <header className="home-header">
-      <img className="home-logo" src={logoUrl} alt="" aria-hidden="true" />
+      <div className="home-mascot"><Mascot size={120} gaze="pointer" /></div>
       <Wordmark />
       <p className="home-tagline">
         <span className="tagline-line1">{t('tagline.line1')}</span>

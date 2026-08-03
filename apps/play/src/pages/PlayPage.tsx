@@ -9,6 +9,7 @@ import ScannedProjectPage from './ScannedProjectPage'
 import { shareFilmVideo } from '../utils/shareFilmVideo'
 import SharePreparingOverlay from '../components/SharePreparingOverlay'
 import LoadingScreen from '../components/LoadingScreen'
+import Mascot from '@shared/components/mascot/Mascot'
 import { useI18n } from '../i18n'
 
 export default function PlayPage() {
@@ -100,7 +101,7 @@ function UnavailableMessage() {
   return (
     <div className="placeholder-page">
       <div className="placeholder-card soft-card">
-        <span className="placeholder-icon" aria-hidden="true">🎨</span>
+        <Mascot size={88} mood="oops" />
         <h1>{t('unavailable.title')}</h1>
         <p className="text-preline">{t('unavailable.text')}</p>
         <button className="book-home-btn" onClick={() => navigate('/')}>

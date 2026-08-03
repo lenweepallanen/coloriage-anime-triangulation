@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
-import picopopLogoUrl from '../../assets/picopop-logo.png'
 import { playT } from '../../utils/playI18n'
+import Mascot from '../mascot/Mascot'
 import { loadOpenCVWorker, detectFrame, setDetectCallback } from '../../utils/perspectiveCorrection'
 import type { Point2D } from '../../types/project'
 
@@ -582,7 +582,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         {!isCameraActive && !warmingUp && document.body.classList.contains('play-app') && (
           <div className="camera-idle-hero">
             <div className="camera-idle-illustration" aria-hidden="true">
-              <img src={picopopLogoUrl} alt="" />
+              <Mascot size={120} gaze="pointer" />
               <svg className="camera-idle-cam" viewBox="0 0 64 50" fill="none">
                 <rect x="3" y="13" width="58" height="32" rx="9" fill="#8b7cf0" />
                 <path d="M22 13 l4 -7 h12 l4 7" fill="#8b7cf0" />

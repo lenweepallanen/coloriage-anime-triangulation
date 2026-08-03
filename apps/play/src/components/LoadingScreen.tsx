@@ -1,4 +1,4 @@
-import logoUrl from '../assets/picopop-logo.png'
+import Mascot from '@shared/components/mascot/Mascot'
 import { useI18n } from '../i18n'
 
 /**
@@ -12,7 +12,7 @@ export default function LoadingScreen() {
     <div className="loading-screen" role="status" aria-busy="true">
       <div className="share-loading-spinner" aria-hidden="true">
         <span className="share-loading-ring" />
-        <img className="share-loading-star" src={logoUrl} alt="" />
+        <Mascot size={76} gaze="ring" />
       </div>
       <p className="loading-screen-text">{t('loading.hint')}</p>
     </div>

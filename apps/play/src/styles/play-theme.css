@@ -498,9 +498,10 @@ body.play-app .home-header {
   padding: calc(20px + env(safe-area-inset-top)) 0 10px;
   margin-bottom: 14px;
 }
-body.play-app .home-logo {
-  width: clamp(96px, 28vw, 150px);
-  height: auto;
+body.play-app .home-mascot {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 2px;
 }
 
 /* Titres de section : texte violet centré + petites étincelles décoratives */
@@ -1530,9 +1531,9 @@ body.play-app .camera-idle-illustration {
   width: clamp(104px, 28vw, 150px);
   margin-bottom: 2px;
 }
-body.play-app .camera-idle-illustration img {
-  width: 100%;
-  height: auto;
+body.play-app .camera-idle-illustration {
+  display: flex;
+  justify-content: center;
 }
 body.play-app .camera-idle-cam {
   position: absolute;
@@ -2171,14 +2172,7 @@ body.play-app .scan-progress-pill {
   position: relative;
   z-index: 5;
 }
-body.play-app .scan-progress-star {
-  font-size: 1.4rem;
-  animation: star-wiggle 1.4s ease-in-out infinite;
-}
-@keyframes star-wiggle {
-  0%, 100% { transform: rotate(-10deg) scale(1); }
-  50% { transform: rotate(10deg) scale(1.15); }
-}
+
 
 /* ---------------------------------------------------------------------
    Scène / Animation — HUD crayonné + doodle DERRIÈRE le perso
@@ -2515,9 +2509,10 @@ body.play-app .scan-validate--landscape .scan-validate-bar {
 body.play-app .galerie-page {
   padding: calc(20px + env(safe-area-inset-top)) 16px 120px;
 }
-/* Logo PicoPop centré en tête de page (même rythme que l'accueil) */
+/* Mascotte centrée en tête de page (même rythme que l'accueil) */
 body.play-app .galerie-logo-row {
-  text-align: center;
+  display: flex;
+  justify-content: center;
   margin-bottom: 4px;
 }
 body.play-app .galerie-sub {
@@ -2724,9 +2719,6 @@ body.play-app .scanned-project-bravo {
 body.play-app .scanned-project-bravo p {
   margin: 4px 0 0;
 }
-body.play-app .scanned-project-bravo-star {
-  font-size: 2rem;
-}
 body.play-app .scanned-project-rescan {
   display: flex;
   flex-direction: column;
@@ -2861,7 +2853,7 @@ body.play-app .scene-player-film-knob {
    le padding haut réserve la place du débord de l'étoile. */
 body.play-app .scene-player-film-end {
   background: rgba(46, 42, 94, 0.55);
-  padding: calc(84px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+  padding: calc(100px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
   box-sizing: border-box;
   overflow-y: auto;
   -webkit-user-select: none;
@@ -2922,9 +2914,7 @@ body.play-app .scene-player-film-end-replace {
 /* Étoile PicoPop débordant au-dessus de la carte (comme la maquette) —
    l'espace est réservé par le padding-top de l'overlay. */
 body.play-app .scene-player-film-end-star {
-  width: clamp(70px, 20vw, 96px);
-  margin: -74px 0 -8px;
-  filter: drop-shadow(0 4px 10px rgba(90, 80, 140, 0.25));
+  margin: -84px 0 -6px;
 }
 /* Boutons empilés : pilules Fredoka par fonction (violet / mint / blanc) */
 body.play-app .film-end-btn {
@@ -2976,6 +2966,23 @@ body.play-app .scanner-error-card {
   max-width: 380px;
 }
 
+/* Mascotte de l'écran de validation scan (au-dessus de la question) */
+body.play-app .scan-validate-mascot {
+  display: flex;
+  justify-content: center;
+  margin-bottom: -4px;
+}
+
+/* Ligne mascotte centrée (choix scanner, menu livre…) — une par écran */
+body.play-app .page-mascot-row {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 0;
+}
+body.play-app .page-mascot-row--book {
+  margin: 4px 0 8px;
+}
+
 /* ---------------------------------------------------------------------
    Popup « Partage en cours de création » : étoile PicoPop + anneau tournant
    ------------------------------------------------------------------- */
@@ -2988,8 +2995,8 @@ body.play-app .share-loading-card {
 }
 body.play-app .share-loading-spinner {
   position: relative;
-  width: 108px;
-  height: 108px;
+  width: 132px;
+  height: 132px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3001,10 +3008,6 @@ body.play-app .share-loading-ring {
   border: 5px solid #e9e2fb;
   border-top-color: var(--accent-violet);
   animation: boot-spin 0.9s linear infinite;
-}
-body.play-app .share-loading-star {
-  width: 62px;
-  height: auto;
 }
 body.play-app .share-loading-title {
   font-family: 'Fredoka', sans-serif;

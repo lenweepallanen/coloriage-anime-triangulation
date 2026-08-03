@@ -6,6 +6,7 @@ import { getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/project
 import { shareFilmVideo } from '../utils/shareFilmVideo'
 import { useI18n } from '../i18n'
 import SharePreparingOverlay from '../components/SharePreparingOverlay'
+import Mascot from '@shared/components/mascot/Mascot'
 import LoadingScreen from '../components/LoadingScreen'
 
 interface Props {
@@ -111,7 +112,7 @@ export default function ScannedProjectPage({ project, onNewScan }: Props) {
       </div>
 
       <div className="paper-card scanned-project-bravo">
-        <span className="scanned-project-bravo-star" aria-hidden="true">⭐</span>
+        <Mascot size={60} mood="happy" />
         <div>
           <strong>{t('scanned.bravo')}</strong>
           <p>{t('scanned.bravoText')}</p>

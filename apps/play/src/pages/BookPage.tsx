@@ -6,6 +6,7 @@ import type { Book, Project } from '@shared/types/project'
 import { useI18n } from '../i18n'
 import { removeBook } from '../utils/bookDownload'
 import LoadingScreen from '../components/LoadingScreen'
+import Mascot from '@shared/components/mascot/Mascot'
 
 /** Préfixe https:// si l'URL n'a pas de schéma (ex. "amazon.com" → "https://amazon.com"). */
 function normalizeUrl(u: string): string {
@@ -90,6 +91,7 @@ export default function BookPage() {
         <img className="book-cover-hero" src={coverUrl} alt="" aria-hidden="true" />
       )}
       <h1 className="book-title">{book.name}</h1>
+      <div className="page-mascot-row page-mascot-row--book"><Mascot size={64} gaze="pointer" /></div>
       <p className="book-subtitle">
         {projects.length} {projects.length > 1 ? t('book.countPlural') : t('book.countSingle')}
       </p>
