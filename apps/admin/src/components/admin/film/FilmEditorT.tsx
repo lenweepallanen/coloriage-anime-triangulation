@@ -471,6 +471,45 @@ export default function FilmEditorT({ project, onSave }: {
     })
   }, [project.scene])
 
+  // --- RESET : repartir de zéro (utile sur une copie dupliquée) ---
+  const handleReset = useCallback(() => {
+    if (!film) return
+    const ok = window.confirm(
+      'Repartir de ZÉRO ?\n\n'
+      + 'Tous les plans, clips, points, sons et la musique de ce film seront supprimés '
+      + '(les réglages du dessin — sens du regard, point d\'ancrage — sont conservés).\n\n'
+      + 'Le nettoyage ne devient définitif qu\'à la SAUVEGARDE.',
+    )
+    if (!ok) return
+    // Programme la suppression Storage des décors + sons actuels (appliquée à la sauvegarde).
+    for (const pl of film.plans) {
+      if (pl.backdrop) pendingSoundHintsRef.current.push({ deleteFilmPlanBackdrop: pl.id })
+      if (pl.overlay) pendingSoundHintsRef.current.push({ deleteFilmPlanOverlay: pl.id })
+    }
+    for (const snd of film.sounds) pendingSoundHintsRef.current.push({ deleteFilmSoundId: snd.id })
+    if (film.music) pendingSoundHintsRef.current.push({ deleteFilmSoundId: film.music.id })
+    setFilm({
+      version: 4,
+      plans: [{
+        id: crypto.randomUUID(),
+        backdrop: null,
+        overlay: null,
+        cameraX: 0,
+        timeline: { durationMs: 5000, waypoints: [], motion: [], anim: [], soundTracks: [[]] },
+      }],
+      character: { ...film.character },
+      sounds: [],
+      ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
+      moveSpeedPxPerSec: film.moveSpeedPxPerSec,
+      ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
+    })
+    setActivePlanId(null)
+    setSelection(null)
+    setSelectedWaypointId(null)
+    setPlayheadMs(0)
+    setEditorPlaying(false)
+  }, [film])
+
   // --- Sauvegarde : diff décors + sons en attente ; 1ʳᵉ sauvegarde = upload complet ---
   const handleSave = useCallback(async () => {
     if (!film) return
@@ -602,6 +641,12 @@ export default function FilmEditorT({ project, onSave }: {
           <button className="btn-primary btn-sm" onClick={handleSave} disabled={saving}>
             {saving ? 'Sauvegarde...' : 'Sauvegarder'}
           </button>
+          <button
+            className="btn-ghost btn-sm btn-danger"
+            onClick={handleReset}
+            disabled={saving}
+            title="Vider le film (plans, clips, sons, musique) pour repartir de zéro — définitif à la sauvegarde"
+          >Reset</button>
         </div>
       </div>
 
