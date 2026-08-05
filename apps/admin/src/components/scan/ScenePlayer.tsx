@@ -20,6 +20,7 @@ import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverla
 import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import { FilmDirector, resolveFilmPlans } from '../../utils/filmDirector'
 import { FilmTimelineSampler } from '../../utils/filmTimelineSampler'
+import { FilmAudioScheduler } from '../../utils/filmAudioScheduler'
 import { startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
@@ -1020,7 +1021,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     // --- Son d'ambiance (boucle continue) + son d'entrée (1 fois au début) ---
     let sceneAmbientAudio: HTMLAudioElement | null = null
-    if (scene.ambientSound?.blob) {
+    if (scene.ambientSound?.blob && !timelineMode) {
       const url = URL.createObjectURL(scene.ambientSound.blob)
       const audio = new Audio(url)
       audio.loop = true
@@ -1131,9 +1132,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // (transition de plan, fin de film) et switcher l'animation du corps.
     let filmRuntime: {
       sampler: FilmTimelineSampler
+      scheduler: FilmAudioScheduler
       tMs: number
       started: boolean
       ended: boolean
+      audioReady: boolean
+      decorHold: boolean
       lastAnimKey: string | null
       launchedTransitionTo: number
       playableIdxByPlan: Map<number, number>
@@ -1148,7 +1152,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const k = filmPlans.findIndex(fp => fp.id === pl.id)
         if (k >= 0) playableIdxByPlan.set(idx, k)
       })
-      filmRuntime = { sampler, tMs: 0, started: false, ended: false, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
+      // Sons + musique planifiés en WebAudio sur l'horloge du ctx partagé —
+      // qui devient l'horloge MAÎTRESSE du film (zéro dérive audio/visuel).
+      const scheduler = new FilmAudioScheduler(filmT, sampler.planStartMs, sampler.totalMs)
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
+      scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
     }
 
     let filmDirector: FilmDirector | null = null
@@ -1743,13 +1751,26 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const rt = filmRuntime
       if (!rt || !filmT) return
       if (!rt.started) {
+        // Attend le décodage des sons : le film démarre avec son audio calé.
+        if (!rt.audioReady) return
         rt.started = true
         maybeStartFilmRecording()
+        void rt.scheduler.unlock()
+        rt.scheduler.start(rt.tMs)
       }
       // Horloge gelée pendant une transition de plan / tant que le décor swappé
-      // n'est pas prêt (vidéos en cours de chargement).
+      // n'est pas prêt : on SUSPEND le ctx audio (horloge maîtresse + sons gelés
+      // d'un coup, même mécanisme que la vraie pause).
       const decorPending = planTransitionRunner != null || !currentLayers.ready()
-      if (!decorPending) rt.tMs += deltaSeconds * 1000
+      if (decorPending && !rt.decorHold) {
+        rt.decorHold = true
+        void suspendMouthAudioContext()
+      } else if (!decorPending && rt.decorHold) {
+        rt.decorHold = false
+        if (playingRef.current) void resumeMouthAudioContext()
+      }
+      if (rt.scheduler.isStarted) rt.tMs = rt.scheduler.currentTimeMs()
+      else if (!decorPending) rt.tMs += deltaSeconds * 1000
       const sample = rt.sampler.evaluate(rt.tMs)
 
       // Transition de plan : lancée UNE fois à l'entrée de la fenêtre.
@@ -1800,6 +1821,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       if (!rt.ended && rt.tMs >= rt.sampler.totalMs) {
         rt.ended = true
+        rt.scheduler.stop()
         handleFilmEnd()
       }
     }
@@ -2150,7 +2172,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             bodyForMouth = pts
           }
         }
-        const rms = mouthAudioRef.current ? mouthAudioRef.current.getRMS() : 0
+        const rms = filmRuntime ? filmRuntime.scheduler.getSpokenRMS() : (mouthAudioRef.current ? mouthAudioRef.current.getRMS() : 0)
         // Construit la liste des (animation, frame) qui pilotent le rendu courant.
         const mpb = currentMultiPlaybackRef
         const activeFrames: Array<{ animId: string; frame: number }> = []
@@ -2331,6 +2353,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const audio of animAudioElements.values()) { audio.pause() }
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
       if (sceneAmbientAudio) { sceneAmbientAudio.pause(); try { URL.revokeObjectURL(sceneAmbientAudio.src) } catch { /* */ } }
+      filmRuntime?.scheduler.dispose()
       document.getElementById('film-debug-error')?.remove()
       if (mouthOverlay) mouthOverlay.destroy()
       app.destroy(true, { children: true, texture: true })

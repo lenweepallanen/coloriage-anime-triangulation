@@ -639,7 +639,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
 
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button
-              onClick={() => setStage('animation')}
+              onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); setStage('animation') }}
               disabled={lamaStatus === 'generating-mask' || lamaStatus === 'warmup' || lamaStatus === 'inpainting' || deferredLoaded === false}
             >
               {deferredLoaded === false
@@ -681,7 +681,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
             <div className="scan-validate-actions">
               <button
                 className="btn-primary btn-lg"
-                onClick={() => setStage('animation')}
+                onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); setStage('animation') }}
                 disabled={deferredLoaded === false}
               >
                 {deferredLoaded === false ? playT('validate.loading') : mode === 'play' ? playT('validate.see') : 'Oui'}
