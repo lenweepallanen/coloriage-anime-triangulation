@@ -1,4 +1,4 @@
-import type { Film, FilmPlan, Scene, SceneFilm, SceneFilmPlan } from '../types/project'
+import type { Film, FilmPlan, FilmT, Scene, SceneFilm, SceneFilmPlan } from '../types/project'
 
 /**
  * Adapter moteur : convertit le FILM (modèle projet, indépendant) vers la forme
@@ -57,6 +57,30 @@ export function buildFilmScene(film: Film): Scene {
     ...(film.music != null && {
       ambientSound: { id: film.music.id, name: film.music.name, blob: film.music.blob, volume: film.music.volume },
     }),
+    entry: 'fixed',
+    speakSounds: [],
+    speakSoundBlobs: [],
+  }
+}
+
+/**
+ * Pseudo-scène de lecture d'un FILM TIMELINE (v4) : layout perso + décor du 1er
+ * plan. PAS de scene.film — le player timeline lit les décors depuis filmT.
+ * La musique est jouée par le FilmAudioScheduler (pas d'ambientSound).
+ */
+export function buildFilmTScene(film: FilmT): Scene {
+  const firstWithBackdrop = film.plans.find(pl => pl.backdrop != null)
+  return {
+    id: 'film',
+    name: 'Film',
+    background: firstWithBackdrop?.backdrop ?? null,
+    foreground: firstWithBackdrop?.overlay ?? null,
+    characterScale: film.character.scale,
+    characterY: 0,
+    restPoint: { id: 'film-rest', backgroundX: 0 },
+    characterFacing: film.character.facing,
+    characterOriginU: film.character.originU,
+    characterOriginV: film.character.originV,
     entry: 'fixed',
     speakSounds: [],
     speakSoundBlobs: [],

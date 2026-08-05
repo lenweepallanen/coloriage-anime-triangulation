@@ -189,9 +189,26 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // le sampler pilote la lecture ; sinon fallback legacy FilmDirector.
   const filmT = project.filmT ?? null
   // Plans jouables du film (fallback décor scène appliqué) — même filtre que le director.
-  const filmPlans = film ? resolveFilmPlans(film, scene) : []
-  const filmEnabled = !!(film?.enabled && filmPlans.length > 0)
-  const timelineMode = filmEnabled && filmT != null && filmTIsPlayable(filmT)
+  // Mode TIMELINE indépendant de scene.film : les décors viennent de filmT
+  // (projets filmT natifs sans Film v3). Legacy : resolveFilmPlans sur scene.film.
+  const timelineMode = filmT != null && filmTIsPlayable(filmT)
+  const filmPlans = timelineMode && filmT
+    ? filmT.plans
+        .filter(pl => pl.backdrop != null
+          && (pl.timeline.motion.length + pl.timeline.anim.length > 0 || pl.timeline.durationMs > 0))
+        .map((pl): import('../../types/project').SceneFilmPlan => ({
+          id: pl.id,
+          ...(pl.name != null && { name: pl.name }),
+          background: pl.backdrop,
+          foreground: pl.overlay,
+          cameraX: pl.cameraX,
+          entrySide: 'left',
+          points: [],
+          ending: { kind: 'stay' },
+          ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+        }))
+    : (film ? resolveFilmPlans(film, scene) : [])
+  const filmEnabled = timelineMode || !!(film?.enabled && filmPlans.length > 0)
   // [Film DEBUG] — diagnostic flip/décor, à retirer une fois le moonwalk résolu.
   if (filmEnabled) {
     // eslint-disable-next-line no-console

@@ -20,9 +20,9 @@ const ScenePlayer = lazy(importScenePlayer)
 import { generateLimbMask, generateLimbMaskFromContours } from '../utils/limbMaskGenerator'
 import { requestLamaInpainting } from '../utils/lamaInpainting'
 import { renderIsolatedLimbDebug } from '../utils/hiddenFaceTexture'
-import { filmIsPlayable } from '../types/project'
+import { filmIsPlayable, filmTIsPlayable } from '../types/project'
 import type { Point2D, Project } from '../types/project'
-import { buildFilmScene } from '../utils/filmScene'
+import { buildFilmScene, buildFilmTScene } from '../utils/filmScene'
 
 interface ScanPageProps {
   /** Si fourni, court-circuite useProject (utilisé par play pour passer un projet light). */
@@ -264,6 +264,11 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   useEffect(() => {
     let cancelled = false
     const film = project.film
+    // filmT natif (doc v4) : aucune conversion nécessaire.
+    if (project.filmT != null) {
+      setFilmTResult({ filmT: project.filmT })
+      return
+    }
     if (!film || !filmIsPlayable(film)) {
       setFilmTResult({ filmT: null })
       return
@@ -284,14 +289,20 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   // pseudo-scène construite depuis le FILM (décor du plan 1, perso/musique du
   // film) — la scène interactive (dépréciée) n'est utilisée qu'à défaut.
   // Mémoïsé : une nouvelle identité de scène remonterait l'effect PIXI du player.
-  const playerProject = useMemo(
-    () => (project.film && filmIsPlayable(project.film)
-      ? { ...project, scene: buildFilmScene(project.film), filmT: filmTResult?.filmT ?? null }
-      : project),
-    [project, filmTResult],
-  )
+  const playerProject = useMemo(() => {
+    // filmT natif (v4) → pseudo-scène timeline pure (pas de scene.film).
+    if (project.filmT && filmTIsPlayable(project.filmT)) {
+      return { ...project, scene: buildFilmTScene(project.filmT) }
+    }
+    if (project.film && filmIsPlayable(project.film)) {
+      return { ...project, scene: buildFilmScene(project.film), filmT: filmTResult?.filmT ?? null }
+    }
+    return project
+  }, [project, filmTResult])
   // En mode film, ne monter le player qu'une fois la conversion timeline résolue.
-  const filmPlayerReady = !(project.film && filmIsPlayable(project.film)) || filmTResult != null
+  const filmPlayerReady = project.filmT != null
+    || !(project.film && filmIsPlayable(project.film))
+    || filmTResult != null
 
   // Trigger LaMa inpainting after rectified canvas is ready
   useEffect(() => {
