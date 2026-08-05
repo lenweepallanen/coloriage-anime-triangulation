@@ -257,16 +257,41 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
     [mode, stage, project.id],
   )
 
+  // Conversion v3 → TIMELINE (async : lecture des durées audio). Le player attend
+  // le résultat pour ne monter qu'UNE fois (null = en cours ; { filmT: null } =
+  // échec → lecture legacy FilmDirector).
+  const [filmTResult, setFilmTResult] = useState<{ filmT: import('../types/project').FilmT | null } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const film = project.film
+    if (!film || !filmIsPlayable(film)) {
+      setFilmTResult({ filmT: null })
+      return
+    }
+    setFilmTResult(null)
+    import('../utils/filmV3Convert')
+      .then(({ convertFilmV3ToTimeline }) => convertFilmV3ToTimeline(film, project.animations))
+      .then(filmT => { if (!cancelled) setFilmTResult({ filmT }) })
+      .catch(err => {
+        // eslint-disable-next-line no-console
+        console.error('[Film] conversion timeline échouée — lecture legacy', err)
+        if (!cancelled) setFilmTResult({ filmT: null })
+      })
+    return () => { cancelled = true }
+  }, [project])
+
   // FILM prioritaire : si le projet a un film jouable, le player reçoit la
   // pseudo-scène construite depuis le FILM (décor du plan 1, perso/musique du
   // film) — la scène interactive (dépréciée) n'est utilisée qu'à défaut.
   // Mémoïsé : une nouvelle identité de scène remonterait l'effect PIXI du player.
   const playerProject = useMemo(
     () => (project.film && filmIsPlayable(project.film)
-      ? { ...project, scene: buildFilmScene(project.film) }
+      ? { ...project, scene: buildFilmScene(project.film), filmT: filmTResult?.filmT ?? null }
       : project),
-    [project],
+    [project, filmTResult],
   )
+  // En mode film, ne monter le player qu'une fois la conversion timeline résolue.
+  const filmPlayerReady = !(project.film && filmIsPlayable(project.film)) || filmTResult != null
 
   // Trigger LaMa inpainting after rectified canvas is ready
   useEffect(() => {
@@ -695,7 +720,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
         // que le blob n'est pas hydraté. Le blob est garanti chargé au clic « Oui »
         // (bouton gated sur deferredLoaded).
         <Suspense fallback={<div className="loading">Chargement…</div>}>
-          {playerProject.scene && !!playerProject.scene.background && playerProject.scene.restPoint != null
+          {playerProject.scene && !!playerProject.scene.background && playerProject.scene.restPoint != null && filmPlayerReady
             ? <ScenePlayer
                 forcePaused={showRotateOverlay || undefined}
                 project={playerProject}
@@ -710,7 +735,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
                 confirmReplaceOnEnd={filmReplaceOnEnd}
                 onShareFilm={onShareFilm}
               />
-            : <AnimationPlayer
+            : !filmPlayerReady
+              ? <div className="loading">Chargement…</div>
+              : <AnimationPlayer
                 project={project}
                 scanCanvas={processor.rectifiedCanvas}
                 lamaCanvas={lamaCanvas}

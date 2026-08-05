@@ -100,6 +100,39 @@ export default function FilmEditor({ project, onSave }: {
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [film, project.animations])
 
+  // [Film DEBUG] J1 timeline — parité v3 ↔ timeline (retiré au jalon 7 avec les autres logs).
+  useEffect(() => {
+    if (!import.meta.env.DEV || !film || !film.plans.some(pl => pl.points.length > 0)) return
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      try {
+        const [{ convertFilmV3ToTimeline }, { FilmTimelineSampler }] = await Promise.all([
+          import('../../../utils/filmV3Convert'),
+          import('../../../utils/filmTimelineSampler'),
+        ])
+        const filmT = await convertFilmV3ToTimeline(film, project.animations)
+        if (cancelled) return
+        const sampler = new FilmTimelineSampler(filmT, project.animations)
+        const est = await estimateFilmDurations(filmToSceneFilm(film), buildFilmScene(film), project.animations)
+        if (cancelled) return
+        // eslint-disable-next-line no-console
+        console.log(`[Film DEBUG] timeline J1: sampler=${Math.round(sampler.totalMs)}ms estimateV3=${Math.round(est.totalMs)}ms (écart attendu = 290ms × nb actions)`)
+        const pl = filmT.plans.find(p => p.timeline.motion.length > 0)
+        if (pl) {
+          // eslint-disable-next-line no-console
+          console.log(`[Film DEBUG] plan "${pl.name ?? pl.id.slice(0, 8)}" durée=${pl.timeline.durationMs}ms`
+            + `\n motion: ${JSON.stringify(pl.timeline.motion.map(c => ({ t: c.startMs, d: c.durationMs, k: c.kind })))}`
+            + `\n anim:   ${JSON.stringify(pl.timeline.anim.map(c => ({ t: c.startMs, d: c.durationMs, id: c.animationId.slice(0, 8), f: c.fillMode })))}`
+            + `\n sons:   ${JSON.stringify(pl.timeline.soundTracks.map(tr => tr.map(c => ({ t: c.startMs, d: c.durationMs, loop: c.loop === true }))))}`)
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[Film DEBUG] conversion timeline J1 échouée', err)
+      }
+    }, 600)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [film, project.animations])
+
   // --- Patchers ---
   const updateFilm = useCallback((partial: Partial<Film>) => {
     setFilm(prev => prev ? { ...prev, ...partial } : prev)
@@ -314,6 +347,15 @@ export default function FilmEditor({ project, onSave }: {
   // --- Preview (image originale, sans scan) — film complet ou UN SEUL plan ---
   const openPreview = useCallback(async (previewFilm: Film) => {
     if (!project.originalImageBlob) return
+    // Conversion v3 → TIMELINE : le player joue via le sampler (échec → legacy).
+    let filmT: import('../../../types/project').FilmT | null = null
+    try {
+      const { convertFilmV3ToTimeline } = await import('../../../utils/filmV3Convert')
+      filmT = await convertFilmV3ToTimeline(previewFilm, project.animations)
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[Film] conversion timeline preview échouée — lecture legacy', err)
+    }
     const img = new Image()
     const url = URL.createObjectURL(project.originalImageBlob)
     img.src = url
@@ -325,7 +367,7 @@ export default function FilmEditor({ project, onSave }: {
         const ctx = canvas.getContext('2d')!
         ctx.drawImage(img, 0, 0)
         URL.revokeObjectURL(url)
-        previewProjectRef.current = { ...project, film: previewFilm, scene: buildFilmScene(previewFilm) }
+        previewProjectRef.current = { ...project, film: previewFilm, filmT, scene: buildFilmScene(previewFilm) }
         setPreviewCanvas(canvas)
         setPreviewing(true)
         resolve()

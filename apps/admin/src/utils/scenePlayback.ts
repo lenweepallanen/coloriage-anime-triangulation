@@ -130,6 +130,11 @@ export class ScenePlayback {
     animSpeedMul?: number
   } | null = null
 
+  // --- Mode film TIMELINE : pose directe pilotée par le sampler ---
+  private _filmPoseActive: boolean = false
+  private _filmPoseAnimId: string | null = null
+  private _filmPoseAnimSpeedMul: number = 1
+
   private onRestPointArrival?: (restPoint: SceneRestPoint) => void
   private onWalkStateChange?: (walking: boolean) => void
   private characterBaseWidthBg: number = 0
@@ -294,6 +299,23 @@ export class ScenePlayback {
       if (wasInteracting) this.onWalkStateChange?.(true)
     }
     return true
+  }
+
+  /**
+   * MODE FILM TIMELINE : pose directe du perso, pilotée par le sampler pur
+   * (`FilmTimelineSampler.evaluate(t)`). Remplace startFilmTravel/updateFilmTravel :
+   * la position est une fonction du temps, plus un état accumulé.
+   */
+  setFilmPose(pose: { x: number; y: number; scaleMul: number; flip: 1 | -1; animId?: string | null; animSpeedMul?: number }): void {
+    this._filmPoseActive = true
+    this._filmTravel = null
+    this._currentX = pose.x
+    this._currentY = pose.y
+    this._filmScale = pose.scaleMul
+    this._walkFlipX = pose.flip
+    this._lastFlipX = pose.flip
+    this._filmPoseAnimId = pose.animId ?? null
+    this._filmPoseAnimSpeedMul = pose.animSpeedMul ?? 1
   }
 
   /** X hors-champ tel que le perso (à l'échelle donnée) soit tout juste hors du cadre fixe. */
@@ -688,6 +710,7 @@ export class ScenePlayback {
 
   /** Animation jouée pendant la phase d'entrée ou de marche. */
   get currentSegmentAnimationId(): string | undefined {
+    if (this._filmPoseActive) return this._filmPoseAnimId ?? undefined
     if (this._state === 'entering') {
       return this.scene.entryAnimationId ?? this.scene.restPoint?.restAnimationId
     }
@@ -700,6 +723,7 @@ export class ScenePlayback {
 
   /** Multiplicateur de vitesse de LECTURE de l'animation du trajet film en cours (1 hors film). */
   get currentSegmentAnimSpeedMul(): number {
+    if (this._filmPoseActive) return this._filmPoseAnimSpeedMul
     if (this._filmMode && this._state === 'walking') return this._filmTravel?.animSpeedMul ?? 1
     return 1
   }

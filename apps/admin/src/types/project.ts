@@ -1088,6 +1088,132 @@ export function filmIsPlayable(film: Film | null | undefined): boolean {
   return !!film && film.plans.some(pl => pl.backdrop != null && pl.points.length > 0);
 }
 
+/** Alias V3 (modèle « séquence de points »). Le modèle cible est `FilmT` (timeline) ;
+ *  Film/FilmPlan ne servent plus qu'à la lecture legacy et au convertisseur. */
+export type FilmV3 = Film;
+export type FilmPlanV3 = FilmPlan;
+
+// ---------------------------------------------------------------------------
+// FILM TIMELINE (v4) — modèle cible : chaque plan porte SA timeline de clips.
+// Le OÙ reste spatial (waypoints sur le décor) ; le QUAND devient la donnée
+// maîtresse : MotionClip (déplacement), AnimClip (animation du corps),
+// SoundClip (sons superposables sur N pistes). Moteur = sampler pur state=f(t).
+// ---------------------------------------------------------------------------
+
+/** Waypoint spatial d'un plan (ex-FilmPoint réduit au spatial). */
+export interface FilmWaypoint {
+  id: string;
+  /** Position de l'origine du perso, en coords backdrop. */
+  x: number;
+  y: number;
+  /** Échelle du perso à ce waypoint (× character.scale). */
+  scale: number;
+  /** Regard à l'idle SUR ce waypoint. Absent = tangente de fin du dernier trajet. */
+  facing?: 'left' | 'right';
+}
+
+/** Extrémité d'un MotionClip. */
+export type FilmMotionRef =
+  | { kind: 'waypoint'; id: string }
+  | { kind: 'offscreen'; side: 'left' | 'right' }
+  | { kind: 'free'; x: number; y: number; scale?: number };
+
+/** Clip de déplacement. La DURÉE est la donnée maîtresse (vitesse dérivée =
+ *  longueur du chemin ÷ durée). `from` absent = enchaîne depuis la position
+ *  courante (fin du clip précédent). */
+export interface FilmMotionClip {
+  id: string;
+  startMs: number;
+  durationMs: number;
+  /** 'appear' : téléportation (durée 0, pas de `from`). 'exit' : sortie hors-champ. */
+  kind: 'appear' | 'travel' | 'exit';
+  from?: FilmMotionRef;
+  to: FilmMotionRef;
+  /** Points de contrôle Bézier (1 = quadratique, 2 = cubique), coords backdrop. */
+  controlPoints?: Point2D[];
+  easing?: FilmTravelEasing;
+  /** Toggle ÉDITEUR « vitesse verrouillée » : les mutations géométriques recalculent
+   *  durationMs = longueur ÷ cette vitesse. Jamais lu par le moteur. */
+  lockedSpeedPxPerSec?: number;
+}
+
+/** Clip d'animation du corps (1 seule piste — un seul corps). */
+export interface FilmAnimClip {
+  id: string;
+  startMs: number;
+  durationMs: number;
+  animationId: string;
+  /** Multiplicateur de vitesse de lecture (défaut 1). */
+  speedMul?: number;
+  /** 'loop' : rejoue en boucle sur toute la durée ; 'once-hold' : 1 passe puis figé. */
+  fillMode: 'loop' | 'once-hold';
+}
+
+/** Clip son — N pistes, superposition libre. */
+export interface FilmSoundClip {
+  id: string;
+  /** DÉRIVÉ si `anchor` est présent (recalculé par resolveSoundAnchors). */
+  startMs: number;
+  durationMs: number;
+  /** Réf vers la bibliothèque FilmT.sounds (chemins Storage film/sounds/{id}). */
+  soundId: string;
+  volume?: number;
+  rate?: number;
+  loop?: boolean;
+  /** Pilote la bouche (lip-sync RMS) pendant la lecture. */
+  isSpoken?: boolean;
+  fadeInMs?: number;
+  fadeOutMs?: number;
+  /** Ancrage ⚓ : startMs = bord du clip cible + offsetMs. Cible = motion|anim
+   *  UNIQUEMENT (pas de son→son : zéro cycle par construction). */
+  anchor?: { clipId: string; edge: 'start' | 'end'; offsetMs: number };
+}
+
+/** Timeline d'un plan : waypoints spatiaux + pistes de clips. */
+export interface FilmPlanTimeline {
+  /** Durée du plan (bord droit de la timeline). */
+  durationMs: number;
+  waypoints: FilmWaypoint[];
+  /** 1 piste, clips triés par startMs, SANS chevauchement. */
+  motion: FilmMotionClip[];
+  /** 1 piste, clips triés par startMs, SANS chevauchement. */
+  anim: FilmAnimClip[];
+  /** N pistes sons, superposition libre. */
+  soundTracks: FilmSoundClip[][];
+}
+
+/** PLAN d'un film timeline : décor + cadrage + timeline. */
+export interface FilmTimelinePlan {
+  id: string;
+  name?: string;
+  backdrop: FilmBackdrop | null;
+  overlay: FilmOverlay | null;
+  cameraX: number;
+  transitionToNext?: FilmPlanTransition;
+  timeline: FilmPlanTimeline;
+}
+
+/** FILM TIMELINE (v4) — entité de niveau projet. */
+export interface FilmT {
+  version: 4;
+  plans: FilmTimelinePlan[];
+  character: FilmCharacter;
+  /** Bibliothèque de sons du film (référencés par FilmSoundClip.soundId). */
+  sounds: FilmSound[];
+  /** Musique de fond globale, bouclée sur toute la durée du film. */
+  music?: FilmSound;
+  /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
+  moveAnimationId?: string;
+  moveSpeedPxPerSec: number;
+  idleSpeedMul?: number;
+}
+
+/** true si le film timeline a de quoi être joué. */
+export function filmTIsPlayable(film: FilmT | null | undefined): boolean {
+  return !!film && film.plans.some(pl =>
+    pl.backdrop != null && (pl.timeline.motion.length + pl.timeline.anim.length > 0));
+}
+
 export interface Scene {
   id: string;
   name: string;
@@ -1224,8 +1350,12 @@ export interface Project {
   animations: Animation[];
   bodyZones: BodyZone[];
   markers: MarkerCorners | null;
-  /** FILM du coloriage (niveau projet, prioritaire sur la scène). null = pas de film. */
+  /** FILM du coloriage (niveau projet, prioritaire sur la scène). null = pas de film.
+   *  Modèle v3 « séquence de points » — legacy dès que `filmT` existe. */
   film: Film | null;
+  /** FILM TIMELINE (v4) — modèle cible. Hydraté depuis doc.filmT, ou converti
+   *  depuis `film` (v3) à la lecture. Prioritaire sur `film` partout. */
+  filmT?: FilmT | null;
   /** Flag léger « a un film jouable » renseigné par les chargements de LISTE
    *  (getProjectsByBook) sans désérialiser le film. Les chargements complets
    *  remplissent `film` directement. */

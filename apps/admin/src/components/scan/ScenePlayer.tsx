@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import * as PIXI from 'pixi.js'
-import { animationHasFrames, getIdleAnimation, getGeometryOwner, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound } from '../../types/project'
+import { animationHasFrames, getIdleAnimation, getGeometryOwner, filmTIsPlayable, type Project, type Animation, type Point2D, type MeshData, type WalkLimbSeparation, type ProjectTriangulation, type SceneRestPoint, type SceneAction, type SceneActionStep, type SceneSound } from '../../types/project'
 import { computeUVs } from '../../utils/textureExtractor'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { LoopPlayback } from '../../utils/loopPlayback'
@@ -19,6 +19,7 @@ import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../..
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
 import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import { FilmDirector, resolveFilmPlans } from '../../utils/filmDirector'
+import { FilmTimelineSampler } from '../../utils/filmTimelineSampler'
 import { startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
@@ -183,9 +184,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
   const scene = project.scene!
   const film = scene.film
+  // Mode TIMELINE : le projet fournit un filmT (converti v3→timeline ou natif) →
+  // le sampler pilote la lecture ; sinon fallback legacy FilmDirector.
+  const filmT = project.filmT ?? null
   // Plans jouables du film (fallback décor scène appliqué) — même filtre que le director.
   const filmPlans = film ? resolveFilmPlans(film, scene) : []
   const filmEnabled = !!(film?.enabled && filmPlans.length > 0)
+  const timelineMode = filmEnabled && filmT != null && filmTIsPlayable(filmT)
   // [Film DEBUG] — diagnostic flip/décor, à retirer une fois le moonwalk résolu.
   if (filmEnabled) {
     // eslint-disable-next-line no-console
@@ -1100,8 +1105,54 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     let lastFilmPct = -1
     // Sons de trajet en cours (sous-ensemble de animSoundAudiosRef → gelés par la pause film).
     let travelAudios: HTMLAudioElement[] = []
+    // Fin de film (partagée director legacy / runtime timeline) : écran Bravo +
+    // finalisation de la capture vidéo.
+    function handleFilmEnd() {
+      if (filmEndedRef.current) return
+      filmEndedRef.current = true
+      setFilmEnded(true)
+      if (filmRecording) {
+        const rec = filmRecording
+        filmRecording = null
+        rec.stop().then(r => {
+          if (!r.blob || r.blob.size === 0) return
+          setPendingRecording(r)
+          if (!confirmReplaceOnEnd) {
+            onFilmRecordedRef.current?.(r)
+            setRecordingSaved(true)
+          }
+        }).catch(() => {})
+      }
+    }
+
+    // --- Mode TIMELINE : sampler pur + couche impérative fine ---
+    // Le sampler donne l'état complet à t ; ici on ne fait que : avancer l'horloge,
+    // poser le perso (setFilmPose), déclencher les side-effects aux franchissements
+    // (transition de plan, fin de film) et switcher l'animation du corps.
+    let filmRuntime: {
+      sampler: FilmTimelineSampler
+      tMs: number
+      started: boolean
+      ended: boolean
+      lastAnimKey: string | null
+      launchedTransitionTo: number
+      playableIdxByPlan: Map<number, number>
+    } | null = null
+    if (timelineMode && filmT) {
+      // charW_bg(scale)/bgH est CONSTANT entre plans (= refW·baseCharScale/viewH) →
+      // le sampler reproduit exactement filmOffscreenX quel que soit le décor.
+      const metrics = { aspect: (refW * baseCharScale) / Math.max(1, viewH), originU, baseScale: 1 }
+      const sampler = new FilmTimelineSampler(filmT, project.animations, { charMetrics: metrics })
+      const playableIdxByPlan = new Map<number, number>()
+      filmT.plans.forEach((pl, idx) => {
+        const k = filmPlans.findIndex(fp => fp.id === pl.id)
+        if (k >= 0) playableIdxByPlan.set(idx, k)
+      })
+      filmRuntime = { sampler, tMs: 0, started: false, ended: false, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
+    }
+
     let filmDirector: FilmDirector | null = null
-    if (filmEnabled && film) {
+    if (filmEnabled && film && !timelineMode) {
       filmDirector = new FilmDirector(film, {
         startTravel: (target, opts) => scenePlayback.startFilmTravel(target, opts),
         playTravelSound: (sound) => {
@@ -1151,25 +1202,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         },
         isPlanSwitchDone: () => planTransitionRunner == null && currentLayers.ready(),
         setFilmFade: (a) => { filmFadeAlpha = a },
-        onEnd: () => {
-          if (filmEndedRef.current) return
-          filmEndedRef.current = true
-          setFilmEnded(true)
-          // Finalise la capture vidéo (1ʳᵉ lecture). 1er scan : sauvegarde directe ;
-          // rescan (confirmReplaceOnEnd) : mise en attente, l'écran Fin demande.
-          if (filmRecording) {
-            const rec = filmRecording
-            filmRecording = null
-            rec.stop().then(r => {
-              if (!r.blob || r.blob.size === 0) return
-              setPendingRecording(r)
-              if (!confirmReplaceOnEnd) {
-                onFilmRecordedRef.current?.(r)
-                setRecordingSaved(true)
-              }
-            }).catch(() => {})
-          }
-        },
+        // Finalise la capture vidéo (1ʳᵉ lecture). 1er scan : sauvegarde directe ;
+        // rescan (confirmReplaceOnEnd) : mise en attente, l'écran Fin demande.
+        onEnd: handleFilmEnd,
       })
       estimateFilmDurations(film, scene, project.animations)
         .then(d => filmDirector?.setEstimatedDurations(d.segments))
@@ -1703,6 +1738,72 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
       if (filmEnabled) app.stage.alpha = filmFadeAlpha
     }
+    /** Tick du mode TIMELINE : horloge → sampler → pose + side-effects aux bornes. */
+    function tickFilmTimeline(deltaSeconds: number) {
+      const rt = filmRuntime
+      if (!rt || !filmT) return
+      if (!rt.started) {
+        rt.started = true
+        maybeStartFilmRecording()
+      }
+      // Horloge gelée pendant une transition de plan / tant que le décor swappé
+      // n'est pas prêt (vidéos en cours de chargement).
+      const decorPending = planTransitionRunner != null || !currentLayers.ready()
+      if (!decorPending) rt.tMs += deltaSeconds * 1000
+      const sample = rt.sampler.evaluate(rt.tMs)
+
+      // Transition de plan : lancée UNE fois à l'entrée de la fenêtre.
+      if (sample.transition && rt.launchedTransitionTo !== sample.transition.toPlanIndex) {
+        rt.launchedTransitionTo = sample.transition.toPlanIndex
+        const playableIdx = rt.playableIdxByPlan.get(sample.transition.toPlanIndex)
+        const fromPlan = filmT.plans[sample.planIndex]
+        if (playableIdx != null) {
+          planTransitionRunner = startPlanTransition(
+            app, planTransitionOverlay,
+            fromPlan?.transitionToNext ?? { kind: 'cut' },
+            () => activatePlan(playableIdx),
+          )
+        }
+      }
+
+      // Pose du perso — le sampler est la source de vérité (position/échelle/flip).
+      scenePlayback.setFilmPose({
+        x: sample.x, y: sample.y, scaleMul: sample.scaleMul, flip: sample.flip,
+        animId: sample.animationId, animSpeedMul: sample.animSpeedMul,
+      })
+      filmFadeAlpha = sample.fadeAlpha
+
+      // Changement d'animation du corps → crossfade + calage de phase du clip.
+      const animKey = sample.animationId
+      if (animKey !== rt.lastAnimKey) {
+        rt.lastAnimKey = animKey
+        beginCrossfade(animKey != null && sample.phase === 'travel' ? 120 : 400, false)
+        if (animKey != null) {
+          setupMovementAnimation(animKey)
+        } else {
+          setupInteractionAnimation(scene.restPoint?.restAnimationId, collectRestPointAnimIds(scene.restPoint ?? null))
+        }
+        const seekTo = Math.max(0, Math.floor(sample.animFrame))
+        if (seekTo > 0) {
+          if (activeBodyPlayback && 'seekFrame' in activeBodyPlayback) (activeBodyPlayback as LoopPlayback).seekFrame(seekTo)
+          if (activeZonePlaybacks) {
+            for (const zp of activeZonePlaybacks) {
+              if ('seekFrame' in zp.playback) (zp.playback as LoopPlayback).seekFrame(seekTo)
+            }
+          }
+        }
+      }
+
+      // Barre de progression EXACTE (t / durée totale).
+      const pct = Math.min(100, Math.round((rt.tMs / Math.max(1, rt.sampler.totalMs)) * 200) / 2)
+      if (pct !== lastFilmPct) { lastFilmPct = pct; setFilmProgressPct(pct) }
+
+      if (!rt.ended && rt.tMs >= rt.sampler.totalMs) {
+        rt.ended = true
+        handleFilmEnd()
+      }
+    }
+
     let lastTickerErrorLog = 0
     app.ticker.add((delta) => {
       try {
@@ -1768,7 +1869,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         if (planTransitionRunner) {
           if (planTransitionRunner.update(deltaSeconds * 1000)) planTransitionRunner = null
         }
-        if (filmDirector) {
+        if (filmRuntime) {
+          tickFilmTimeline(deltaSeconds)
+        } else if (filmDirector) {
           filmDirector.update(deltaSeconds * 1000)
           const pct = Math.round(filmDirector.progress.ratio * 200) / 2
           if (pct !== lastFilmPct) { lastFilmPct = pct; setFilmProgressPct(pct) }

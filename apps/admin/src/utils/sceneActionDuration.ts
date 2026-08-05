@@ -59,7 +59,7 @@ export interface FilmDurationEstimate {
 }
 
 /** Marge forfaitaire après une action : trans-in MultiAnimationPlayback (~7 frames). */
-const ACTION_SETTLE_MS = 290
+export const ACTION_SETTLE_MS = 290
 /** Durée du fade de fin de film. */
 const ENDING_FADE_MS = 400
 
