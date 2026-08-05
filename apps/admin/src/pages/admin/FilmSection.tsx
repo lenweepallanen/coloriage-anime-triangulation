@@ -1,5 +1,5 @@
 import { useAdminContext } from './AdminLayout'
-import FilmEditor from '../../components/admin/film/FilmEditor'
+import FilmEditorT from '../../components/admin/film/FilmEditorT'
 
 export default function FilmSection() {
   const { project, save, canPreview } = useAdminContext()
@@ -12,5 +12,5 @@ export default function FilmSection() {
     )
   }
 
-  return <FilmEditor project={project} onSave={save} />
+  return <FilmEditorT project={project} onSave={save} />
 }
