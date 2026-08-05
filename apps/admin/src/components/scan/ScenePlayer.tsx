@@ -209,70 +209,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         }))
     : (film ? resolveFilmPlans(film, scene) : [])
   const filmEnabled = timelineMode || !!(film?.enabled && filmPlans.length > 0)
-  // [Film DEBUG] — diagnostic flip/décor, à retirer une fois le moonwalk résolu.
-  if (filmEnabled) {
-    // eslint-disable-next-line no-console
-    console.log('[Film DEBUG] characterFacing=' + scene.characterFacing + ' plans=' + JSON.stringify(filmPlans.map(pl => ({
-      pts: pl.points.length,
-      bg: pl.background?.videoBlob ? `video(${pl.background.videoBlob.type})` : pl.background?.imageBlob ? `image(${pl.background.imageBlob.type})` : 'none',
-      fg: pl.foreground?.videoBlob ? 'video' : pl.foreground?.imageBlob ? 'image' : 'none',
-    }))))
-  }
-
-  // Mode play : layout PORTRAIT (canvas carré centré, titre + sortie en haut,
-  // boutons 1/2/3 puis ⚙/⏸/? sous le canvas). Pas de plein écran ni de lock
-  // d'orientation (résout les soucis iOS). Détecté via la classe body.play-app.
-  const portrait = !modal && typeof document !== 'undefined' && document.body.classList.contains('play-app')
-
-  const bgAspectW = scene.background?.width
-  const bgAspectH = scene.background?.height
-  // Format du CADRE de scène : horizontal 16:9 max (app native jouée en paysage
-  // plein écran). Si le décor est moins large que 16:9, on cale sur son ratio
-  // (tout le décor visible) — même formule que le cadre caméra de l'éditeur film.
-  const frameAspect = Math.min(bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9, 16 / 9)
-  // Taille du canvas plein écran paysage (dimensions utiles inversées si la
-  // WebView est restée portrait — le player sera alors tourné de 90° via CSS).
-  const computePlayCardSize = () => {
-    const vw = window.innerWidth, vh = window.innerHeight
-    const isLs = vw > vh
-    const availW = isLs ? vw : vh
-    const availH = isLs ? vh : vw
-    let w = availW
-    let h = w / frameAspect
-    if (h > availH) { h = availH; w = h * frameAspect }
-    return { w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) }
-  }
-  // Carte scène (mode play/scan, hors modal) : en play, PLEIN ÉCRAN PAYSAGE dès le
-  // PREMIER rendu (taille calculée de façon synchrone — aucun flash de l'ancien
-  // layout portrait). En admin/scan paysage, format du fond + marge boutons.
-  const [cardSize, setCardSize] = useState<{ w: number; h: number }>(() =>
-    portrait && !modal && typeof window !== 'undefined' ? computePlayCardSize() : { w: 0, h: 0 })
-  // Paysage FORCÉ par rotation CSS 90° (WebView restée portrait — lock natif KO).
-  // Initialisé de façon synchrone pour la même raison (pas de frame en portrait).
-  const [forcedRotate, setForcedRotate] = useState(() =>
-    portrait && !modal && typeof window !== 'undefined' && window.innerWidth <= window.innerHeight)
-  useEffect(() => {
-    if (modal) return
-    function compute() {
-      const vw = window.innerWidth, vh = window.innerHeight
-      if (portrait) {
-        // HORIZONTAL OBLIGATOIRE (play) : recalcule taille + rotation au resize.
-        setForcedRotate(!(vw > vh))
-        setCardSize(computePlayCardSize())
-        return
-      }
-      const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
-      const PAD = 14
-      const availW = Math.max(160, vw - SIDEBAR - PAD * 2)
-      const availH = Math.max(120, vh - PAD * 2)
-      let h = availH, w = h * frameAspect
-      if (w > availW) { w = availW; h = w / frameAspect }
-      setCardSize({ w: Math.round(w), h: Math.round(h) })
-    }
-    compute()
-    window.addEventListener('resize', compute)
-    return () => window.removeEventListener('resize', compute)
-  }, [modal, portrait, frameAspect])
 
   // Preview modal (admin) : canvas contraint au même cadre 16:9 que le play,
   // pour que le cadrage caméra du film soit fidèle. Suit le resize de la modal.
@@ -518,16 +454,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       let activeIdx = 0
       let fading = false
-      let lastVideoLog = 0
       const update = () => {
         const act = videos[activeIdx]
-        // [Film DEBUG] état de la vidéo (1×/s) — à retirer après diagnostic.
-        const nowMs = performance.now()
-        if (nowMs - lastVideoLog > 1000) {
-          lastVideoLog = nowMs
-          // eslint-disable-next-line no-console
-          console.log('[Film DEBUG] video ' + JSON.stringify({ t: Math.round(act.currentTime * 10) / 10, paused: act.paused, ready: act.readyState }))
-        }
         // Garantit que la vidéo active joue dès que possible (l'autoplay/play() au
         // montage peut échouer par course avant que la vidéo soit prête). On relance
         // donc à chaque frame du ticker tant qu'elle est en pause → démarre dès la 1re
@@ -584,8 +512,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       let bgImgReady = !mbg?.imageBlob
       let fgImgReady = !mfg?.imageBlob
 
-      // eslint-disable-next-line no-console
-      console.log('[Film DEBUG] mountDecorLayers bg=', mbg?.videoBlob ? `video(${mbg.videoBlob.type})` : mbg?.imageBlob ? `image(${mbg.imageBlob.type})` : 'none')
       if (mbg?.videoBlob) {
         const { update, primary } = setupCrossfadeVideo(mbg.videoBlob, mbg.width * bgScale, mbg.height * bgScale, bgContainer)
         bgVideoUpdate = update
@@ -1239,24 +1165,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // Now that scenePlayback exists, compute the correct initial charOffsetX
     charOffsetX = computeCharOffsetX(scenePlayback)
 
-    // [DEBUG] Diagnostic caméra/fond — à retirer une fois le placement validé.
-    setTimeout(() => {
-      const vid = bgVideoElements[0]
-      // eslint-disable-next-line no-console
-      console.log('[ScenePlayer DEBUG]', {
-        viewW, viewH, bgScale,
-        bgW: bg?.width, bgH: bg?.height,
-        hasBgVideo: !!bg?.videoBlob, hasBgImage: !!bg?.imageBlob,
-        bgSprite: backgroundSprite
-          ? { x: Math.round(backgroundSprite.x), y: Math.round(backgroundSprite.y), w: Math.round(backgroundSprite.width), h: Math.round(backgroundSprite.height), visible: backgroundSprite.visible }
-          : 'NULL (pas de sprite fond créé)',
-        bgOffsetX: Math.round(scenePlayback.backgroundOffsetX),
-        currentX: Math.round(scenePlayback.currentX),
-        charOffsetX: Math.round(charOffsetX), charScale: charScale.toFixed(3),
-        charW: Math.round(charW), charH: Math.round(charH), refW, refH,
-        video: vid ? { paused: vid.paused, readyState: vid.readyState, vw: vid.videoWidth, vh: vid.videoHeight } : 'pas de <video> fond',
-      })
-    }, 1800)
 
     // --- Animation switching ---
     let currentGetPositions: () => Point2D[] = () => allPoints
@@ -1292,37 +1200,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       // Check if this is a walk with zone separation
       if (anim && anim.mesh?.walkZoneFrames && anim.mesh.walkBodyFrames && walkZoneMeshMap.has(anim.id)) {
-        // Garde-fou : frames incompatibles avec le maillage (topologie recalculée
-        // depuis, NaN, décompte de sommets différent) → on N'ACTIVE PAS le rendu
-        // zone (le perso resterait invisible / PIXI planterait) ; on garde
-        // l'animation courante et on signale clairement le problème.
+        // Garde-fou : frames de l'animation incompatibles avec la topologie du
+        // maillage (animation calculée sur une ancienne Triangulation projet) →
+        // on conserve l'animation courante au lieu d'afficher un corps invisible.
         {
-          const dbgSetup = walkZoneMeshMap.get(anim.id)
-          const bodyBuf = dbgSetup ? (dbgSetup.bodyMesh.geometry.getBuffer('aVertexPosition').data as unknown as Float32Array).length / 2 : -1
+          const setup = walkZoneMeshMap.get(anim.id)
+          const bodyBuf = setup ? (setup.bodyMesh.geometry.getBuffer('aVertexPosition').data as unknown as Float32Array).length / 2 : -1
           const bodyFrame0 = anim.mesh.walkBodyFrames[0] ?? []
           const nanBody = bodyFrame0.length > 0 && (!Number.isFinite(bodyFrame0[0].x) || !Number.isFinite(bodyFrame0[0].y))
-          const diag = {
-            anim: anim.name,
-            bodyMeshVerts: bodyBuf,
-            bodyFrameVerts: bodyFrame0.length,
-            nanBody,
-            zones: Object.fromEntries(Object.entries(anim.mesh.walkZoneFrames).map(([zid, zf]) => [zid, { frames: zf?.length ?? 0, verts: zf?.[0]?.length ?? 0 }])),
-          }
-          // eslint-disable-next-line no-console
-          console.log('[Film DEBUG] walk setup ' + JSON.stringify(diag))
           if (bodyBuf > 0 && (bodyFrame0.length !== bodyBuf || nanBody)) {
             // eslint-disable-next-line no-console
-            console.error(`[Film DEBUG] anim "${anim.name}" incompatible avec la topologie actuelle (mesh=${bodyBuf} sommets, frames=${bodyFrame0.length}${nanBody ? ', NaN' : ''}) — RECALCULER cette animation. Fallback : animation précédente conservée.`)
-            if (import.meta.env.DEV) {
-              let el = document.getElementById('film-debug-error')
-              if (!el) {
-                el = document.createElement('div')
-                el.id = 'film-debug-error'
-                el.style.cssText = 'position:fixed;bottom:8px;left:8px;right:8px;z-index:99999;background:#b71c1c;color:#fff;font:12px/1.4 monospace;padding:8px 10px;border-radius:6px;white-space:pre-wrap;pointer-events:none'
-                document.body.appendChild(el)
-              }
-              el.textContent = `[Film] Animation « ${anim.name} » incompatible avec la topologie actuelle (maillage ${bodyBuf} sommets ≠ frames ${bodyFrame0.length}${nanBody ? ', NaN' : ''}).\nRecalculez cette animation (onglet Animations → ${anim.name} → étape Calcul).`
-            }
+            console.error(`[ScenePlayer] anim "${anim.name}" incompatible avec la topologie actuelle (mesh=${bodyBuf} sommets, frames=${bodyFrame0.length}${nanBody ? ', NaN' : ''}) — recalculer cette animation. L'animation précédente est conservée.`)
             return
           }
         }
@@ -1343,7 +1231,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           const zf = anim.mesh!.walkZoneFrames![zone.id]
           if (!zf || zf.length === 0) {
             // eslint-disable-next-line no-console
-            console.warn(`[Film DEBUG] anim "${anim.name}" : zone "${zone.id}" sans frames — zone figée`)
+            console.warn(`[ScenePlayer] anim "${anim.name}" : zone "${zone.id}" sans frames — zone figée`)
             return []
           }
           return [{ zoneId: zone.id, playback: new LoopPlayback(zf, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul }) }]
@@ -1380,7 +1268,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // statique » est invisible pour les personnages zone-based (cotracker,
         // members-bones), le perso disparaîtrait pendant tout le trajet.
         // eslint-disable-next-line no-console
-        console.warn(`[Film DEBUG] trajet sans animation de déplacement exploitable (anim="${anim?.name ?? 'aucune'}") — idle conservé pendant le trajet`)
+        console.warn(`[ScenePlayer] trajet sans animation de déplacement exploitable (anim="${anim?.name ?? 'aucune'}") — idle conservé pendant le trajet`)
         setupInteractionAnimation(scene.restPoint?.restAnimationId, [])
         return
       }
@@ -1415,7 +1303,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           const zf = rest.mesh!.walkZoneFrames![zone.id]
           if (!zf || zf.length === 0) {
             // eslint-disable-next-line no-console
-            console.warn(`[Film DEBUG] rest "${rest.name}" : zone "${zone.id}" sans frames — zone figée`)
+            console.warn(`[ScenePlayer] rest "${rest.name}" : zone "${zone.id}" sans frames — zone figée`)
             return []
           }
           return [{ zoneId: zone.id, playback: new LoopPlayback(zf, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul }) }]
@@ -1632,7 +1520,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const zf = anim.mesh!.walkZoneFrames![zone.id]
         if (!zf || zf.length === 0) {
           // eslint-disable-next-line no-console
-          console.warn(`[Film DEBUG] oneshot "${anim.name}" : zone "${zone.id}" sans frames — zone figée`)
+          console.warn(`[ScenePlayer] oneshot "${anim.name}" : zone "${zone.id}" sans frames — zone figée`)
           return []
         }
         return [{ zoneId: zone.id, playback: mkPb(zf) }]
@@ -1854,18 +1742,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         if (now - lastTickerErrorLog > 1000) {
           lastTickerErrorLog = now
           // eslint-disable-next-line no-console
-          console.error('[Film DEBUG] ticker error', err)
-          // DEV : bandeau rouge dans la page avec la stack (diagnostic sans console).
-          if (import.meta.env.DEV) {
-            let el = document.getElementById('film-debug-error')
-            if (!el) {
-              el = document.createElement('div')
-              el.id = 'film-debug-error'
-              el.style.cssText = 'position:fixed;bottom:8px;left:8px;right:8px;z-index:99999;background:#b71c1c;color:#fff;font:11px/1.4 monospace;padding:8px 10px;border-radius:6px;white-space:pre-wrap;max-height:40vh;overflow:auto;pointer-events:none'
-              document.body.appendChild(el)
-            }
-            el.textContent = `[Film DEBUG] ticker error\n${(err as Error)?.stack ?? String(err)}`
-          }
+          console.error('[ScenePlayer] ticker error', err)
         }
         try { updateDecorFrame() } catch { /* décor indisponible ce frame */ }
       }
@@ -2218,43 +2095,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         }
         const openness = Math.max(rms, jawOpenness)
         mouthOpennessRef.current = openness
-        // DEBUG JAW
-        if ((globalThis as any).__jawDbg !== false) {
-          const _w = globalThis as any
-          _w.__jawDbgCount = (_w.__jawDbgCount ?? 0) + 1
-          if (_w.__jawDbgCount % 60 === 1) {
-            const allAnims = project.animations.map(a => ({
-              id: a.id.slice(0, 8),
-              name: a.name,
-              type: a.type,
-              hasJaw: !!a.mesh?.cotrackerJawOpennessFrames,
-              jawLen: a.mesh?.cotrackerJawOpennessFrames?.length ?? 0,
-              hasJawBone: !!(a.mesh as any)?.cotrackerSkeleton?.jaw,
-              lbsValidated: !!(a.mesh as any)?.cotrackerLBSValidated,
-            }))
-            const activeDbg = activeFrames.map(({ animId, frame }) => {
-              const a = animMap.current.get(animId)
-              const jf = a?.mesh?.cotrackerJawOpennessFrames
-              return {
-                id: animId.slice(0, 8),
-                name: a?.name,
-                type: a?.type,
-                frame,
-                jawLen: jf?.length ?? 0,
-                jawValAtFrame: jf && jf.length > 0 ? jf[Math.min(frame, jf.length - 1)] : null,
-              }
-            })
-            console.log('[JAW]',
-              'rest=', restAnim?.id?.slice(0, 8), restAnim?.type,
-              'mpb=', !!mpb,
-              'walkZone=', activeWalkZoneAnimId?.slice(0, 8) ?? null,
-              'jawOpenness=', jawOpenness, 'rms=', rms,
-              'mouthOnProj=', !!project.projectMouth,
-              'activeFrames=', JSON.stringify(activeDbg),
-              'allAnims=', JSON.stringify(allAnims),
-            )
-          }
-        }
         mouthOverlay.update(bodyForMouth, charScale, charOffsetX, charOffsetY, openness)
       }
 
@@ -2371,7 +2211,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
       if (sceneAmbientAudio) { sceneAmbientAudio.pause(); try { URL.revokeObjectURL(sceneAmbientAudio.src) } catch { /* */ } }
       filmRuntime?.scheduler.dispose()
-      document.getElementById('film-debug-error')?.remove()
       if (mouthOverlay) mouthOverlay.destroy()
       app.destroy(true, { children: true, texture: true })
       appRef.current = null

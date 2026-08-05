@@ -339,19 +339,6 @@ export class ScenePlayback {
    *   (le perso reste figé hors écran, `isExited` passe à true).
    */
   startFilmTravel(target: Point2D | null, opts: FilmTravelOpts): void {
-    // [Film DEBUG] — à retirer une fois le moonwalk résolu.
-    // eslint-disable-next-line no-console
-    console.log('[Film DEBUG] travel ' + JSON.stringify({
-      from: { x: Math.round(this._currentX), y: Math.round(this._currentY) },
-      target: target ? { x: Math.round(target.x), y: Math.round(target.y) } : null,
-      startAt: opts.startAt ? { x: Math.round(opts.startAt.x), y: Math.round(opts.startAt.y) } : null,
-      offStart: opts.offscreenStart ?? null,
-      offEnd: opts.offscreenEnd ?? null,
-      scaleFrom: opts.scaleFrom,
-      scaleTo: opts.scaleTo,
-      facing: this.scene.characterFacing ?? '(undefined→right)',
-      arriveFacing: opts.arriveFacing ?? null,
-    }))
     this._exited = false
     this._exitMode = false
     if (opts.startAt) {
