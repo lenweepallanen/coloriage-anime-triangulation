@@ -20,7 +20,9 @@ const ScenePlayer = lazy(importScenePlayer)
 import { generateLimbMask, generateLimbMaskFromContours } from '../utils/limbMaskGenerator'
 import { requestLamaInpainting } from '../utils/lamaInpainting'
 import { renderIsolatedLimbDebug } from '../utils/hiddenFaceTexture'
+import { filmIsPlayable } from '../types/project'
 import type { Point2D, Project } from '../types/project'
+import { buildFilmScene } from '../utils/filmScene'
 
 interface ScanPageProps {
   /** Si fourni, court-circuite useProject (utilisé par play pour passer un projet light). */
@@ -253,6 +255,17 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   const filmReplaceOnEnd = useMemo(
     () => (mode === 'play' && stage === 'animation' ? hasFilmVideo(project.id) : false),
     [mode, stage, project.id],
+  )
+
+  // FILM prioritaire : si le projet a un film jouable, le player reçoit la
+  // pseudo-scène construite depuis le FILM (décor du plan 1, perso/musique du
+  // film) — la scène interactive (dépréciée) n'est utilisée qu'à défaut.
+  // Mémoïsé : une nouvelle identité de scène remonterait l'effect PIXI du player.
+  const playerProject = useMemo(
+    () => (project.film && filmIsPlayable(project.film)
+      ? { ...project, scene: buildFilmScene(project.film) }
+      : project),
+    [project],
   )
 
   // Trigger LaMa inpainting after rectified canvas is ready
@@ -682,10 +695,10 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
         // que le blob n'est pas hydraté. Le blob est garanti chargé au clic « Oui »
         // (bouton gated sur deferredLoaded).
         <Suspense fallback={<div className="loading">Chargement…</div>}>
-          {project.scene && !!project.scene.background && project.scene.restPoint != null
+          {playerProject.scene && !!playerProject.scene.background && playerProject.scene.restPoint != null
             ? <ScenePlayer
                 forcePaused={showRotateOverlay || undefined}
-                project={project}
+                project={playerProject}
                 scanCanvas={processor.rectifiedCanvas}
                 lamaCanvas={lamaCanvas}
                 contentAlignment={processor.contentAlignment}

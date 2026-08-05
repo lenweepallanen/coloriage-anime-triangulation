@@ -132,7 +132,7 @@ export default function SceneConfigPanel({
 }
 
 // --- Action card (séquence ordonnée + son unique) ---
-// Exporté : réutilisé par SceneFilmEditor pour les blocs « Action » du mode film.
+// Exporté : réutilisé par le FilmEditor (components/admin/film/) pour les blocs « Action ».
 
 export function ActionCard({ action, readyAnimations, onChange, onSceneSoundImported, onSceneSoundDeleted }: {
   action: SceneAction
@@ -371,6 +371,17 @@ function StepSoundRow({ step, onChange, onImport, onDelete }: {
         style={{ width: 90 }}
         title="Multiplicateur de vitesse de lecture de l'animation (0.5 = 2× plus lent)"
       />
+      <label
+        style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }}
+        title="Rejoue l'animation en BOUCLE jusqu'à la fin de l'action (durée = son d'action / dernier son d'étape). Ex. : courir sur place pendant toute la durée d'un dialogue superposé."
+      >
+        <input
+          type="checkbox"
+          checked={step.loop ?? false}
+          onChange={(e) => onChange({ loop: e.target.checked || undefined })}
+        />
+        🔁 anim en boucle
+      </label>
       <span style={{ opacity: 0.7 }}>son :</span>
       {step.sound ? (
         <>

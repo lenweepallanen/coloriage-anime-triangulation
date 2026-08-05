@@ -18,7 +18,8 @@ import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan, imageToScanPixel } from
 import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
 import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
-import { FilmDirector } from '../../utils/filmDirector'
+import { FilmDirector, resolveFilmPlans } from '../../utils/filmDirector'
+import { startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
@@ -182,7 +183,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
   const scene = project.scene!
   const film = scene.film
-  const filmEnabled = !!(film?.enabled && film.points.length > 0)
+  // Plans jouables du film (fallback décor scène appliqué) — même filtre que le director.
+  const filmPlans = film ? resolveFilmPlans(film, scene) : []
+  const filmEnabled = !!(film?.enabled && filmPlans.length > 0)
+  // [Film DEBUG] — diagnostic flip/décor, à retirer une fois le moonwalk résolu.
+  if (filmEnabled) {
+    // eslint-disable-next-line no-console
+    console.log('[Film DEBUG] characterFacing=' + scene.characterFacing + ' plans=' + JSON.stringify(filmPlans.map(pl => ({
+      pts: pl.points.length,
+      bg: pl.background?.videoBlob ? `video(${pl.background.videoBlob.type})` : pl.background?.imageBlob ? `image(${pl.background.imageBlob.type})` : 'none',
+      fg: pl.foreground?.videoBlob ? 'video' : pl.foreground?.imageBlob ? 'image' : 'none',
+    }))))
+  }
 
   // Mode play : layout PORTRAIT (canvas carré centré, titre + sortie en haut,
   // boutons 1/2/3 puis ⚙/⏸/? sous le canvas). Pas de plein écran ni de lock
@@ -352,20 +364,27 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const bgContainer = new PIXI.Container()
     const characterContainer = new PIXI.Container()
     const foregroundContainer = new PIXI.Container()
-    // Ordre z : arrière-plan → personnage (+ overlays) → avant-plan → HUD (DOM).
+    // Ordre z : arrière-plan → personnage (+ overlays) → avant-plan → transitions
+    // de plan (film) → filigrane (ajouté au stage à l'enregistrement) → HUD (DOM).
     app.stage.addChild(bgContainer)
     app.stage.addChild(characterContainer)
     app.stage.addChild(foregroundContainer)
+    const planTransitionOverlay = new PIXI.Container()
+    app.stage.addChild(planTransitionOverlay)
 
-    const bg = scene.background
-    const fg = scene.foreground
+    // Décor initial : en mode film, décor du PLAN 1 (fallback scène déjà appliqué
+    // par resolveFilmPlans) ; les plans suivants sont montés par activatePlan().
+    const bg = filmEnabled ? filmPlans[0].background : scene.background
+    const fg = filmEnabled ? filmPlans[0].foreground : scene.foreground
     // Play (bandeau) : rendu « cover » → le fond remplit toute la largeur ET la
     // hauteur du canvas (débord rogné), donc plus de vide latéral même si le ratio
     // du canvas diffère un peu de celui du fond. Admin/modal : calage hauteur (inchangé).
     const coverFill = document.body.classList.contains('play-app')
-    const bgScale = (bg && (bg.imageBlob || bg.videoBlob) && bg.height > 0)
-      ? (coverFill ? Math.max(viewW / bg.width, viewH / bg.height) : viewH / bg.height)
+    const computeBgScale = (b: typeof bg): number => (b && (b.imageBlob || b.videoBlob) && b.height > 0)
+      ? (coverFill ? Math.max(viewW / b.width, viewH / b.height) : viewH / b.height)
       : 1
+    // MUTABLE : recalculé au changement de plan du film (décor différent).
+    let bgScale = computeBgScale(bg)
 
     let backgroundSprite: PIXI.Sprite | null = null
     let foregroundSprite: PIXI.Sprite | null = null
@@ -476,13 +495,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       let activeIdx = 0
       let fading = false
+      let lastVideoLog = 0
       const update = () => {
         const act = videos[activeIdx]
+        // [Film DEBUG] état de la vidéo (1×/s) — à retirer après diagnostic.
+        const nowMs = performance.now()
+        if (nowMs - lastVideoLog > 1000) {
+          lastVideoLog = nowMs
+          // eslint-disable-next-line no-console
+          console.log('[Film DEBUG] video ' + JSON.stringify({ t: Math.round(act.currentTime * 10) / 10, paused: act.paused, ready: act.readyState }))
+        }
         // Garantit que la vidéo active joue dès que possible (l'autoplay/play() au
         // montage peut échouer par course avant que la vidéo soit prête). On relance
         // donc à chaque frame du ticker tant qu'elle est en pause → démarre dès la 1re
         // seconde, sans attendre un geste / l'arrivée au rest point.
         if (act.paused && !act.ended) act.play().catch(() => {})
+        // Rafraîchissement FORCÉ de la texture active à chaque frame : ne dépend
+        // pas de l'autoUpdate interne de PIXI (VideoResource), qui peut rester
+        // inerte selon l'ordre play/pause → vidéo figée à sa 1re frame.
+        if (act.readyState >= 2) sprites[activeIdx].texture.update()
         const dur = act.duration
         if (!Number.isFinite(dur) || dur <= 0) return
         // Durée du fondu : 0.6 s, borné à 30 % du clip pour les boucles très courtes.
@@ -502,6 +533,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         }
         if (fading) {
           const cp = Math.max(0, Math.min(1, 1 - (dur - t) / fade))
+          if (inc.readyState >= 2) incSpr.texture.update()
           actSpr.alpha = 1 // sortant toujours pleinement visible sous l'entrant
           incSpr.alpha = cp // entrant fondu de 0 → 1
           if (cp >= 1 || act.ended) {
@@ -518,57 +550,108 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       return { update, primary: sprites[0] }
     }
 
-    if (bg?.videoBlob) {
-      const { update, primary } = setupCrossfadeVideo(bg.videoBlob, bg.width * bgScale, bg.height * bgScale, bgContainer)
-      bgVideoUpdate = update
-      backgroundSprite = primary
-    } else if (bg?.imageBlob) {
-      const url = URL.createObjectURL(bg.imageBlob)
-      bgImageUrls.push(url)
-      const img = new Image()
-      img.src = url
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = img.naturalWidth
-        canvas.height = img.naturalHeight
-        canvas.getContext('2d')!.drawImage(img, 0, 0)
-        const tex = PIXI.Texture.from(canvas)
-        const sprite = new PIXI.Sprite(tex)
-        sprite.width = bg.width * bgScale
-        sprite.height = bg.height * bgScale
-        bgContainer.addChild(sprite)
-        backgroundSprite = sprite
-      }
-    }
+    // --- Montage du décor (bg + fg) — appelé au setup, puis à chaque changement
+    // de plan du film. Lit `bgScale` (à jour AVANT l'appel). dispose() nettoie
+    // sprites/textures/vidéos/URLs du décor courant (swap de plan sans fuite). ---
+    interface DecorLayers { ready: () => boolean; dispose: () => void }
+    const mountDecorLayers = (mbg: typeof bg, mfg: typeof fg): DecorLayers => {
+      const urlStart = bgImageUrls.length
+      const vidStart = bgVideoElements.length
+      let disposed = false
+      let bgImgReady = !mbg?.imageBlob
+      let fgImgReady = !mfg?.imageBlob
 
-    if (fg?.videoBlob) {
-      const chroma = fg.chromaKeyColor
-        ? { color: fg.chromaKeyColor, threshold: fg.chromaKeyThreshold ?? 0.1, smoothness: fg.chromaKeySmoothness ?? 0.12 }
-        : undefined
-      const { update, primary } = setupCrossfadeVideo(fg.videoBlob, fg.width * bgScale, fg.height * bgScale, foregroundContainer, chroma)
-      fgVideoUpdate = update
-      foregroundSprite = primary
-    } else if (fg?.imageBlob) {
-      const url = URL.createObjectURL(fg.imageBlob)
-      bgImageUrls.push(url)
-      const img = new Image()
-      img.src = url
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = img.naturalWidth
-        canvas.height = img.naturalHeight
-        canvas.getContext('2d')!.drawImage(img, 0, 0)
-        const tex = PIXI.Texture.from(canvas)
-        const sprite = new PIXI.Sprite(tex)
-        sprite.width = fg.width * bgScale
-        sprite.height = fg.height * bgScale
-        if (fg.chromaKeyColor) {
-          sprite.filters = [buildChromaKeyFilter(fg.chromaKeyColor, fg.chromaKeyThreshold ?? 0.1, fg.chromaKeySmoothness ?? 0.12)]
+      // eslint-disable-next-line no-console
+      console.log('[Film DEBUG] mountDecorLayers bg=', mbg?.videoBlob ? `video(${mbg.videoBlob.type})` : mbg?.imageBlob ? `image(${mbg.imageBlob.type})` : 'none')
+      if (mbg?.videoBlob) {
+        const { update, primary } = setupCrossfadeVideo(mbg.videoBlob, mbg.width * bgScale, mbg.height * bgScale, bgContainer)
+        bgVideoUpdate = update
+        backgroundSprite = primary
+      } else if (mbg?.imageBlob) {
+        const url = URL.createObjectURL(mbg.imageBlob)
+        bgImageUrls.push(url)
+        const img = new Image()
+        img.src = url
+        img.onload = () => {
+          bgImgReady = true
+          if (disposed) return
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          canvas.getContext('2d')!.drawImage(img, 0, 0)
+          const tex = PIXI.Texture.from(canvas)
+          const sprite = new PIXI.Sprite(tex)
+          sprite.width = mbg.width * bgScale
+          sprite.height = mbg.height * bgScale
+          bgContainer.addChild(sprite)
+          backgroundSprite = sprite
         }
-        foregroundContainer.addChild(sprite)
-        foregroundSprite = sprite
+      }
+
+      if (mfg?.videoBlob) {
+        const chroma = mfg.chromaKeyColor
+          ? { color: mfg.chromaKeyColor, threshold: mfg.chromaKeyThreshold ?? 0.1, smoothness: mfg.chromaKeySmoothness ?? 0.12 }
+          : undefined
+        const { update, primary } = setupCrossfadeVideo(mfg.videoBlob, mfg.width * bgScale, mfg.height * bgScale, foregroundContainer, chroma)
+        fgVideoUpdate = update
+        foregroundSprite = primary
+      } else if (mfg?.imageBlob) {
+        const url = URL.createObjectURL(mfg.imageBlob)
+        bgImageUrls.push(url)
+        const img = new Image()
+        img.src = url
+        img.onload = () => {
+          fgImgReady = true
+          if (disposed) return
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          canvas.getContext('2d')!.drawImage(img, 0, 0)
+          const tex = PIXI.Texture.from(canvas)
+          const sprite = new PIXI.Sprite(tex)
+          sprite.width = mfg.width * bgScale
+          sprite.height = mfg.height * bgScale
+          if (mfg.chromaKeyColor) {
+            sprite.filters = [buildChromaKeyFilter(mfg.chromaKeyColor, mfg.chromaKeyThreshold ?? 0.1, mfg.chromaKeySmoothness ?? 0.12)]
+          }
+          foregroundContainer.addChild(sprite)
+          foregroundSprite = sprite
+        }
+      }
+
+      const planVideos = bgVideoElements.slice(vidStart)
+      const planUrls = bgImageUrls.slice(urlStart)
+      return {
+        ready: () => bgImgReady && fgImgReady && planVideos.every(v => v.readyState >= 2),
+        dispose: () => {
+          disposed = true
+          bgVideoUpdate = null
+          fgVideoUpdate = null
+          backgroundSprite = null
+          foregroundSprite = null
+          for (const v of planVideos) {
+            v.pause()
+            v.remove()
+            const i = bgVideoElements.indexOf(v)
+            if (i >= 0) bgVideoElements.splice(i, 1)
+          }
+          for (const u of planUrls) {
+            try { URL.revokeObjectURL(u) } catch { /* */ }
+            const i = bgImageUrls.indexOf(u)
+            if (i >= 0) bgImageUrls.splice(i, 1)
+          }
+          for (const c of [...bgContainer.children]) {
+            bgContainer.removeChild(c)
+            c.destroy({ children: true, texture: true, baseTexture: true })
+          }
+          for (const c of [...foregroundContainer.children]) {
+            foregroundContainer.removeChild(c)
+            c.destroy({ children: true, texture: true, baseTexture: true })
+          }
+        },
       }
     }
+    let currentLayers: DecorLayers = mountDecorLayers(bg, fg)
 
     // Référence de scaling = dimensions de l'IMAGE du coloriage (espace des coords du
     // maillage), pas le scanCanvas (2048 en play). En admin scanCanvas == image → identique.
@@ -581,14 +664,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     let charScale = baseCharScale
     let charW = refW * charScale
     let charH = refH * charScale
-    const baseCharOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
+    let baseCharOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
     let charOffsetY = baseCharOffsetY
     // Origine du personnage (U,V) ∈ [0,1] dans l'image du coloriage. Le clic en marche
     // libre vise ce point ; pivot des transforms (rotation/skew/flip) = ce point.
     const originU = scene.characterOriginU ?? 0.5
     const originV = scene.characterOriginV ?? 1.0
-    /** Y de l'origine au rest, en coords background front (utilisé comme initial currentY). */
-    const baselineOriginBgY = (baseCharOffsetY + originV * refH * baseCharScale) / bgScale
+    /** Y de l'origine au rest, en coords background front (utilisé comme initial currentY).
+     *  Recalculé au changement de plan (bgScale différent). */
+    let baselineOriginBgY = (baseCharOffsetY + originV * refH * baseCharScale) / bgScale
 
     // Character X offset: computed dynamically each frame from scenePlayback.currentX.
     // L'origine du personnage (U×W) doit se trouver à (currentX - bgOffset) * bgScale en X.
@@ -956,25 +1040,57 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
 
     // --- Scene playback state machine ---
-    const scenePlayback = new ScenePlayback({
-      scene,
-      viewportWidth: viewW / bgScale,
-      viewportHeight: viewH / bgScale,
-      initialFeetBgY: baselineOriginBgY,
-      // Largeur du personnage à scale=1 (sans perspective) en coords background.
-      characterBaseWidthBg: (refW * baseCharScale) / bgScale,
-      characterOriginU: originU,
-      // Mode film : caméra FIXE (cadrage) + départ hors-champ côté entrée.
-      ...(filmEnabled && film && {
-        filmCameraX: film.cameraX,
+    // MUTABLE : recréé à chaque changement de plan du film (le constructeur encode
+    // tout l'état initial d'un plan : clamp caméra, position hors-champ, échelle).
+    // La scène passée est DÉRIVÉE du plan (background/foreground du plan) pour que
+    // le clamp caméra utilise la largeur du bon décor.
+    const makeFilmScenePlayback = (planIdx: number): ScenePlayback => {
+      const p = filmPlans[planIdx]
+      return new ScenePlayback({
+        scene: { ...scene, background: p.background, foreground: p.foreground },
+        viewportWidth: viewW / bgScale,
+        viewportHeight: viewH / bgScale,
+        initialFeetBgY: baselineOriginBgY,
+        characterBaseWidthBg: (refW * baseCharScale) / bgScale,
+        characterOriginU: originU,
+        filmCameraX: p.cameraX,
         filmInitial: {
-          side: film.entrySide,
-          y: film.points[0]?.y ?? baselineOriginBgY ?? 0,
-          scale: film.points[0]?.scale ?? 1,
+          side: p.entrySide,
+          y: p.points[0]?.y ?? baselineOriginBgY ?? 0,
+          scale: p.points[0]?.scale ?? 1,
         },
-      }),
-    })
+      })
+    }
+    let scenePlayback = filmEnabled
+      ? makeFilmScenePlayback(0)
+      : new ScenePlayback({
+          scene,
+          viewportWidth: viewW / bgScale,
+          viewportHeight: viewH / bgScale,
+          initialFeetBgY: baselineOriginBgY,
+          // Largeur du personnage à scale=1 (sans perspective) en coords background.
+          characterBaseWidthBg: (refW * baseCharScale) / bgScale,
+          characterOriginU: originU,
+        })
     scenePlaybackRef.current = scenePlayback
+
+    /** Swap décor + playback vers le plan `k` du film (appelé par la transition). */
+    const activatePlan = (k: number) => {
+      const p = filmPlans[k]
+      if (!p) return
+      currentLayers.dispose()
+      bgScale = computeBgScale(p.background)
+      currentLayers = mountDecorLayers(p.background, p.foreground)
+      // Recalage vertical du perso : dépend du bgScale du nouveau décor.
+      baseCharOffsetY = (viewH - charH) / 2 + scene.characterY * bgScale
+      baselineOriginBgY = (baseCharOffsetY + originV * refH * baseCharScale) / bgScale
+      scenePlayback = makeFilmScenePlayback(k)
+      scenePlaybackRef.current = scenePlayback
+      attachPlaybackExtensions()
+      charOffsetX = computeCharOffsetX(scenePlayback)
+    }
+    // Transition de plan en cours (avancée par le ticker en lecture uniquement).
+    let planTransitionRunner: PlanTransitionRunner | null = null
 
     // --- Film director (mode film v2) : orchestrateur du chemin, avancé par le ticker ---
     // Fade global de fin de film [0,1], appliqué sur app.stage.alpha.
@@ -1028,6 +1144,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         },
         getSceneState: () => scenePlayback.currentState,
         isExited: () => scenePlayback.isExited,
+        // Changement de plan : transition visuelle (overlay PIXI) + swap décor/playback.
+        // Fin par polling : transition terminée ET décor du nouveau plan prêt (vidéos).
+        startPlanSwitch: (toPlanIndex, transition) => {
+          planTransitionRunner = startPlanTransition(app, planTransitionOverlay, transition, () => activatePlan(toPlanIndex))
+        },
+        isPlanSwitchDone: () => planTransitionRunner == null && currentLayers.ready(),
         setFilmFade: (a) => { filmFadeAlpha = a },
         onEnd: () => {
           if (filmEndedRef.current) return
@@ -1110,6 +1232,40 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       // Check if this is a walk with zone separation
       if (anim && anim.mesh?.walkZoneFrames && anim.mesh.walkBodyFrames && walkZoneMeshMap.has(anim.id)) {
+        // Garde-fou : frames incompatibles avec le maillage (topologie recalculée
+        // depuis, NaN, décompte de sommets différent) → on N'ACTIVE PAS le rendu
+        // zone (le perso resterait invisible / PIXI planterait) ; on garde
+        // l'animation courante et on signale clairement le problème.
+        {
+          const dbgSetup = walkZoneMeshMap.get(anim.id)
+          const bodyBuf = dbgSetup ? (dbgSetup.bodyMesh.geometry.getBuffer('aVertexPosition').data as unknown as Float32Array).length / 2 : -1
+          const bodyFrame0 = anim.mesh.walkBodyFrames[0] ?? []
+          const nanBody = bodyFrame0.length > 0 && (!Number.isFinite(bodyFrame0[0].x) || !Number.isFinite(bodyFrame0[0].y))
+          const diag = {
+            anim: anim.name,
+            bodyMeshVerts: bodyBuf,
+            bodyFrameVerts: bodyFrame0.length,
+            nanBody,
+            zones: Object.fromEntries(Object.entries(anim.mesh.walkZoneFrames).map(([zid, zf]) => [zid, { frames: zf?.length ?? 0, verts: zf?.[0]?.length ?? 0 }])),
+          }
+          // eslint-disable-next-line no-console
+          console.log('[Film DEBUG] walk setup ' + JSON.stringify(diag))
+          if (bodyBuf > 0 && (bodyFrame0.length !== bodyBuf || nanBody)) {
+            // eslint-disable-next-line no-console
+            console.error(`[Film DEBUG] anim "${anim.name}" incompatible avec la topologie actuelle (mesh=${bodyBuf} sommets, frames=${bodyFrame0.length}${nanBody ? ', NaN' : ''}) — RECALCULER cette animation. Fallback : animation précédente conservée.`)
+            if (import.meta.env.DEV) {
+              let el = document.getElementById('film-debug-error')
+              if (!el) {
+                el = document.createElement('div')
+                el.id = 'film-debug-error'
+                el.style.cssText = 'position:fixed;bottom:8px;left:8px;right:8px;z-index:99999;background:#b71c1c;color:#fff;font:12px/1.4 monospace;padding:8px 10px;border-radius:6px;white-space:pre-wrap;pointer-events:none'
+                document.body.appendChild(el)
+              }
+              el.textContent = `[Film] Animation « ${anim.name} » incompatible avec la topologie actuelle (maillage ${bodyBuf} sommets ≠ frames ${bodyFrame0.length}${nanBody ? ', NaN' : ''}).\nRecalculez cette animation (onglet Animations → ${anim.name} → étape Calcul).`
+            }
+            return
+          }
+        }
         activateZoneMeshes(anim.id)
         pixiMesh.visible = false
 
@@ -1121,10 +1277,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // Capture les refs localement pour que la closure `currentAdvance` n'avance
         // QUE ses propres playbacks même après que `activeZonePlaybacks`/`activeBodyPlayback`
         // soient réassignés par un beginCrossfade ultérieur.
-        const localZP = sep.zones.map(zone => ({
-          zoneId: zone.id,
-          playback: new LoopPlayback(anim.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul }),
-        }))
+        // Tolère les zones sans frames (données partielles : la zone garde sa pose
+        // de repos au lieu de faire planter tout le rendu du trajet).
+        const localZP = sep.zones.flatMap(zone => {
+          const zf = anim.mesh!.walkZoneFrames![zone.id]
+          if (!zf || zf.length === 0) {
+            // eslint-disable-next-line no-console
+            console.warn(`[Film DEBUG] anim "${anim.name}" : zone "${zone.id}" sans frames — zone figée`)
+            return []
+          }
+          return [{ zoneId: zone.id, playback: new LoopPlayback(zf, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul }) }]
+        })
         const localBP = new LoopPlayback(anim.mesh.walkBodyFrames, { crossfadeFrames: anim.mesh?.crossfadeFrames ?? 7, speed: moveAnimSpeedMul })
         activeZonePlaybacks = localZP
         activeBodyPlayback = localBP
@@ -1150,15 +1313,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
 
       // Standard (non-walk) animation
-      activateZoneMeshes(null)
-      pixiMesh.visible = true
-
       const frames = anim?.mesh?.videoFramesMesh
       if (!frames || frames.length === 0) {
-        currentGetPositions = () => allPoints
-        currentAdvance = () => {}
+        // Aucune animation de déplacement exploitable pour ce trajet : on GARDE
+        // l'idle en lecture (perso visible qui glisse) — le fallback « mesh
+        // statique » est invisible pour les personnages zone-based (cotracker,
+        // members-bones), le perso disparaîtrait pendant tout le trajet.
+        // eslint-disable-next-line no-console
+        console.warn(`[Film DEBUG] trajet sans animation de déplacement exploitable (anim="${anim?.name ?? 'aucune'}") — idle conservé pendant le trajet`)
+        setupInteractionAnimation(scene.restPoint?.restAnimationId, [])
         return
       }
+      activateZoneMeshes(null)
+      pixiMesh.visible = true
       const playback = new LoopPlayback(frames, { crossfadeFrames: anim?.mesh?.crossfadeFrames ?? 7, speed: scenePlayback.currentSegmentAnimSpeedMul })
       currentGetPositions = () => playback.getPositions()
       currentAdvance = (delta) => playback.advance(delta)
@@ -1184,10 +1351,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
         const sep = rest.mesh.walkLimbSeparation ?? (project.projectTriangulation ? buildPseudoSeparation(project.projectTriangulation) : null)
         if (!sep) return
-        const localZP = sep.zones.map(zone => ({
-          zoneId: zone.id,
-          playback: new LoopPlayback(rest.mesh!.walkZoneFrames![zone.id], { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul }),
-        }))
+        const localZP = sep.zones.flatMap(zone => {
+          const zf = rest.mesh!.walkZoneFrames![zone.id]
+          if (!zf || zf.length === 0) {
+            // eslint-disable-next-line no-console
+            console.warn(`[Film DEBUG] rest "${rest.name}" : zone "${zone.id}" sans frames — zone figée`)
+            return []
+          }
+          return [{ zoneId: zone.id, playback: new LoopPlayback(zf, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul }) }]
+        })
         const localBP = new LoopPlayback(rest.mesh.walkBodyFrames, { crossfadeFrames: rest.mesh?.crossfadeFrames ?? 7, speed: idleSpeedMul })
         activeZonePlaybacks = localZP
         activeBodyPlayback = localBP
@@ -1278,6 +1450,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     let lastSegmentAnimId: string | undefined = undefined
 
     let zoneOneshotBody: OncePlayback | null = null
+    // Oneshot zone en BOUCLE (step d'action loop) : pas de fin naturelle, coupé
+    // explicitement par endZoneLoopOneshot() à la fin de l'action.
+    let zoneLoopActive = false
 
     function beginCrossfade(durationMs: number, easeInNew: boolean) {
       // Hide any leftover prev container (if a previous fade hadn't finished yet)
@@ -1344,8 +1519,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Mode film : les animations des actions des points doivent être enregistrées
       // comme oneshots (requestSequence ignore silencieusement les ids inconnus).
       if (filmEnabled && film) {
-        for (const p of film.points) {
-          for (const s of p.action?.steps ?? []) if (s.animationId) set.add(s.animationId)
+        for (const plan of filmPlans) {
+          for (const p of plan.points) {
+            for (const s of p.action?.steps ?? []) if (s.animationId) set.add(s.animationId)
+          }
         }
       }
       return Array.from(set)
@@ -1374,7 +1551,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
      * current rest point setup. Ignored if a oneshot is already in flight or the anim
      * is not zone-based / not ready.
      */
-    function triggerZoneOneshot(animId: string, playSpeedMul: number = 1): boolean {
+    function triggerZoneOneshot(animId: string, playSpeedMul: number = 1, loop: boolean = false): boolean {
       if (zoneOneshotBody) return false
       const anim = animMap.current.get(animId)
       if (!anim || !anim.mesh?.walkZoneFrames || !anim.mesh.walkBodyFrames || !walkZoneMeshMap.has(anim.id)) return false
@@ -1385,19 +1562,30 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       activateZoneMeshes(anim.id)
       pixiMesh.visible = false
 
+      // loop : LoopPlayback (rejoue jusqu'à endZoneLoopOneshot, fin d'action) ;
+      // sinon OncePlayback (une passe, auto-revert à isFinished).
       const fps = 24
-      const localZP = sep.zones.map(zone => ({
-        zoneId: zone.id,
-        playback: new OncePlayback(anim.mesh!.walkZoneFrames![zone.id], { fps, speed: playSpeedMul }),
-      }))
-      const localBP = new OncePlayback(anim.mesh.walkBodyFrames, { fps, speed: playSpeedMul })
+      const mkPb = (frames: import('../../types/project').Point2D[][]) => loop
+        ? new LoopPlayback(frames, { crossfadeFrames: 4, speed: playSpeedMul })
+        : new OncePlayback(frames, { fps, speed: playSpeedMul })
+      const localZP = sep.zones.flatMap(zone => {
+        const zf = anim.mesh!.walkZoneFrames![zone.id]
+        if (!zf || zf.length === 0) {
+          // eslint-disable-next-line no-console
+          console.warn(`[Film DEBUG] oneshot "${anim.name}" : zone "${zone.id}" sans frames — zone figée`)
+          return []
+        }
+        return [{ zoneId: zone.id, playback: mkPb(zf) }]
+      })
+      const localBP = mkPb(anim.mesh.walkBodyFrames)
       activeZonePlaybacks = localZP
       activeBodyPlayback = localBP
-      zoneOneshotBody = localBP
+      zoneLoopActive = loop
+      if (!loop) zoneOneshotBody = localBP as OncePlayback
 
       const legacyFrames = anim.mesh.videoFramesMesh
       if (legacyFrames && legacyFrames.length > 0) {
-        const legacyPb = new OncePlayback(legacyFrames, { fps, speed: playSpeedMul })
+        const legacyPb = mkPb(legacyFrames)
         currentGetPositions = () => legacyPb.getPositions()
         currentAdvance = (delta) => {
           legacyPb.advance(delta)
@@ -1416,9 +1604,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
     function revertFromZoneOneshot() {
       zoneOneshotBody = null
+      zoneLoopActive = false
       beginCrossfade(400, false)
       const rp = scenePlayback.currentRestPoint
       setupInteractionAnimation(rp?.restAnimationId, collectRestPointAnimIds(rp))
+    }
+
+    /** Coupe un oneshot zone en BOUCLE (appelé à la fin du timer d'action). */
+    function endZoneLoopOneshot() {
+      if (!zoneLoopActive) return
+      revertFromZoneOneshot()
     }
 
     // Initialize based on scene playback initial state
@@ -1494,7 +1689,48 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const triForOutline = project.projectTriangulation
 
     // --- Main ticker ---
+    // Scroll décor + crossfade vidéos + fade de fin : extrait pour être rejoué
+    // même si une exception frappe le reste du frame (vidéos jamais affamées).
+    function updateDecorFrame() {
+      const offsetPx = scenePlayback.backgroundOffsetX * bgScale
+      bgContainer.x = -offsetPx
+      foregroundContainer.x = -offsetPx
+      // En mode film, l'updater est gelé pendant la pause (sinon il relancerait
+      // activement les vidéos pausées via son auto-play).
+      if (playingRef.current || !filmEnabled) {
+        if (bgVideoUpdate) bgVideoUpdate()
+        if (fgVideoUpdate) fgVideoUpdate()
+      }
+      if (filmEnabled) app.stage.alpha = filmFadeAlpha
+    }
+    let lastTickerErrorLog = 0
     app.ticker.add((delta) => {
+      try {
+        tickFrame(delta)
+      } catch (err) {
+        // Une exception de frame ne doit pas casser la lecture : décor maintenu,
+        // erreur réelle loggée (throttle 1 s) pour diagnostic.
+        const now = performance.now()
+        if (now - lastTickerErrorLog > 1000) {
+          lastTickerErrorLog = now
+          // eslint-disable-next-line no-console
+          console.error('[Film DEBUG] ticker error', err)
+          // DEV : bandeau rouge dans la page avec la stack (diagnostic sans console).
+          if (import.meta.env.DEV) {
+            let el = document.getElementById('film-debug-error')
+            if (!el) {
+              el = document.createElement('div')
+              el.id = 'film-debug-error'
+              el.style.cssText = 'position:fixed;bottom:8px;left:8px;right:8px;z-index:99999;background:#b71c1c;color:#fff;font:11px/1.4 monospace;padding:8px 10px;border-radius:6px;white-space:pre-wrap;max-height:40vh;overflow:auto;pointer-events:none'
+              document.body.appendChild(el)
+            }
+            el.textContent = `[Film DEBUG] ticker error\n${(err as Error)?.stack ?? String(err)}`
+          }
+        }
+        try { updateDecorFrame() } catch { /* décor indisponible ce frame */ }
+      }
+    })
+    function tickFrame(delta: number) {
       const deltaSeconds = delta / 60
 
       // Sync pause/play du son d'ambiance avec le toggle ⏵/⏸
@@ -1528,6 +1764,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       if (playingRef.current) {
         scenePlayback.update(deltaSeconds)
+        // Transition de plan (film) : avancée en lecture uniquement (pause = gel).
+        if (planTransitionRunner) {
+          if (planTransitionRunner.update(deltaSeconds * 1000)) planTransitionRunner = null
+        }
         if (filmDirector) {
           filmDirector.update(deltaSeconds * 1000)
           const pct = Math.round(filmDirector.progress.ratio * 200) / 2
@@ -1879,19 +2119,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Scroll synchrone arrière-plan + avant-plan (mêmes dimensions, suivent le perso 1:1).
       // L'offset est porté par les conteneurs (chaque plan peut contenir 2 sprites
       // crossfade), pas par un sprite unique.
-      const offsetPx = scenePlayback.backgroundOffsetX * bgScale
-      bgContainer.x = -offsetPx
-      foregroundContainer.x = -offsetPx
-      // Avance le crossfade seamless des vidéos de fond / avant-plan.
-      // En mode film, l'updater est gelé pendant la pause (sinon il relancerait
-      // activement les vidéos pausées via son auto-play).
-      if (playingRef.current || !filmEnabled) {
-        if (bgVideoUpdate) bgVideoUpdate()
-        if (fgVideoUpdate) fgVideoUpdate()
-      }
-
-      // Fade global de fin de film.
-      if (filmEnabled) app.stage.alpha = filmFadeAlpha
+      updateDecorFrame()
 
       // Outlines de zones
       outlineOverlay.clear()
@@ -1955,7 +2183,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           outlineOverlay.lineStyle(0)
         }
       }
-    })
+    }
 
     function handleResize() {
       if (!containerRef.current) return
@@ -1964,8 +2192,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     window.addEventListener('resize', handleResize)
 
     const getMultiPlayback = () => currentMultiPlaybackRef
-    ;(scenePlaybackRef.current as unknown as { getMultiPlayback: typeof getMultiPlayback }).getMultiPlayback = getMultiPlayback
-    ;(scenePlaybackRef.current as unknown as { triggerZoneOneshot: typeof triggerZoneOneshot }).triggerZoneOneshot = triggerZoneOneshot
+    // Ré-attaché après chaque recréation de ScenePlayback (changement de plan film).
+    function attachPlaybackExtensions() {
+      ;(scenePlaybackRef.current as unknown as { getMultiPlayback: typeof getMultiPlayback }).getMultiPlayback = getMultiPlayback
+      ;(scenePlaybackRef.current as unknown as { triggerZoneOneshot: typeof triggerZoneOneshot }).triggerZoneOneshot = triggerZoneOneshot
+      ;(scenePlaybackRef.current as unknown as { endZoneLoopOneshot: typeof endZoneLoopOneshot }).endZoneLoopOneshot = endZoneLoopOneshot
+    }
+    attachPlaybackExtensions()
 
     // Entrée 'fixed' : la scène démarre directement en interaction (pas de marche).
     // On déclenche alors l'intro de présentation (ou le film) maintenant que le
@@ -1995,6 +2228,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const audio of animAudioElements.values()) { audio.pause() }
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
       if (sceneAmbientAudio) { sceneAmbientAudio.pause(); try { URL.revokeObjectURL(sceneAmbientAudio.src) } catch { /* */ } }
+      document.getElementById('film-debug-error')?.remove()
       if (mouthOverlay) mouthOverlay.destroy()
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
@@ -2070,24 +2304,51 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       await playActionSound(action.sound, action.isSpoken === true)
     }
 
+    // Durée TOTALE de l'action (max anims / audio d'action / dernier audio
+    // d'étape) — calculée AVANT le lancement pour dimensionner les steps en boucle.
+    const totalMs = await estimateActionDurationMs(action, project.animations)
+
     // Marque l'action active : chaque oneshot suivant consomme une étape
     activeActionStepsRef.current = action.steps
     actionStepIdxRef.current = 0
 
-    const animIds = action.steps.map(s => s.animationId)
     const sp = scenePlaybackRef.current as unknown as {
       getMultiPlayback?: () => MultiAnimationPlayback | null
-      triggerZoneOneshot?: (animId: string, playSpeedMul?: number) => boolean
+      triggerZoneOneshot?: (animId: string, playSpeedMul?: number, loop?: boolean) => boolean
+      endZoneLoopOneshot?: () => void
     }
     const mp = sp?.getMultiPlayback?.()
     if (mp) {
-      mp.requestSequence(animIds, action.steps.map(s => s.animSpeedMul ?? 1))
+      // Steps en BOUCLE : rejoués assez de fois pour couvrir la durée totale de
+      // l'action (typiquement : courir sur place pendant tout un dialogue superposé).
+      const stepMs = (st: (typeof action.steps)[number]) => {
+        const anim = project.animations.find(x => x.id === st.animationId)
+        const n = anim?.mesh?.videoFramesMesh?.length ?? anim?.mesh?.walkBodyFrames?.length ?? 0
+        return (n / 24 / Math.max(0.01, st.animSpeedMul ?? 1)) * 1000
+      }
+      const baseMs = action.steps.reduce((acc, st) => acc + stepMs(st), 0)
+      const firstLoopIdx = action.steps.findIndex(st => st.loop === true)
+      const seqIds: string[] = []
+      const seqSpeeds: number[] = []
+      for (let i = 0; i < action.steps.length; i++) {
+        const st = action.steps[i]
+        let repeats = 1
+        if (i === firstLoopIdx && totalMs > baseMs) {
+          const one = stepMs(st)
+          if (one > 0) repeats = 1 + Math.ceil((totalMs - baseMs) / one)
+        }
+        for (let r = 0; r < repeats; r++) {
+          seqIds.push(st.animationId)
+          seqSpeeds.push(st.animSpeedMul ?? 1)
+        }
+      }
+      mp.requestSequence(seqIds, seqSpeeds)
     } else {
       // Chemin zone-based (rest cotracker-bones / walk / members-bones) : une seule
       // animation jouée via triggerZoneOneshot, et pas de callback onOneshotStart →
       // on joue le son du 1er step ICI (sinon les sons de step restent muets).
-      sp?.triggerZoneOneshot?.(animIds[0], action.steps[0]?.animSpeedMul ?? 1)
       const step0 = action.steps[0]
+      sp?.triggerZoneOneshot?.(step0.animationId, step0.animSpeedMul ?? 1, step0.loop === true)
       if (step0?.sound?.blob) {
         void playActionSound(step0.sound, step0.isSpoken === true)
       }
@@ -2097,12 +2358,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       actionStepIdxRef.current = 0
     }
 
-    // Durée du curseur circulaire = durée TOTALE de l'action (max anims / audio
-    // d'action / dernier audio d'étape) — calcul partagé avec le mode film.
-    const totalMs = await estimateActionDurationMs(action, project.animations)
     startBtnTimer(btnId, totalMs, () => {
       actionPlayingRef.current = false
-      // Coupe les sons en LOOP de l'action (ils ne se terminent pas d'eux-mêmes).
+      // Coupe les sons en LOOP de l'action (ils ne se terminent pas d'eux-mêmes)
+      // et l'éventuel oneshot zone en boucle (retour à l'idle).
+      sp?.endZoneLoopOneshot?.()
       for (const a of loopingActionAudiosRef.current) {
         a.pause()
         try { URL.revokeObjectURL(a.src) } catch { /* */ }

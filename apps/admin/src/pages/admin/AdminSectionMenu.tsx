@@ -56,6 +56,28 @@ export default function AdminSectionMenu() {
       </Link>
 
       <Link
+        to={canEditScene ? 'film' : '#'}
+        className={`admin-section-card ${!canEditScene ? 'admin-section-card--disabled' : ''}`}
+        onClick={e => { if (!canEditScene) e.preventDefault() }}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="32" height="32">
+          <rect x="2" y="4" width="20" height="16" rx="2" />
+          <path d="M2 8h20" />
+          <path d="M6 4v4" />
+          <path d="M10 4v4" />
+          <path d="M14 4v4" />
+          <path d="M18 4v4" />
+          <path d="M10 12l5 3-5 3v-6z" />
+        </svg>
+        <span className="admin-section-card-title">Film</span>
+        <span className="admin-section-card-desc">
+          {canEditScene
+            ? 'Le film du coloriage : plans, chemin, actions, musique'
+            : 'Complétez au moins une animation pour créer le film'}
+        </span>
+      </Link>
+
+      <Link
         to={canEditScene ? 'scene' : '#'}
         className={`admin-section-card ${!canEditScene ? 'admin-section-card--disabled' : ''}`}
         onClick={e => { if (!canEditScene) e.preventDefault() }}
@@ -69,7 +91,7 @@ export default function AdminSectionMenu() {
         <span className="admin-section-card-title">Scène</span>
         <span className="admin-section-card-desc">
           {canEditScene
-            ? 'Éditeur de scène et transitions'
+            ? 'Éditeur de scène interactive (déprécié)'
             : 'Complétez au moins une animation pour accéder à la scène'}
         </span>
       </Link>

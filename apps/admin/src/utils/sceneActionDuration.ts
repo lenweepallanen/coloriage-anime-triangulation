@@ -1,5 +1,6 @@
 import type { Animation, Scene, SceneAction, SceneFilm } from '../types/project'
-import { buildFilmSegments } from './filmDirector'
+import { buildFilmSegments, resolveFilmPlans, transitionDurationMs } from './filmDirector'
+import { sampleFilmPath } from './filmPath'
 
 /** Lit la durée (ms) d'un blob audio via ses métadonnées. 0 si indéterminé. */
 export function getAudioDurationMs(blob: Blob): Promise<number> {
@@ -71,24 +72,42 @@ const ENDING_FADE_MS = 400
  */
 export async function estimateFilmDurations(film: SceneFilm, scene: Scene, animations: Animation[]): Promise<FilmDurationEstimate> {
   const segments = buildFilmSegments(film)
-  const bgW = scene.background?.width ?? 0
-  const bgH = scene.background?.height ?? 800
-  const frameHalfW = Math.max(1, Math.min(bgW > 0 ? bgW : Number.POSITIVE_INFINITY, bgH * (16 / 9)) / 2)
-  const edgeX = (side: 'left' | 'right') =>
-    side === 'left' ? film.cameraX - frameHalfW : film.cameraX + frameHalfW
+  const plans = resolveFilmPlans(film, scene)
+  // Bords du cadre 16:9 PAR PLAN (le décor et le cadrage changent à chaque plan).
+  const edgeX = (planIndex: number, side: 'left' | 'right') => {
+    const plan = plans[planIndex]
+    const bgW = plan?.background?.width ?? 0
+    const bgH = plan?.background?.height ?? 800
+    const frameHalfW = Math.max(1, Math.min(bgW > 0 ? bgW : Number.POSITIVE_INFINITY, bgH * (16 / 9)) / 2)
+    const camX = plan?.cameraX ?? 0
+    return side === 'left' ? camX - frameHalfW : camX + frameHalfW
+  }
 
-  let pos = { x: edgeX(film.entrySide), y: film.points[0]?.y ?? 0 }
+  let pos = { x: edgeX(0, plans[0]?.entrySide ?? 'left'), y: plans[0]?.points[0]?.y ?? 0 }
   const out: number[] = []
   for (const seg of segments) {
     if (seg.kind === 'action') {
       out.push((await estimateActionDurationMs(seg.action, animations)) + ACTION_SETTLE_MS)
       continue
     }
+    if (seg.kind === 'pause') {
+      out.push(seg.durationMs)
+      continue
+    }
+    if (seg.kind === 'planSwitch') {
+      out.push(transitionDurationMs(seg.transition))
+      // Le plan suivant démarre hors-champ par son côté d'entrée.
+      const next = plans[seg.toPlanIndex]
+      pos = { x: edgeX(seg.toPlanIndex, next?.entrySide ?? 'left'), y: next?.points[0]?.y ?? 0 }
+      continue
+    }
     const target = seg.opts.offscreenEnd
-      ? { x: edgeX(seg.opts.offscreenEnd), y: pos.y }
+      ? { x: edgeX(seg.planIndex, seg.opts.offscreenEnd), y: pos.y }
       : seg.target ?? pos
-    if (seg.opts.offscreenStart) pos = { x: edgeX(seg.opts.offscreenStart), y: target.y }
-    const dist = Math.hypot(target.x - pos.x, target.y - pos.y)
+    if (seg.opts.startAt) pos = { x: seg.opts.startAt.x, y: seg.opts.startAt.y }
+    else if (seg.opts.offscreenStart) pos = { x: edgeX(seg.planIndex, seg.opts.offscreenStart), y: target.y }
+    // Longueur du chemin via la même table arc-length que le playback (courbes incluses).
+    const dist = sampleFilmPath(pos, target, seg.opts.controlPoints).totalLen
     pos = target
     out.push((dist / seg.opts.speedPxPerSec) * 1000)
   }

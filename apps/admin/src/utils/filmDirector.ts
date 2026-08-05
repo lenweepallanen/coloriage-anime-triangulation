@@ -1,7 +1,28 @@
-import type { SceneAction, SceneFilm, SceneSound } from '../types/project'
+import type { FilmPlanTransition, Scene, SceneAction, SceneFilm, SceneFilmPlan, SceneSound } from '../types/project'
 import type { FilmTravelOpts, SceneState } from './scenePlayback'
 
-export type FilmPhase = 'idle' | 'travel' | 'action' | 'settle' | 'ending' | 'done'
+export type FilmPhase = 'idle' | 'travel' | 'action' | 'pause' | 'planSwitch' | 'settle' | 'ending' | 'done'
+
+/** Durées par défaut des transitions de plan (partagées player ↔ estimation). */
+export function transitionDurationMs(t: FilmPlanTransition): number {
+  switch (t.kind) {
+    case 'cut': return 0
+    case 'iris': return t.durationMs ?? 700
+    default: return t.durationMs ?? 500
+  }
+}
+
+/**
+ * Plans JOUABLES du film (≥ 1 point), avec le fallback décor appliqué : un plan
+ * sans background propre utilise le décor de la scène (background ET foreground,
+ * en bloc). Même filtre que buildFilmSegments → les `planIndex`/`toPlanIndex`
+ * des segments indexent ce tableau.
+ */
+export function resolveFilmPlans(film: SceneFilm, scene: Scene): SceneFilmPlan[] {
+  return (film.plans ?? [])
+    .filter(p => (p.points?.length ?? 0) > 0)
+    .map(p => p.background != null ? p : { ...p, background: scene.background, foreground: scene.foreground })
+}
 
 /**
  * Pont entre le director (pur) et les primitives du ScenePlayer (closures du
@@ -16,6 +37,10 @@ export interface FilmDirectorAdapter {
   playAction(action: SceneAction, btnId: string): void
   isActionPlaying(): boolean
   isActionPlayable(action: SceneAction): boolean
+  /** Lance le changement de plan (transition visuelle + swap décor/caméra). */
+  startPlanSwitch(toPlanIndex: number, transition: FilmPlanTransition): void
+  /** true quand la transition est finie ET le décor du nouveau plan est prêt. */
+  isPlanSwitchDone(): boolean
   /** true quand MultiAnimationPlayback est revenu au rest (pas en transition). */
   isPlaybackSettled(): boolean
   getSceneState(): SceneState
@@ -42,12 +67,24 @@ const SETTLE_GRACE_MS = 120
 const ENDING_FADE_MS = 400
 
 /**
- * Segment interne du chemin : le film est aplati en une séquence
- * [entryTravel, action?, travel, action?, …, endingTravel? ] au constructeur.
+ * Segment interne du chemin : le film (tous plans confondus) est aplati en une
+ * séquence [entryTravel, action?, pause?, departureTravel?, …, planSwitch, …,
+ * endingTravel? ]. `planIndex` = index du plan du segment (progression, edges).
  */
-type FilmSegment =
-  | { kind: 'travel'; target: { x: number; y: number } | null; opts: FilmTravelOpts; sound?: SceneSound }
-  | { kind: 'action'; action: SceneAction }
+export type FilmSegment =
+  | { kind: 'travel'; planIndex: number; target: { x: number; y: number } | null; opts: FilmTravelOpts; sound?: SceneSound }
+  | { kind: 'action'; planIndex: number; action: SceneAction }
+  | { kind: 'pause'; planIndex: number; durationMs: number }
+  | { kind: 'planSwitch'; planIndex: number; toPlanIndex: number; transition: FilmPlanTransition }
+
+function phaseForSegment(seg: FilmSegment): FilmPhase {
+  switch (seg.kind) {
+    case 'travel': return 'travel'
+    case 'action': return 'action'
+    case 'pause': return 'pause'
+    case 'planSwitch': return 'planSwitch'
+  }
+}
 
 /**
  * Machine d'états du mode film v2 (chemin de points) : entrée hors-champ → pour
@@ -91,7 +128,7 @@ export class FilmDirector {
     this.segIndex = 0
     this.launched = false
     this.segmentElapsedMs = 0
-    this._phase = this.segments[0].kind === 'travel' ? 'travel' : 'action'
+    this._phase = phaseForSegment(this.segments[0])
   }
 
   get phase(): FilmPhase {
@@ -139,6 +176,8 @@ export class FilmDirector {
       }
       case 'travel':
       case 'action':
+      case 'pause':
+      case 'planSwitch':
         this.updateSegment(deltaMs)
         return
     }
@@ -149,10 +188,28 @@ export class FilmDirector {
     if (!seg) { this.beginEnding(); return }
     this.segmentElapsedMs += deltaMs
 
+    if (seg.kind === 'pause') {
+      // Attente idle au point : le perso reste en interaction, rien à lancer.
+      if (this.segmentElapsedMs >= seg.durationMs) this.advance()
+      return
+    }
+
+    if (seg.kind === 'planSwitch') {
+      // Changement de plan : transition visuelle + swap décor. Fin par polling
+      // (attend aussi le chargement du décor du nouveau plan).
+      if (!this.launched) {
+        this.launched = true
+        this.adapter.startPlanSwitch(seg.toPlanIndex, seg.transition)
+        return
+      }
+      if (this.adapter.isPlanSwitchDone()) this.advance()
+      return
+    }
+
     if (seg.kind === 'travel') {
       if (!this.launched) {
         this.launched = true
-        this.terminalTravel = seg.opts.offscreenEnd != null
+        this.terminalTravel = seg.opts.offscreenEnd != null && seg.opts.terminal !== false
         this.adapter.startTravel(seg.target, seg.opts)
         if (seg.sound) this.adapter.playTravelSound(seg.sound)
         return
@@ -197,7 +254,7 @@ export class FilmDirector {
     if (this.segIndex >= this.segments.length) {
       this.beginEnding()
     } else {
-      this._phase = this.segments[this.segIndex].kind === 'travel' ? 'travel' : 'action'
+      this._phase = phaseForSegment(this.segments[this.segIndex])
     }
   }
 
@@ -215,53 +272,122 @@ export class FilmDirector {
   }
 }
 
-/** Aplatit un SceneFilm v2 en segments jouables. Exporté pour l'estimation de durées. */
+/** Aplatit un SceneFilm (tous plans) en segments jouables. Exporté pour l'estimation de durées. */
 export function buildFilmSegments(film: SceneFilm): FilmSegment[] {
   const segments: FilmSegment[] = []
-  const points = film.points ?? []
-  if (points.length === 0) return segments
+  const plans = (film.plans ?? []).filter(pl => (pl.points?.length ?? 0) > 0)
 
-  const resolveOpts = (
-    travel: import('../types/project').FilmTravel,
-    scaleFrom: number,
-    scaleTo: number,
-  ): FilmTravelOpts => ({
-    speedPxPerSec: Math.max(1, travel.speedPxPerSec ?? film.moveSpeedPxPerSec),
-    scaleFrom,
-    scaleTo,
-    ...((travel.animationId ?? film.moveAnimationId) != null && { animationId: travel.animationId ?? film.moveAnimationId }),
-    ...(travel.animSpeedMul != null && { animSpeedMul: travel.animSpeedMul }),
-  })
+  plans.forEach((plan, k) => {
+    const points = plan.points
+    const isLastPlan = k === plans.length - 1
 
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i]
-    const scaleFrom = i === 0 ? p.scale : points[i - 1].scale
-    segments.push({
-      kind: 'travel',
-      target: { x: p.x, y: p.y },
-      opts: {
-        ...resolveOpts(p.travel, scaleFrom, p.scale),
-        ...(i === 0 && { offscreenStart: film.entrySide }),
-      },
-      ...(p.travel.sound != null && { sound: p.travel.sound }),
+    const resolveOpts = (
+      travel: import('../types/project').FilmTravel,
+      scaleFrom: number,
+      scaleTo: number,
+    ): FilmTravelOpts => ({
+      speedPxPerSec: Math.max(1, travel.speedPxPerSec ?? plan.moveSpeedPxPerSec ?? film.moveSpeedPxPerSec),
+      scaleFrom,
+      scaleTo,
+      ...((travel.animationId ?? plan.moveAnimationId ?? film.moveAnimationId) != null
+        && { animationId: travel.animationId ?? plan.moveAnimationId ?? film.moveAnimationId }),
+      ...(travel.animSpeedMul != null && { animSpeedMul: travel.animSpeedMul }),
+      ...(travel.controlPoints != null && travel.controlPoints.length > 0 && { controlPoints: travel.controlPoints }),
+      ...(travel.easing != null && { easing: travel.easing }),
     })
-    if (p.action && p.action.steps.length > 0) {
-      segments.push({ kind: 'action', action: p.action })
+
+    // Échelle "cursor" = échelle du perso à la fin du segment précédent.
+    let cursorScale = points[0].scale
+
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]
+      const origin = p.travel.origin
+      // Origine résolue du trajet entrant : téléportation (offscreen/custom) →
+      // scaleFrom = échelle du point (pas d'interpolation après téléport).
+      let scaleFrom = cursorScale
+      const originOpts: Partial<FilmTravelOpts> = {}
+      if (origin?.kind === 'offscreen') {
+        originOpts.offscreenStart = origin.side
+        scaleFrom = p.scale
+      } else if (origin?.kind === 'custom') {
+        originOpts.startAt = { x: origin.x, y: origin.y }
+        scaleFrom = p.scale
+      } else if (origin?.kind === 'appear') {
+        // Apparition : trajet de longueur nulle — le perso est posé sur le point.
+        originOpts.startAt = { x: p.x, y: p.y }
+        scaleFrom = p.scale
+      } else if (i === 0) {
+        // Entrée du plan : hors-champ par le côté d'entrée du plan.
+        originOpts.offscreenStart = plan.entrySide
+        scaleFrom = p.scale
+      }
+      segments.push({
+        kind: 'travel',
+        planIndex: k,
+        target: { x: p.x, y: p.y },
+        opts: {
+          ...resolveOpts(p.travel, scaleFrom, p.scale),
+          ...originOpts,
+          ...(p.facing != null && { arriveFacing: p.facing }),
+        },
+        ...(p.travel.sound != null && { sound: p.travel.sound }),
+      })
+      cursorScale = p.scale
+      if (p.action && p.action.steps.length > 0) {
+        segments.push({ kind: 'action', planIndex: k, action: p.action })
+      }
+      if (p.pauseMs != null && p.pauseMs > 0) {
+        segments.push({ kind: 'pause', planIndex: k, durationMs: p.pauseMs })
+      }
+      if (p.departure) {
+        const target = p.departure.target
+        if (target.kind === 'offscreen') {
+          segments.push({
+            kind: 'travel',
+            planIndex: k,
+            target: null,
+            opts: { ...resolveOpts(p.departure.travel, p.scale, p.scale), offscreenEnd: target.side, terminal: false },
+            ...(p.departure.travel.sound != null && { sound: p.departure.travel.sound }),
+          })
+        } else {
+          const depScale = target.scale ?? p.scale
+          segments.push({
+            kind: 'travel',
+            planIndex: k,
+            target: { x: target.x, y: target.y },
+            opts: resolveOpts(p.departure.travel, p.scale, depScale),
+            ...(p.departure.travel.sound != null && { sound: p.departure.travel.sound }),
+          })
+          cursorScale = depScale
+        }
+      }
     }
-  }
 
-  if (film.ending.kind === 'exit') {
-    const lastScale = points[points.length - 1].scale
-    segments.push({
-      kind: 'travel',
-      target: null,
-      opts: {
-        ...resolveOpts(film.ending.travel, lastScale, lastScale),
-        offscreenEnd: film.ending.side,
-      },
-      ...(film.ending.travel.sound != null && { sound: film.ending.travel.sound }),
-    })
-  }
+    if (plan.ending.kind === 'exit') {
+      // Sortie du plan : TERMINALE uniquement sur le dernier plan (fade + Bravo) ;
+      // sinon le perso sort du champ puis la transition enchaîne le plan suivant.
+      segments.push({
+        kind: 'travel',
+        planIndex: k,
+        target: null,
+        opts: {
+          ...resolveOpts(plan.ending.travel, cursorScale, cursorScale),
+          offscreenEnd: plan.ending.side,
+          ...(!isLastPlan && { terminal: false }),
+        },
+        ...(plan.ending.travel.sound != null && { sound: plan.ending.travel.sound }),
+      })
+    }
+
+    if (!isLastPlan) {
+      segments.push({
+        kind: 'planSwitch',
+        planIndex: k,
+        toPlanIndex: k + 1,
+        transition: plan.transitionToNext ?? { kind: 'cut' },
+      })
+    }
+  })
 
   return segments
 }

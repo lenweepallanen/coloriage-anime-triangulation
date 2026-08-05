@@ -197,6 +197,7 @@ interface SceneActionStepDoc {
   sound?: SceneSoundMetaDoc
   isSpoken?: boolean
   animSpeedMul?: number
+  loop?: boolean
 }
 
 interface SceneActionDoc {
@@ -229,11 +230,30 @@ interface SceneRestPointDoc {
   helpTexts?: string[]
 }
 
+type FilmTravelOriginDoc =
+  | { kind: 'previous' }
+  | { kind: 'offscreen'; side: 'left' | 'right' }
+  | { kind: 'custom'; x: number; y: number }
+  | { kind: 'appear' }
+
 interface FilmTravelDoc {
   animationId?: string
   speedPxPerSec?: number
   animSpeedMul?: number
   sound?: SceneSoundMetaDoc
+  origin?: FilmTravelOriginDoc
+  /** Array de maps {x, y} — OK Firestore (pas d'array imbriqué). */
+  controlPoints?: { x: number; y: number }[]
+  easing?: import('../types/project').FilmTravelEasing
+}
+
+type FilmDepartureTargetDoc =
+  | { kind: 'offscreen'; side: 'left' | 'right' }
+  | { kind: 'custom'; x: number; y: number; scale?: number }
+
+interface FilmDepartureDoc {
+  target: FilmDepartureTargetDoc
+  travel: FilmTravelDoc
 }
 
 interface FilmPointDoc {
@@ -243,22 +263,86 @@ interface FilmPointDoc {
   scale: number
   travel: FilmTravelDoc
   action?: SceneActionDoc
+  pauseMs?: number
+  facing?: 'left' | 'right'
+  departure?: FilmDepartureDoc
 }
 
 type FilmEndingDoc =
   | { kind: 'exit'; side: 'left' | 'right'; travel: FilmTravelDoc }
   | { kind: 'stay' }
 
-interface SceneFilmDoc {
-  enabled: boolean
+interface FilmPlanDoc {
+  id: string
+  name?: string
+  /** null/absent = décor de la scène (fallback). Blobs dans Storage filmPlans/{planId}/. */
+  background?: SceneBackgroundDoc | null
+  foreground?: SceneForegroundDoc | null
+  cameraX: number
   entrySide: 'left' | 'right'
   points: FilmPointDoc[]
   ending: FilmEndingDoc
-  cameraX: number
+  transitionToNext?: import('../types/project').FilmPlanTransition
+  moveAnimationId?: string
+  moveSpeedPxPerSec?: number
+  idleSpeedMul?: number
+}
+
+interface SceneFilmDoc {
+  enabled: boolean
+  /** Nouveau format multi-plans. */
+  plans?: FilmPlanDoc[]
+  /** Miroir legacy de plans[0] à plat — lu par les clients play pas encore
+   *  déployés (dégradation douce : ils jouent au moins le plan 1). */
+  entrySide?: 'left' | 'right'
+  points?: FilmPointDoc[]
+  ending?: FilmEndingDoc
+  cameraX?: number
   moveAnimationId?: string
   moveSpeedPxPerSec: number
   idleSpeedMul?: number
   endBehavior: 'menu'
+}
+
+// --- FILM niveau projet (modèle cible, indépendant de la scène) ---
+// Storage : projects/{id}/film/plans/{planId}/backdrop|overlay
+//           projects/{id}/film/sounds/{soundId}
+
+interface FilmBackdropDoc {
+  hasImage: boolean
+  hasVideo: boolean
+  width: number
+  height: number
+}
+
+interface FilmOverlayDoc extends FilmBackdropDoc {
+  chromaKeyColor?: string | null
+  chromaKeyThreshold?: number
+  chromaKeySmoothness?: number
+}
+
+interface FilmPlanV3Doc {
+  id: string
+  name?: string
+  backdrop?: FilmBackdropDoc | null
+  overlay?: FilmOverlayDoc | null
+  cameraX: number
+  entrySide: 'left' | 'right'
+  points: FilmPointDoc[]
+  ending: FilmEndingDoc
+  transitionToNext?: import('../types/project').FilmPlanTransition
+  moveAnimationId?: string
+  moveSpeedPxPerSec?: number
+  idleSpeedMul?: number
+}
+
+interface FilmDoc {
+  plans: FilmPlanV3Doc[]
+  character: { scale: number; facing: 'left' | 'right'; originU: number; originV: number }
+  music?: SceneSoundMetaDoc
+  moveAnimationId?: string
+  moveSpeedPxPerSec: number
+  idleSpeedMul?: number
 }
 
 interface SceneSegmentDoc {
@@ -417,6 +501,8 @@ interface ProjectDoc {
   animations: AnimationDoc[]
   bodyZones?: BodyZoneDoc[]
   markers: Project['markers']
+  /** FILM niveau projet (modèle cible). Absent = pas encore migré/créé. */
+  film?: FilmDoc | null
   scene: SceneDoc | null
   projectTriangulation?: ProjectTriangulationDoc | null
   projectEyes?: Project['projectEyes']
@@ -448,30 +534,42 @@ function projectRef(id: string) {
   return doc(db, 'projects', id)
 }
 
-/** Itère tous les SceneSound d'un film v2 : sons d'action des points (son global +
- *  sons de steps) + sons de trajet (points + sortie). */
+/** Itère tous les SceneSound d'un film : par plan, sons d'action des points (son
+ *  global + sons de steps) + sons de trajet (entrant, sortie de point, sortie de plan). */
 function* iterateFilmSounds(film: import('../types/project').SceneFilm | undefined): Generator<import('../types/project').SceneSound> {
   if (!film) return
-  for (const p of film.points ?? []) {
-    if (p.travel?.sound) yield p.travel.sound
-    if (p.action) {
-      if (p.action.sound) yield p.action.sound
-      for (const s of p.action.steps ?? []) if (s.sound) yield s.sound
+  for (const plan of film.plans ?? []) {
+    for (const p of plan.points ?? []) {
+      if (p.travel?.sound) yield p.travel.sound
+      if (p.departure?.travel?.sound) yield p.departure.travel.sound
+      if (p.action) {
+        if (p.action.sound) yield p.action.sound
+        for (const s of p.action.steps ?? []) if (s.sound) yield s.sound
+      }
     }
+    if (plan.ending?.kind === 'exit' && plan.ending.travel?.sound) yield plan.ending.travel.sound
   }
-  if (film.ending?.kind === 'exit' && film.ending.travel?.sound) yield film.ending.travel.sound
 }
 
-/** Même traversée côté doc Firestore (métadonnées, sans blobs). */
+/** Même traversée côté doc Firestore (métadonnées, sans blobs). Supporte le
+ *  nouveau format `plans` ET l'ancien format à plat (docs pas encore réécrits). */
 function collectFilmDocSoundMetas(filmDoc: SceneFilmDoc | undefined): SceneSoundMetaDoc[] {
-  if (!filmDoc || !Array.isArray(filmDoc.points)) return []
+  if (!filmDoc) return []
   const out: SceneSoundMetaDoc[] = []
-  for (const p of filmDoc.points) {
-    if (p.travel?.sound) out.push(p.travel.sound)
-    if (p.action?.sound) out.push(p.action.sound)
-    for (const s of p.action?.steps ?? []) if (s.sound) out.push(s.sound)
+  const collectPoints = (points: FilmPointDoc[] | undefined, ending: FilmEndingDoc | undefined) => {
+    for (const p of points ?? []) {
+      if (p.travel?.sound) out.push(p.travel.sound)
+      if (p.departure?.travel?.sound) out.push(p.departure.travel.sound)
+      if (p.action?.sound) out.push(p.action.sound)
+      for (const s of p.action?.steps ?? []) if (s.sound) out.push(s.sound)
+    }
+    if (ending?.kind === 'exit' && ending.travel?.sound) out.push(ending.travel.sound)
   }
-  if (filmDoc.ending?.kind === 'exit' && filmDoc.ending.travel?.sound) out.push(filmDoc.ending.travel.sound)
+  if (Array.isArray(filmDoc.plans) && filmDoc.plans.length > 0) {
+    for (const plan of filmDoc.plans) collectPoints(plan.points, plan.ending)
+  } else if (Array.isArray(filmDoc.points)) {
+    collectPoints(filmDoc.points, filmDoc.ending)
+  }
   return out
 }
 
@@ -515,12 +613,57 @@ function findSceneSoundBlob(project: Project, soundId: string): Blob | null {
   return null
 }
 
+/**
+ * Télécharge les blobs de décor propres aux plans du film (Storage
+ * `projects/{id}/filmPlans/{planId}/background|foreground`) et les attache.
+ * Un plan avec `background: null` (décor de la scène) est laissé tel quel.
+ */
+async function hydrateFilmPlanDecorBlobs(
+  projectId: string,
+  film: import('../types/project').SceneFilm,
+  filmDoc: SceneFilmDoc,
+): Promise<import('../types/project').SceneFilm> {
+  const docPlans = new Map((filmDoc.plans ?? []).map(p => [p.id, p]))
+  const plans = await Promise.all(film.plans.map(async (plan) => {
+    const docPlan = docPlans.get(plan.id)
+    if (!docPlan) return plan
+    let background = plan.background
+    if (background && docPlan.background) {
+      const blob = await downloadBlob(`projects/${projectId}/filmPlans/${plan.id}/background`).catch(() => null)
+      const isVideo = blob ? (blob.type.startsWith('video/') || docPlan.background.hasVideo === true) : docPlan.background.hasVideo === true
+      background = { ...background, imageBlob: isVideo ? null : blob, videoBlob: isVideo ? blob : null }
+    }
+    let foreground = plan.foreground
+    if (foreground && docPlan.foreground) {
+      const blob = await downloadBlob(`projects/${projectId}/filmPlans/${plan.id}/foreground`).catch(() => null)
+      const isVideo = blob ? (blob.type.startsWith('video/') || docPlan.foreground.hasVideo === true) : docPlan.foreground.hasVideo === true
+      foreground = { ...foreground, imageBlob: isVideo ? null : blob, videoBlob: isVideo ? blob : null }
+    }
+    return { ...plan, background, foreground }
+  }))
+  return { ...film, plans }
+}
+
 const STORAGE_CACHE_METADATA = { cacheControl: 'public, max-age=31536000, immutable' }
 
+/** Upload avec retry (3 tentatives, backoff) : un échec transitoire au milieu
+ *  d'une rafale (duplication ≈ 30 fichiers) ne doit pas laisser un projet
+ *  à moitié copié. Échec définitif → throw (remonté à l'appelant). */
 async function uploadBlob(path: string, blob: Blob): Promise<void> {
   const storageRef = ref(storage, path)
-  await uploadBytes(storageRef, blob, STORAGE_CACHE_METADATA)
-  invalidateBlobCache(path)
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await uploadBytes(storageRef, blob, STORAGE_CACHE_METADATA)
+      invalidateBlobCache(path)
+      return
+    } catch (err) {
+      lastErr = err
+      console.warn(`[Storage] Upload échoué (tentative ${attempt}/3) pour ${path}`, err)
+      if (attempt < 3) await new Promise(r => setTimeout(r, 700 * attempt))
+    }
+  }
+  throw lastErr
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {
@@ -986,6 +1129,7 @@ function actionToDoc(a: import('../types/project').SceneAction): SceneActionDoc 
       ...(s.sound != null && { sound: sceneSoundMetaToDoc(s.sound) }),
       ...(s.isSpoken && { isSpoken: true }),
       ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
+      ...(s.loop && { loop: true }),
     })),
     ...(a.sound != null && { sound: sceneSoundMetaToDoc(a.sound) }),
     ...(a.isSpoken && { isSpoken: true }),
@@ -998,30 +1142,330 @@ function filmTravelToDoc(t: import('../types/project').FilmTravel): FilmTravelDo
     ...(t.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
     ...(t.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
     ...(t.sound != null && { sound: sceneSoundMetaToDoc(t.sound) }),
+    ...(t.origin != null && { origin: t.origin }),
+    ...(t.controlPoints != null && t.controlPoints.length > 0 && { controlPoints: t.controlPoints.map(cp => ({ x: cp.x, y: cp.y })) }),
+    ...(t.easing != null && { easing: t.easing }),
+  }
+}
+
+function filmDepartureToDoc(d: import('../types/project').FilmDeparture): FilmDepartureDoc {
+  return {
+    target: d.target.kind === 'offscreen'
+      ? { kind: 'offscreen', side: d.target.side }
+      : { kind: 'custom', x: d.target.x, y: d.target.y, ...(d.target.scale != null && { scale: d.target.scale }) },
+    travel: filmTravelToDoc(d.travel),
+  }
+}
+
+function filmPointToDoc(p: import('../types/project').FilmPoint): FilmPointDoc {
+  return {
+    id: p.id,
+    x: p.x,
+    y: p.y,
+    scale: p.scale,
+    travel: filmTravelToDoc(p.travel),
+    ...(p.action != null && { action: actionToDoc(p.action) }),
+    ...(p.pauseMs != null && p.pauseMs > 0 && { pauseMs: p.pauseMs }),
+    ...(p.facing != null && { facing: p.facing }),
+    ...(p.departure != null && { departure: filmDepartureToDoc(p.departure) }),
+  }
+}
+
+function filmEndingToDoc(e: import('../types/project').FilmEnding): FilmEndingDoc {
+  return e.kind === 'exit'
+    ? { kind: 'exit', side: e.side, travel: filmTravelToDoc(e.travel) }
+    : { kind: 'stay' }
+}
+
+function filmPlanToDoc(pl: import('../types/project').SceneFilmPlan): FilmPlanDoc {
+  return {
+    id: pl.id,
+    ...(pl.name != null && { name: pl.name }),
+    background: pl.background ? {
+      hasImage: pl.background.imageBlob != null,
+      hasVideo: pl.background.videoBlob != null,
+      width: pl.background.width,
+      height: pl.background.height,
+    } : null,
+    foreground: pl.foreground ? {
+      hasImage: pl.foreground.imageBlob != null,
+      hasVideo: pl.foreground.videoBlob != null,
+      width: pl.foreground.width,
+      height: pl.foreground.height,
+      ...(pl.foreground.chromaKeyColor != null && { chromaKeyColor: pl.foreground.chromaKeyColor }),
+      ...(pl.foreground.chromaKeyThreshold != null && { chromaKeyThreshold: pl.foreground.chromaKeyThreshold }),
+      ...(pl.foreground.chromaKeySmoothness != null && { chromaKeySmoothness: pl.foreground.chromaKeySmoothness }),
+    } : null,
+    cameraX: pl.cameraX,
+    entrySide: pl.entrySide,
+    points: pl.points.map(filmPointToDoc),
+    ending: filmEndingToDoc(pl.ending),
+    ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+    ...(pl.moveAnimationId != null && { moveAnimationId: pl.moveAnimationId }),
+    ...(pl.moveSpeedPxPerSec != null && { moveSpeedPxPerSec: pl.moveSpeedPxPerSec }),
+    ...(pl.idleSpeedMul != null && { idleSpeedMul: pl.idleSpeedMul }),
   }
 }
 
 function filmToDoc(film: import('../types/project').SceneFilm): SceneFilmDoc {
+  const first = film.plans[0]
   return {
     enabled: film.enabled,
-    entrySide: film.entrySide,
-    points: film.points.map((p): FilmPointDoc => ({
-      id: p.id,
-      x: p.x,
-      y: p.y,
-      scale: p.scale,
-      travel: filmTravelToDoc(p.travel),
-      ...(p.action != null && { action: actionToDoc(p.action) }),
-    })),
-    ending: film.ending.kind === 'exit'
-      ? { kind: 'exit', side: film.ending.side, travel: filmTravelToDoc(film.ending.travel) }
-      : { kind: 'stay' },
-    cameraX: film.cameraX,
+    plans: film.plans.map(filmPlanToDoc),
+    // Miroir legacy de plans[0] à plat : un client play pas encore déployé joue
+    // au moins le plan 1 (les nouveaux champs y sont simplement ignorés).
+    entrySide: first?.entrySide ?? 'left',
+    points: first ? first.points.map(filmPointToDoc) : [],
+    ending: first ? filmEndingToDoc(first.ending) : { kind: 'stay' },
+    cameraX: first?.cameraX ?? 0,
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     moveSpeedPxPerSec: film.moveSpeedPxPerSec,
     ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
     endBehavior: film.endBehavior,
   }
+}
+
+// --- Sérialisation FILM niveau projet ---
+
+function filmV3ToDoc(film: import('../types/project').Film): FilmDoc {
+  return {
+    plans: film.plans.map((pl): FilmPlanV3Doc => ({
+      id: pl.id,
+      ...(pl.name != null && { name: pl.name }),
+      backdrop: pl.backdrop ? {
+        hasImage: pl.backdrop.imageBlob != null,
+        hasVideo: pl.backdrop.videoBlob != null,
+        width: pl.backdrop.width,
+        height: pl.backdrop.height,
+      } : null,
+      overlay: pl.overlay ? {
+        hasImage: pl.overlay.imageBlob != null,
+        hasVideo: pl.overlay.videoBlob != null,
+        width: pl.overlay.width,
+        height: pl.overlay.height,
+        ...(pl.overlay.chromaKeyColor != null && { chromaKeyColor: pl.overlay.chromaKeyColor }),
+        ...(pl.overlay.chromaKeyThreshold != null && { chromaKeyThreshold: pl.overlay.chromaKeyThreshold }),
+        ...(pl.overlay.chromaKeySmoothness != null && { chromaKeySmoothness: pl.overlay.chromaKeySmoothness }),
+      } : null,
+      cameraX: pl.cameraX,
+      entrySide: pl.entrySide,
+      points: pl.points.map(filmPointToDoc),
+      ending: filmEndingToDoc(pl.ending),
+      ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+      ...(pl.moveAnimationId != null && { moveAnimationId: pl.moveAnimationId }),
+      ...(pl.moveSpeedPxPerSec != null && { moveSpeedPxPerSec: pl.moveSpeedPxPerSec }),
+      ...(pl.idleSpeedMul != null && { idleSpeedMul: pl.idleSpeedMul }),
+    })),
+    character: {
+      scale: film.character.scale,
+      facing: film.character.facing,
+      originU: film.character.originU,
+      originV: film.character.originV,
+    },
+    ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
+    ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
+    moveSpeedPxPerSec: film.moveSpeedPxPerSec,
+    ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
+  }
+}
+
+/** Désérialise un FilmDoc. `getBlob` fournit les blobs des sons (film/sounds/{id}) ;
+ *  les décors de plans sont hydratés séparément (hydrateFilmV3DecorBlobs). */
+function docToFilmV3(filmDoc: FilmDoc, getBlob: (id: string) => Blob | null): import('../types/project').Film {
+  const mapSound = (m: SceneSoundMetaDoc): import('../types/project').SceneSound => ({
+    id: m.id, name: m.name, volume: m.volume, loop: m.loop, rate: m.rate, blob: getBlob(m.id),
+  })
+  const mapAction = (a: SceneActionDoc): import('../types/project').SceneAction => ({
+    id: a.id,
+    name: a.name,
+    steps: (a.steps ?? []).map(s => ({
+      animationId: s.animationId,
+      ...(s.sound != null && { sound: mapSound(s.sound) }),
+      ...(s.isSpoken && { isSpoken: true }),
+      ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
+      ...(s.loop && { loop: true }),
+    })),
+    ...(a.sound != null && { sound: mapSound(a.sound) }),
+    ...(a.isSpoken && { isSpoken: true }),
+  })
+  const mapTravel = (t: FilmTravelDoc | undefined): import('../types/project').FilmTravel => ({
+    ...(t?.animationId != null && { animationId: t.animationId }),
+    ...(t?.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
+    ...(t?.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
+    ...(t?.sound != null && { sound: mapSound(t.sound) }),
+    ...(t?.origin != null && { origin: t.origin }),
+    ...(t?.controlPoints != null && t.controlPoints.length > 0 && { controlPoints: t.controlPoints.map(cp => ({ x: cp.x, y: cp.y })) }),
+    ...(t?.easing != null && { easing: t.easing }),
+  })
+  const mapPoint = (p: FilmPointDoc): import('../types/project').FilmPoint => ({
+    id: p.id,
+    x: p.x,
+    y: p.y,
+    scale: p.scale ?? 1,
+    travel: mapTravel(p.travel),
+    ...(p.action != null && { action: mapAction(p.action) }),
+    ...(p.pauseMs != null && p.pauseMs > 0 && { pauseMs: p.pauseMs }),
+    ...(p.facing != null && { facing: p.facing }),
+    ...(p.departure != null && { departure: { target: p.departure.target, travel: mapTravel(p.departure.travel) } }),
+  })
+  const mapEnding = (e: FilmEndingDoc | undefined): import('../types/project').FilmEnding =>
+    e?.kind === 'exit' ? { kind: 'exit', side: e.side, travel: mapTravel(e.travel) } : { kind: 'stay' }
+
+  return {
+    plans: (filmDoc.plans ?? []).map((pl): import('../types/project').FilmPlan => ({
+      id: pl.id,
+      ...(pl.name != null && { name: pl.name }),
+      backdrop: pl.backdrop
+        ? { imageBlob: null, videoBlob: null, width: pl.backdrop.width, height: pl.backdrop.height }
+        : null,
+      overlay: pl.overlay
+        ? {
+            imageBlob: null,
+            videoBlob: null,
+            width: pl.overlay.width,
+            height: pl.overlay.height,
+            chromaKeyColor: pl.overlay.chromaKeyColor ?? null,
+            chromaKeyThreshold: pl.overlay.chromaKeyThreshold,
+            chromaKeySmoothness: pl.overlay.chromaKeySmoothness,
+          }
+        : null,
+      cameraX: pl.cameraX ?? 0,
+      entrySide: pl.entrySide ?? 'left',
+      points: (pl.points ?? []).map(mapPoint),
+      ending: mapEnding(pl.ending),
+      ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+      ...(pl.moveAnimationId != null && { moveAnimationId: pl.moveAnimationId }),
+      ...(pl.moveSpeedPxPerSec != null && { moveSpeedPxPerSec: pl.moveSpeedPxPerSec }),
+      ...(pl.idleSpeedMul != null && { idleSpeedMul: pl.idleSpeedMul }),
+    })),
+    character: {
+      scale: filmDoc.character?.scale ?? 1,
+      facing: filmDoc.character?.facing ?? 'right',
+      originU: filmDoc.character?.originU ?? 0.5,
+      originV: filmDoc.character?.originV ?? 1.0,
+    },
+    ...(filmDoc.music != null && { music: { id: filmDoc.music.id, name: filmDoc.music.name, blob: getBlob(filmDoc.music.id), volume: filmDoc.music.volume } }),
+    ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
+    moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
+    ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
+  }
+}
+
+/** Itère tous les sons d'un Film (musique + trajets + sorties + actions/étapes + endings). */
+function* iterateFilmV3Sounds(film: import('../types/project').Film | null | undefined): Generator<{ id: string; blob: Blob | null }> {
+  if (!film) return
+  if (film.music) yield { id: film.music.id, blob: film.music.blob }
+  for (const pl of film.plans) {
+    for (const p of pl.points) {
+      if (p.travel?.sound) yield { id: p.travel.sound.id, blob: p.travel.sound.blob }
+      if (p.departure?.travel?.sound) yield { id: p.departure.travel.sound.id, blob: p.departure.travel.sound.blob }
+      if (p.action) {
+        if (p.action.sound) yield { id: p.action.sound.id, blob: p.action.sound.blob }
+        for (const s of p.action.steps ?? []) if (s.sound) yield { id: s.sound.id, blob: s.sound.blob }
+      }
+    }
+    if (pl.ending.kind === 'exit' && pl.ending.travel.sound) yield { id: pl.ending.travel.sound.id, blob: pl.ending.travel.sound.blob }
+  }
+}
+
+/** Ids de sons référencés par un FilmDoc (pour le download film/sounds/). */
+function collectFilmV3DocSoundIds(filmDoc: FilmDoc | null | undefined): string[] {
+  if (!filmDoc) return []
+  const ids = new Set<string>()
+  if (filmDoc.music) ids.add(filmDoc.music.id)
+  const fromTravel = (t: FilmTravelDoc | undefined) => { if (t?.sound) ids.add(t.sound.id) }
+  const fromAction = (a: SceneActionDoc | undefined) => {
+    if (!a) return
+    if (a.sound) ids.add(a.sound.id)
+    for (const s of a.steps ?? []) if (s.sound) ids.add(s.sound.id)
+  }
+  for (const pl of filmDoc.plans ?? []) {
+    for (const p of pl.points ?? []) {
+      fromTravel(p.travel)
+      fromTravel(p.departure?.travel)
+      fromAction(p.action)
+    }
+    if (pl.ending?.kind === 'exit') fromTravel(pl.ending.travel)
+  }
+  return [...ids]
+}
+
+/** Télécharge et attache les blobs de décors des plans d'un Film (doc.film présent). */
+async function hydrateFilmV3DecorBlobs(projectId: string, film: import('../types/project').Film): Promise<import('../types/project').Film> {
+  const plans = await Promise.all(film.plans.map(async (pl) => {
+    const [bd, ov] = await Promise.all([
+      pl.backdrop ? downloadBlob(`projects/${projectId}/film/plans/${pl.id}/backdrop`).catch(() => null) : Promise.resolve(null),
+      pl.overlay ? downloadBlob(`projects/${projectId}/film/plans/${pl.id}/overlay`).catch(() => null) : Promise.resolve(null),
+    ])
+    return {
+      ...pl,
+      backdrop: pl.backdrop && bd
+        ? { ...pl.backdrop, imageBlob: bd.type.startsWith('video/') ? null : bd, videoBlob: bd.type.startsWith('video/') ? bd : null }
+        : pl.backdrop,
+      overlay: pl.overlay && ov
+        ? { ...pl.overlay, imageBlob: ov.type.startsWith('video/') ? null : ov, videoBlob: ov.type.startsWith('video/') ? ov : null }
+        : pl.overlay,
+    }
+  }))
+  return { ...film, plans }
+}
+
+/**
+ * MIGRATION legacy : convertit un film stocké dans la scène (SceneFilm) vers le
+ * modèle Film niveau projet. Les blobs de la scène (décor, sons) sont réutilisés
+ * tels quels en mémoire ; la première sauvegarde du FilmEditor les uploade sous
+ * les nouveaux chemins film/… (flag `filmNeedsFullUpload`).
+ */
+function convertLegacySceneFilm(scene: Scene): import('../types/project').Film | null {
+  const sf = scene.film
+  if (!sf || !sf.plans.some(pl => pl.points.length > 0)) return null
+  const sceneBackdrop = scene.background && (scene.background.imageBlob || scene.background.videoBlob) ? scene.background : null
+  return {
+    plans: sf.plans.map((pl): import('../types/project').FilmPlan => {
+      const ownDecor = pl.background != null
+      const backdrop = ownDecor ? pl.background : sceneBackdrop
+      const overlay = ownDecor ? pl.foreground : (sceneBackdrop ? scene.foreground : null)
+      return {
+        id: pl.id,
+        ...(pl.name != null && { name: pl.name }),
+        backdrop: backdrop ? { ...backdrop } : null,
+        overlay: overlay ? { ...overlay } : null,
+        cameraX: pl.cameraX,
+        entrySide: pl.entrySide,
+        points: pl.points,
+        ending: pl.ending,
+        ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+        ...(pl.moveAnimationId != null && { moveAnimationId: pl.moveAnimationId }),
+        ...(pl.moveSpeedPxPerSec != null && { moveSpeedPxPerSec: pl.moveSpeedPxPerSec }),
+        ...(pl.idleSpeedMul != null && { idleSpeedMul: pl.idleSpeedMul }),
+      }
+    }),
+    character: {
+      scale: scene.characterScale ?? 1,
+      facing: scene.characterFacing ?? 'right',
+      originU: scene.characterOriginU ?? 0.5,
+      originV: scene.characterOriginV ?? 1.0,
+    },
+    ...(scene.ambientSound != null && {
+      music: { id: scene.ambientSound.id, name: scene.ambientSound.name, blob: scene.ambientSound.blob, volume: scene.ambientSound.volume },
+    }),
+    ...(sf.moveAnimationId != null && { moveAnimationId: sf.moveAnimationId }),
+    moveSpeedPxPerSec: sf.moveSpeedPxPerSec,
+    ...(sf.idleSpeedMul != null && { idleSpeedMul: sf.idleSpeedMul }),
+  }
+}
+
+/** « A un film jouable » calculé depuis le DOC (chargements de liste, sans blobs). */
+function computeDocHasFilm(projDoc: ProjectDoc): boolean {
+  const f = projDoc.film
+  if (f && Array.isArray(f.plans) && f.plans.some(pl => pl.backdrop != null && (pl.points?.length ?? 0) > 0)) return true
+  // Legacy : film dans la scène (converti à l'ouverture) — le décor vient de la scène.
+  const sf = projDoc.scene?.film
+  if (sf) {
+    if (Array.isArray(sf.plans) && sf.plans.some(pl => (pl.points?.length ?? 0) > 0)) return true
+    if (Array.isArray(sf.points) && sf.points.length > 0) return true
+  }
+  return false
 }
 
 function restPointToDoc(rp: import('../types/project').SceneRestPoint): SceneRestPointDoc {
@@ -1087,6 +1531,7 @@ function toDoc(project: Project): ProjectDoc {
     animations: project.animations.map(animToDoc),
     ...(project.bodyZones.length > 0 && { bodyZones: project.bodyZones }),
     markers: project.markers,
+    ...(project.film != null && { film: filmV3ToDoc(project.film) }),
     scene: project.scene ? sceneToDoc(project.scene) : null,
     ...(project.projectTriangulation != null && { projectTriangulation: projectTriangulationToDoc(project.projectTriangulation) }),
     ...(project.projectEyes != null && { projectEyes: project.projectEyes }),
@@ -1461,6 +1906,7 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
           ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, loop: s.sound.loop, rate: s.sound.rate, blob: sceneSoundBlobs.get(s.sound.id) ?? null } }),
           ...(s.isSpoken && { isSpoken: true }),
           ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
+      ...(s.loop && { loop: true }),
         }))
       : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
     return {
@@ -1477,26 +1923,83 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     ...(t?.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
     ...(t?.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
     ...(t?.sound != null && { sound: { id: t.sound.id, name: t.sound.name, volume: t.sound.volume, loop: t.sound.loop, rate: t.sound.rate, blob: sceneSoundBlobs.get(t.sound.id) ?? null } }),
+    ...(t?.origin != null && { origin: t.origin }),
+    ...(t?.controlPoints != null && t.controlPoints.length > 0 && { controlPoints: t.controlPoints.map(cp => ({ x: cp.x, y: cp.y })) }),
+    ...(t?.easing != null && { easing: t.easing }),
+  })
+
+  const docToFilmDeparture = (d: FilmDepartureDoc): import('../types/project').FilmDeparture => ({
+    target: d.target,
+    travel: docToFilmTravel(d.travel),
+  })
+
+  const docToFilmPoint = (p: FilmPointDoc): import('../types/project').FilmPoint => ({
+    id: p.id,
+    x: p.x,
+    y: p.y,
+    scale: p.scale ?? 1,
+    travel: docToFilmTravel(p.travel),
+    ...(p.action != null && { action: docToAction(p.action) }),
+    ...(p.pauseMs != null && p.pauseMs > 0 && { pauseMs: p.pauseMs }),
+    ...(p.facing != null && { facing: p.facing }),
+    ...(p.departure != null && { departure: docToFilmDeparture(p.departure) }),
+  })
+
+  const docToFilmEnding = (e: FilmEndingDoc | undefined): import('../types/project').FilmEnding =>
+    e?.kind === 'exit'
+      ? { kind: 'exit', side: e.side, travel: docToFilmTravel(e.travel) }
+      : { kind: 'stay' }
+
+  // Blobs des décors de plan téléchargés séparément (hydrateFilmPlanDecorBlobs).
+  const docToFilmPlan = (pl: FilmPlanDoc): import('../types/project').SceneFilmPlan => ({
+    id: pl.id,
+    ...(pl.name != null && { name: pl.name }),
+    background: pl.background
+      ? { imageBlob: null, videoBlob: null, width: pl.background.width, height: pl.background.height }
+      : null,
+    foreground: pl.foreground
+      ? {
+          imageBlob: null,
+          videoBlob: null,
+          width: pl.foreground.width,
+          height: pl.foreground.height,
+          chromaKeyColor: pl.foreground.chromaKeyColor ?? null,
+          chromaKeyThreshold: pl.foreground.chromaKeyThreshold,
+          chromaKeySmoothness: pl.foreground.chromaKeySmoothness,
+        }
+      : null,
+    cameraX: pl.cameraX ?? 0,
+    entrySide: pl.entrySide ?? 'left',
+    points: (pl.points ?? []).map(docToFilmPoint),
+    ending: docToFilmEnding(pl.ending),
+    ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+    ...(pl.moveAnimationId != null && { moveAnimationId: pl.moveAnimationId }),
+    ...(pl.moveSpeedPxPerSec != null && { moveSpeedPxPerSec: pl.moveSpeedPxPerSec }),
+    ...(pl.idleSpeedMul != null && { idleSpeedMul: pl.idleSpeedMul }),
   })
 
   // Garde de compat : les docs film v1 (format `steps`) sont ignorés (jamais en prod).
+  // Migration : format à plat (pré-plans) → plans[0] avec décor de la scène.
   const docToFilm = (filmDoc: SceneFilmDoc): import('../types/project').SceneFilm | undefined => {
-    if (!Array.isArray(filmDoc.points)) return undefined
+    let plans: import('../types/project').SceneFilmPlan[]
+    if (Array.isArray(filmDoc.plans) && filmDoc.plans.length > 0) {
+      plans = filmDoc.plans.map(docToFilmPlan)
+    } else if (Array.isArray(filmDoc.points)) {
+      plans = [{
+        id: crypto.randomUUID(),
+        background: null,
+        foreground: null,
+        cameraX: filmDoc.cameraX ?? 0,
+        entrySide: filmDoc.entrySide ?? 'left',
+        points: filmDoc.points.map(docToFilmPoint),
+        ending: docToFilmEnding(filmDoc.ending),
+      }]
+    } else {
+      return undefined
+    }
     return {
       enabled: filmDoc.enabled,
-      entrySide: filmDoc.entrySide ?? 'left',
-      points: filmDoc.points.map((p): import('../types/project').FilmPoint => ({
-        id: p.id,
-        x: p.x,
-        y: p.y,
-        scale: p.scale ?? 1,
-        travel: docToFilmTravel(p.travel),
-        ...(p.action != null && { action: docToAction(p.action) }),
-      })),
-      ending: filmDoc.ending?.kind === 'exit'
-        ? { kind: 'exit', side: filmDoc.ending.side, travel: docToFilmTravel(filmDoc.ending.travel) }
-        : { kind: 'stay' },
-      cameraX: filmDoc.cameraX ?? 0,
+      plans,
       ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
       moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
       ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
@@ -1603,7 +2106,10 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       ? docToRestPoint(rpDoc)
       : { id: crypto.randomUUID(), backgroundX: 0 }
 
-    const filmV2 = projDoc.scene.film ? docToFilm(projDoc.scene.film) : undefined
+    let filmV2 = projDoc.scene.film ? docToFilm(projDoc.scene.film) : undefined
+    if (filmV2 && projDoc.scene.film) {
+      filmV2 = await hydrateFilmPlanDecorBlobs(id, filmV2, projDoc.scene.film)
+    }
 
     // Migration entry/entryStartX depuis l'ancien startMode
     let entry: 'fixed' | 'moving' = projDoc.scene.entry ?? 'fixed'
@@ -1653,6 +2159,24 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
     projectTriangulation = { ...triBase, referenceImageBlob, masksRLE, contours }
   }
 
+  // FILM niveau projet : doc.film prioritaire ; sinon conversion legacy scene.film
+  // (les blobs de la scène déjà hydratés sont réutilisés, upload complet à la
+  // prochaine sauvegarde du film → filmNeedsFullUpload).
+  let filmV3: import('../types/project').Film | null = null
+  let filmNeedsFullUpload = false
+  if (projDoc.film) {
+    const filmSoundIds = collectFilmV3DocSoundIds(projDoc.film)
+    const filmSoundBlobs = await Promise.all(
+      filmSoundIds.map(sid => downloadBlob(`projects/${id}/film/sounds/${sid}`).catch(() => null))
+    )
+    const filmSoundMap = new Map(filmSoundIds.map((sid, i) => [sid, filmSoundBlobs[i]]))
+    filmV3 = docToFilmV3(projDoc.film, sid => filmSoundMap.get(sid) ?? null)
+    filmV3 = await hydrateFilmV3DecorBlobs(id, filmV3)
+  } else if (scene) {
+    filmV3 = convertLegacySceneFilm(scene)
+    if (filmV3) filmNeedsFullUpload = true
+  }
+
   return {
     id: projDoc.id,
     name: projDoc.name,
@@ -1669,6 +2193,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
       triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
     })),
     markers: projDoc.markers,
+    film: filmV3,
+    ...(filmNeedsFullUpload && { filmNeedsFullUpload: true }),
     scene,
     projectTriangulation,
     projectEyes: projDoc.projectEyes ?? null,
@@ -1729,10 +2255,12 @@ async function fromLegacyDoc(data: LegacyProjectDoc): Promise<Project> {
     animations: [legacyAnimation],
     bodyZones: [],
     markers: data.markers,
+    film: null,
     scene: null,
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
+    published: false,
     publishedAt: null,
     bookId: null,
     bookOrder: data.createdAt,
@@ -1784,11 +2312,13 @@ export async function createProject(name: string): Promise<Project> {
     animations: [],
     bodyZones: [],
     markers: null,
+    film: null,
     scene: null,
     projectTriangulation: null,
     projectEyes: null,
     projectMouth: null,
     published: false,
+    publishedAt: null,
     bookId: null,
     bookOrder: Date.now(),
     thumbnailBlob: null,
@@ -1839,12 +2369,14 @@ export async function getAllProjects(): Promise<Project[]> {
         animations: [legacyAnim],
         bodyZones: [],
         markers: legacy.markers,
+        film: null,
         scene: null,
         projectTriangulation: null,
         projectEyes: null,
         projectMouth: null,
         published: false,
         publishedAt: null,
+        bookId: null,
         bookOrder: legacy.createdAt,
         thumbnailBlob: null,
       }
@@ -1879,6 +2411,8 @@ export async function getAllProjects(): Promise<Project[]> {
       triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
     })),
       markers: projDoc.markers,
+      film: null,
+      hasFilm: computeDocHasFilm(projDoc),
       scene: null,
       projectTriangulation: null,
       projectEyes: projDoc.projectEyes ?? null,
@@ -1886,6 +2420,7 @@ export async function getAllProjects(): Promise<Project[]> {
       published: projDoc.published === true,
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
+      bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
       thumbnailBlob: null,
     }
   })
@@ -1915,21 +2450,49 @@ export type UploadHint =
   | { deleteSpeakSoundId: string }
   | { sceneSoundId: string }
   | { deleteSceneSoundId: string }
+  | { filmPlanBackground: string }        // valeur = planId (LEGACY scene.film)
+  | { filmPlanForeground: string }
+  | { deleteFilmPlanBackground: string }
+  | { deleteFilmPlanForeground: string }
+  // FILM niveau projet : film/plans/{planId}/backdrop|overlay + film/sounds/{soundId}
+  | { filmPlanBackdrop: string }          // valeur = planId
+  | { filmPlanOverlay: string }
+  | { deleteFilmPlanBackdrop: string }
+  | { deleteFilmPlanOverlay: string }
+  | { filmSoundId: string }
+  | { deleteFilmSoundId: string }
 
 /** Flat upload hint used by step components (legacy-compatible strings) */
 export type StepUploadHint = 'image' | 'backgroundVideo' | 'ambientSound' | 'thumbnail' | AnimationUploadField
 
-export async function updateProject(project: Project, uploadOnly?: UploadHint[]): Promise<void> {
+export async function updateProject(
+  project: Project,
+  uploadOnly?: UploadHint[],
+  opts?: {
+    /** Écrit le doc Firestore APRÈS la réussite de tous les uploads Storage.
+     *  Utilisé par la duplication : le projet n'apparaît que quand la copie est
+     *  COMPLÈTE — une interruption/erreur ne laisse pas de projet à moitié copié
+     *  (doc annonçant des fichiers absents → 404 / scène vide). */
+    docAfterUploads?: boolean
+  },
+): Promise<void> {
   const id = project.id
 
-  // Save Firestore doc first (always)
-  console.log('[Firebase] Saving project metadata:', id)
-  await setDoc(projectRef(id), toDoc(project))
+  const saveDoc = async () => {
+    console.log('[Firebase] Saving project metadata:', id)
+    await setDoc(projectRef(id), toDoc(project))
+  }
+
+  // Comportement normal (sauvegarde d'édition) : doc d'abord, puis blobs.
+  if (!opts?.docAfterUploads) await saveDoc()
 
   // Then upload blobs to Storage (only what's specified)
   const uploads: Promise<void>[] = []
 
-  if (!uploadOnly) return
+  if (!uploadOnly) {
+    if (opts?.docAfterUploads) await saveDoc()
+    return
+  }
 
   for (const hint of uploadOnly) {
     if (hint === 'image' && project.originalImageBlob) {
@@ -2029,6 +2592,87 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
       uploads.push(
         deleteObject(ref(storage, `projects/${id}/scene/sounds/${soundId}`)).catch(() => {})
       )
+    } else if (typeof hint === 'object' && 'filmPlanBackground' in hint) {
+      const planId = hint.filmPlanBackground
+      const plan = project.scene?.film?.plans.find(pl => pl.id === planId)
+      const blob = plan?.background?.videoBlob ?? plan?.background?.imageBlob
+      if (blob) {
+        console.log(`[Storage] Uploading film plan background ${planId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/filmPlans/${planId}/background`, blob)
+            .then(() => console.log(`[Storage] Film plan background ${planId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'filmPlanForeground' in hint) {
+      const planId = hint.filmPlanForeground
+      const plan = project.scene?.film?.plans.find(pl => pl.id === planId)
+      const blob = plan?.foreground?.videoBlob ?? plan?.foreground?.imageBlob
+      if (blob) {
+        console.log(`[Storage] Uploading film plan foreground ${planId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/filmPlans/${planId}/foreground`, blob)
+            .then(() => console.log(`[Storage] Film plan foreground ${planId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'deleteFilmPlanBackground' in hint) {
+      const planId = hint.deleteFilmPlanBackground
+      console.log(`[Storage] Deleting film plan background ${planId}`)
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/filmPlans/${planId}/background`)).catch(() => {})
+      )
+    } else if (typeof hint === 'object' && 'deleteFilmPlanForeground' in hint) {
+      const planId = hint.deleteFilmPlanForeground
+      console.log(`[Storage] Deleting film plan foreground ${planId}`)
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/filmPlans/${planId}/foreground`)).catch(() => {})
+      )
+    } else if (typeof hint === 'object' && 'filmPlanBackdrop' in hint) {
+      const planId = hint.filmPlanBackdrop
+      const plan = project.film?.plans.find(pl => pl.id === planId)
+      const blob = plan?.backdrop?.videoBlob ?? plan?.backdrop?.imageBlob
+      if (blob) {
+        console.log(`[Storage] Uploading film plan backdrop ${planId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/film/plans/${planId}/backdrop`, blob)
+            .then(() => console.log(`[Storage] Film plan backdrop ${planId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'filmPlanOverlay' in hint) {
+      const planId = hint.filmPlanOverlay
+      const plan = project.film?.plans.find(pl => pl.id === planId)
+      const blob = plan?.overlay?.videoBlob ?? plan?.overlay?.imageBlob
+      if (blob) {
+        console.log(`[Storage] Uploading film plan overlay ${planId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/film/plans/${planId}/overlay`, blob)
+            .then(() => console.log(`[Storage] Film plan overlay ${planId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'deleteFilmPlanBackdrop' in hint) {
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/film/plans/${hint.deleteFilmPlanBackdrop}/backdrop`)).catch(() => {})
+      )
+    } else if (typeof hint === 'object' && 'deleteFilmPlanOverlay' in hint) {
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/film/plans/${hint.deleteFilmPlanOverlay}/overlay`)).catch(() => {})
+      )
+    } else if (typeof hint === 'object' && 'filmSoundId' in hint) {
+      const soundId = hint.filmSoundId
+      let blob: Blob | null = null
+      for (const s of iterateFilmV3Sounds(project.film)) {
+        if (s.id === soundId && s.blob) { blob = s.blob; break }
+      }
+      if (blob) {
+        console.log(`[Storage] Uploading film sound ${soundId}`)
+        uploads.push(
+          uploadBlob(`projects/${id}/film/sounds/${soundId}`, blob)
+            .then(() => console.log(`[Storage] Film sound ${soundId} uploaded`))
+        )
+      }
+    } else if (typeof hint === 'object' && 'deleteFilmSoundId' in hint) {
+      uploads.push(
+        deleteObject(ref(storage, `projects/${id}/film/sounds/${hint.deleteFilmSoundId}`)).catch(() => {})
+      )
     } else if (typeof hint === 'object' && 'animationId' in hint) {
       const { animationId, field } = hint
       const anim = project.animations.find(a => a.id === animationId)
@@ -2107,6 +2751,7 @@ export async function updateProject(project: Project, uploadOnly?: UploadHint[])
   }
 
   await Promise.all(uploads)
+  if (opts?.docAfterUploads) await saveDoc()
 }
 
 const ANIM_JSON_FILES = [
@@ -2185,6 +2830,23 @@ export async function deleteProject(id: string): Promise<void> {
     for (const meta of collectFilmDocSoundMetas(sceneDoc?.film)) sceneSoundIds.add(meta.id)
     for (const sid of sceneSoundIds) {
       deletions.push(deleteObject(ref(storage, `projects/${id}/scene/sounds/${sid}`)).catch(() => {}))
+    }
+    // Décors propres aux plans du film legacy (scene.film)
+    for (const plan of sceneDoc?.film?.plans ?? []) {
+      deletions.push(deleteObject(ref(storage, `projects/${id}/filmPlans/${plan.id}/background`)).catch(() => {}))
+      deletions.push(deleteObject(ref(storage, `projects/${id}/filmPlans/${plan.id}/foreground`)).catch(() => {}))
+    }
+  }
+
+  // FILM niveau projet : décors de plans + sons
+  if (data && 'film' in data && (data as unknown as ProjectDoc).film) {
+    const filmDoc = (data as unknown as ProjectDoc).film!
+    for (const plan of filmDoc.plans ?? []) {
+      deletions.push(deleteObject(ref(storage, `projects/${id}/film/plans/${plan.id}/backdrop`)).catch(() => {}))
+      deletions.push(deleteObject(ref(storage, `projects/${id}/film/plans/${plan.id}/overlay`)).catch(() => {}))
+    }
+    for (const sid of collectFilmV3DocSoundIds(filmDoc)) {
+      deletions.push(deleteObject(ref(storage, `projects/${id}/film/sounds/${sid}`)).catch(() => {}))
     }
   }
 
@@ -2293,16 +2955,54 @@ function remapSceneAnimationIds(scene: Scene | null, idMap: Map<string, string>)
       film: {
         ...scene.film,
         ...(scene.film.moveAnimationId != null && { moveAnimationId: mapId(scene.film.moveAnimationId) }),
-        points: scene.film.points.map(p => ({
-          ...p,
-          travel: mapTravel(p.travel),
-          ...(p.action != null && { action: mapAction(p.action) }),
+        // Les `plan.id` ne sont PAS remappés (scopés par projectId) — les blobs
+        // Storage des plans sont re-uploadés sous le nouveau projectId par les hints.
+        plans: scene.film.plans.map(plan => ({
+          ...plan,
+          ...(plan.moveAnimationId != null && { moveAnimationId: mapId(plan.moveAnimationId) }),
+          points: plan.points.map(p => ({
+            ...p,
+            travel: mapTravel(p.travel),
+            ...(p.action != null && { action: mapAction(p.action) }),
+            ...(p.departure != null && { departure: { ...p.departure, travel: mapTravel(p.departure.travel) } }),
+          })),
+          ending: plan.ending.kind === 'exit'
+            ? { ...plan.ending, travel: mapTravel(plan.ending.travel) }
+            : plan.ending,
         })),
-        ending: scene.film.ending.kind === 'exit'
-          ? { ...scene.film.ending, travel: mapTravel(scene.film.ending.travel) }
-          : scene.film.ending,
       },
     }),
+  }
+}
+
+/** Remappe les références d'animations d'un FILM (duplication). */
+function remapFilmAnimationIds(film: import('../types/project').Film | null, idMap: Map<string, string>): import('../types/project').Film | null {
+  if (!film) return film
+  const mapId = (id: string) => idMap.get(id) ?? id
+  const mapAction = (a: import('../types/project').SceneAction): import('../types/project').SceneAction => ({
+    ...a,
+    steps: a.steps.map(s => ({ ...s, animationId: mapId(s.animationId) })),
+  })
+  const mapTravel = (t: import('../types/project').FilmTravel): import('../types/project').FilmTravel => ({
+    ...t,
+    ...(t.animationId != null && { animationId: mapId(t.animationId) }),
+  })
+  return {
+    ...film,
+    ...(film.moveAnimationId != null && { moveAnimationId: mapId(film.moveAnimationId) }),
+    plans: film.plans.map(pl => ({
+      ...pl,
+      ...(pl.moveAnimationId != null && { moveAnimationId: mapId(pl.moveAnimationId) }),
+      points: pl.points.map(p => ({
+        ...p,
+        travel: mapTravel(p.travel),
+        ...(p.action != null && { action: mapAction(p.action) }),
+        ...(p.departure != null && { departure: { ...p.departure, travel: mapTravel(p.departure.travel) } }),
+      })),
+      ending: pl.ending.kind === 'exit'
+        ? { ...pl.ending, travel: mapTravel(pl.ending.travel) }
+        : pl.ending,
+    })),
   }
 }
 
@@ -2327,6 +3027,8 @@ export async function duplicateProject(sourceId: string, overrides?: DuplicatePr
       id: animIdMap.get(a.id)!,
       createdAt: Date.now(),
     })),
+    film: remapFilmAnimationIds(source.film, animIdMap),
+    filmNeedsFullUpload: undefined,
     scene: remapSceneAnimationIds(source.scene, animIdMap),
     bookId: overrides?.bookId !== undefined ? overrides.bookId : source.bookId,
     bookOrder: overrides?.bookOrder !== undefined ? overrides.bookOrder : Date.now(),
@@ -2355,6 +3057,31 @@ export async function duplicateProject(sourceId: string, overrides?: DuplicatePr
   for (const sid of collectSceneSoundIds(duplicate.scene)) {
     hints.push({ sceneSoundId: sid })
   }
+  for (const plan of duplicate.scene?.film?.plans ?? []) {
+    if (plan.background && (plan.background.imageBlob || plan.background.videoBlob)) {
+      hints.push({ filmPlanBackground: plan.id })
+    }
+    if (plan.foreground && (plan.foreground.imageBlob || plan.foreground.videoBlob)) {
+      hints.push({ filmPlanForeground: plan.id })
+    }
+  }
+  // FILM niveau projet : décors de plans + sons (le duplicata démarre directement
+  // au nouveau format, même si la source était un film legacy converti).
+  const dupFilmSoundIds = new Set<string>()
+  for (const plan of duplicate.film?.plans ?? []) {
+    if (plan.backdrop && (plan.backdrop.imageBlob || plan.backdrop.videoBlob)) {
+      hints.push({ filmPlanBackdrop: plan.id })
+    }
+    if (plan.overlay && (plan.overlay.imageBlob || plan.overlay.videoBlob)) {
+      hints.push({ filmPlanOverlay: plan.id })
+    }
+  }
+  for (const s of iterateFilmV3Sounds(duplicate.film)) {
+    if (s.blob && !dupFilmSoundIds.has(s.id)) {
+      dupFilmSoundIds.add(s.id)
+      hints.push({ filmSoundId: s.id })
+    }
+  }
   for (const anim of duplicate.animations) {
     const newAnimId = anim.id
     for (const field of ANIM_UPLOAD_FIELDS) {
@@ -2371,7 +3098,9 @@ export async function duplicateProject(sourceId: string, overrides?: DuplicatePr
     }
   }
 
-  await updateProject(duplicate, hints)
+  // Uploads d'abord (avec retry), doc Firestore en DERNIER : le duplicata
+  // n'apparaît que quand la copie est complète.
+  await updateProject(duplicate, hints, { docAfterUploads: true })
   console.log(`[Firebase] Project duplicated: ${sourceId} -> ${newId}`)
   await logAudit('project.duplicate', newId, { sourceId })
   return duplicate
@@ -2423,6 +3152,8 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
         triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
       })),
       markers: projDoc.markers,
+      film: null,
+      hasFilm: computeDocHasFilm(projDoc),
       scene: null,
       projectTriangulation: null,
       projectEyes: projDoc.projectEyes ?? null,
@@ -2431,6 +3162,7 @@ export async function getProjectsByBook(bookId: string, publishedOnly = false): 
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
       bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
+      thumbnailBlob: null,
       // Permet à la vignette play d'éviter une requête /thumbnail vouée à 404 quand
       // le projet n'a pas de vignette dédiée (cf. BookPage → fallback image directe).
       hasThumbnail: projDoc.hasThumbnail === true,
@@ -2592,6 +3324,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
             ...(s.sound != null && { sound: { id: s.sound.id, name: s.sound.name, volume: s.sound.volume, loop: s.sound.loop, rate: s.sound.rate, blob: null } }),
             ...(s.isSpoken && { isSpoken: true }),
             ...(s.animSpeedMul != null && { animSpeedMul: s.animSpeedMul }),
+      ...(s.loop && { loop: true }),
           }))
         : (a.animationIds ?? []).map((animId: string) => ({ animationId: animId }))
       return {
@@ -2608,26 +3341,77 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       ...(t?.speedPxPerSec != null && { speedPxPerSec: t.speedPxPerSec }),
       ...(t?.animSpeedMul != null && { animSpeedMul: t.animSpeedMul }),
       ...(t?.sound != null && { sound: { id: t.sound.id, name: t.sound.name, volume: t.sound.volume, loop: t.sound.loop, rate: t.sound.rate, blob: null } }),
+      ...(t?.origin != null && { origin: t.origin }),
+      ...(t?.controlPoints != null && t.controlPoints.length > 0 && { controlPoints: t.controlPoints.map(cp => ({ x: cp.x, y: cp.y })) }),
+      ...(t?.easing != null && { easing: t.easing }),
+    })
+
+    const docToFilmPointEssentials = (p: FilmPointDoc): import('../types/project').FilmPoint => ({
+      id: p.id,
+      x: p.x,
+      y: p.y,
+      scale: p.scale ?? 1,
+      travel: docToFilmTravelEssentials(p.travel),
+      ...(p.action != null && { action: docToActionEssentials(p.action) }),
+      ...(p.pauseMs != null && p.pauseMs > 0 && { pauseMs: p.pauseMs }),
+      ...(p.facing != null && { facing: p.facing }),
+      ...(p.departure != null && { departure: { target: p.departure.target, travel: docToFilmTravelEssentials(p.departure.travel) } }),
+    })
+
+    const docToFilmEndingEssentials = (e: FilmEndingDoc | undefined): import('../types/project').FilmEnding =>
+      e?.kind === 'exit'
+        ? { kind: 'exit', side: e.side, travel: docToFilmTravelEssentials(e.travel) }
+        : { kind: 'stay' }
+
+    const docToFilmPlanEssentials = (pl: FilmPlanDoc): import('../types/project').SceneFilmPlan => ({
+      id: pl.id,
+      ...(pl.name != null && { name: pl.name }),
+      background: pl.background
+        ? { imageBlob: null, videoBlob: null, width: pl.background.width, height: pl.background.height }
+        : null,
+      foreground: pl.foreground
+        ? {
+            imageBlob: null,
+            videoBlob: null,
+            width: pl.foreground.width,
+            height: pl.foreground.height,
+            chromaKeyColor: pl.foreground.chromaKeyColor ?? null,
+            chromaKeyThreshold: pl.foreground.chromaKeyThreshold,
+            chromaKeySmoothness: pl.foreground.chromaKeySmoothness,
+          }
+        : null,
+      cameraX: pl.cameraX ?? 0,
+      entrySide: pl.entrySide ?? 'left',
+      points: (pl.points ?? []).map(docToFilmPointEssentials),
+      ending: docToFilmEndingEssentials(pl.ending),
+      ...(pl.transitionToNext != null && { transitionToNext: pl.transitionToNext }),
+      ...(pl.moveAnimationId != null && { moveAnimationId: pl.moveAnimationId }),
+      ...(pl.moveSpeedPxPerSec != null && { moveSpeedPxPerSec: pl.moveSpeedPxPerSec }),
+      ...(pl.idleSpeedMul != null && { idleSpeedMul: pl.idleSpeedMul }),
     })
 
     // Garde de compat : docs film v1 (format `steps`) ignorés.
+    // Migration : format à plat (pré-plans) → plans[0] avec décor de la scène.
     const docToFilmEssentials = (filmDoc: SceneFilmDoc): import('../types/project').SceneFilm | undefined => {
-      if (!Array.isArray(filmDoc.points)) return undefined
+      let plans: import('../types/project').SceneFilmPlan[]
+      if (Array.isArray(filmDoc.plans) && filmDoc.plans.length > 0) {
+        plans = filmDoc.plans.map(docToFilmPlanEssentials)
+      } else if (Array.isArray(filmDoc.points)) {
+        plans = [{
+          id: crypto.randomUUID(),
+          background: null,
+          foreground: null,
+          cameraX: filmDoc.cameraX ?? 0,
+          entrySide: filmDoc.entrySide ?? 'left',
+          points: filmDoc.points.map(docToFilmPointEssentials),
+          ending: docToFilmEndingEssentials(filmDoc.ending),
+        }]
+      } else {
+        return undefined
+      }
       return {
         enabled: filmDoc.enabled,
-        entrySide: filmDoc.entrySide ?? 'left',
-        points: filmDoc.points.map((p): import('../types/project').FilmPoint => ({
-          id: p.id,
-          x: p.x,
-          y: p.y,
-          scale: p.scale ?? 1,
-          travel: docToFilmTravelEssentials(p.travel),
-          ...(p.action != null && { action: docToActionEssentials(p.action) }),
-        })),
-        ending: filmDoc.ending?.kind === 'exit'
-          ? { kind: 'exit', side: filmDoc.ending.side, travel: docToFilmTravelEssentials(filmDoc.ending.travel) }
-          : { kind: 'stay' },
-        cameraX: filmDoc.cameraX ?? 0,
+        plans,
         ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
         moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
         ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
@@ -2709,6 +3493,15 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
     }
   }
 
+  // FILM niveau projet (essentials, sans blobs — hydraté en phase différée) :
+  // doc.film prioritaire ; sinon conversion legacy scene.film.
+  let filmEssentialsV3: import('../types/project').Film | null = null
+  if (projDoc.film) {
+    filmEssentialsV3 = docToFilmV3(projDoc.film, () => null)
+  } else if (scene) {
+    filmEssentialsV3 = convertLegacySceneFilm(scene)
+  }
+
   return {
     id: projDoc.id,
     name: projDoc.name,
@@ -2725,6 +3518,7 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
       triangleIndices: (z.triangleIndices ?? z.vertexIndices ?? []) as number[],
     })),
     markers: projDoc.markers,
+    film: filmEssentialsV3,
     scene,
     projectTriangulation,
     projectEyes: projDoc.projectEyes ?? null,
@@ -2826,6 +3620,37 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
       ...(t.sound != null && { sound: { ...t.sound, blob: sceneSoundMap.get(t.sound.id) ?? t.sound.blob ?? null } }),
     })
 
+    // Décors propres aux plans du film : download parallèle, type via MIME du blob.
+    const filmPlansHydrated = scene.film
+      ? await Promise.all(scene.film.plans.map(async (plan) => {
+          const [planBg, planFg] = await Promise.all([
+            plan.background && !plan.background.imageBlob && !plan.background.videoBlob
+              ? downloadBlob(`projects/${id}/filmPlans/${plan.id}/background`).catch(() => null)
+              : Promise.resolve(null),
+            plan.foreground && !plan.foreground.imageBlob && !plan.foreground.videoBlob
+              ? downloadBlob(`projects/${id}/filmPlans/${plan.id}/foreground`).catch(() => null)
+              : Promise.resolve(null),
+          ])
+          return {
+            ...plan,
+            background: plan.background && planBg
+              ? {
+                  ...plan.background,
+                  imageBlob: planBg.type.startsWith('video/') ? null : planBg,
+                  videoBlob: planBg.type.startsWith('video/') ? planBg : null,
+                }
+              : plan.background,
+            foreground: plan.foreground && planFg
+              ? {
+                  ...plan.foreground,
+                  imageBlob: planFg.type.startsWith('video/') ? null : planFg,
+                  videoBlob: planFg.type.startsWith('video/') ? planFg : null,
+                }
+              : plan.foreground,
+          }
+        }))
+      : null
+
     scene = {
       ...scene,
       background: scene.background
@@ -2856,21 +3681,41 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
           presentation: hydrateActionBlobs(scene.restPoint.presentation),
         }),
       },
-      ...(scene.film != null && {
+      ...(scene.film != null && filmPlansHydrated != null && {
         film: {
           ...scene.film,
-          points: scene.film.points.map(p => ({
-            ...p,
-            travel: hydrateTravelBlob(p.travel),
-            ...(p.action != null && { action: hydrateActionBlobs(p.action) }),
+          plans: filmPlansHydrated.map(plan => ({
+            ...plan,
+            points: plan.points.map(p => ({
+              ...p,
+              travel: hydrateTravelBlob(p.travel),
+              ...(p.action != null && { action: hydrateActionBlobs(p.action) }),
+              ...(p.departure != null && { departure: { ...p.departure, travel: hydrateTravelBlob(p.departure.travel) } }),
+            })),
+            ending: plan.ending.kind === 'exit'
+              ? { ...plan.ending, travel: hydrateTravelBlob(plan.ending.travel) }
+              : plan.ending,
           })),
-          ending: scene.film.ending.kind === 'exit'
-            ? { ...scene.film.ending, travel: hydrateTravelBlob(scene.film.ending.travel) }
-            : scene.film.ending,
         },
       }),
       speakSoundBlobs,
     }
+  }
+
+  // FILM niveau projet : hydratation des blobs (phase différée).
+  // doc.film présent → sons film/sounds/ + décors film/plans/ ;
+  // sinon legacy → reconversion depuis la scène HYDRATÉE (décor + sons scène).
+  let film = project.film
+  if (projDoc?.film) {
+    const filmSoundIds = collectFilmV3DocSoundIds(projDoc.film)
+    const filmSoundBlobs = await Promise.all(
+      filmSoundIds.map(sid => downloadBlob(`projects/${id}/film/sounds/${sid}`).catch(() => null))
+    )
+    const filmSoundMap = new Map(filmSoundIds.map((sid, i) => [sid, filmSoundBlobs[i]]))
+    film = docToFilmV3(projDoc.film, sid => filmSoundMap.get(sid) ?? null)
+    film = await hydrateFilmV3DecorBlobs(id, film)
+  } else if (film && scene) {
+    film = convertLegacySceneFilm(scene) ?? film
   }
 
   return {
@@ -2879,6 +3724,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     backgroundVideoBlob,
     ambientSoundBlob,
     animations: animationsWithAudio,
+    film,
     scene,
   }
 }

@@ -755,6 +755,10 @@ export interface SceneActionStep {
   isSpoken?: boolean;
   /** Multiplicateur de vitesse de LECTURE de l'animation de cette étape (défaut 1). */
   animSpeedMul?: number;
+  /** Si true, l'animation de cette étape est REJOUÉE en boucle jusqu'à la fin de
+   *  l'action (durée = son d'action / dernier son d'étape). Permet p. ex. de courir
+   *  sur place pendant toute la durée d'un dialogue superposé. */
+  loop?: boolean;
 }
 
 /**
@@ -880,6 +884,19 @@ export interface SceneWalkTrapezoid {
  * interpolée pendant les trajets.
  */
 
+/** Origine d'un trajet entrant. Absent = `{ kind: 'previous' }` (rétro-compat).
+ *  'offscreen'/'custom' téléportent le perso au départ du trajet — si le point
+ *  précédent n'a pas de `departure`, la disparition est un cut sec (voulu).
+ *  'appear' = PAS de trajet : le perso apparaît directement posé sur le point
+ *  (utile en début de plan après une transition). */
+export type FilmTravelOrigin =
+  | { kind: 'previous' }
+  | { kind: 'offscreen'; side: 'left' | 'right' }
+  | { kind: 'custom'; x: number; y: number }
+  | { kind: 'appear' };
+
+export type FilmTravelEasing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
+
 /** Trajet ENTRANT vers un point (ou vers la sortie). */
 export interface FilmTravel {
   /** Animation de déplacement ; défaut = `SceneFilm.moveAnimationId`. */
@@ -891,6 +908,28 @@ export interface FilmTravel {
   animSpeedMul?: number;
   /** Son joué pendant le trajet, coupé à l'arrivée. */
   sound?: SceneSound;
+  /** Origine du trajet (défaut : point précédent). Ignoré sur les trajets sortants
+   *  (departure/ending) qui partent toujours du point courant. */
+  origin?: FilmTravelOrigin;
+  /** Points de contrôle Bézier en coords background : 0/absent = ligne droite,
+   *  1 = quadratique, 2 = cubique. Vitesse constante en espace (paramétrisation arc-length). */
+  controlPoints?: Point2D[];
+  /** Easing temporel du trajet (défaut linear). Module la vitesse instantanée,
+   *  la durée totale (= distance/vitesse) est inchangée. */
+  easing?: FilmTravelEasing;
+}
+
+/** Cible d'un trajet de sortie de point (symétrique de FilmTravelOrigin). */
+export type FilmDepartureTarget =
+  | { kind: 'offscreen'; side: 'left' | 'right' }
+  | { kind: 'custom'; x: number; y: number; scale?: number };
+
+/** Trajet SORTANT d'un point, joué après l'action/pause. Permet au perso de
+ *  sortir hors-champ (ou d'aller à une position libre) avant que le point
+ *  suivant le fasse revenir d'ailleurs — jamais de téléportation visible. */
+export interface FilmDeparture {
+  target: FilmDepartureTarget;
+  travel: FilmTravel;
 }
 
 export interface FilmPoint {
@@ -904,28 +943,149 @@ export interface FilmPoint {
   travel: FilmTravel;
   /** Séquence jouée à l'arrivée. Absent = point de passage. */
   action?: SceneAction;
+  /** Attente en idle au point (après l'action si présente), en ms. */
+  pauseMs?: number;
+  /** Sens du regard du perso À CE POINT (idle). Absent = auto (garde le sens
+   *  d'arrivée du trajet). Appliqué à l'arrivée au point. */
+  facing?: 'left' | 'right';
+  /** Trajet de sortie après action/pause (voir FilmDeparture). */
+  departure?: FilmDeparture;
 }
 
 export type FilmEnding =
   | { kind: 'exit'; side: 'left' | 'right'; travel: FilmTravel }
   | { kind: 'stay' };
 
-export interface SceneFilm {
-  enabled: boolean;
-  /** Côté d'entrée en scène (le perso arrive hors-champ par ce bord). */
+/** Transition visuelle entre deux plans du film. */
+export type FilmPlanTransition =
+  | { kind: 'cut' }
+  | { kind: 'fadeBlack'; durationMs?: number }   // défaut 500
+  | { kind: 'crossfade'; durationMs?: number }   // défaut 500
+  | { kind: 'wipe'; direction: 'left' | 'right' | 'up' | 'down'; durationMs?: number } // défaut 500
+  | { kind: 'iris'; durationMs?: number };       // défaut 700
+
+/**
+ * LEGACY (moteur + anciens docs) — plan d'un film stocké dans la scène.
+ * Le moteur de lecture (ScenePlayer/FilmDirector) consomme cette forme via
+ * `buildFilmScene()`. Ne plus utiliser pour l'édition : voir `Film`/`FilmPlan`.
+ */
+export interface SceneFilmPlan {
+  id: string;
+  name?: string;
+  /** Décor propre au plan. null = fallback sur le décor de la scène
+   *  (`Scene.background`/`Scene.foreground`, cas du plan issu de la migration). */
+  background: SceneBackground | null;
+  foreground: SceneForeground | null;
+  /** Centre du cadre caméra fixe, en coords background DU PLAN. */
+  cameraX: number;
+  /** Côté d'entrée en scène du plan (le perso arrive hors-champ par ce bord). */
   entrySide: 'left' | 'right';
   points: FilmPoint[];
+  /** Fin du plan. Plan intermédiaire : la sortie enchaîne sur la transition ;
+   *  seule la fin du DERNIER plan déclenche le fade + écran Bravo. */
   ending: FilmEnding;
-  /** Centre du cadre caméra fixe, en coords background. */
-  cameraX: number;
-  /** Animation de déplacement par défaut. */
+  /** Transition vers le plan suivant (ignorée sur le dernier plan). Défaut cut. */
+  transitionToNext?: FilmPlanTransition;
+  /** Défauts de déplacement du plan (fallback → SceneFilm). */
   moveAnimationId?: string;
-  /** Vitesse de déplacement par défaut (px background/s). */
+  moveSpeedPxPerSec?: number;
+  idleSpeedMul?: number;
+}
+
+/** LEGACY (moteur + anciens docs) — film stocké dans la scène. */
+export interface SceneFilm {
+  enabled: boolean;
+  plans: SceneFilmPlan[];
+  /** Animation de déplacement par défaut (fallback global). */
+  moveAnimationId?: string;
+  /** Vitesse de déplacement par défaut (px background/s, fallback global). */
   moveSpeedPxPerSec: number;
   /** Multiplicateur de vitesse de lecture de l'animation idle aux points (défaut 1).
    *  Ex. idle un peu rapide → 0.5 = 2× plus lent. */
   idleSpeedMul?: number;
   endBehavior: 'menu';
+}
+
+// ---------------------------------------------------------------------------
+// FILM (niveau projet) — modèle cible, totalement indépendant de la scène.
+// Un coloriage = un FILM : une séquence de PLANS (au sens cinéma), chacun avec
+// SON décor, son cadrage caméra et son chemin de points. L'app play ne joue
+// que les coloriages qui ont un film. Le mode scène interactif est déprécié.
+// ---------------------------------------------------------------------------
+
+/** Arrière-plan d'un plan de film : image OU vidéo en boucle. */
+export interface FilmBackdrop {
+  imageBlob: Blob | null;
+  videoBlob: Blob | null;
+  width: number;
+  height: number;
+}
+
+/** Avant-plan d'un plan de film (devant le perso) : PNG transparent ou vidéo chroma key. */
+export interface FilmOverlay extends FilmBackdrop {
+  chromaKeyColor?: string | null;
+  chromaKeyThreshold?: number;
+  chromaKeySmoothness?: number;
+}
+
+/** PLAN d'un film (au sens cinéma) : SON décor + cadrage + chemin de points. */
+export interface FilmPlan {
+  id: string;
+  name?: string;
+  /** Décor du plan. null = plan pas encore prêt (l'éditeur demande l'import). */
+  backdrop: FilmBackdrop | null;
+  overlay: FilmOverlay | null;
+  /** Centre du cadre caméra fixe 16:9, en coords backdrop. */
+  cameraX: number;
+  /** Côté d'entrée en scène du plan (le perso arrive hors-champ par ce bord). */
+  entrySide: 'left' | 'right';
+  points: FilmPoint[];
+  /** Fin du plan. Intermédiaire : enchaîne sur la transition ; dernier plan : fade + Bravo. */
+  ending: FilmEnding;
+  /** Transition vers le plan suivant (ignorée sur le dernier plan). Défaut cut. */
+  transitionToNext?: FilmPlanTransition;
+  /** Défauts de déplacement du plan (fallback → Film). */
+  moveAnimationId?: string;
+  moveSpeedPxPerSec?: number;
+  idleSpeedMul?: number;
+}
+
+/** Réglages du personnage DANS le film (indépendants de la scène). */
+export interface FilmCharacter {
+  /** Échelle de base du perso (multipliée par l'échelle de chaque point). */
+  scale: number;
+  /** Sens dans lequel le coloriage est dessiné (pilote le flip auto des trajets). */
+  facing: 'left' | 'right';
+  /** Origine d'ancrage normalisée dans l'image (0..1). Défaut (0.5, 1.0) = pieds. */
+  originU: number;
+  originV: number;
+}
+
+/** Son du film (musique de fond). Blob en Storage `projects/{id}/film/sounds/{id}`. */
+export interface FilmSound {
+  id: string;
+  name: string;
+  blob: Blob | null;
+  volume?: number;
+}
+
+/** FILM d'un coloriage — entité de niveau projet, prioritaire sur la scène. */
+export interface Film {
+  plans: FilmPlan[];
+  character: FilmCharacter;
+  /** Musique de fond du film, jouée en boucle continue. */
+  music?: FilmSound;
+  /** Animation de déplacement par défaut (fallback global des trajets). */
+  moveAnimationId?: string;
+  /** Vitesse de déplacement par défaut (px backdrop/s). */
+  moveSpeedPxPerSec: number;
+  /** Multiplicateur de vitesse de lecture de l'idle aux points (défaut 1). */
+  idleSpeedMul?: number;
+}
+
+/** true si le film a de quoi être joué (au moins un plan avec décor et point). */
+export function filmIsPlayable(film: Film | null | undefined): boolean {
+  return !!film && film.plans.some(pl => pl.backdrop != null && pl.points.length > 0);
 }
 
 export interface Scene {
@@ -1064,6 +1224,17 @@ export interface Project {
   animations: Animation[];
   bodyZones: BodyZone[];
   markers: MarkerCorners | null;
+  /** FILM du coloriage (niveau projet, prioritaire sur la scène). null = pas de film. */
+  film: Film | null;
+  /** Flag léger « a un film jouable » renseigné par les chargements de LISTE
+   *  (getProjectsByBook) sans désérialiser le film. Les chargements complets
+   *  remplissent `film` directement. */
+  hasFilm?: boolean;
+  /** Transient (jamais sérialisé) : le film vient d'une conversion legacy
+   *  (scene.film) — la prochaine sauvegarde du film doit uploader TOUS ses
+   *  décors/sons vers les chemins film/… . */
+  filmNeedsFullUpload?: boolean;
+  /** Scène interactive (DÉPRÉCIÉ — remplacée par le film). */
   scene: Scene | null;
   projectTriangulation: ProjectTriangulation | null;
   projectEyes: ProjectEyes | null;

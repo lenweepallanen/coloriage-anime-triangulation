@@ -95,6 +95,17 @@ Le `vercel.json` de chaque app exécute `cd ../.. && npm run build:<app>` puis s
 
 L'utilisateur crée un projet avec une image de coloriage et **plusieurs animations** (une "rest" en boucle infinie + des "oneshot" déclenchées à la demande). L'admin définit des **anchor points** (points structurels trackés) sur l'image, puis un maillage triangulé avec des points internes. Le suivi optique est pré-calculé sur les anchors seuls, avec validation par keyframes. Les points internes suivent via coordonnées barycentriques. Toutes les animations partagent la même géométrie (topologie mesh) mais ont chacune leur propre vidéo et tracking. L'utilisateur final scanne son coloriage colorié, et l'app injecte ses couleurs dans le maillage animé via PIXI.js avec transitions fluides entre animations.
 
+## FILM (niveau projet — produit cible)
+
+Chaque coloriage a un **FILM** (`Project.film: Film | null`) : une séquence de **PLANS** (au sens cinéma) jouée automatiquement après le scan. **Le mode scène interactif est DÉPRÉCIÉ** — ne jamais concevoir de nouvelle feature qui s'y réfère ; l'app PLAY n'affiche un coloriage QUE s'il a un film jouable (`filmIsPlayable`), et le film est **prioritaire** sur la scène partout.
+
+- **Modèle** (`types/project.ts`) : `Film { plans: FilmPlan[], character: FilmCharacter, music?, moveAnimationId?, moveSpeedPxPerSec, idleSpeedMul? }`. Chaque `FilmPlan` possède **SON décor** (`backdrop` image/vidéo + `overlay` chroma optionnel), son cadrage `cameraX` (16:9), son `entrySide`, ses `points` (chemin), son `ending` et sa `transitionToNext` (cut/fondu noir/fondu enchaîné/volet/iris). Chaque `FilmPoint` : échelle, trajet entrant (origine précédent/hors-champ/libre, droit ou courbe Bézier + easing, anim/vitesse/son), `action?` (séquence anims+sons+parlé), `pauseMs?`, `departure?` (trajet de sortie hors-champ/libre).
+- **Admin** : onglet **FILM** (`pages/admin/FilmSection.tsx` → `components/admin/film/FilmEditor.tsx` + FilmStoryboard/FilmCanvas/FilmPointPanel/FilmTravelFields). Preview sans scan via `PreviewModalShell` + `ScenePlayer`. L'onglet **Scène** reste l'éditeur interactif legacy (plus touché).
+- **Moteur de lecture** : inchangé (`filmDirector.ts`, `filmPath.ts`, `filmTransitions.ts`, `scenePlayback.ts`, `ScenePlayer.tsx`). L'unique pont modèle→moteur est **`utils/filmScene.ts`** (`buildFilmScene(film): Scene` — pseudo-scène consommée par le player). `ScanPage` joue `buildFilmScene(project.film)` si le film est jouable.
+- **Persistance** : Firestore `ProjectDoc.film` ; Storage `projects/{id}/film/plans/{planId}/backdrop|overlay` + `projects/{id}/film/sounds/{soundId}` ; hints `{filmPlanBackdrop|filmPlanOverlay|deleteFilmPlan…: planId}`, `{filmSoundId}`/`{deleteFilmSoundId}`. Enregistrement vidéo play : local (IndexedDB `filmVideosStore`), partage natif.
+- **Migration** : ancien coloriage interactif sans film → `film: null` (onglet Film propose « Créer le film ») ; ancien « mode FILM V2 » (`scene.film`) → converti automatiquement à la lecture (`convertLegacySceneFilm` : décor scène matérialisé comme backdrop des plans, perso/musique copiés) ; la 1ʳᵉ sauvegarde du FilmEditor uploade tout vers `film/…` (`filmNeedsFullUpload`). `scene.film` n'est plus jamais écrit.
+- **PLAY** : `PlayPage` gate `published && filmIsPlayable(film)` ; `BookPage` filtre `hasFilm` (flag léger calculé par `getProjectsByBook`). ⚠ Admin et play se déploient ENSEMBLE (l'admin n'écrit plus l'ancien format).
+
 ## Stack technique
 
 | Couche | Technologie |

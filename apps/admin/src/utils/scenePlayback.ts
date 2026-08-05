@@ -1,5 +1,6 @@
-import type { Scene, SceneRestPoint, Point2D } from '../types/project'
+import type { FilmTravelEasing, Scene, SceneRestPoint, Point2D } from '../types/project'
 import { clampPointToTrapezoid, isInsideTrapezoid, scaleAtY, segmentTrapezoidExit } from './sceneTrapezoid'
+import { applyFilmEasing, pointAtLen, sampleFilmPath, type FilmPathTable } from './filmPath'
 
 function smoothstep(t: number): number {
   const c = Math.max(0, Math.min(1, t))
@@ -20,8 +21,21 @@ export interface FilmTravelOpts {
   animSpeedMul?: number
   /** Téléporte d'abord le perso hors-champ de ce côté (entrée de film). */
   offscreenStart?: 'left' | 'right'
-  /** Cible = hors-champ de ce côté (sortie). Trajet TERMINAL : reste figé, isExited=true. */
+  /** Cible = hors-champ de ce côté (sortie). Trajet TERMINAL par défaut : reste
+   *  figé, isExited=true — sauf si `terminal: false` (departure : arrive normalement). */
   offscreenEnd?: 'left' | 'right'
+  /** Téléporte le perso à ce point avant le trajet (origin custom / cut sec).
+   *  Exclusif avec offscreenStart. */
+  startAt?: Point2D
+  /** false = offscreenEnd NON terminal (trajet de sortie de point, le film continue). */
+  terminal?: boolean
+  /** Points de contrôle Bézier (1 = quadratique, 2 = cubique) en coords background.
+   *  Vitesse constante en espace (table arc-length). */
+  controlPoints?: Point2D[]
+  /** Easing temporel du trajet (défaut linear, durée totale inchangée). */
+  easing?: FilmTravelEasing
+  /** Sens du regard imposé à l'ARRIVÉE au point (absent = garde le sens du trajet). */
+  arriveFacing?: 'left' | 'right'
 }
 
 export interface ScenePlaybackConfig {
@@ -101,13 +115,17 @@ export class ScenePlayback {
   private _filmMode: boolean = false
   /** Échelle courante du perso (échelle du dernier point atteint, interpolée en trajet). */
   private _filmScale: number = 1
-  /** Trajet film en cours (null hors trajet). */
+  /** Trajet film en cours (null hors trajet). Position pilotée par le temps
+   *  (elapsedSec) sur une table arc-length (courbe ou droite) + easing. */
   private _filmTravel: {
     speed: number
     scaleFrom: number
     scaleTo: number
     totalDist: number
-    coveredDist: number
+    elapsedSec: number
+    path: FilmPathTable
+    easing?: FilmTravelEasing
+    arriveFacing?: 'left' | 'right'
     animId?: string
     animSpeedMul?: number
   } | null = null
@@ -299,9 +317,25 @@ export class ScenePlayback {
    *   (le perso reste figé hors écran, `isExited` passe à true).
    */
   startFilmTravel(target: Point2D | null, opts: FilmTravelOpts): void {
+    // [Film DEBUG] — à retirer une fois le moonwalk résolu.
+    // eslint-disable-next-line no-console
+    console.log('[Film DEBUG] travel ' + JSON.stringify({
+      from: { x: Math.round(this._currentX), y: Math.round(this._currentY) },
+      target: target ? { x: Math.round(target.x), y: Math.round(target.y) } : null,
+      startAt: opts.startAt ? { x: Math.round(opts.startAt.x), y: Math.round(opts.startAt.y) } : null,
+      offStart: opts.offscreenStart ?? null,
+      offEnd: opts.offscreenEnd ?? null,
+      scaleFrom: opts.scaleFrom,
+      scaleTo: opts.scaleTo,
+      facing: this.scene.characterFacing ?? '(undefined→right)',
+      arriveFacing: opts.arriveFacing ?? null,
+    }))
     this._exited = false
     this._exitMode = false
-    if (opts.offscreenStart) {
+    if (opts.startAt) {
+      this._currentX = opts.startAt.x
+      this._currentY = opts.startAt.y
+    } else if (opts.offscreenStart) {
       if (target) this._currentY = target.y
       this._currentX = this.filmOffscreenX(opts.offscreenStart, opts.scaleFrom)
     }
@@ -310,7 +344,7 @@ export class ScenePlayback {
     if (opts.offscreenEnd) {
       tx = this.filmOffscreenX(opts.offscreenEnd, opts.scaleTo)
       ty = this._currentY
-      this._exitMode = true
+      this._exitMode = opts.terminal !== false
     } else if (target) {
       tx = target.x
       ty = target.y
@@ -318,12 +352,16 @@ export class ScenePlayback {
       return
     }
     this._filmScale = opts.scaleFrom
+    const path = sampleFilmPath({ x: this._currentX, y: this._currentY }, { x: tx, y: ty }, opts.controlPoints)
     this._filmTravel = {
       speed: Math.max(1, opts.speedPxPerSec),
       scaleFrom: opts.scaleFrom,
       scaleTo: opts.scaleTo,
-      totalDist: Math.hypot(tx - this._currentX, ty - this._currentY),
-      coveredDist: 0,
+      totalDist: path.totalLen,
+      elapsedSec: 0,
+      path,
+      ...(opts.easing != null && { easing: opts.easing }),
+      ...(opts.arriveFacing != null && { arriveFacing: opts.arriveFacing }),
       ...(opts.animationId != null && { animId: opts.animationId }),
       ...(opts.animSpeedMul != null && { animSpeedMul: opts.animSpeedMul }),
     }
@@ -337,6 +375,37 @@ export class ScenePlayback {
       this._walkAlpha = 1
       this._pauseSec = 0
       if (wasInteracting) this.onWalkStateChange?.(true)
+    }
+  }
+
+  /** Avance un trajet film : position par temps → easing → distance → table arc-length.
+   *  Vitesse constante en espace hors easing ; le flip suit la tangente du chemin. */
+  private updateFilmTravel(deltaSeconds: number): void {
+    const ft = this._filmTravel
+    if (!ft) return
+    ft.elapsedSec += deltaSeconds
+    const durationSec = ft.totalDist > 1e-6 ? ft.totalDist / ft.speed : 0
+    const tRaw = durationSec > 0 ? Math.min(1, ft.elapsedSec / durationSec) : 1
+    const sFrac = applyFilmEasing(ft.easing, tRaw)
+    const covered = ft.totalDist * sFrac
+    const prevX = this._currentX
+    const prevY = this._currentY
+    const pos = pointAtLen(ft.path, covered)
+    this._currentX = pos.x
+    this._currentY = pos.y
+    this._filmScale = ft.scaleFrom + (ft.scaleTo - ft.scaleFrom) * sFrac
+    const invDt = 1 / Math.max(deltaSeconds, 1e-6)
+    this.recomputeWalkVisualsFromVelocity((this._currentX - prevX) * invDt, (this._currentY - prevY) * invDt)
+    if (tRaw >= 1) {
+      this.recomputeWalkVisualsFromVelocity(0, 0)
+      if (this._exitMode) {
+        // Sortie de champ terminale : reste figé en 'walking', hors écran.
+        this._filmScale = ft.scaleTo
+        this._filmTravel = null
+        this._exited = true
+      } else {
+        this.filmArrive()
+      }
     }
   }
 
@@ -367,8 +436,14 @@ export class ScenePlayback {
       }
 
       case 'walking': {
+        // Mode film : trajet piloté par le temps (courbe arc-length + easing).
+        // Un film sorti (_exited) reste figé en 'walking' sans trajet.
+        if (this._filmMode) {
+          if (this._filmTravel) this.updateFilmTravel(deltaSeconds)
+          break
+        }
         const trap = this.scene.walkTrapezoid
-        if (!trap && !this._filmTravel) { this.arriveAtRestPoint(); break }
+        if (!trap) { this.arriveAtRestPoint(); break }
 
         // Pause hors écran (après un téléport).
         if (this._pauseSec > 0) {
@@ -399,11 +474,11 @@ export class ScenePlayback {
           break
         }
 
+        // Branche trapèze uniquement (le mode film est traité par updateFilmTravel ci-dessus).
         const dx = this.walkTargetX - this._currentX
         const dy = this.walkTargetY - this._currentY
         const dist = Math.hypot(dx, dy)
-        const speed = this._filmTravel ? this._filmTravel.speed : Math.max(1, trap!.walkSpeedPxPerSec)
-        const step = speed * deltaSeconds
+        const step = Math.max(1, trap!.walkSpeedPxPerSec) * deltaSeconds
         let vx = 0, vy = 0
         if (dist <= step || dist < 0.5) {
           this._currentX = this.walkTargetX
@@ -415,16 +490,7 @@ export class ScenePlayback {
             this.walkTargetY = next.y
           } else {
             this.recomputeWalkVisualsFromVelocity(0, 0)
-            if (this._exitMode) {
-              // Sortie de champ (film) : trajet terminal, on reste figé en 'walking'.
-              if (this._filmTravel) this._filmScale = this._filmTravel.scaleTo
-              this._filmTravel = null
-              this._exited = true
-            } else if (this._filmTravel) {
-              this.filmArrive()
-            } else {
-              this.arriveAtRestPoint()
-            }
+            this.arriveAtRestPoint()
           }
           break
         }
@@ -432,12 +498,6 @@ export class ScenePlayback {
         vy = dy / dist
         this._currentX += vx * step
         this._currentY += vy * step
-        if (this._filmTravel) {
-          const ft = this._filmTravel
-          ft.coveredDist += step
-          const t = ft.totalDist > 1e-6 ? Math.min(1, ft.coveredDist / ft.totalDist) : 1
-          this._filmScale = ft.scaleFrom + (ft.scaleTo - ft.scaleFrom) * t
-        }
         this.recomputeWalkVisualsFromVelocity(vx, vy)
         break
       }
@@ -465,7 +525,15 @@ export class ScenePlayback {
   /** Arrivée d'un trajet film : blend vers l'idle SANS re-snap au rest point
    *  (le perso reste au point du chemin, l'échelle est figée à scaleTo). */
   private filmArrive(): void {
-    this._filmScale = this._filmTravel?.scaleTo ?? this._filmScale
+    const ft = this._filmTravel
+    this._filmScale = ft?.scaleTo ?? this._filmScale
+    // Sens du regard imposé au point (réglage par point du film) : flip calculé
+    // depuis le sens natif du dessin, figé pour toute la phase idle.
+    if (ft?.arriveFacing) {
+      const nativeRight = this.scene.characterFacing !== 'left'
+      const flip: 1 | -1 = ((ft.arriveFacing === 'right') === nativeRight) ? 1 : -1
+      this._lastFlipX = flip
+    }
     this._filmTravel = null
     this.recomputeWalkVisuals()
     this._walkAlpha = 1

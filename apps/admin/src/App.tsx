@@ -6,6 +6,7 @@ import AdminSectionMenu from './pages/admin/AdminSectionMenu'
 import GeneralSection from './pages/admin/GeneralSection'
 import AnimationsSection from './pages/admin/AnimationsSection'
 import SceneSection from './pages/admin/SceneSection'
+import FilmSection from './pages/admin/FilmSection'
 import BodyZonesSection from './pages/admin/BodyZonesSection'
 import TriangulationSection from './pages/admin/TriangulationSection'
 import EyesSection from './pages/admin/EyesSection'
@@ -29,6 +30,7 @@ function App() {
             <Route path="general" element={<GeneralSection />} />
             <Route path="animations" element={<AnimationsSection />} />
             <Route path="zones" element={<BodyZonesSection />} />
+            <Route path="film" element={<FilmSection />} />
             <Route path="scene" element={<SceneSection />} />
             <Route path="triangulation" element={<TriangulationSection />} />
             <Route path="eyes" element={<EyesSection />} />

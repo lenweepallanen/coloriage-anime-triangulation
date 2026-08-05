@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useProjectForPlay } from '@shared/hooks/useProjectForPlay'
+import { filmIsPlayable } from '@shared/types/project'
 import ScanPage from '@shared/pages/ScanPage'
 import { getFilmVideo, hasFilmVideo, saveFilmVideo } from '@shared/db/filmVideosStore'
 import type { FilmRecordingResult } from '@shared/utils/filmRecorder'
@@ -59,7 +60,8 @@ export default function PlayPage() {
 
   if (loading) return <LoadingScreen />
 
-  if (!project || project.published !== true) {
+  // Un coloriage n'est jouable côté play QUE s'il est publié ET a un FILM.
+  if (!project || project.published !== true || !filmIsPlayable(project.film)) {
     return <UnavailableMessage />
   }
 

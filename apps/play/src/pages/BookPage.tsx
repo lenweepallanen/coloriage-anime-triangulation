@@ -48,8 +48,9 @@ export default function BookPage() {
           revokeBonus = URL.createObjectURL(b.bonusImageBlob)
           setBonusImgUrl(revokeBonus)
         }
+        // Seuls les coloriages avec un FILM sont montrés côté play.
         const ps = await getProjectsByBook(bookId, true)
-        setProjects(ps)
+        setProjects(ps.filter(p => p.hasFilm === true))
       } catch (err) {
         console.error(err)
         setNotAvailable(true)
