@@ -10,6 +10,7 @@ import { formatMs } from '../filmEditorShared'
 export default function ClipInspector({
   timeline, selection, animations, sounds,
   onPatchMotion, onSetMotionCurve, onPatchAnim, onPatchSound, onRemove,
+  anchorTargets, motionPathLen,
 }: {
   timeline: FilmPlanTimeline
   selection: NonNullable<TimelineSelection>
@@ -21,6 +22,10 @@ export default function ClipInspector({
   onPatchAnim: (id: string, partial: Partial<FilmAnimClip>) => void
   onPatchSound: (trackIndex: number, id: string, partial: Partial<FilmSoundClip>) => void
   onRemove: () => void
+  /** Cibles d'ancrage ⚓ (clips motion + anim du plan, libellés). */
+  anchorTargets: { id: string; label: string }[]
+  /** Longueur du chemin d'un MotionClip (px décor) — pour la vitesse dérivée. */
+  motionPathLen: (id: string) => number
 }) {
   const numField = (
     label: string, value: number, onChange: (v: number) => void,
@@ -61,7 +66,33 @@ export default function ClipInspector({
           {clip.to.kind === 'waypoint' && ' · vers un point du canvas'}
           {clip.to.kind === 'offscreen' && ` · vers hors-champ ${clip.to.side === 'left' ? '←' : '→'}`}
         </div>
-        {clip.kind !== 'appear' && numField('Durée (s)', clip.durationMs / 1000, v => onPatchMotion(clip.id, { durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1, title: 'La durée est la donnée maîtresse — la vitesse en découle' })}
+        {clip.kind !== 'appear' && (() => {
+          const pathLen = motionPathLen(clip.id)
+          const speed = clip.durationMs > 0 ? Math.round((pathLen / clip.durationMs) * 1000) : 0
+          const locked = clip.lockedSpeedPxPerSec != null
+          return (
+            <>
+              {locked ? (
+                <div style={{ fontSize: 11, opacity: 0.75 }}>
+                  Durée : {(clip.durationMs / 1000).toFixed(2)} s (dérivée de la vitesse verrouillée)
+                </div>
+              ) : (
+                numField('Durée (s)', clip.durationMs / 1000, v => onPatchMotion(clip.id, { durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1, title: 'La durée est la donnée maîtresse — la vitesse en découle' })
+              )}
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                title="Verrouillé : déplacer les points/courbes recalcule la durée pour garder cette vitesse constante"
+              >
+                <input
+                  type="checkbox"
+                  checked={locked}
+                  onChange={(e) => onPatchMotion(clip.id, { lockedSpeedPxPerSec: e.target.checked ? Math.max(1, speed) : undefined })}
+                />
+                🔒 vitesse verrouillée — {locked ? clip.lockedSpeedPxPerSec : speed} px/s
+              </label>
+            </>
+          )
+        })()}
         <div className="scene-editor-field" style={{ maxWidth: 170 }}>
           <label style={{ fontSize: 11 }}>Allure</label>
           <select
@@ -158,6 +189,51 @@ export default function ClipInspector({
       <div style={{ display: 'flex', gap: 8 }}>
         {numField('Fade in (s)', (clip.fadeInMs ?? 0) / 1000, v => patch({ fadeInMs: v > 0 ? Math.round(v * 1000) : undefined }), { min: 0, step: 0.1 })}
         {numField('Fade out (s)', (clip.fadeOutMs ?? 0) / 1000, v => patch({ fadeOutMs: v > 0 ? Math.round(v * 1000) : undefined }), { min: 0, step: 0.1 })}
+      </div>
+      {/* Ancrage ⚓ : le début du son est calé sur un clip motion/anim + offset.
+          Ex. rugissement à +2 s du début de l'anim rugissement. */}
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="scene-editor-field">
+          <label style={{ fontSize: 11 }}>⚓ Ancrer à</label>
+          <select
+            value={clip.anchor?.clipId ?? ''}
+            onChange={(e) => {
+              const clipId = e.target.value
+              if (!clipId) patch({ anchor: undefined })
+              else patch({ anchor: { clipId, edge: clip.anchor?.edge ?? 'start', offsetMs: clip.anchor?.offsetMs ?? 0 } })
+            }}
+            title="Le début du son suit ce clip : le déplacer déplace le son"
+          >
+            <option value="">— libre (temps absolu) —</option>
+            {anchorTargets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </div>
+        {clip.anchor && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div className="scene-editor-field" style={{ maxWidth: 120 }}>
+              <label style={{ fontSize: 11 }}>Bord</label>
+              <select
+                value={clip.anchor.edge}
+                onChange={(e) => patch({ anchor: { ...clip.anchor!, edge: e.target.value as 'start' | 'end' } })}
+              >
+                <option value="start">Début</option>
+                <option value="end">Fin</option>
+              </select>
+            </div>
+            <div className="scene-editor-field" style={{ maxWidth: 130 }}>
+              <label style={{ fontSize: 11 }}>Décalage (s)</label>
+              <input
+                type="number" step={0.1}
+                value={clip.anchor.offsetMs / 1000}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value)
+                  if (Number.isFinite(v)) patch({ anchor: { ...clip.anchor!, offsetMs: Math.round(v * 1000) } })
+                }}
+                title="Peut être négatif (le son démarre avant le bord ancré)"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

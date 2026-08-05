@@ -7,6 +7,7 @@ import {
 import type { UploadHint } from '../../../db/projectsStore'
 import { buildFilmTScene } from '../../../utils/filmScene'
 import { FilmTimelineSampler } from '../../../utils/filmTimelineSampler'
+import { sampleFilmPath } from '../../../utils/filmPath'
 import { resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
 import { getAudioDurationMs } from '../../../utils/sceneActionDuration'
 import ScenePlayer from '../../scan/ScenePlayer'
@@ -100,11 +101,14 @@ export default function FilmEditorT({ project, onSave }: {
     return plan.timeline.motion.map(c => {
       const a = sampler.evaluatePlanLocal(planIndex, c.startMs + Math.min(1, c.durationMs))
       const b = sampler.evaluatePlanLocal(planIndex, c.startMs + Math.max(c.durationMs - 1, 0))
+      const from = { x: a.x, y: a.y }
+      const to = { x: b.x, y: b.y }
       return {
         id: c.id,
         kind: c.kind,
-        from: { x: a.x, y: a.y },
-        to: { x: b.x, y: b.y },
+        from,
+        to,
+        pathLen: sampleFilmPath(from, to, c.controlPoints).totalLen,
         ...(c.controlPoints != null && { controlPoints: c.controlPoints }),
       }
     })
@@ -182,10 +186,34 @@ export default function FilmEditorT({ project, onSave }: {
       : prev)
   }, [])
 
+  /** 🔒 Vitesse verrouillée : après une mutation géométrique, les clips lockés
+   *  retrouvent durationMs = longueur du chemin ÷ vitesse. Les positions des
+   *  endpoints ne dépendent pas des durées → une seule passe suffit. */
+  const applyLockedSpeeds = useCallback((f: FilmT): FilmT => {
+    const anyLocked = f.plans.some(pl => pl.timeline.motion.some(c => c.lockedSpeedPxPerSec != null && c.kind !== 'appear'))
+    if (!anyLocked) return f
+    const smp = new FilmTimelineSampler(f, project.animations)
+    let changed = false
+    const plans = f.plans.map((pl, pi) => {
+      const motion = pl.timeline.motion.map(c => {
+        if (c.lockedSpeedPxPerSec == null || c.kind === 'appear') return c
+        const a = smp.evaluatePlanLocal(pi, c.startMs + Math.min(1, c.durationMs))
+        const b = smp.evaluatePlanLocal(pi, c.startMs + Math.max(c.durationMs - 1, 0))
+        const len = sampleFilmPath({ x: a.x, y: a.y }, { x: b.x, y: b.y }, c.controlPoints).totalLen
+        const dur = Math.max(100, Math.round((len / Math.max(1, c.lockedSpeedPxPerSec)) * 1000))
+        if (dur === c.durationMs) return c
+        changed = true
+        return { ...c, durationMs: dur }
+      })
+      return motion === pl.timeline.motion ? pl : { ...pl, timeline: resolveSoundAnchors({ ...pl.timeline, motion }) }
+    })
+    return changed ? { ...f, plans } : f
+  }, [project.animations])
+
   const patchTimeline = useCallback((planId: string, mut: (tl: FilmPlanTimeline) => FilmPlanTimeline) => {
     setFilm(prev => {
       if (!prev) return prev
-      return {
+      const next = {
         ...prev,
         plans: prev.plans.map(pl => {
           if (pl.id !== planId) return pl
@@ -196,8 +224,9 @@ export default function FilmEditorT({ project, onSave }: {
           return { ...pl, timeline: resolveSoundAnchors(tl) }
         }),
       }
+      return applyLockedSpeeds(next)
     })
-  }, [])
+  }, [applyLockedSpeeds])
 
   const updateFilm = useCallback((partial: Partial<FilmT>) => {
     setFilm(prev => prev ? { ...prev, ...partial } : prev)
@@ -219,7 +248,15 @@ export default function FilmEditorT({ project, onSave }: {
       return {
         ...tl,
         soundTracks: tl.soundTracks.map((tr, i) => i === sel.trackIndex
-          ? tr.map(c => c.id === sel.id ? { ...c, ...partial, ...(partial.startMs != null && c.anchor != null ? { anchor: undefined } : {}) } : c)
+          ? tr.map(c => {
+              if (c.id !== sel.id) return c
+              // Clip ancré ⚓ : déplacer le clip édite l'OFFSET (l'ancrage est conservé).
+              if (partial.startMs != null && c.anchor != null) {
+                const delta = partial.startMs - c.startMs
+                return { ...c, ...partial, anchor: { ...c.anchor, offsetMs: c.anchor.offsetMs + delta } }
+              }
+              return { ...c, ...partial }
+            })
           : tr),
       }
     })
@@ -705,6 +742,17 @@ export default function FilmEditorT({ project, onSave }: {
                 onPatchAnim={patchAnim}
                 onPatchSound={patchSound}
                 onRemove={() => removeClip(selection)}
+                anchorTargets={[
+                  ...plan.timeline.motion.map((c, i) => ({
+                    id: c.id,
+                    label: c.kind === 'appear' ? `✨ Apparition ${i + 1}` : c.kind === 'exit' ? `Sortie ${i + 1}` : `Trajet ${i + 1}`,
+                  })),
+                  ...plan.timeline.anim.map((c, i) => ({
+                    id: c.id,
+                    label: `Anim ${i + 1} — ${readyAnimations.find(a => a.id === c.animationId)?.name ?? '?'}`,
+                  })),
+                ]}
+                motionPathLen={(id) => motionGeom.find(g => g.id === id)?.pathLen ?? 0}
               />
             ) : selectedWp ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
