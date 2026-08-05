@@ -15,7 +15,8 @@ import CharacterOriginEditor from '../CharacterOriginEditor'
 import FilmCanvasT from './FilmCanvasT'
 import TimelineEditor, { type TimelineSelection } from './timeline/TimelineEditor'
 import ClipInspector from './timeline/ClipInspector'
-import { fileToDecorLayer, formatMs, transitionFromKey, transitionToKey } from './filmEditorShared'
+import { defaultControlPoints, fileToDecorLayer, formatMs, transitionFromKey, transitionToKey } from './filmEditorShared'
+import { FilmAudioScheduler } from '../../../utils/filmAudioScheduler'
 
 /**
  * Éditeur de FILM TIMELINE (v4) : canvas spatial (waypoints, caméra, chemins) en
@@ -33,6 +34,7 @@ export default function FilmEditorT({ project, onSave }: {
   const [selection, setSelection] = useState<TimelineSelection>(null)
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null)
   const [playheadMs, setPlayheadMs] = useState(0)
+  const [editorPlaying, setEditorPlaying] = useState(false)
   const [saving, setSaving] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [previewCanvas, setPreviewCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -114,6 +116,65 @@ export default function FilmEditorT({ project, onSave }: {
     return { x: s.x, y: s.y, scaleMul: s.scaleMul, flip: s.flip }
   }, [sampler, planIndex, playheadMs])
 
+  // --- Lecture ÉDITEUR (Espace) : playhead animé + sons du plan via le scheduler ---
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      e.preventDefault()
+      setEditorPlaying(p => !p)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Le plan actif change ou est édité → on stoppe la lecture (les sons re-partiraient faux).
+  useEffect(() => { setEditorPlaying(false) }, [activePlanId])
+
+  const editorPlayFilmRef = useRef<{ film: FilmT; planIndex: number; fromMs: number } | null>(null)
+  useEffect(() => {
+    if (!editorPlaying) return
+    if (!film || !plan || planIndex < 0) { setEditorPlaying(false); return }
+    editorPlayFilmRef.current = {
+      film,
+      planIndex,
+      fromMs: playheadMs >= plan.timeline.durationMs - 20 ? 0 : playheadMs,
+    }
+    const ctx = editorPlayFilmRef.current
+    const planStartMs = ctx.film.plans.map((_, i) => (i === ctx.planIndex ? 0 : Number.NaN))
+    const durationMs = ctx.film.plans[ctx.planIndex].timeline.durationMs
+    const sched = new FilmAudioScheduler(ctx.film, planStartMs, durationMs)
+    let disposed = false
+    let raf = 0
+    sched.ready.then(async () => {
+      if (disposed) return
+      await sched.unlock()
+      sched.start(ctx.fromMs)
+      const tick = () => {
+        if (disposed) return
+        const t = sched.currentTimeMs()
+        if (t >= durationMs) {
+          setPlayheadMs(durationMs)
+          setEditorPlaying(false)
+          return
+        }
+        setPlayheadMs(t)
+        raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame(tick)
+    })
+    return () => {
+      disposed = true
+      cancelAnimationFrame(raf)
+      sched.stop()
+      sched.dispose()
+    }
+    // Volontairement PAS de dep sur film/plan : les éditions pendant la lecture
+    // ne re-planifient pas l'audio (rejouer pour les entendre).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorPlaying])
+
   // --- Patchers (toute mutation de clips repasse par resolveSoundAnchors) ---
   const patchPlanT = useCallback((planId: string, partial: Partial<FilmTimelinePlan>) => {
     setFilm(prev => prev
@@ -182,6 +243,17 @@ export default function FilmEditorT({ project, onSave }: {
     if (!plan) return
     patchTimeline(plan.id, tl => ({ ...tl, anim: tl.anim.map(c => c.id === id ? { ...c, ...partial } : c) }))
   }, [plan, patchTimeline])
+  const setMotionCurve = useCallback((id: string, count: 0 | 1 | 2) => {
+    if (!plan) return
+    const geom = motionGeom.find(g => g.id === id)
+    patchTimeline(plan.id, tl => ({
+      ...tl,
+      motion: tl.motion.map(c => c.id === id
+        ? { ...c, controlPoints: count === 0 || !geom ? undefined : defaultControlPoints(geom.from, geom.to, count) }
+        : c),
+    }))
+  }, [plan, patchTimeline, motionGeom])
+
   const patchSound = useCallback((trackIndex: number, id: string, partial: Partial<FilmSoundClip>) => {
     if (!plan) return
     patchTimeline(plan.id, tl => ({
@@ -629,6 +701,7 @@ export default function FilmEditorT({ project, onSave }: {
                 animations={readyAnimations}
                 sounds={film.sounds}
                 onPatchMotion={patchMotion}
+                onSetMotionCurve={setMotionCurve}
                 onPatchAnim={patchAnim}
                 onPatchSound={patchSound}
                 onRemove={() => removeClip(selection)}
@@ -691,7 +764,7 @@ export default function FilmEditorT({ project, onSave }: {
             <button className="btn-ghost btn-sm" onClick={() => addMotionClip('travel')} title="Trajet vers le point sélectionné, posé au playhead">+ Trajet</button>
             <button className="btn-ghost btn-sm" onClick={() => addMotionClip('appear')} title="Apparition directe sur le point sélectionné">+ ✨ Apparition</button>
             <button className="btn-ghost btn-sm" onClick={addAnimClip} title="Clip d'animation du corps au playhead">+ Anim</button>
-            <span style={{ fontSize: 10, opacity: 0.55 }}>Double-clic sur une piste son = poser un son · Ctrl+molette = zoom</span>
+            <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic sur une piste son = poser un son · Ctrl+molette = zoom · Alt = sans snap</span>
           </div>
           <TimelineEditor
             timeline={plan.timeline}
@@ -704,7 +777,8 @@ export default function FilmEditorT({ project, onSave }: {
             onAddSoundAt={addSoundAt}
             onAddSoundTrack={addSoundTrack}
             playheadMs={playheadMs}
-            onScrub={setPlayheadMs}
+            onScrub={(ms) => { setEditorPlaying(false); setPlayheadMs(ms) }}
+            playing={editorPlaying}
           />
           <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
             <div className="scene-editor-field" style={{ maxWidth: 180 }}>

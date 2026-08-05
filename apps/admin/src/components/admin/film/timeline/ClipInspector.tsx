@@ -9,13 +9,15 @@ import { formatMs } from '../filmEditorShared'
  */
 export default function ClipInspector({
   timeline, selection, animations, sounds,
-  onPatchMotion, onPatchAnim, onPatchSound, onRemove,
+  onPatchMotion, onSetMotionCurve, onPatchAnim, onPatchSound, onRemove,
 }: {
   timeline: FilmPlanTimeline
   selection: NonNullable<TimelineSelection>
   animations: Animation[]
   sounds: FilmSound[]
   onPatchMotion: (id: string, partial: Partial<FilmMotionClip>) => void
+  /** Change la forme du trajet (0 = droit, 1/2 = CPs posés au milieu, draggables sur le canvas). */
+  onSetMotionCurve: (id: string, count: 0 | 1 | 2) => void
   onPatchAnim: (id: string, partial: Partial<FilmAnimClip>) => void
   onPatchSound: (trackIndex: number, id: string, partial: Partial<FilmSoundClip>) => void
   onRemove: () => void
@@ -72,12 +74,20 @@ export default function ClipInspector({
             <option value="easeInOut">Doux départ+arrivée</option>
           </select>
         </div>
-        {(clip.controlPoints?.length ?? 0) > 0 && (
-          <button
-            className="btn-sm btn-secondary"
-            onClick={() => onPatchMotion(clip.id, { controlPoints: undefined })}
-            title="Repasser en trajet droit"
-          >Retirer la courbe ({clip.controlPoints!.length} CP)</button>
+        {clip.kind !== 'appear' && (
+          <div className="scene-editor-field" style={{ maxWidth: 220 }}>
+            <label style={{ fontSize: 11 }}>Forme du trajet</label>
+            <div className="scene-config-panel-type-toggle">
+              {([0, 1, 2] as const).map(n => (
+                <button
+                  key={n}
+                  className={`btn-sm ${(clip.controlPoints?.length ?? 0) === n ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => onSetMotionCurve(clip.id, n)}
+                  title={n === 0 ? 'Trajet droit' : `Courbe Bézier à ${n} point${n > 1 ? 's' : ''} de contrôle (draggables sur le canvas)`}
+                >{n === 0 ? 'Droit' : `${n} CP`}</button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     )

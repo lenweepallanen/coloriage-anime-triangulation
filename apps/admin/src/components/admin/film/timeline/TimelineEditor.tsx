@@ -87,10 +87,40 @@ export default function TimelineEditor({
 
   // --- Drag clip / poignées / playhead ---
   const dragRef = useRef<
-    | { mode: 'move' | 'resize-l' | 'resize-r'; sel: NonNullable<TimelineSelection>; grabPx: number; origStart: number; origDur: number }
+    | { mode: 'move' | 'resize-l' | 'resize-r'; sel: NonNullable<TimelineSelection>; grabPx: number; origStart: number; origDur: number; snapTargets: number[] }
     | { mode: 'scrub' }
     | null
   >(null)
+
+  /** Bords de tous les clips (toutes pistes) sauf celui-ci + secondes + playhead. */
+  const collectSnapTargets = (excludeId: string): number[] => {
+    const out: number[] = [0, playheadMs, timeline.durationMs]
+    const eat = (clips: { id: string; startMs: number; durationMs: number }[]) => {
+      for (const c of clips) {
+        if (c.id === excludeId) continue
+        out.push(c.startMs, c.startMs + c.durationMs)
+      }
+    }
+    eat(timeline.motion)
+    eat(timeline.anim)
+    for (const tr of timeline.soundTracks) eat(tr)
+    const stepSec = pxPerSec >= 90 ? 1 : pxPerSec >= 35 ? 2 : 5
+    for (let t = 0; t <= contentMs; t += stepSec * 1000) out.push(t)
+    return out
+  }
+
+  /** Snap une valeur ms sur la cible la plus proche (seuil 6 px écran). Alt désactive. */
+  const snapMs = (ms: number, targets: number[], disabled: boolean): number => {
+    if (disabled) return ms
+    const thresholdMs = pxToMs(6)
+    let best = ms
+    let bestDist = thresholdMs
+    for (const t of targets) {
+      const d = Math.abs(t - ms)
+      if (d < bestDist) { bestDist = d; best = t }
+    }
+    return best
+  }
 
   const clipsOf = (sel: NonNullable<TimelineSelection>) =>
     sel.kind === 'motion' ? timeline.motion
@@ -119,20 +149,26 @@ export default function TimelineEditor({
     const bounds = exclusive
       ? exclusiveTrackBounds(clips, sel.id)
       : { minStartMs: 0, maxEndMs: Number.POSITIVE_INFINITY }
+    const noSnap = e.altKey
     if (drag.mode === 'move') {
       let start = Math.round(drag.origStart + deltaMs)
+      // Snap sur le bord le plus attiré (début OU fin du clip déplacé).
+      const snappedStart = snapMs(start, drag.snapTargets, noSnap)
+      const snappedEnd = snapMs(start + drag.origDur, drag.snapTargets, noSnap) - drag.origDur
+      start = Math.abs(snappedStart - start) <= Math.abs(snappedEnd - start) ? snappedStart : snappedEnd
       start = Math.max(bounds.minStartMs, Math.min(bounds.maxEndMs - drag.origDur, start))
       start = Math.max(0, start)
-      onPatchClip(sel, { startMs: start })
+      onPatchClip(sel, { startMs: Math.round(start) })
     } else if (drag.mode === 'resize-l') {
-      let start = Math.round(drag.origStart + deltaMs)
+      let start = snapMs(Math.round(drag.origStart + deltaMs), drag.snapTargets, noSnap)
       start = Math.max(bounds.minStartMs, Math.min(drag.origStart + drag.origDur - 100, start))
       start = Math.max(0, start)
-      onPatchClip(sel, { startMs: start, durationMs: drag.origStart + drag.origDur - start })
+      onPatchClip(sel, { startMs: Math.round(start), durationMs: Math.round(drag.origStart + drag.origDur - start) })
     } else {
-      let dur = Math.round(drag.origDur + deltaMs)
+      const end = snapMs(Math.round(drag.origStart + drag.origDur + deltaMs), drag.snapTargets, noSnap)
+      let dur = end - drag.origStart
       dur = Math.max(100, Math.min(bounds.maxEndMs - drag.origStart, dur))
-      onPatchClip(sel, { durationMs: dur })
+      onPatchClip(sel, { durationMs: Math.round(dur) })
     }
   }, [contentMs, onPatchClip, onScrub, pxToMs, timeline]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -153,7 +189,7 @@ export default function TimelineEditor({
     onSelect(sel)
     const clip = clipsOf(sel).find(c => c.id === sel.id)
     if (!clip) return
-    dragRef.current = { mode, sel, grabPx: localX(e), origStart: clip.startMs, origDur: clip.durationMs }
+    dragRef.current = { mode, sel, grabPx: localX(e), origStart: clip.startMs, origDur: clip.durationMs, snapTargets: collectSnapTargets(sel.id) }
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }
 
