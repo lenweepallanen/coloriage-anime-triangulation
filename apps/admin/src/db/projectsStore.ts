@@ -3,7 +3,7 @@ import {
   collection, query, where
 } from 'firebase/firestore'
 import {
-  ref, uploadBytes, deleteObject
+  ref, uploadBytes, deleteObject, getMetadata
 } from 'firebase/storage'
 import { db, storage } from './firebase'
 import { cachedDownloadBlob, invalidateBlobCache } from './blobCache'
@@ -813,6 +813,18 @@ async function buildMeshJSONUpload(field: string, data: unknown): Promise<{ blob
   return gz
     ? { blob: gz, meta: { contentType: 'application/json', contentEncoding: 'gzip' } }
     : { blob: new Blob([json], { type: 'application/json' }), meta: { contentType: 'application/json' } }
+}
+
+/** Dé-gzip d'un Blob (vérification du backfill). Retourne le texte, ou null. */
+async function gunzipToText(blob: Blob): Promise<string | null> {
+  try {
+    const g = globalThis as unknown as { DecompressionStream?: new (format: string) => ReadableWritablePair<Uint8Array, Uint8Array> }
+    if (!g.DecompressionStream) return null
+    const stream = blob.stream().pipeThrough(new g.DecompressionStream('gzip'))
+    return await new Response(stream).text()
+  } catch {
+    return null
+  }
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {
@@ -3204,6 +3216,152 @@ const ANIM_JSON_FILES = [
   'cotrackerFramesRaw.json',
   'cotrackerVisibility.json',
 ]
+
+// ===================================================================
+// Backfill : optimisation des JSON mesh EXISTANTS (arrondi + gzip)
+// ===================================================================
+// Les pistes 2+3 (arrondi coords, gzip) ne s'appliquent qu'aux NOUVEAUX
+// uploads. Ce backfill relit les gros JSON de coordonnées déjà en Storage et les
+// ré-écrit optimisés. Idempotent (saute ceux déjà gzippés), avec VÉRIFICATION
+// par fichier (re-parse + comparaison de forme) AVANT écriture, et dry-run.
+//
+// Réversibilité : le bucket a le SOFT-DELETE activé (7 jours) → chaque fichier
+// écrasé garde sa version d'avant, restaurable via `gcloud storage restore`
+// (le manifeste retourné liste chaque chemin + génération d'origine).
+//
+// À lancer depuis la console du navigateur ADMIN (auth requise) :
+//   await backfillMeshOptimization({ dryRun: true })            // rapport seul
+//   await backfillMeshOptimization({ dryRun: true, projectId }) // 1 projet
+//   await backfillMeshOptimization({})                          // écrit
+// ===================================================================
+
+/** Fichiers de coordonnées lourds ciblés (les plus gros + pertinents au play). */
+const BACKFILL_COORD_FILES: { field: string; file: string; flag: keyof MeshDoc }[] = [
+  { field: 'videoFramesMesh', file: 'videoFramesMesh.json', flag: 'hasVideoFramesMesh' },
+  { field: 'walkZoneFrames', file: 'walkZoneFrames.json', flag: 'hasWalkZoneFrames' },
+  { field: 'walkBodyFrames', file: 'walkBodyFrames.json', flag: 'hasWalkBodyFrames' },
+  { field: 'walkBodyFramesSmoothed', file: 'walkBodyFramesSmoothed.json', flag: 'hasWalkBodyFramesSmoothed' },
+  { field: 'walkZoneFramesSmoothed', file: 'walkZoneFramesSmoothed.json', flag: 'hasWalkZoneFramesSmoothed' },
+]
+
+export interface MeshBackfillEntry {
+  projectId: string
+  projectName: string
+  animId: string
+  path: string
+  field: string
+  oldBytes: number
+  newBytes: number
+  /** Génération Storage AVANT écrasement (clé de restauration soft-delete). */
+  oldGeneration: string
+  status: 'optimized' | 'would-optimize' | 'skipped-gzip' | 'skipped-empty' | 'verify-failed' | 'error'
+}
+
+export interface MeshBackfillResult {
+  dryRun: boolean
+  entries: MeshBackfillEntry[]
+  totalOldBytes: number
+  totalNewBytes: number
+  optimized: number
+  skipped: number
+  failed: number
+}
+
+/** Compare la FORME (dimensions) de deux structures — invariant à l'arrondi. */
+function sameShape(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false
+    if (a.length === 0) return true
+    return sameShape(a[0], b[0]) && sameShape(a[a.length - 1], b[b.length - 1])
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    return Object.keys(a).length === Object.keys(b).length
+  }
+  return typeof a === typeof b
+}
+
+export async function backfillMeshOptimization(opts?: {
+  dryRun?: boolean
+  projectId?: string
+  concurrency?: number
+  onProgress?: (e: MeshBackfillEntry) => void
+}): Promise<MeshBackfillResult> {
+  const dryRun = opts?.dryRun ?? false
+  const concurrency = Math.max(1, opts?.concurrency ?? 3)
+
+  const projects = opts?.projectId
+    ? [{ id: opts.projectId, name: opts.projectId }]
+    : (await getAllProjects()).map(p => ({ id: p.id, name: p.name }))
+
+  const entries: MeshBackfillEntry[] = []
+  const push = (e: MeshBackfillEntry) => { entries.push(e); opts?.onProgress?.(e) }
+
+  for (const proj of projects) {
+    const snap = await getDoc(projectRef(proj.id))
+    if (!snap.exists()) continue
+    const projDoc = snap.data() as unknown as ProjectDoc
+    const name = (projDoc as { name?: string }).name ?? proj.name
+
+    // Aplatit la liste des fichiers à traiter pour ce projet.
+    const jobs: { animId: string; field: string; file: string }[] = []
+    for (const animDoc of projDoc.animations ?? []) {
+      const meshDoc = animDoc.mesh as MeshDoc | null | undefined
+      if (!meshDoc) continue
+      for (const { field, file, flag } of BACKFILL_COORD_FILES) {
+        if (meshDoc[flag] === true) jobs.push({ animId: animDoc.id, field, file })
+      }
+    }
+
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < jobs.length) {
+        const job = jobs[cursor++]
+        const path = animStoragePath(proj.id, job.animId, job.file)
+        const base: Omit<MeshBackfillEntry, 'status' | 'newBytes'> = {
+          projectId: proj.id, projectName: name, animId: job.animId, path, field: job.field,
+          oldBytes: 0, oldGeneration: '',
+        }
+        try {
+          const meta = await getMetadata(ref(storage, path)).catch(() => null)
+          if (!meta) { push({ ...base, status: 'skipped-empty', newBytes: 0 }); continue }
+          base.oldBytes = meta.size ?? 0
+          base.oldGeneration = meta.generation ?? ''
+          if (meta.contentEncoding === 'gzip') { push({ ...base, status: 'skipped-gzip', newBytes: base.oldBytes }); continue }
+
+          const data = await downloadJSON<unknown>(path)
+          if (data == null) { push({ ...base, status: 'error', newBytes: 0 }); continue }
+
+          const { blob, meta: upMeta } = await buildMeshJSONUpload(job.field, data)
+
+          // VÉRIFICATION avant écriture : re-parse + même forme que la source.
+          const text = upMeta.contentEncoding === 'gzip' ? await gunzipToText(blob) : await blob.text()
+          if (text == null) { push({ ...base, status: 'verify-failed', newBytes: blob.size }); continue }
+          const reparsed = JSON.parse(text)
+          if (!sameShape(reparsed, data)) { push({ ...base, status: 'verify-failed', newBytes: blob.size }); continue }
+
+          if (dryRun) { push({ ...base, status: 'would-optimize', newBytes: blob.size }); continue }
+          await uploadBlob(path, blob, upMeta)
+          push({ ...base, status: 'optimized', newBytes: blob.size })
+        } catch (err) {
+          console.warn(`[backfill] échec ${path}`, err)
+          push({ ...base, status: 'error', newBytes: 0 })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker))
+  }
+
+  const done = entries.filter(e => e.status === 'optimized' || e.status === 'would-optimize')
+  return {
+    dryRun,
+    entries,
+    totalOldBytes: entries.reduce((s, e) => s + e.oldBytes, 0),
+    totalNewBytes: entries.reduce((s, e) => s + e.newBytes, 0),
+    optimized: done.length,
+    skipped: entries.filter(e => e.status.startsWith('skipped')).length,
+    failed: entries.filter(e => e.status === 'error' || e.status === 'verify-failed').length,
+  }
+}
 
 export async function deleteProject(id: string): Promise<void> {
   // First load the project doc to get animation IDs
