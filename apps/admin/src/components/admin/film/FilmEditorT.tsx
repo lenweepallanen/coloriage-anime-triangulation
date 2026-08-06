@@ -8,7 +8,7 @@ import type { UploadHint } from '../../../db/projectsStore'
 import { buildFilmTScene } from '../../../utils/filmScene'
 import { FilmTimelineSampler } from '../../../utils/filmTimelineSampler'
 import { sampleFilmPath } from '../../../utils/filmPath'
-import { dedupeTravelAnimClips, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
+import { dedupeTravelAnimClips, pushExclusiveOverlaps, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
 import { getAudioDurationMs } from '../../../utils/sceneActionDuration'
 import { transitionDurationMs } from '../../../utils/filmDirector'
 import ScenePlayer from '../../scan/ScenePlayer'
@@ -209,7 +209,7 @@ export default function FilmEditorT({ project, onSave }: {
         changed = true
         return { ...c, durationMs: dur }
       })
-      return motion === pl.timeline.motion ? pl : { ...pl, timeline: resolveSoundAnchors({ ...pl.timeline, motion }) }
+      return motion === pl.timeline.motion ? pl : { ...pl, timeline: resolveSoundAnchors({ ...pl.timeline, motion: pushExclusiveOverlaps(motion) }) }
     })
     return changed ? { ...f, plans } : f
   }, [project.animations])
@@ -222,6 +222,11 @@ export default function FilmEditorT({ project, onSave }: {
         plans: prev.plans.map(pl => {
           if (pl.id !== planId) return pl
           let tl = mut(pl.timeline)
+          // Pistes exclusives : un clip étiré/déplacé POUSSE ses voisins (ripple)
+          // au lieu de chevaucher — jamais de blocage contre le clip suivant.
+          const motion = pushExclusiveOverlaps(tl.motion)
+          const anim = pushExclusiveOverlaps(tl.anim)
+          if (motion !== tl.motion || anim !== tl.anim) tl = { ...tl, motion, anim }
           // Le plan s'étend automatiquement pour contenir ses clips.
           const contentEnd = timelineContentEndMs(tl)
           if (contentEnd > tl.durationMs) tl = { ...tl, durationMs: contentEnd }

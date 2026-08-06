@@ -134,6 +134,26 @@ export function sortClips<T extends { startMs: number }>(clips: T[]): T[] {
   return [...clips].sort((a, b) => a.startMs - b.startMs)
 }
 
+/** Piste EXCLUSIVE (motion/anim) : résout les chevauchements en POUSSANT vers la
+ *  droite les clips suivants (ripple, comme un logiciel de montage) — étirer ou
+ *  déplacer un clip ne bloque plus contre son voisin, il le décale. Retourne le
+ *  même tableau si rien ne chevauche. */
+export function pushExclusiveOverlaps<T extends { startMs: number; durationMs: number }>(clips: T[]): T[] {
+  const sorted = sortClips(clips)
+  let prevEnd = Number.NEGATIVE_INFINITY
+  let changed = false
+  const out = sorted.map(c => {
+    // Marqueurs PONCTUELS (durée 0, ✨ apparition) : instantanés, ils ne poussent
+    // ni ne sont poussés (une apparition peut coïncider avec un début de trajet).
+    if (c.durationMs <= 0) return c
+    let s = c.startMs
+    if (s < prevEnd) { s = prevEnd; changed = true }
+    prevEnd = s + c.durationMs
+    return s === c.startMs ? c : { ...c, startMs: Math.round(s) }
+  })
+  return changed ? out : clips
+}
+
 /** Clampe le déplacement/resize d'un clip d'une piste EXCLUSIVE (motion/anim)
  *  contre ses voisins : jamais de chevauchement, jamais < 0. Retourne les bornes
  *  autorisées pour ce clip. */

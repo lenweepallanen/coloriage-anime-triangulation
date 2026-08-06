@@ -266,9 +266,10 @@ export default function TimelineEditor({
       start = Math.max(0, start)
       onPatchClip(sel, { startMs: Math.round(start), durationMs: Math.round(drag.origStart + drag.origDur - start) })
     } else {
+      // Pas de clamp contre le clip suivant : l'étirement le POUSSE (ripple,
+      // résolu par pushExclusiveOverlaps dans le patcher central).
       const end = snapMs(Math.round(drag.origStart + drag.origDur + deltaMs), drag.snapTargets, noSnap)
-      let dur = end - drag.origStart
-      dur = Math.max(100, Math.min(bounds.maxEndMs - drag.origStart, dur))
+      const dur = Math.max(100, end - drag.origStart)
       onPatchClip(sel, { durationMs: Math.round(dur) })
     }
   }, [contentMs, onPatchClip, onScrub, pxToMs, timeline]) // eslint-disable-line react-hooks/exhaustive-deps
