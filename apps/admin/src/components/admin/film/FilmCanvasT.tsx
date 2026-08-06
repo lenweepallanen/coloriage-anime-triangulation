@@ -41,7 +41,8 @@ export default function FilmCanvasT({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
-  const [canvasW, setCanvasW] = useState(800)
+  const [wrapW, setWrapW] = useState(800)
+  const centeredRef = useRef<string | null>(null)
   const [bgImg, setBgImg] = useState<HTMLImageElement | null>(null)
   const [charImg, setCharImg] = useState<HTMLImageElement | null>(null)
   const dragRef = useRef<
@@ -131,24 +132,39 @@ export default function FilmCanvasT({
   useEffect(() => {
     const el = wrapRef.current
     if (!hasBackdrop || !el) return
-    setCanvasW(Math.max(200, el.clientWidth))
+    setWrapW(Math.max(200, el.clientWidth))
     const ro = new ResizeObserver(entries => {
-      for (const e of entries) setCanvasW(Math.max(200, e.contentRect.width))
+      for (const e of entries) setWrapW(Math.max(200, e.contentRect.width))
     })
     ro.observe(el)
     return () => ro.disconnect()
   }, [hasBackdrop])
 
-  // Marge « hors décor » : points plaçables hors du cadre de la vidéo.
-  const OUT_M = layerH > 0 ? Math.round(layerH * 0.35) : 0
+  // Marge « hors décor » LARGE (1,2 × la hauteur du décor de chaque côté) :
+  // points/départs/sorties plaçables très loin hors champ. Le canvas est plus
+  // grand que la fenêtre → ascenseurs H/V, centré sur le décor à l'ouverture.
+  const OUT_M = layerH > 0 ? Math.round(layerH * 1.2) : 0
   const fullW = layerW + 2 * OUT_M
   const fullH = layerH + 2 * OUT_M
   const aspect = fullH > 0 && fullW > 0 ? fullH / fullW : 9 / 16
+  // Le DÉCOR garde ~la largeur de la fenêtre ; le canvas total est donc plus large.
+  const canvasW = layerW > 0 ? Math.round((wrapW - 20) * (fullW / layerW)) : wrapW
   const canvasH = Math.round(canvasW * aspect)
   const sX = fullW > 0 ? canvasW / fullW : 1
   const sY = fullH > 0 ? canvasH / fullH : 1
   const toScreen = (p: Point2D) => ({ x: (p.x + OUT_M) * sX, y: (p.y + OUT_M) * sY })
   const toLayer = (sx: number, sy: number): Point2D => ({ x: sx / sX - OUT_M, y: sy / sY - OUT_M })
+
+  // Centre le scroll sur le décor à l'ouverture (une fois par plan/décor).
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || !hasBackdrop || layerW <= 0) return
+    const key = `${plan.id}:${canvasW}`
+    if (centeredRef.current === key) return
+    centeredRef.current = key
+    el.scrollLeft = Math.max(0, OUT_M * sX - (el.clientWidth - layerW * sX) / 2)
+    el.scrollTop = Math.max(0, OUT_M * sY - (el.clientHeight - layerH * sY) / 2)
+  }, [hasBackdrop, canvasW, plan.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const frameHalf = Math.max(1, Math.min(layerW > 0 ? layerW : Number.POSITIVE_INFINITY, layerH * (16 / 9)) / 2)
   const frameLeft = plan.cameraX - frameHalf
@@ -488,10 +504,16 @@ export default function FilmCanvasT({
   }
 
   return (
-    <div ref={wrapRef} style={{ width: '100%' }}>
+    <div
+      ref={wrapRef}
+      style={{
+        width: '100%', maxHeight: '62vh', overflow: 'auto',
+        border: '1px solid #333', borderRadius: 4, background: '#101010',
+      }}
+    >
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: '100%', borderRadius: 4, border: '1px solid #333', cursor: 'crosshair', touchAction: 'none' }}
+        style={{ display: 'block', width: canvasW, height: canvasH, cursor: 'crosshair', touchAction: 'none' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
