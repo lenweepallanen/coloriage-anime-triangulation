@@ -379,6 +379,9 @@ export default function FilmEditorT({ project, onSave }: {
     })
     setSelectedWaypointId(wp.id)
     setSelection(null)
+    // Le playhead saute à l'arrivée du nouveau point (posé au tick suivant,
+    // une fois le clip inséré dans l'état).
+    requestAnimationFrame(() => jumpPlayheadToWaypoint(wp.id))
   }
   const removeWaypoint = (id: string) => {
     if (!plan) return
@@ -396,6 +399,16 @@ export default function FilmEditorT({ project, onSave }: {
     if (!plan) return
     patchTimeline(plan.id, tl => ({ ...tl, waypoints: tl.waypoints.map(w => w.id === id ? { ...w, ...partial } : w) }))
   }
+
+  /** Place le playhead juste après l'ARRIVÉE au point : la silhouette montre le
+   *  perso posé sur ce point, à son échelle (et la timeline suit). */
+  const jumpPlayheadToWaypoint = useCallback((wpId: string) => {
+    if (!plan) return
+    const inc = plan.timeline.motion.find(c => c.to.kind === 'waypoint' && c.to.id === wpId)
+    if (!inc) return
+    setEditorPlaying(false)
+    setPlayheadMs(Math.min(inc.startMs + inc.durationMs + 1, Math.max(0, plan.timeline.durationMs)))
+  }, [plan])
 
   /** Trajet ENTRANT d'un point (clip motion dont la cible est ce waypoint). */
   const incomingClipOf = (wpId: string): FilmMotionClip | null =>
@@ -837,7 +850,13 @@ export default function FilmEditorT({ project, onSave }: {
             <FilmCanvasT
               plan={plan}
               selectedWaypointId={selectedWaypointId}
-              onSelectWaypoint={(id) => { setSelectedWaypointId(id); if (id) setSelection(null) }}
+              onSelectWaypoint={(id) => {
+                setSelectedWaypointId(id)
+                if (id) {
+                  setSelection(null)
+                  jumpPlayheadToWaypoint(id)
+                }
+              }}
               onAddWaypoint={addWaypoint}
               onRemoveWaypoint={removeWaypoint}
               onPatchWaypoint={patchWaypoint}
