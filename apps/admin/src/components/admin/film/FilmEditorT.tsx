@@ -1035,6 +1035,16 @@ export default function FilmEditorT({ project, onSave }: {
         <div className="scene-editor-section-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
             <h4 className="scene-editor-section-title" style={{ margin: 0 }}>Timeline du plan {planIndex + 1}</h4>
+            <button
+              className="btn-icon btn-sm"
+              onClick={() => setEditorPlaying(p => !p)}
+              title={editorPlaying ? 'Pause (Espace) — le playhead reste en place pour couper/ajuster' : 'Lecture avec sons depuis le playhead (Espace)'}
+            >{editorPlaying ? '⏸' : '▶'}</button>
+            <button
+              className="btn-icon btn-sm"
+              onClick={() => { setEditorPlaying(false); setPlayheadMs(0) }}
+              title="Retour au début du plan"
+            >⏮</button>
             <div style={{ flex: 1 }} />
             <button className="btn-secondary btn-sm" onClick={addAnimClip} title="Pose un clip d'animation du corps au playhead (rugir, parler… — prioritaire sur l'anim de marche pendant un trajet)">+ Animation</button>
             <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic sur une piste son = poser un son · Ctrl+molette = zoom · Alt = sans snap</span>
