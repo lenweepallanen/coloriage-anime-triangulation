@@ -840,6 +840,7 @@ Pour repasser au cloud : commenter ou supprimer cette ligne et redémarrer Vite.
 
 ## Conventions
 
+- **UI (admin comme play) : jamais de chevauchement ni d'élément coupé.** Formulaires en lignes thématiques (`flex-wrap` + `gap`), libellé et contrôle groupés en bloc insécable, `minWidth`/`flexShrink: 0` sur les contrôles, panneaux riches en pleine largeur (pas de colonne latérale étroite). Vérifier le rendu en largeur réduite : tout doit wrapper proprement.
 - Tout le traitement lourd (OpenCV) tourne dans un Web Worker
 - Communication Worker via messages typés avec pattern RPC (perspectiveCorrection.ts)
 - Le maillage est toujours stocké en coordonnées image
