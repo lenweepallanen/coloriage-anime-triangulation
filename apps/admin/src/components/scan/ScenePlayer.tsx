@@ -408,6 +408,28 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const bgImageUrls: string[] = []
     const bgVideoElements: HTMLVideoElement[] = []
 
+    // Pré-décodage des décors IMAGE de TOUS les plans du film : au changement de
+    // plan, le sprite est alors créé de façon SYNCHRONE (ready() immédiat) — le
+    // swap décor/perso se fait dans la même frame, sans gel ni écran vide.
+    // Textures partagées entre plans (même blob) : dispose() ne les détruit pas,
+    // elles sont libérées au démontage du player.
+    const preDecodedDecorTex = new Map<Blob, PIXI.Texture>()
+    if (filmEnabled) {
+      for (const p of filmPlans) {
+        for (const blob of [p.background?.imageBlob, p.foreground?.imageBlob]) {
+          if (!blob || preDecodedDecorTex.has(blob)) continue
+          createImageBitmap(blob).then(bmp => {
+            const canvas = document.createElement('canvas')
+            canvas.width = bmp.width
+            canvas.height = bmp.height
+            canvas.getContext('2d')!.drawImage(bmp, 0, 0)
+            bmp.close()
+            preDecodedDecorTex.set(blob, PIXI.Texture.from(canvas))
+          }).catch(() => { /* décodage impossible : fallback chemin async au montage */ })
+        }
+      }
+    }
+
     // Filtre chroma key partagé image/vidéo :
     //  - smoothstep entre threshold et threshold+smoothness → bord progressif
     //  - érosion 1 pixel (min des 4 voisins) → tire le bord vers l'intérieur, supprime l'aliasing
@@ -573,23 +595,35 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         bgVideoUpdate = update
         backgroundSprite = primary
       } else if (mbg?.imageBlob) {
-        const url = URL.createObjectURL(mbg.imageBlob)
-        bgImageUrls.push(url)
-        const img = new Image()
-        img.src = url
-        img.onload = () => {
+        const pre = preDecodedDecorTex.get(mbg.imageBlob)
+        if (pre) {
+          // Décor pré-décodé : montage synchrone, prêt dans la même frame.
           bgImgReady = true
-          if (disposed) return
-          const canvas = document.createElement('canvas')
-          canvas.width = img.naturalWidth
-          canvas.height = img.naturalHeight
-          canvas.getContext('2d')!.drawImage(img, 0, 0)
-          const tex = PIXI.Texture.from(canvas)
-          const sprite = new PIXI.Sprite(tex)
+          const sprite = new PIXI.Sprite(pre)
+          ;(sprite as PIXI.Sprite & { __sharedDecorTex?: boolean }).__sharedDecorTex = true
           sprite.width = mbg.width * bgScale
           sprite.height = mbg.height * bgScale
           bgContainer.addChild(sprite)
           backgroundSprite = sprite
+        } else {
+          const url = URL.createObjectURL(mbg.imageBlob)
+          bgImageUrls.push(url)
+          const img = new Image()
+          img.src = url
+          img.onload = () => {
+            bgImgReady = true
+            if (disposed) return
+            const canvas = document.createElement('canvas')
+            canvas.width = img.naturalWidth
+            canvas.height = img.naturalHeight
+            canvas.getContext('2d')!.drawImage(img, 0, 0)
+            const tex = PIXI.Texture.from(canvas)
+            const sprite = new PIXI.Sprite(tex)
+            sprite.width = mbg.width * bgScale
+            sprite.height = mbg.height * bgScale
+            bgContainer.addChild(sprite)
+            backgroundSprite = sprite
+          }
         }
       }
 
@@ -601,19 +635,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         fgVideoUpdate = update
         foregroundSprite = primary
       } else if (mfg?.imageBlob) {
-        const url = URL.createObjectURL(mfg.imageBlob)
-        bgImageUrls.push(url)
-        const img = new Image()
-        img.src = url
-        img.onload = () => {
-          fgImgReady = true
-          if (disposed) return
-          const canvas = document.createElement('canvas')
-          canvas.width = img.naturalWidth
-          canvas.height = img.naturalHeight
-          canvas.getContext('2d')!.drawImage(img, 0, 0)
-          const tex = PIXI.Texture.from(canvas)
+        const buildFgSprite = (tex: PIXI.Texture, shared: boolean): void => {
           const sprite = new PIXI.Sprite(tex)
+          if (shared) (sprite as PIXI.Sprite & { __sharedDecorTex?: boolean }).__sharedDecorTex = true
           sprite.width = mfg.width * bgScale
           sprite.height = mfg.height * bgScale
           if (mfg.chromaKeyColor) {
@@ -621,6 +645,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           }
           foregroundContainer.addChild(sprite)
           foregroundSprite = sprite
+        }
+        const pre = preDecodedDecorTex.get(mfg.imageBlob)
+        if (pre) {
+          fgImgReady = true
+          buildFgSprite(pre, true)
+        } else {
+          const url = URL.createObjectURL(mfg.imageBlob)
+          bgImageUrls.push(url)
+          const img = new Image()
+          img.src = url
+          img.onload = () => {
+            fgImgReady = true
+            if (disposed) return
+            const canvas = document.createElement('canvas')
+            canvas.width = img.naturalWidth
+            canvas.height = img.naturalHeight
+            canvas.getContext('2d')!.drawImage(img, 0, 0)
+            buildFgSprite(PIXI.Texture.from(canvas), false)
+          }
         }
       }
 
@@ -647,11 +690,15 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           }
           for (const c of [...bgContainer.children]) {
             bgContainer.removeChild(c)
-            c.destroy({ children: true, texture: true, baseTexture: true })
+            // Texture pré-décodée PARTAGÉE entre plans : le sprite est détruit
+            // mais pas sa texture (libérée au démontage du player).
+            const shared = (c as { __sharedDecorTex?: boolean }).__sharedDecorTex === true
+            c.destroy({ children: true, texture: !shared, baseTexture: !shared })
           }
           for (const c of [...foregroundContainer.children]) {
             foregroundContainer.removeChild(c)
-            c.destroy({ children: true, texture: true, baseTexture: true })
+            const shared = (c as { __sharedDecorTex?: boolean }).__sharedDecorTex === true
+            c.destroy({ children: true, texture: !shared, baseTexture: !shared })
           }
         },
       }
@@ -1137,9 +1184,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       ended: boolean
       audioReady: boolean
       decorHold: boolean
-      /** true entre un changement de plan et le 1er ready() du nouveau décor —
-       *  le ready() peut vaciller EN COURS de plan (vidéo qui rebuffère) et ne
-       *  doit alors PAS suspendre l'audio (micro-coupures). */
+      /** Posé au SWAP effectif du décor (swapFn), levé au 1er ready() du nouveau
+       *  décor. Tant qu'il est posé : la transition visuelle est retenue (écran
+       *  couvert, audio CONTINU) ; si plus rien ne couvre (cut, transition finie),
+       *  gel horloge+audio en ultime recours. Un ready() qui vacille EN COURS de
+       *  plan (vidéo qui rebuffère) ne coupe jamais le son. */
       decorWait: boolean
       lastAnimKey: string | null
       lastX?: number
@@ -1784,14 +1833,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         void rt.scheduler.unlock()
         rt.scheduler.start(rt.tMs)
       }
-      // Horloge gelée UNIQUEMENT autour des changements de plan (transition en
-      // cours, ou nouveau décor pas encore prêt) : on SUSPEND le ctx audio
-      // (horloge maîtresse + sons gelés d'un coup). Un ready() qui vacille EN
-      // COURS de plan (vidéo de fond qui rebuffère) ne coupe PAS le son.
-      const switching = planTransitionRunner != null
-      if (switching) rt.decorWait = true
-      const decorPending = switching || (rt.decorWait && !currentLayers.ready())
-      if (!switching && rt.decorWait && currentLayers.ready()) rt.decorWait = false
+      // L'audio (musique, ambiances, dialogues) reste CONTINU pendant les
+      // transitions de plans : plus AUCUN suspend du ctx pendant la fenêtre —
+      // c'était la cause des « sauts » de son à chaque changement de plan.
+      // `decorWait` n'est posé qu'au SWAP effectif du décor (dans le swapFn) ;
+      // tant que la transition visuelle couvre l'écran, elle est simplement
+      // retenue (voir tickFrame) le temps que le décor charge. Ultime recours,
+      // devenu rarissime (décors image pré-décodés) : décor toujours pas prêt
+      // alors que plus rien ne couvre → gel horloge + audio d'un bloc.
+      if (rt.decorWait && currentLayers.ready()) rt.decorWait = false
+      const decorPending = rt.decorWait && planTransitionRunner == null
       if (decorPending && !rt.decorHold) {
         rt.decorHold = true
         void suspendMouthAudioContext()
@@ -1814,7 +1865,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
             fromPlan?.transitionToNext ?? { kind: 'cut' },
-            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex },
+            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true },
           )
         }
       } else if (!sample.transition && sample.planIndex !== rt.currentPlanIndex && planTransitionRunner == null) {
@@ -1830,7 +1881,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
             fromPlan?.transitionToNext ?? { kind: 'cut' },
-            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex },
+            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true },
           )
         }
       }
@@ -1909,8 +1960,12 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (playingRef.current) {
         scenePlayback.update(deltaSeconds)
         // Transition de plan (film) : avancée en lecture uniquement (pause = gel).
+        // Mode timeline : si le décor swappé n'est pas encore prêt, la transition
+        // est RETENUE (l'écran reste couvert par le fondu/volet/snapshot) — l'audio
+        // continue, et elle se termine dès que le décor est là.
         if (planTransitionRunner) {
-          if (planTransitionRunner.update(deltaSeconds * 1000)) planTransitionRunner = null
+          const holdForDecor = filmRuntime != null && filmRuntime.decorWait && !currentLayers.ready()
+          if (!holdForDecor && planTransitionRunner.update(deltaSeconds * 1000)) planTransitionRunner = null
         }
         if (filmRuntime) {
           tickFilmTimeline(deltaSeconds)
@@ -2338,6 +2393,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       for (const url of animAudioUrls) URL.revokeObjectURL(url)
       if (sceneAmbientAudio) { sceneAmbientAudio.pause(); try { URL.revokeObjectURL(sceneAmbientAudio.src) } catch { /* */ } }
       filmRuntime?.scheduler.dispose()
+      for (const t of preDecodedDecorTex.values()) { try { t.destroy(true) } catch { /* déjà détruite */ } }
+      preDecodedDecorTex.clear()
       if (mouthOverlay) mouthOverlay.destroy()
       app.destroy(true, { children: true, texture: true })
       appRef.current = null

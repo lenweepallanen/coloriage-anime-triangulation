@@ -82,11 +82,25 @@ export class FilmAudioScheduler {
     film.plans.forEach((plan, idx) => {
       const base = planStartMs[idx]
       if (base == null || Number.isNaN(base)) return
+      // Fenêtre de transition APRÈS ce plan (début du plan actif suivant − fin de
+      // ce plan ; dernier plan : jusqu'au bout du fade de fin). Les sons BOUCLÉS
+      // qui tiennent jusqu'à la fin du plan (ambiances) sont prolongés à travers
+      // cette fenêtre : l'audio des transitions est continu, sans trou de silence
+      // — leur fondu de fin (150 ms auto) atterrit au début du plan suivant.
+      let nextBase = this.totalMs
+      for (let j = idx + 1; j < film.plans.length; j++) {
+        const b = planStartMs[j]
+        if (b != null && !Number.isNaN(b)) { nextBase = b; break }
+      }
+      const planEndAbs = base + plan.timeline.durationMs
+      const transitionGapMs = Math.max(0, nextBase - planEndAbs)
       for (const track of plan.timeline.soundTracks) {
         for (const clip of track) {
+          const bridges = transitionGapMs > 0 && clip.loop === true
+            && clip.startMs + clip.durationMs >= plan.timeline.durationMs - 60
           this.clips.push({
             startMs: base + clip.startMs,
-            endMs: base + clip.startMs + clip.durationMs,
+            endMs: base + clip.startMs + clip.durationMs + (bridges ? transitionGapMs : 0),
             soundId: clip.soundId,
             volume: clip.volume ?? 1,
             rate: Math.max(0.01, clip.rate ?? 1),

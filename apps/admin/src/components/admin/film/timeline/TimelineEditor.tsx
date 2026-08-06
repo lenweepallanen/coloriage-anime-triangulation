@@ -227,10 +227,12 @@ export default function TimelineEditor({
     return e.clientX - rect.left + el.scrollLeft - LABEL_W
   }
 
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
+  /** Applique l'état de drag courant pour une position pointeur donnée — appelé
+   *  par onPointerMove ET par la boucle d'auto-scroll (pointeur immobile au bord). */
+  const applyDragAt = useCallback((clientX: number, altKey: boolean) => {
     const drag = dragRef.current
     if (!drag) return
-    const x = localX(e)
+    const x = localX({ clientX })
     if (drag.mode === 'scrub') {
       onScrub(Math.max(0, Math.min(contentMs, pxToMs(x))))
       return
@@ -238,7 +240,7 @@ export default function TimelineEditor({
     if (drag.mode === 'planEnd') {
       // Snap sur les bords de clips / secondes / playhead (sans la durée elle-même).
       const targets = collectSnapTargets('').filter(t => t !== timeline.durationMs)
-      onSetPlanDuration(Math.max(500, Math.round(snapMs(pxToMs(x), targets, e.altKey))))
+      onSetPlanDuration(Math.max(500, Math.round(snapMs(pxToMs(x), targets, altKey))))
       return
     }
     const deltaMs = pxToMs(x - drag.grabPx)
@@ -248,7 +250,7 @@ export default function TimelineEditor({
     const bounds = exclusive
       ? exclusiveTrackBounds(clips, sel.id)
       : { minStartMs: 0, maxEndMs: Number.POSITIVE_INFINITY }
-    const noSnap = e.altKey
+    const noSnap = altKey
     if (drag.mode === 'move') {
       let start = Math.round(drag.origStart + deltaMs)
       // Snap sur le bord le plus attiré (début OU fin du clip déplacé).
@@ -271,12 +273,59 @@ export default function TimelineEditor({
     }
   }, [contentMs, onPatchClip, onScrub, pxToMs, timeline]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const applyDragAtRef = useRef(applyDragAt)
+  applyDragAtRef.current = applyDragAt
+  const lastPointerRef = useRef<{ clientX: number; altKey: boolean } | null>(null)
+  const autoScrollRafRef = useRef<number | null>(null)
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    lastPointerRef.current = { clientX: e.clientX, altKey: e.altKey }
+    applyDragAtRef.current(e.clientX, e.altKey)
+  }, [])
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRafRef.current != null) {
+      cancelAnimationFrame(autoScrollRafRef.current)
+      autoScrollRafRef.current = null
+    }
+  }, [])
+
+  /** Pendant un drag, pointeur près d'un bord → la timeline défile toute seule
+   *  (indispensable pour étirer un clip au-delà de la zone visible en un geste). */
+  const startAutoScroll = useCallback(() => {
+    stopAutoScroll()
+    const step = () => {
+      autoScrollRafRef.current = null
+      const el = scrollRef.current
+      if (!el || !dragRef.current) return
+      const lp = lastPointerRef.current
+      if (lp) {
+        const rect = el.getBoundingClientRect()
+        const M = 42
+        let dx = 0
+        if (lp.clientX > rect.right - M) dx = Math.min(26, (lp.clientX - (rect.right - M)) * 0.5 + 4)
+        else if (lp.clientX < rect.left + LABEL_W + M) dx = -Math.min(26, ((rect.left + LABEL_W + M) - lp.clientX) * 0.5 + 4)
+        if (dx !== 0) {
+          el.scrollLeft += dx
+          applyDragAtRef.current(lp.clientX, lp.altKey)
+        }
+      }
+      autoScrollRafRef.current = requestAnimationFrame(step)
+    }
+    autoScrollRafRef.current = requestAnimationFrame(step)
+  }, [stopAutoScroll])
+
+  useEffect(() => stopAutoScroll, [stopAutoScroll])
+
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     if (dragRef.current) {
       dragRef.current = null
+      lastPointerRef.current = null
+      stopAutoScroll()
       try { (e.target as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* */ }
     }
-  }, [])
+  }, [stopAutoScroll])
 
   const startClipDrag = (e: React.PointerEvent, sel: NonNullable<TimelineSelection>, mode: 'move' | 'resize-l' | 'resize-r') => {
     e.stopPropagation()
@@ -289,6 +338,8 @@ export default function TimelineEditor({
     const clip = clipsOf(sel).find(c => c.id === sel.id)
     if (!clip) return
     dragRef.current = { mode, sel, grabPx: localX(e), origStart: clip.startMs, origDur: clip.durationMs, snapTargets: collectSnapTargets(sel.id) }
+    lastPointerRef.current = { clientX: e.clientX, altKey: e.altKey }
+    startAutoScroll()
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }
 
@@ -446,6 +497,8 @@ export default function TimelineEditor({
             onPointerDown={(e) => {
               if (e.button !== 0) return
               dragRef.current = { mode: 'scrub' }
+              lastPointerRef.current = { clientX: e.clientX, altKey: e.altKey }
+              startAutoScroll()
               ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
               onScrub(Math.max(0, Math.min(contentMs, pxToMs(localX(e)))))
             }}
@@ -462,6 +515,8 @@ export default function TimelineEditor({
                 if (e.button !== 0) return
                 e.stopPropagation()
                 dragRef.current = { mode: 'planEnd' }
+                lastPointerRef.current = { clientX: e.clientX, altKey: e.altKey }
+                startAutoScroll()
                 ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
               }}
               style={{ position: 'absolute', left: msToPx(timeline.durationMs) - 4, top: 0, bottom: 0, width: 9, cursor: 'ew-resize', zIndex: 2 }}
