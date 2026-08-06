@@ -746,10 +746,10 @@ export default function FilmEditorT({ project, onSave }: {
         )}
       </div>
 
-      {/* Canvas spatial + inspecteur */}
+      {/* Canvas spatial (pleine largeur) + inspecteur EN DESSOUS */}
       {plan && (
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 520px', minWidth: 380 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ width: '100%' }}>
             <span style={{ fontSize: 12, opacity: 0.7, display: 'block', marginBottom: 6 }}>
               <strong>Clic</strong> : poser un point · <strong>Glisser</strong> : déplacer (point, CP, caméra) ·
               <strong> Clic droit</strong> : supprimer. La zone sombre = hors décor (autorisé).
@@ -775,7 +775,7 @@ export default function FilmEditorT({ project, onSave }: {
               characterFacing={film.character.facing}
             />
           </div>
-          <div style={{ flex: '0 1 300px', minWidth: 260, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 10 }}>
+          <div style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 12, boxSizing: 'border-box' }}>
             {selection && plan ? (
               <ClipInspector
                 timeline={plan.timeline}
@@ -800,8 +800,8 @@ export default function FilmEditorT({ project, onSave }: {
                 motionPathLen={(id) => motionGeom.find(g => g.id === id)?.pathLen ?? 0}
               />
             ) : selectedWp ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexBasis: '100%' }}>
                   <span style={{ fontWeight: 700, fontSize: 13 }}>
                     Point {plan.timeline.waypoints.indexOf(selectedWp) + 1}
                   </span>
@@ -809,7 +809,7 @@ export default function FilmEditorT({ project, onSave }: {
                   <div style={{ flex: 1 }} />
                   <button className="btn-icon btn-sm btn-danger" onClick={() => removeWaypoint(selectedWp.id)} title="Supprimer le point">&times;</button>
                 </div>
-                <div className="scene-editor-field">
+                <div className="scene-editor-field" style={{ minWidth: 280, maxWidth: 380 }}>
                   <label style={{ fontSize: 11 }}>Échelle : {selectedWp.scale.toFixed(2)}×</label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <input

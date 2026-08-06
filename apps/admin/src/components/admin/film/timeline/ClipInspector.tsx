@@ -1,3 +1,4 @@
+import type React from 'react'
 import type { Animation, FilmAnimClip, FilmMotionClip, FilmPlanTimeline, FilmSound, FilmSoundClip, FilmTravelEasing } from '../../../../types/project'
 import type { TimelineSelection } from './TimelineEditor'
 import { formatMs } from '../filmEditorShared'
@@ -48,20 +49,23 @@ export default function ClipInspector({
   )
 
   const header = (title: string) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexBasis: '100%' }}>
       <span style={{ fontWeight: 700, fontSize: 13 }}>{title}</span>
       <div style={{ flex: 1 }} />
       <button className="btn-icon btn-sm btn-danger" onClick={onRemove} title="Supprimer le clip">&times;</button>
     </div>
   )
 
+  /** Conteneur : champs en LIGNE (wrap) sous le canvas — pleine largeur. */
+  const ROW: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 16 }
+
   if (selection.kind === 'motion') {
     const clip = timeline.motion.find(c => c.id === selection.id)
     if (!clip) return null
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={ROW}>
         {header(clip.kind === 'appear' ? '✨ Apparition' : clip.kind === 'exit' ? 'Clip sortie' : 'Clip trajet')}
-        <div style={{ fontSize: 11, opacity: 0.65 }}>
+        <div style={{ fontSize: 11, opacity: 0.65, flexBasis: '100%' }}>
           {formatMs(clip.startMs)} → {formatMs(clip.startMs + clip.durationMs)}
           {clip.to.kind === 'waypoint' && ' · vers un point du canvas'}
           {clip.to.kind === 'offscreen' && ` · vers hors-champ ${clip.to.side === 'left' ? '←' : '→'}`}
@@ -128,7 +132,7 @@ export default function ClipInspector({
     const clip = timeline.anim.find(c => c.id === selection.id)
     if (!clip) return null
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={ROW}>
         {header('Clip animation')}
         <div className="scene-editor-field">
           <label style={{ fontSize: 11 }}>Animation</label>
@@ -164,7 +168,7 @@ export default function ClipInspector({
   const patch = (partial: Partial<FilmSoundClip>) => onPatchSound(selection.trackIndex, clip.id, partial)
   const soundName = sounds.find(x => x.id === clip.soundId)?.name ?? clip.soundId.slice(0, 8)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={ROW}>
       {header(`Clip son — ${soundName}`)}
       {numField('Durée (s)', clip.durationMs / 1000, v => patch({ durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1, title: 'Tronque ou étend (loop) le son' })}
       <div className="scene-editor-field" style={{ maxWidth: 200 }}>
@@ -192,8 +196,8 @@ export default function ClipInspector({
       </div>
       {/* Ancrage ⚓ : le début du son est calé sur un clip motion/anim + offset.
           Ex. rugissement à +2 s du début de l'anim rugissement. */}
-      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div className="scene-editor-field">
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 12 }}>
+        <div className="scene-editor-field" style={{ minWidth: 220 }}>
           <label style={{ fontSize: 11 }}>⚓ Ancrer à</label>
           <select
             value={clip.anchor?.clipId ?? ''}
