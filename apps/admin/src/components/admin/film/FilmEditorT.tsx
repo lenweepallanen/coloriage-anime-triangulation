@@ -8,7 +8,7 @@ import type { UploadHint } from '../../../db/projectsStore'
 import { buildFilmTScene } from '../../../utils/filmScene'
 import { FilmTimelineSampler } from '../../../utils/filmTimelineSampler'
 import { sampleFilmPath } from '../../../utils/filmPath'
-import { resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
+import { dedupeTravelAnimClips, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
 import { getAudioDurationMs } from '../../../utils/sceneActionDuration'
 import ScenePlayer from '../../scan/ScenePlayer'
 import { PreviewModalShell } from '../PreviewModal'
@@ -48,7 +48,7 @@ export default function FilmEditorT({ project, onSave }: {
   // Chargement : filmT du projet, sinon conversion v3 → timeline (une fois).
   useEffect(() => {
     if (project.filmT) {
-      setFilm(project.filmT)
+      setFilm(dedupeTravelAnimClips(project.filmT))
       return
     }
     if (!project.film) {
@@ -59,7 +59,7 @@ export default function FilmEditorT({ project, onSave }: {
     setConverting(true)
     import('../../../utils/filmV3Convert')
       .then(({ convertFilmV3ToTimeline }) => convertFilmV3ToTimeline(project.film!, project.animations))
-      .then(t => { if (!cancelled) setFilm(t) })
+      .then(t => { if (!cancelled) setFilm(dedupeTravelAnimClips(t)) })
       .catch(err => {
         // eslint-disable-next-line no-console
         console.error('[Film] conversion v3 → timeline échouée', err)

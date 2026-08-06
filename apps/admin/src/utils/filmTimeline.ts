@@ -105,6 +105,30 @@ export function resolveSoundAnchors(timeline: FilmPlanTimeline): FilmPlanTimelin
   return changed ? { ...timeline, soundTracks } : timeline
 }
 
+/**
+ * MIGRATION : retire les clips Animation qui DUPLIQUENT l'anim d'un trajet
+ * (même animation, mêmes bornes ±60 ms) — reliquats des premières conversions
+ * v3→timeline, avant que l'anim de marche soit portée par le trajet lui-même.
+ * Sans ça, le clip dupliqué a priorité et les réglages du trajet (vitesse
+ * anim…) semblent sans effet. Retourne le film inchangé s'il n'y a rien à faire.
+ */
+export function dedupeTravelAnimClips(film: FilmT): FilmT {
+  let changed = false
+  const plans = film.plans.map(pl => {
+    const tl = pl.timeline
+    const anim = tl.anim.filter(a => {
+      const dup = tl.motion.some(m => m.kind !== 'appear'
+        && (m.animationId ?? film.moveAnimationId) === a.animationId
+        && Math.abs(m.startMs - a.startMs) <= 60
+        && Math.abs(m.durationMs - a.durationMs) <= 60)
+      if (dup) changed = true
+      return !dup
+    })
+    return anim.length === tl.anim.length ? pl : { ...pl, timeline: { ...tl, anim } }
+  })
+  return changed ? { ...film, plans } : film
+}
+
 /** Tri par startMs (nouvelle array). */
 export function sortClips<T extends { startMs: number }>(clips: T[]): T[] {
   return [...clips].sort((a, b) => a.startMs - b.startMs)
