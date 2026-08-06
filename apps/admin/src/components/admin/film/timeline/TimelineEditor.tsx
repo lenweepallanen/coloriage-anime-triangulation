@@ -315,14 +315,14 @@ export default function TimelineEditor({
           const toLabel = (c: (typeof timeline.motion)[number]) =>
             c.to.kind === 'waypoint' ? `📍${wpIdx(c.to.id) + 1}`
               : c.to.kind === 'offscreen' ? (c.to.side === 'left' ? 'hors-champ ←' : 'hors-champ →')
-                : 'libre'
+                : 'sortie libre'
           const sorted = [...timeline.motion].sort((a, b) => a.startMs - b.startMs)
           // Blocs « au point » (informatifs) entre l'arrivée d'un trajet et le départ du suivant.
           const pointBlocks = sorted.map((c, i) => {
             const start = c.startMs + c.durationMs
             const end = sorted[i + 1]?.startMs ?? timeline.durationMs
             if (end - start < 80) return null
-            return { key: `pb-${c.id}`, start, end, label: `au ${toLabel(c)}` }
+            return { key: `pb-${c.id}`, start, end, label: c.to.kind === 'waypoint' ? `au ${toLabel(c)}` : '(hors point)' }
           }).filter((b): b is NonNullable<typeof b> => b != null)
           return (
             <>

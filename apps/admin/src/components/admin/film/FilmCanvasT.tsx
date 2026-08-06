@@ -49,6 +49,7 @@ export default function FilmCanvasT({
     | { mode: 'camera' }
     | { mode: 'cp'; clipId: string; cpIndex: number }
     | { mode: 'from'; clipId: string }
+    | { mode: 'to'; clipId: string }
     | null
   >(null)
 
@@ -281,6 +282,28 @@ export default function FilmCanvasT({
       ctx.textAlign = 'left'
     }
 
+    // Losange « sortie » du trajet sélectionné (cible libre, draggable)
+    if (selectedMotionClip?.to.kind === 'free') {
+      const t = selectedMotionClip.to
+      const st = toScreen({ x: t.x, y: t.y })
+      ctx.beginPath()
+      ctx.moveTo(st.x, st.y - 9)
+      ctx.lineTo(st.x + 9, st.y)
+      ctx.lineTo(st.x, st.y + 9)
+      ctx.lineTo(st.x - 9, st.y)
+      ctx.closePath()
+      ctx.fillStyle = FILM_COLORS.departure
+      ctx.fill()
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 10px system-ui'
+      ctx.textAlign = 'center'
+      ctx.fillText('sortie', st.x, st.y - 13)
+      ctx.textAlign = 'left'
+    }
+
     // Waypoints numérotés
     waypoints.forEach((w, i) => {
       const s = toScreen(w)
@@ -344,6 +367,15 @@ export default function FilmCanvasT({
       const sd = toScreen({ x: f.x, y: f.y })
       if (Math.hypot(sd.x - sx, sd.y - sy) <= 12) {
         dragRef.current = { mode: 'from', clipId: selectedMotionClip.id }
+        capture()
+        return
+      }
+    }
+    if (selectedMotionClip?.to.kind === 'free') {
+      const t = selectedMotionClip.to
+      const st = toScreen({ x: t.x, y: t.y })
+      if (Math.hypot(st.x - sx, st.y - sy) <= 12) {
+        dragRef.current = { mode: 'to', clipId: selectedMotionClip.id }
         capture()
         return
       }
@@ -423,6 +455,8 @@ export default function FilmCanvasT({
       onPatchWaypoint(drag.id, { x: px, y: py })
     } else if (drag.mode === 'from') {
       onPatchMotionClip(drag.clipId, { from: { kind: 'free', x: px, y: py } })
+    } else if (drag.mode === 'to') {
+      onPatchMotionClip(drag.clipId, { to: { kind: 'free', x: px, y: py } })
     } else if (drag.mode === 'cp') {
       const cps = [...(selectedMotionClip?.controlPoints ?? [])]
       if (selectedMotionClip && drag.cpIndex < cps.length) {

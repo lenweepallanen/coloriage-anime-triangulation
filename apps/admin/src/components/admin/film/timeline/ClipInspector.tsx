@@ -63,10 +63,11 @@ export default function ClipInspector({
     const clip = timeline.motion.find(c => c.id === selection.id)
     if (!clip) return null
     const wpIdx = clip.to.kind === 'waypoint' ? timeline.waypoints.findIndex(w => w.id === (clip.to as { id: string }).id) : -1
-    const toLbl = wpIdx >= 0 ? `📍 ${wpIdx + 1}` : clip.to.kind === 'offscreen' ? 'hors-champ' : 'libre'
+    const toLbl = wpIdx >= 0 ? `📍 ${wpIdx + 1}` : clip.to.kind === 'offscreen' ? 'hors-champ' : 'position libre'
+    const isExit = clip.kind === 'exit' || clip.to.kind === 'free'
     return (
       <div style={ROW}>
-        {header(clip.kind === 'appear' ? `✨ Apparition ${toLbl}` : clip.kind === 'exit' ? `Sortie ${toLbl}` : `Trajet → ${toLbl}`)}
+        {header(clip.kind === 'appear' ? `✨ Apparition ${toLbl}` : isExit ? `Sortie → ${toLbl}` : `Trajet → ${toLbl}`)}
         <div style={{ fontSize: 11, opacity: 0.65, flexBasis: '100%' }}>
           {formatMs(clip.startMs)} → {formatMs(clip.startMs + clip.durationMs)}
           {clip.to.kind === 'waypoint' && ' · vers un point du canvas'}

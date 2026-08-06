@@ -401,6 +401,51 @@ export default function FilmEditorT({ project, onSave }: {
   const incomingClipOf = (wpId: string): FilmMotionClip | null =>
     plan?.timeline.motion.find(c => c.to.kind === 'waypoint' && c.to.id === wpId) ?? null
 
+  /** Trajet de SORTIE LIBRE d'un point : le clip qui suit son trajet entrant,
+   *  chaîné (pas de from) et ciblant une position libre (pas un waypoint). */
+  const exitClipOf = (wpId: string): FilmMotionClip | null => {
+    if (!plan) return null
+    const sorted = [...plan.timeline.motion].sort((a, b) => a.startMs - b.startMs)
+    const idx = sorted.findIndex(c => c.to.kind === 'waypoint' && c.to.id === wpId)
+    if (idx < 0) return null
+    const next = sorted[idx + 1]
+    return next && next.to.kind === 'free' && next.from == null ? next : null
+  }
+
+  /** Active/retire la sortie libre d'un point. Si activée, le point SUIVANT ne
+   *  peut plus arriver « depuis le point précédent » (continuité rompue) : son
+   *  origine est convertie en position libre automatiquement. */
+  const setExitMode = (wp: FilmWaypoint, mode: 'none' | 'free') => {
+    if (!plan) return
+    const existing = exitClipOf(wp.id)
+    if (mode === 'none') {
+      if (existing) patchTimeline(plan.id, tl => ({ ...tl, motion: tl.motion.filter(c => c.id !== existing.id) }))
+      return
+    }
+    if (existing) return
+    const wpIdx = plan.timeline.waypoints.findIndex(w => w.id === wp.id)
+    const nextWp = plan.timeline.waypoints[wpIdx + 1] ?? null
+    patchTimeline(plan.id, tl => {
+      const incoming = tl.motion.find(c => c.to.kind === 'waypoint' && c.to.id === wp.id)
+      const startMs = incoming ? incoming.startMs + incoming.durationMs + 1000 : Math.round(playheadMs)
+      const exit: FilmMotionClip = {
+        id: crypto.randomUUID(),
+        startMs,
+        durationMs: 2000,
+        kind: 'travel',
+        to: { kind: 'free', x: Math.round(wp.x + 300), y: wp.y },
+      }
+      // Continuité rompue : l'arrivée du point suivant devient « position libre ».
+      const motion = tl.motion.map(c => {
+        if (nextWp && c.to.kind === 'waypoint' && c.to.id === nextWp.id && c.kind === 'travel' && c.from == null) {
+          return { ...c, from: { kind: 'free' as const, x: Math.round(nextWp.x - 300), y: nextWp.y } }
+        }
+        return c
+      })
+      return { ...tl, motion: [...motion, exit] }
+    })
+  }
+
   /** Change le mode d'arrivée d'un point : ✨ apparition / point précédent / position libre. */
   const setArrivalMode = (wp: FilmWaypoint, mode: 'appear' | 'previous' | 'free') => {
     if (!plan) return
@@ -871,11 +916,35 @@ export default function FilmEditorT({ project, onSave }: {
                     {(() => {
                       const inc = incomingClipOf(selectedWp.id)
                       const mode = inc?.kind === 'appear' ? 'appear' : inc?.from?.kind === 'free' ? 'free' : 'previous'
+                      const wpIdx = plan.timeline.waypoints.findIndex(w => w.id === selectedWp.id)
+                      const prevWp = wpIdx > 0 ? plan.timeline.waypoints[wpIdx - 1] : null
+                      const prevHasExit = prevWp != null && exitClipOf(prevWp.id) != null
                       return (
                         <>
                           <button className={`btn-sm ${mode === 'appear' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setArrivalMode(selectedWp, 'appear')} title="Posé directement sur le point, sans trajet">✨ Apparition</button>
-                          <button className={`btn-sm ${mode === 'previous' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setArrivalMode(selectedWp, 'previous')} title="Marche depuis le point précédent (ou l'entrée du plan)">Point précédent</button>
+                          <button
+                            className={`btn-sm ${mode === 'previous' ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setArrivalMode(selectedWp, 'previous')}
+                            disabled={prevHasExit}
+                            title={prevHasExit
+                              ? 'Impossible : le point précédent a une SORTIE libre (continuité rompue) — arrivée en apparition ou position libre'
+                              : 'Marche depuis le point précédent (ou l\'entrée du plan)'}
+                          >Point précédent</button>
                           <button className={`btn-sm ${mode === 'free' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setArrivalMode(selectedWp, 'free')} title="Marche depuis une position libre (losange draggable, hors décor autorisé)">Position libre</button>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
+                <div className="scene-editor-field" title="Sortie OPTIONNELLE : après ses actions/pauses, le perso quitte ce point vers une position libre (losange « sortie » draggable, hors décor = sortie hors-champ). Le point suivant devra arriver en apparition ou depuis une position libre.">
+                  <label style={{ fontSize: 11 }}>Sortie du point</label>
+                  <div className="scene-config-panel-type-toggle">
+                    {(() => {
+                      const exit = exitClipOf(selectedWp.id)
+                      return (
+                        <>
+                          <button className={`btn-sm ${exit == null ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setExitMode(selectedWp, 'none')}>Aucune</button>
+                          <button className={`btn-sm ${exit != null ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setExitMode(selectedWp, 'free')}>Position libre</button>
                         </>
                       )
                     })()}
