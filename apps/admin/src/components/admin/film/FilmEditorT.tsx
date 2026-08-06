@@ -246,7 +246,9 @@ export default function FilmEditorT({ project, onSave }: {
   const patchClip = useCallback((sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number }) => {
     if (!plan) return
     patchTimeline(plan.id, tl => {
-      if (sel.kind === 'motion') return { ...tl, motion: tl.motion.map(c => c.id === sel.id ? { ...c, ...partial } : c) }
+      if (sel.kind === 'motion') {
+        return { ...tl, motion: tl.motion.map(c => c.id === sel.id ? { ...c, ...partial, ...(c.kind === 'appear' ? { durationMs: 0 } : {}) } : c) }
+      }
       if (sel.kind === 'anim') return { ...tl, anim: tl.anim.map(c => c.id === sel.id ? { ...c, ...partial } : c) }
       return {
         ...tl,

@@ -302,6 +302,7 @@ export default function TimelineEditor({
     titleHint?: string,
     rowH: number = TRACK_H,
     wave?: React.ReactNode,
+    pointMode?: boolean,
   ) => {
     const isSel = selection != null && selection.kind === sel.kind && selection.id === sel.id
     return (
@@ -312,8 +313,8 @@ export default function TimelineEditor({
         title={`${label}${extra ? ` · ${extra}` : ''} — ${formatMs(clip.startMs)} → ${formatMs(clip.startMs + clip.durationMs)}${titleHint ? ` · ${titleHint}` : ''} (clic droit : supprimer)`}
         style={{
           position: 'absolute',
-          left: msToPx(clip.startMs),
-          width: Math.max(6, msToPx(clip.durationMs)),
+          left: pointMode ? msToPx(clip.startMs) - 9 : msToPx(clip.startMs),
+          width: pointMode ? 18 : Math.max(6, msToPx(clip.durationMs)),
           top: 3,
           height: rowH - 6,
           background: color,
@@ -341,15 +342,19 @@ export default function TimelineEditor({
             style={{ position: 'absolute', right: 10, top: 0, bottom: 0, display: 'flex', alignItems: 'center', cursor: 'copy', fontSize: 12, padding: '0 3px' }}
           >⧉</div>
         )}
-        {/* Poignées de resize */}
-        <div
-          onPointerDown={(e) => startClipDrag(e, sel, 'resize-l')}
-          style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize' }}
-        />
-        <div
-          onPointerDown={(e) => startClipDrag(e, sel, 'resize-r')}
-          style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize' }}
-        />
+        {/* Poignées de resize (pas pour les marqueurs ponctuels ✨) */}
+        {!pointMode && (
+          <div
+            onPointerDown={(e) => startClipDrag(e, sel, 'resize-l')}
+            style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize' }}
+          />
+        )}
+        {!pointMode && (
+          <div
+            onPointerDown={(e) => startClipDrag(e, sel, 'resize-r')}
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize' }}
+          />
+        )}
       </div>
     )
   }
@@ -495,8 +500,12 @@ export default function TimelineEditor({
               ))}
               {timeline.motion.map(c => renderClip(
                 { kind: 'motion', id: c.id }, c, FILM_COLORS.travel,
-                c.kind === 'appear' ? `✨ ${toLabel(c)}` : c.kind === 'exit' ? `sortie ${toLabel(c)}` : `🚶 → ${toLabel(c)}`,
-                'bord gauche = Départ · bord droit = Arrivée',
+                c.kind === 'appear' ? '✨' : c.kind === 'exit' ? `sortie ${toLabel(c)}` : `🚶 → ${toLabel(c)}`,
+                c.kind === 'appear' ? `apparition ${toLabel(c)} — INSTANTANÉE, glisser pour changer le moment (à gauche = dès le début)` : undefined,
+                c.kind === 'appear' ? undefined : 'bord gauche = Départ · bord droit = Arrivée',
+                TRACK_H,
+                undefined,
+                c.kind === 'appear',
               ))}
             </>
           )
