@@ -359,29 +359,27 @@ export default function FilmEditorT({ project, onSave }: {
       y: pos.y,
       scale: plan.timeline.waypoints[plan.timeline.waypoints.length - 1]?.scale ?? 1,
     }
-    patchTimeline(plan.id, tl => {
-      // Poser un point crée automatiquement son trajet entrant, chaîné après le
-      // dernier trajet (1 s sur place puis 2 s de marche). 1er point : entrée
-      // hors-champ gauche (modifiable via les pills « Arrivée à ce point »).
-      const sorted = [...tl.motion].sort((a, b) => a.startMs - b.startMs)
-      const last = sorted[sorted.length - 1]
-      const isFirst = tl.waypoints.length === 0
-      const startMs = last ? last.startMs + last.durationMs + 1000 : Math.max(0, Math.round(playheadMs))
-      const clip: FilmMotionClip = {
-        id: crypto.randomUUID(),
-        startMs,
-        durationMs: 2000,
-        kind: 'travel',
-        to: { kind: 'waypoint', id: wp.id },
-        ...(isFirst && { from: { kind: 'offscreen', side: 'left' } }),
-      }
-      return { ...tl, waypoints: [...tl.waypoints, wp], motion: [...tl.motion, clip] }
-    })
+    // Poser un point crée automatiquement son trajet entrant, chaîné après le
+    // dernier trajet (1 s sur place puis 2 s de marche). 1er point : entrée
+    // hors-champ gauche (modifiable via les pills « Arrivée à ce point »).
+    const sorted = [...plan.timeline.motion].sort((a, b) => a.startMs - b.startMs)
+    const last = sorted[sorted.length - 1]
+    const isFirst = plan.timeline.waypoints.length === 0
+    const startMs = last ? last.startMs + last.durationMs + 1000 : Math.max(0, Math.round(playheadMs))
+    const clip: FilmMotionClip = {
+      id: crypto.randomUUID(),
+      startMs,
+      durationMs: 2000,
+      kind: 'travel',
+      to: { kind: 'waypoint', id: wp.id },
+      ...(isFirst && { from: { kind: 'offscreen', side: 'left' } }),
+    }
+    patchTimeline(plan.id, tl => ({ ...tl, waypoints: [...tl.waypoints, wp], motion: [...tl.motion, clip] }))
     setSelectedWaypointId(wp.id)
     setSelection(null)
-    // Le playhead saute à l'arrivée du nouveau point (posé au tick suivant,
-    // une fois le clip inséré dans l'état).
-    requestAnimationFrame(() => jumpPlayheadToWaypoint(wp.id))
+    // Playhead sur l'arrivée du nouveau point → silhouette posée dessus immédiatement.
+    setEditorPlaying(false)
+    setPlayheadMs(clip.startMs + clip.durationMs + 1)
   }
   const removeWaypoint = (id: string) => {
     if (!plan) return
