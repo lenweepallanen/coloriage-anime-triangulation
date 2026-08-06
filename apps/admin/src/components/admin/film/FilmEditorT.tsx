@@ -1060,6 +1060,7 @@ export default function FilmEditorT({ project, onSave }: {
             onDuplicateClip={duplicateClip}
             onAddSoundAt={addSoundAt}
             onAddSoundTrack={addSoundTrack}
+            onSetPlanDuration={(ms) => patchTimeline(plan.id, tl => ({ ...tl, durationMs: Math.max(500, Math.round(ms)) }))}
             playheadMs={playheadMs}
             onScrub={(ms) => { setEditorPlaying(false); setPlayheadMs(ms) }}
             playing={editorPlaying}

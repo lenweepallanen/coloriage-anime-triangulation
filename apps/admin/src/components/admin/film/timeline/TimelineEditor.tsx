@@ -30,6 +30,8 @@ export interface TimelineEditorProps {
   /** Double-clic sur une piste son : poser un clip à cet instant. */
   onAddSoundAt: (trackIndex: number, atMs: number) => void
   onAddSoundTrack: () => void
+  /** Drag du marqueur rouge « Fin du plan » (durée du plan). */
+  onSetPlanDuration: (ms: number) => void
   playheadMs: number
   onScrub: (ms: number) => void
   /** Lecture éditeur (Espace) : géré par le parent ; ici juste l'affichage. */
@@ -129,7 +131,7 @@ function Waveform({ soundId, blob, clipMs, rate, loop, widthPx, heightPx }: {
 
 export default function TimelineEditor({
   timeline, animations, sounds, selection, onSelect, onPatchClip, onRemoveClip, onDuplicateClip,
-  onAddSoundAt, onAddSoundTrack, playheadMs, onScrub, playing,
+  onAddSoundAt, onAddSoundTrack, onSetPlanDuration, playheadMs, onScrub, playing,
 }: TimelineEditorProps) {
   const [pxPerSec, setPxPerSec] = useState(60)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -179,6 +181,7 @@ export default function TimelineEditor({
   const dragRef = useRef<
     | { mode: 'move' | 'resize-l' | 'resize-r'; sel: NonNullable<TimelineSelection>; grabPx: number; origStart: number; origDur: number; snapTargets: number[] }
     | { mode: 'scrub' }
+    | { mode: 'planEnd' }
     | null
   >(null)
 
@@ -230,6 +233,12 @@ export default function TimelineEditor({
     const x = localX(e)
     if (drag.mode === 'scrub') {
       onScrub(Math.max(0, Math.min(contentMs, pxToMs(x))))
+      return
+    }
+    if (drag.mode === 'planEnd') {
+      // Snap sur les bords de clips / secondes / playhead (sans la durée elle-même).
+      const targets = collectSnapTargets('').filter(t => t !== timeline.durationMs)
+      onSetPlanDuration(Math.max(500, Math.round(snapMs(pxToMs(x), targets, e.altKey))))
       return
     }
     const deltaMs = pxToMs(x - drag.grabPx)
@@ -441,8 +450,21 @@ export default function TimelineEditor({
                 {t}s
               </div>
             ))}
-            {/* Fin du plan */}
-            <div style={{ position: 'absolute', left: msToPx(timeline.durationMs), top: 0, bottom: 0, borderLeft: '2px solid #ef5350' }} title={`Fin du plan (${formatMs(timeline.durationMs)})`} />
+            {/* Fin du plan : poignée DRAGGABLE (la durée s'étend seule avec les clips,
+                mais on peut la tirer pour ajouter du temps ou raccourcir). */}
+            <div
+              onPointerDown={(e) => {
+                if (e.button !== 0) return
+                e.stopPropagation()
+                dragRef.current = { mode: 'planEnd' }
+                ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+              }}
+              style={{ position: 'absolute', left: msToPx(timeline.durationMs) - 4, top: 0, bottom: 0, width: 9, cursor: 'ew-resize', zIndex: 2 }}
+              title={`Fin du plan (${formatMs(timeline.durationMs)}) — glisser pour ajuster la durée`}
+            >
+              <div style={{ position: 'absolute', left: 3, top: 0, bottom: 0, width: 2, background: '#ef5350' }} />
+              <div style={{ position: 'absolute', left: -1, top: 0, width: 10, height: 8, background: '#ef5350', borderRadius: '0 0 4px 4px' }} />
+            </div>
           </div>
         </div>
 
@@ -515,6 +537,12 @@ export default function TimelineEditor({
             onClick={onAddSoundTrack}
           >+ piste son</button>
         </div>
+
+        {/* Fin du plan : ligne pleine hauteur (repère visuel sur toutes les pistes) */}
+        <div style={{
+          position: 'absolute', top: RULER_H, bottom: 0, left: LABEL_W + msToPx(timeline.durationMs),
+          width: 2, background: 'rgba(239,83,80,0.55)', zIndex: 1, pointerEvents: 'none',
+        }} />
 
         {/* Playhead */}
         <div style={{
