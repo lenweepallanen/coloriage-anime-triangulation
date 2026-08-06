@@ -197,19 +197,12 @@ export async function convertFilmV3ToTimeline(filmV3: FilmV3, animations: Animat
       to,
       ...(seg.opts.controlPoints != null && seg.opts.controlPoints.length > 0 && { controlPoints: seg.opts.controlPoints }),
       ...(seg.opts.easing != null && { easing: seg.opts.easing }),
+      // L'anim de déplacement est portée par le trajet lui-même (le sampler la
+      // joue pendant le trajet ; un AnimClip par-dessus aurait priorité).
+      ...(!isAppear && seg.opts.animationId != null && { animationId: seg.opts.animationId }),
+      ...(!isAppear && seg.opts.animSpeedMul != null && { animSpeedMul: seg.opts.animSpeedMul }),
     }
     timeline.motion.push(motion)
-
-    if (!isAppear && travelMs > 0 && seg.opts.animationId != null) {
-      timeline.anim.push({
-        id: newId(),
-        startMs: Math.round(t),
-        durationMs: Math.max(1, Math.round(travelMs)),
-        animationId: seg.opts.animationId,
-        ...(seg.opts.animSpeedMul != null && { speedMul: seg.opts.animSpeedMul }),
-        fillMode: 'loop',
-      })
-    }
     if (seg.sound?.blob) {
       const durMs = seg.sound.loop === true ? Math.max(1, travelMs) : await soundNativeMs(seg.sound)
       if (travelMs > 0) placeSound(timeline, soundClipFrom(seg.sound, t, durMs))

@@ -200,6 +200,7 @@ export default function TimelineEditor({
     color: string,
     label: string,
     extra?: string,
+    titleHint?: string,
   ) => {
     const isSel = selection != null && selection.kind === sel.kind && selection.id === sel.id
     return (
@@ -207,7 +208,7 @@ export default function TimelineEditor({
         key={clip.id}
         onPointerDown={(e) => startClipDrag(e, sel, 'move')}
         onContextMenu={(e) => e.preventDefault()}
-        title={`${label}${extra ? ` · ${extra}` : ''} — ${formatMs(clip.startMs)} → ${formatMs(clip.startMs + clip.durationMs)} (clic droit : supprimer)`}
+        title={`${label}${extra ? ` · ${extra}` : ''} — ${formatMs(clip.startMs)} → ${formatMs(clip.startMs + clip.durationMs)}${titleHint ? ` · ${titleHint}` : ''} (clic droit : supprimer)`}
         style={{
           position: 'absolute',
           left: msToPx(clip.startMs),
@@ -309,10 +310,38 @@ export default function TimelineEditor({
         </div>
 
         {/* Pistes */}
-        {trackRow('Déplacement', timeline.motion.map(c => renderClip(
-          { kind: 'motion', id: c.id }, c, FILM_COLORS.travel,
-          c.kind === 'appear' ? '✨ apparition' : c.kind === 'exit' ? 'sortie' : 'trajet',
-        )))}
+        {trackRow('Déplacement', (() => {
+          const wpIdx = (id: string) => timeline.waypoints.findIndex(w => w.id === id)
+          const toLabel = (c: (typeof timeline.motion)[number]) =>
+            c.to.kind === 'waypoint' ? `📍${wpIdx(c.to.id) + 1}`
+              : c.to.kind === 'offscreen' ? (c.to.side === 'left' ? 'hors-champ ←' : 'hors-champ →')
+                : 'libre'
+          const sorted = [...timeline.motion].sort((a, b) => a.startMs - b.startMs)
+          // Blocs « au point » (informatifs) entre l'arrivée d'un trajet et le départ du suivant.
+          const pointBlocks = sorted.map((c, i) => {
+            const start = c.startMs + c.durationMs
+            const end = sorted[i + 1]?.startMs ?? timeline.durationMs
+            if (end - start < 80) return null
+            return { key: `pb-${c.id}`, start, end, label: `au ${toLabel(c)}` }
+          }).filter((b): b is NonNullable<typeof b> => b != null)
+          return (
+            <>
+              {pointBlocks.map(b => (
+                <div key={b.key} style={{
+                  position: 'absolute', left: msToPx(b.start), width: Math.max(4, msToPx(b.end - b.start)),
+                  top: 6, height: TRACK_H - 12, border: '1px dashed #4a4a4a', borderRadius: 4,
+                  color: '#9a9a9a', fontSize: 9, lineHeight: `${TRACK_H - 14}px`, padding: '0 6px',
+                  overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', boxSizing: 'border-box',
+                }}>{b.label}</div>
+              ))}
+              {timeline.motion.map(c => renderClip(
+                { kind: 'motion', id: c.id }, c, FILM_COLORS.travel,
+                c.kind === 'appear' ? `✨ ${toLabel(c)}` : c.kind === 'exit' ? `sortie ${toLabel(c)}` : `🚶 → ${toLabel(c)}`,
+                'bord gauche = Départ · bord droit = Arrivée',
+              ))}
+            </>
+          )
+        })())}
         {trackRow('Animation', timeline.anim.map(c => renderClip(
           { kind: 'anim', id: c.id }, c, FILM_COLORS.action,
           animName(c.animationId), c.fillMode === 'loop' ? '🔁' : '1×',

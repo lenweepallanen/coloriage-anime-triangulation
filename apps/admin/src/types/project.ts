@@ -1132,6 +1132,10 @@ export interface FilmMotionClip {
   /** Points de contrôle Bézier (1 = quadratique, 2 = cubique), coords backdrop. */
   controlPoints?: Point2D[];
   easing?: FilmTravelEasing;
+  /** Animation de déplacement jouée PENDANT ce trajet (défaut : FilmT.moveAnimationId).
+   *  Un AnimClip qui chevauche le trajet a priorité. */
+  animationId?: string;
+  animSpeedMul?: number;
   /** Toggle ÉDITEUR « vitesse verrouillée » : les mutations géométriques recalculent
    *  durationMs = longueur ÷ cette vitesse. Jamais lu par le moteur. */
   lockedSpeedPxPerSec?: number;

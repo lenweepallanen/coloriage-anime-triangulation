@@ -367,6 +367,8 @@ interface FilmMotionClipDoc {
   /** Array de maps {x, y} — OK Firestore. */
   controlPoints?: { x: number; y: number }[]
   easing?: import('../types/project').FilmTravelEasing
+  animationId?: string
+  animSpeedMul?: number
   lockedSpeedPxPerSec?: number
 }
 
@@ -1503,6 +1505,8 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     to: c.to,
     ...(c.controlPoints != null && c.controlPoints.length > 0 && { controlPoints: c.controlPoints.map(cp => ({ x: cp.x, y: cp.y })) }),
     ...(c.easing != null && { easing: c.easing }),
+    ...(c.animationId != null && { animationId: c.animationId }),
+    ...(c.animSpeedMul != null && { animSpeedMul: c.animSpeedMul }),
     ...(c.lockedSpeedPxPerSec != null && { lockedSpeedPxPerSec: c.lockedSpeedPxPerSec }),
   })
   const cleanAnim = (c: import('../types/project').FilmAnimClip): FilmAnimClipDoc => ({
@@ -1607,6 +1611,8 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
           to: c.to,
           ...(c.controlPoints != null && c.controlPoints.length > 0 && { controlPoints: c.controlPoints.map(cp => ({ x: cp.x, y: cp.y })) }),
           ...(c.easing != null && { easing: c.easing }),
+          ...(c.animationId != null && { animationId: c.animationId }),
+          ...(c.animSpeedMul != null && { animSpeedMul: c.animSpeedMul }),
           ...(c.lockedSpeedPxPerSec != null && { lockedSpeedPxPerSec: c.lockedSpeedPxPerSec }),
         })),
         anim: (pl.anim ?? []).map(c => ({
@@ -1687,6 +1693,7 @@ function remapFilmTAnimationIds(film: import('../types/project').FilmT | null | 
       ...pl,
       timeline: {
         ...pl.timeline,
+        motion: pl.timeline.motion.map(c => c.animationId != null ? { ...c, animationId: mapId(c.animationId) } : c),
         anim: pl.timeline.anim.map(c => ({ ...c, animationId: mapId(c.animationId) })),
       },
     })),

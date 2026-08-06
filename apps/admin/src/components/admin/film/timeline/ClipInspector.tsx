@@ -62,9 +62,11 @@ export default function ClipInspector({
   if (selection.kind === 'motion') {
     const clip = timeline.motion.find(c => c.id === selection.id)
     if (!clip) return null
+    const wpIdx = clip.to.kind === 'waypoint' ? timeline.waypoints.findIndex(w => w.id === (clip.to as { id: string }).id) : -1
+    const toLbl = wpIdx >= 0 ? `📍 ${wpIdx + 1}` : clip.to.kind === 'offscreen' ? 'hors-champ' : 'libre'
     return (
       <div style={ROW}>
-        {header(clip.kind === 'appear' ? '✨ Apparition' : clip.kind === 'exit' ? 'Clip sortie' : 'Clip trajet')}
+        {header(clip.kind === 'appear' ? `✨ Apparition ${toLbl}` : clip.kind === 'exit' ? `Sortie ${toLbl}` : `Trajet → ${toLbl}`)}
         <div style={{ fontSize: 11, opacity: 0.65, flexBasis: '100%' }}>
           {formatMs(clip.startMs)} → {formatMs(clip.startMs + clip.durationMs)}
           {clip.to.kind === 'waypoint' && ' · vers un point du canvas'}
@@ -97,6 +99,19 @@ export default function ClipInspector({
             </>
           )
         })()}
+        {clip.kind !== 'appear' && (
+          <div className="scene-editor-field" style={{ minWidth: 200 }} title="Animation du corps jouée pendant CE trajet (un clip Animation posé par-dessus a priorité)">
+            <label style={{ fontSize: 11 }}>Animation du trajet</label>
+            <select
+              value={clip.animationId ?? ''}
+              onChange={(e) => onPatchMotion(clip.id, { animationId: e.target.value || undefined })}
+            >
+              <option value="">Défaut du film</option>
+              {animations.map(a => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
+            </select>
+          </div>
+        )}
+        {clip.kind !== 'appear' && numField('Vitesse anim ×', clip.animSpeedMul ?? 1, v => onPatchMotion(clip.id, { animSpeedMul: v > 0 && v !== 1 ? v : undefined }), { min: 0.1, title: 'Vitesse de lecture de l’animation de marche pendant ce trajet' })}
         <div className="scene-editor-field" style={{ maxWidth: 170 }}>
           <label style={{ fontSize: 11 }}>Allure</label>
           <select

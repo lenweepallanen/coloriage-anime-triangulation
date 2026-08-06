@@ -253,6 +253,7 @@ export class FilmTimelineSampler {
     let scale = p.initial.scale
     let flip = p.initial.flip
     let travelling = false
+    let activeMotion: PreparedMotion | null = null
     let lastEnded: PreparedMotion | null = null
     for (const m of p.motion) {
       if (local >= m.endMs) {
@@ -272,6 +273,7 @@ export class FilmTimelineSampler {
           scale = m.fromScale + (m.toScale - m.fromScale) * sFrac
           flip = this.tangentFlip(m.table, covered, m.startFlip)
           travelling = m.clip.kind !== 'appear'
+          if (travelling) activeMotion = m
         }
         break
       }
@@ -301,9 +303,23 @@ export class FilmTimelineSampler {
       }
     }
     if (!inAnimClip) {
-      const idleMul = Math.max(0.01, this.film.idleSpeedMul ?? 1)
-      animSpeedMul = idleMul
-      animFrame = (FILM_FPS * idleMul * local) / 1000
+      // Trajet sans AnimClip par-dessus → animation de déplacement DU TRAJET
+      // (fallback : défaut du film), bouclée, phasée sur le début du trajet.
+      const travelAnimId = activeMotion
+        ? (activeMotion.clip.animationId ?? this.film.moveAnimationId ?? null)
+        : null
+      if (travelAnimId != null && activeMotion) {
+        const mul = Math.max(0.01, activeMotion.clip.animSpeedMul ?? 1)
+        const raw = (FILM_FPS * mul * (local - activeMotion.startMs)) / 1000
+        const n = this.animFrameCount.get(travelAnimId) ?? 0
+        animationId = travelAnimId
+        animSpeedMul = mul
+        animFrame = n > 0 ? raw % n : 0
+      } else {
+        const idleMul = Math.max(0.01, this.film.idleSpeedMul ?? 1)
+        animSpeedMul = idleMul
+        animFrame = (FILM_FPS * idleMul * local) / 1000
+      }
     }
 
     const phase: TimelineSample['phase'] = travelling ? 'travel' : (inAnimClip ? 'action' : 'idle')

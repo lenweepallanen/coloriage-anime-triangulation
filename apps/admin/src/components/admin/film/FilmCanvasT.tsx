@@ -10,7 +10,7 @@ import { CAMERA_HANDLE_H, extractVideoFrame0Url, FILM_COLORS } from './filmEdito
  */
 export default function FilmCanvasT({
   plan, selectedWaypointId, onSelectWaypoint, onAddWaypoint, onRemoveWaypoint, onPatchWaypoint,
-  onPatchPlan, selectedMotionClip, onPatchMotionClip, motionGeom, previewPose,
+  onPatchPlan, selectedMotionClip, onSelectTravel, onPatchMotionClip, motionGeom, previewPose,
   characterImageUrl, characterImageSize, characterScale, characterOriginU, characterOriginV, characterFacing,
 }: {
   plan: FilmTimelinePlan
@@ -21,6 +21,8 @@ export default function FilmCanvasT({
   onPatchWaypoint: (id: string, partial: Partial<FilmWaypoint>) => void
   onPatchPlan: (partial: Partial<FilmTimelinePlan>) => void
   selectedMotionClip: FilmMotionClip | null
+  /** Clic sur le pointillé d'un trajet → le sélectionner (inspecteur trajet). */
+  onSelectTravel: (id: string) => void
   onPatchMotionClip: (id: string, partial: Partial<FilmMotionClip>) => void
   /** Géométrie résolue des clips motion (via le sampler, cohérente avec le moteur). */
   motionGeom: { id: string; from: Point2D; to: Point2D; controlPoints?: Point2D[]; kind: FilmMotionClip['kind'] }[]
@@ -46,6 +48,7 @@ export default function FilmCanvasT({
     | { mode: 'waypoint'; id: string }
     | { mode: 'camera' }
     | { mode: 'cp'; clipId: string; cpIndex: number }
+    | { mode: 'from'; clipId: string }
     | null
   >(null)
 
@@ -256,6 +259,28 @@ export default function FilmCanvasT({
       }
     }
 
+    // Losange « départ » du trajet sélectionné (origine libre, draggable)
+    if (selectedMotionClip?.from?.kind === 'free') {
+      const f = selectedMotionClip.from
+      const sd = toScreen({ x: f.x, y: f.y })
+      ctx.beginPath()
+      ctx.moveTo(sd.x, sd.y - 9)
+      ctx.lineTo(sd.x + 9, sd.y)
+      ctx.lineTo(sd.x, sd.y + 9)
+      ctx.lineTo(sd.x - 9, sd.y)
+      ctx.closePath()
+      ctx.fillStyle = FILM_COLORS.travel
+      ctx.fill()
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 10px system-ui'
+      ctx.textAlign = 'center'
+      ctx.fillText('départ', sd.x, sd.y - 13)
+      ctx.textAlign = 'left'
+    }
+
     // Waypoints numérotés
     waypoints.forEach((w, i) => {
       const s = toScreen(w)
@@ -313,12 +338,61 @@ export default function FilmCanvasT({
         }
       }
     }
+    // Losange « départ » du trajet sélectionné (origine libre)
+    if (selectedMotionClip?.from?.kind === 'free') {
+      const f = selectedMotionClip.from
+      const sd = toScreen({ x: f.x, y: f.y })
+      if (Math.hypot(sd.x - sx, sd.y - sy) <= 12) {
+        dragRef.current = { mode: 'from', clipId: selectedMotionClip.id }
+        capture()
+        return
+      }
+    }
     const hit = waypointAt(sx, sy)
     if (hit) {
       onSelectWaypoint(hit.id)
       dragRef.current = { mode: 'waypoint', id: hit.id }
       capture()
       return
+    }
+    // Clic sur le POINTILLÉ d'un trajet → sélection du trajet (inspecteur).
+    {
+      const distToSeg = (p: Point2D, a: Point2D, b: Point2D): number => {
+        const dx = b.x - a.x, dy = b.y - a.y
+        const len2 = dx * dx + dy * dy
+        const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0
+        return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+      }
+      const bez = (a: Point2D, cps: Point2D[], b: Point2D, t: number): Point2D => {
+        const pts = [a, ...cps, b]
+        let work = pts
+        while (work.length > 1) {
+          const next: Point2D[] = []
+          for (let i = 0; i < work.length - 1; i++) {
+            next.push({ x: work[i].x + (work[i + 1].x - work[i].x) * t, y: work[i].y + (work[i + 1].y - work[i].y) * t })
+          }
+          work = next
+        }
+        return work[0]
+      }
+      for (const g of motionGeom) {
+        if (g.kind === 'appear') continue
+        const a = toScreen(g.from)
+        const b = toScreen(g.to)
+        const cps = (g.controlPoints ?? []).map(toScreen)
+        let minD = Number.POSITIVE_INFINITY
+        let prev = a
+        const steps = cps.length > 0 ? 24 : 1
+        for (let i = 1; i <= steps; i++) {
+          const pt = cps.length > 0 ? bez(a, cps, b, i / steps) : b
+          minD = Math.min(minD, distToSeg({ x: sx, y: sy }, prev, pt))
+          prev = pt
+        }
+        if (minD <= 8) {
+          onSelectTravel(g.id)
+          return
+        }
+      }
     }
     // Poignée caméra (bandeau au sommet du décor)
     const camTop = OUT_M * sY
@@ -347,6 +421,8 @@ export default function FilmCanvasT({
     const py = Math.round(p.y)
     if (drag.mode === 'waypoint') {
       onPatchWaypoint(drag.id, { x: px, y: py })
+    } else if (drag.mode === 'from') {
+      onPatchMotionClip(drag.clipId, { from: { kind: 'free', x: px, y: py } })
     } else if (drag.mode === 'cp') {
       const cps = [...(selectedMotionClip?.controlPoints ?? [])]
       if (selectedMotionClip && drag.cpIndex < cps.length) {

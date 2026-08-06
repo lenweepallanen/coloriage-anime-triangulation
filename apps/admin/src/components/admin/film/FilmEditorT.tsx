@@ -308,27 +308,6 @@ export default function FilmEditorT({ project, onSave }: {
     return atMs
   }
 
-  const addMotionClip = (kind: 'travel' | 'appear') => {
-    if (!film || !plan) return
-    const wp = plan.timeline.waypoints.find(w => w.id === selectedWaypointId)
-      ?? plan.timeline.waypoints[plan.timeline.waypoints.length - 1]
-    if (!wp) {
-      window.alert('Posez d’abord un point sur le canvas (clic sur le décor).')
-      return
-    }
-    const start = freeSlotStart(plan.timeline.motion, Math.round(playheadMs))
-    const dur = kind === 'appear' ? 0 : 2000
-    const id = crypto.randomUUID()
-    patchTimeline(plan.id, tl => ({
-      ...tl,
-      motion: [...tl.motion, { id, startMs: start, durationMs: dur, kind, to: { kind: 'waypoint', id: wp.id } }],
-      // Confort : un trajet ajoute son clip d'animation de déplacement par défaut.
-      anim: kind === 'travel' && film.moveAnimationId
-        ? [...tl.anim, { id: crypto.randomUUID(), startMs: start, durationMs: dur, animationId: film.moveAnimationId, fillMode: 'loop' as const }]
-        : tl.anim,
-    }))
-    setSelection({ kind: 'motion', id })
-  }
 
   const addAnimClip = () => {
     if (!film || !plan) return
@@ -380,26 +359,81 @@ export default function FilmEditorT({ project, onSave }: {
       y: pos.y,
       scale: plan.timeline.waypoints[plan.timeline.waypoints.length - 1]?.scale ?? 1,
     }
-    patchTimeline(plan.id, tl => ({ ...tl, waypoints: [...tl.waypoints, wp] }))
+    patchTimeline(plan.id, tl => {
+      // Poser un point crée automatiquement son trajet entrant, chaîné après le
+      // dernier trajet (1 s sur place puis 2 s de marche). 1er point : entrée
+      // hors-champ gauche (modifiable via les pills « Arrivée à ce point »).
+      const sorted = [...tl.motion].sort((a, b) => a.startMs - b.startMs)
+      const last = sorted[sorted.length - 1]
+      const isFirst = tl.waypoints.length === 0
+      const startMs = last ? last.startMs + last.durationMs + 1000 : Math.max(0, Math.round(playheadMs))
+      const clip: FilmMotionClip = {
+        id: crypto.randomUUID(),
+        startMs,
+        durationMs: 2000,
+        kind: 'travel',
+        to: { kind: 'waypoint', id: wp.id },
+        ...(isFirst && { from: { kind: 'offscreen', side: 'left' } }),
+      }
+      return { ...tl, waypoints: [...tl.waypoints, wp], motion: [...tl.motion, clip] }
+    })
     setSelectedWaypointId(wp.id)
     setSelection(null)
   }
   const removeWaypoint = (id: string) => {
     if (!plan) return
     const idx = plan.timeline.waypoints.findIndex(w => w.id === id)
-    const used = plan.timeline.motion.some(c =>
-      (c.to.kind === 'waypoint' && c.to.id === id) || (c.from?.kind === 'waypoint' && c.from.id === id))
-    if (used) {
-      window.alert(`Le point ${idx + 1} est utilisé par un clip de déplacement — supprimez d'abord le clip.`)
-      return
-    }
-    if (!window.confirm(`Supprimer le point ${idx + 1} ?`)) return
-    patchTimeline(plan.id, tl => ({ ...tl, waypoints: tl.waypoints.filter(w => w.id !== id) }))
+    if (!window.confirm(`Supprimer le point ${idx + 1} (et son trajet) ?`)) return
+    patchTimeline(plan.id, tl => ({
+      ...tl,
+      waypoints: tl.waypoints.filter(w => w.id !== id),
+      motion: tl.motion.filter(c =>
+        !(c.to.kind === 'waypoint' && c.to.id === id) && !(c.from?.kind === 'waypoint' && c.from.id === id)),
+    }))
     if (selectedWaypointId === id) setSelectedWaypointId(null)
   }
   const patchWaypoint = (id: string, partial: Partial<FilmWaypoint>) => {
     if (!plan) return
     patchTimeline(plan.id, tl => ({ ...tl, waypoints: tl.waypoints.map(w => w.id === id ? { ...w, ...partial } : w) }))
+  }
+
+  /** Trajet ENTRANT d'un point (clip motion dont la cible est ce waypoint). */
+  const incomingClipOf = (wpId: string): FilmMotionClip | null =>
+    plan?.timeline.motion.find(c => c.to.kind === 'waypoint' && c.to.id === wpId) ?? null
+
+  /** Change le mode d'arrivée d'un point : ✨ apparition / point précédent / position libre. */
+  const setArrivalMode = (wp: FilmWaypoint, mode: 'appear' | 'previous' | 'free') => {
+    if (!plan) return
+    patchTimeline(plan.id, tl => {
+      const existing = tl.motion.find(c => c.to.kind === 'waypoint' && c.to.id === wp.id)
+      const mutate = (c: FilmMotionClip): FilmMotionClip => {
+        if (mode === 'appear') {
+          const { from: _f, ...rest } = c
+          return { ...rest, kind: 'appear', durationMs: 0 }
+        }
+        if (mode === 'previous') {
+          const { from: _f, ...rest } = c
+          return { ...rest, kind: 'travel', durationMs: Math.max(500, c.durationMs || 2000) }
+        }
+        return {
+          ...c,
+          kind: 'travel',
+          durationMs: Math.max(500, c.durationMs || 2000),
+          from: c.from?.kind === 'free' ? c.from : { kind: 'free', x: Math.round(wp.x - 300), y: wp.y },
+        }
+      }
+      if (existing) return { ...tl, motion: tl.motion.map(c => c.id === existing.id ? mutate(c) : c) }
+      const sorted = [...tl.motion].sort((a, b) => a.startMs - b.startMs)
+      const last = sorted[sorted.length - 1]
+      const base: FilmMotionClip = {
+        id: crypto.randomUUID(),
+        startMs: last ? last.startMs + last.durationMs + 1000 : 0,
+        durationMs: 2000,
+        kind: 'travel',
+        to: { kind: 'waypoint', id: wp.id },
+      }
+      return { ...tl, motion: [...tl.motion, mutate(base)] }
+    })
   }
 
   // --- Plans ---
@@ -764,6 +798,7 @@ export default function FilmEditorT({ project, onSave }: {
               onPatchWaypoint={patchWaypoint}
               onPatchPlan={(partial) => patchPlanT(plan.id, partial)}
               selectedMotionClip={selectedMotionClip}
+              onSelectTravel={(id) => { setSelection({ kind: 'motion', id }); setSelectedWaypointId(null) }}
               onPatchMotionClip={patchMotion}
               motionGeom={motionGeom}
               previewPose={previewPose}
@@ -830,6 +865,22 @@ export default function FilmEditorT({ project, onSave }: {
                     />
                   </div>
                 </div>
+                <div className="scene-editor-field" title="Comment le perso arrive à ce point. Position libre : losange « départ » draggable sur le canvas (posez-le hors décor pour une entrée hors-champ).">
+                  <label style={{ fontSize: 11 }}>Arrivée à ce point</label>
+                  <div className="scene-config-panel-type-toggle">
+                    {(() => {
+                      const inc = incomingClipOf(selectedWp.id)
+                      const mode = inc?.kind === 'appear' ? 'appear' : inc?.from?.kind === 'free' ? 'free' : 'previous'
+                      return (
+                        <>
+                          <button className={`btn-sm ${mode === 'appear' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setArrivalMode(selectedWp, 'appear')} title="Posé directement sur le point, sans trajet">✨ Apparition</button>
+                          <button className={`btn-sm ${mode === 'previous' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setArrivalMode(selectedWp, 'previous')} title="Marche depuis le point précédent (ou l'entrée du plan)">Point précédent</button>
+                          <button className={`btn-sm ${mode === 'free' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setArrivalMode(selectedWp, 'free')} title="Marche depuis une position libre (losange draggable, hors décor autorisé)">Position libre</button>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
                 <div className="scene-editor-field" title="Regard à l'idle sur ce point. Auto = sens du dernier trajet.">
                   <label style={{ fontSize: 11 }}>Regard au point</label>
                   <div className="scene-config-panel-type-toggle">
@@ -854,8 +905,6 @@ export default function FilmEditorT({ project, onSave }: {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
             <h4 className="scene-editor-section-title" style={{ margin: 0 }}>Timeline du plan {planIndex + 1}</h4>
             <div style={{ flex: 1 }} />
-            <button className="btn-ghost btn-sm" onClick={() => addMotionClip('travel')} title="Trajet vers le point sélectionné, posé au playhead">+ Trajet</button>
-            <button className="btn-ghost btn-sm" onClick={() => addMotionClip('appear')} title="Apparition directe sur le point sélectionné">+ ✨ Apparition</button>
             <button className="btn-ghost btn-sm" onClick={addAnimClip} title="Clip d'animation du corps au playhead">+ Anim</button>
             <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic sur une piste son = poser un son · Ctrl+molette = zoom · Alt = sans snap</span>
           </div>
