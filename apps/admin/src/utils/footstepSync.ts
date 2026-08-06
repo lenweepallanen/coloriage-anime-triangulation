@@ -19,25 +19,35 @@ export function detectFootstepFrames(anim: Animation, zoneIds?: string[]): numbe
   const collectFromSeries = (ys: number[]): void => {
     const n = ys.length
     if (n < 6) return
+    // Lissage circulaire (moyenne 3) pour tuer le bruit des plateaux.
+    const z = ys.map((_, i) => (ys[(i - 1 + n) % n] + ys[i] + ys[(i + 1) % n]) / 3)
     let min = Number.POSITIVE_INFINITY
     let max = Number.NEGATIVE_INFINITY
-    for (const y of ys) { min = Math.min(min, y); max = Math.max(max, y) }
+    for (const y of z) { min = Math.min(min, y); max = Math.max(max, y) }
     const amp = max - min
     if (amp < 2) return // patte quasi immobile : pas de pas
-    // Machine à états avec HYSTÉRÉSIS : UN événement par appui, au moment où le
-    // pied TOUCHE le sol (franchit le seuil bas en descendant). Le plateau du
-    // pied posé ne redéclenche pas, il faut d'abord repasser en l'air.
-    const groundAt = max - amp * 0.18
-    const airAt = max - amp * 0.45
-    let onGround = ys[0] >= groundAt
-    for (let i = 1; i < n; i++) {
-      if (!onGround && ys[i] >= groundAt) {
-        onGround = true
-        events.push(i)
-      } else if (onGround && ys[i] <= airAt) {
-        onGround = false
-      }
+    // Pics circulaires proches du sol (y écran vers le bas = pied posé), puis
+    // déduplication par distance minimale (≥ 1/6 de cycle) en gardant le plus
+    // bas. Robuste aux levées FAIBLES (pattes arrière d'un bipède) comme aux
+    // plateaux (pied posé plusieurs frames).
+    const thr = max - amp * 0.3
+    const candidates: { i: number; y: number }[] = []
+    for (let i = 0; i < n; i++) {
+      const prev = z[(i - 1 + n) % n]
+      const next = z[(i + 1) % n]
+      if (z[i] >= thr && z[i] >= prev && z[i] > next) candidates.push({ i, y: z[i] })
     }
+    candidates.sort((a, b) => b.y - a.y)
+    const minDist = Math.max(3, Math.floor(n / 6))
+    const kept: number[] = []
+    for (const c of candidates) {
+      const tooClose = kept.some(k => {
+        const d = Math.abs(k - c.i)
+        return Math.min(d, n - d) < minDist
+      })
+      if (!tooClose) kept.push(c.i)
+    }
+    events.push(...kept)
   }
 
   const zoneFrames = mesh.walkZoneFramesSmoothed ?? mesh.walkZoneFrames

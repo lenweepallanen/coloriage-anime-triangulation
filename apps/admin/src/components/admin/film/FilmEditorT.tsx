@@ -1159,85 +1159,99 @@ export default function FilmEditorT({ project, onSave }: {
             project.projectTriangulation?.zones.find(z => z.id === zid)?.label
             ?? ({ 'leg-fl': 'Patte AVG', 'leg-fr': 'Patte AVD', 'leg-bl': 'Patte ARG', 'leg-br': 'Patte ARD' } as Record<string, string>)[zid]
             ?? zid
+          const LBL: React.CSSProperties = { fontSize: 12, opacity: 0.8, minWidth: 150 }
+          const ROWL: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }
           return (
-            <div key={ci} style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', padding: '6px 0', borderTop: ci > 0 ? '1px solid var(--border)' : 'none' }}>
-              <div className="scene-editor-field" style={{ minWidth: 200 }}>
-                <label style={{ fontSize: 11 }}>Animation de marche</label>
-                <select value={cfg.animationId} onChange={(e) => patchCfg({ animationId: e.target.value, zoneIds: undefined })}>
+            <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0', borderTop: ci > 0 ? '1px solid var(--border)' : 'none' }}>
+              <div style={ROWL}>
+                <span style={{ ...LBL, fontWeight: 600, opacity: 1 }}>Animation de marche</span>
+                <select
+                  value={cfg.animationId}
+                  onChange={(e) => patchCfg({ animationId: e.target.value, zoneIds: undefined })}
+                  style={{ minWidth: 200 }}
+                >
                   {readyAnimations.map(a => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
                 </select>
+                <div style={{ flex: 1 }} />
+                <button className="btn-icon btn-sm btn-danger" onClick={() => {
+                  for (const sid of cfg.soundIds) onFilmSoundDeleted(sid)
+                  updateFilm({
+                    sounds: film.sounds.filter(x => !cfg.soundIds.includes(x.id)),
+                    footstepSounds: (film.footstepSounds ?? []).filter((_, i) => i !== ci),
+                  })
+                }} title="Supprimer cette liaison (et ses sons)">&times;</button>
               </div>
               {legZoneIds.length > 0 && (
-                <div className="scene-editor-field" title="Pattes qui PORTENT (déclenchent un pas au contact du sol). Bipède type T-Rex : cochez uniquement les pattes ARRIÈRE — les avant balancent sans toucher le sol et créeraient des pas fantômes.">
-                  <label style={{ fontSize: 11 }}>Pattes au sol</label>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    {legZoneIds.map(zid => {
-                      const active = cfg.zoneIds == null || cfg.zoneIds.includes(zid)
-                      return (
-                        <label key={zid} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
-                          <input
-                            type="checkbox"
-                            checked={active}
-                            onChange={(e) => {
-                              const current = cfg.zoneIds ?? legZoneIds
-                              const next = e.target.checked
-                                ? [...current.filter(z => z !== zid), zid]
-                                : current.filter(z => z !== zid)
-                              patchCfg({ zoneIds: next.length === legZoneIds.length ? undefined : next })
-                            }}
-                          />
-                          {zoneLabel(zid)}
-                        </label>
-                      )
-                    })}
-                  </div>
+                <div style={ROWL} title="Pattes qui PORTENT (déclenchent un pas au contact du sol). Bipède type T-Rex : cochez uniquement les pattes ARRIÈRE — les avant (et la tête !) balancent sans toucher le sol.">
+                  <span style={LBL}>Pattes au sol</span>
+                  {legZoneIds.map(zid => {
+                    const active = cfg.zoneIds == null || cfg.zoneIds.includes(zid)
+                    return (
+                      <label key={zid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, whiteSpace: 'nowrap' }}>
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={(e) => {
+                            const current = cfg.zoneIds ?? legZoneIds
+                            const next = e.target.checked
+                              ? [...current.filter(z => z !== zid), zid]
+                              : current.filter(z => z !== zid)
+                            patchCfg({ zoneIds: next.length === legZoneIds.length ? undefined : next })
+                          }}
+                        />
+                        {zoneLabel(zid)}
+                      </label>
+                    )
+                  })}
                 </div>
               )}
-              {cfg.soundIds.map((sid, si) => (
-                <span key={sid} style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  🦶 {si + 1} : {soundName(sid)}
-                  <button
-                    className="btn-icon btn-sm btn-danger"
-                    onClick={() => {
-                      onFilmSoundDeleted(sid)
-                      updateFilm({
-                        footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: c.soundIds.filter(x => x !== sid) } : c),
-                        sounds: film.sounds.filter(x => x.id !== sid),
-                      })
-                    }}
-                    title="Retirer ce son"
-                  >&times;</button>
-                </span>
-              ))}
-              {cfg.soundIds.length < 2 && (
-                <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
-                  + pas{cfg.soundIds.length + 1}.mp3
-                  <input
-                    type="file" accept="audio/*" style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      e.target.value = ''
-                      if (!file) return
-                      const id = crypto.randomUUID()
-                      onFilmSoundImported(id)
-                      updateFilm({
-                        sounds: [...film.sounds, { id, name: file.name, blob: file }],
-                        footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: [...c.soundIds, id] } : c),
-                      })
-                    }}
-                  />
-                </label>
-              )}
-              <div className="scene-editor-field" style={{ maxWidth: 160 }}>
-                <label style={{ fontSize: 11 }}>Volume : {Math.round((cfg.volume ?? 1) * 100)}%</label>
+              <div style={ROWL}>
+                <span style={LBL}>Sons (alternés)</span>
+                {cfg.soundIds.map((sid, si) => (
+                  <span key={sid} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-full, 999px)', padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                    🦶{si + 1} {soundName(sid)}
+                    <button
+                      className="btn-icon btn-sm btn-danger"
+                      onClick={() => {
+                        onFilmSoundDeleted(sid)
+                        updateFilm({
+                          footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: c.soundIds.filter(x => x !== sid) } : c),
+                          sounds: film.sounds.filter(x => x.id !== sid),
+                        })
+                      }}
+                      title="Retirer ce son"
+                    >&times;</button>
+                  </span>
+                ))}
+                {cfg.soundIds.length < 2 && (
+                  <label className="btn-secondary btn-sm" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    + pas{cfg.soundIds.length + 1}.mp3
+                    <input
+                      type="file" accept="audio/*" style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        e.target.value = ''
+                        if (!file) return
+                        const id = crypto.randomUUID()
+                        onFilmSoundImported(id)
+                        updateFilm({
+                          sounds: [...film.sounds, { id, name: file.name, blob: file }],
+                          footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: [...c.soundIds, id] } : c),
+                        })
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+              <div style={ROWL}>
+                <span style={LBL}>Volume : {Math.round((cfg.volume ?? 1) * 100)}%</span>
                 <input
                   type="range" min={0} max={1} step={0.05}
                   value={cfg.volume ?? 1}
                   onChange={(e) => patchCfg({ volume: parseFloat(e.target.value) })}
+                  style={{ width: 160, flexShrink: 0 }}
                 />
-              </div>
-              <div className="scene-editor-field" style={{ maxWidth: 130 }} title="Ajustement fin de la synchro : négatif = le son part plus tôt, positif = plus tard (ex. si l'impact sonore du mp3 n'est pas à son tout début)">
-                <label style={{ fontSize: 11 }}>Décalage (ms)</label>
+                <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 12, whiteSpace: 'nowrap' }} title="Négatif = le son part plus tôt, positif = plus tard">Décalage (ms)</span>
                 <input
                   type="number" step={10}
                   value={cfg.offsetMs ?? 0}
@@ -1245,15 +1259,9 @@ export default function FilmEditorT({ project, onSave }: {
                     const v = parseInt(e.target.value, 10)
                     patchCfg({ offsetMs: Number.isFinite(v) && v !== 0 ? v : undefined })
                   }}
+                  style={{ width: 90, flexShrink: 0 }}
                 />
               </div>
-              <button className="btn-icon btn-sm btn-danger" onClick={() => {
-                for (const sid of cfg.soundIds) onFilmSoundDeleted(sid)
-                updateFilm({
-                  sounds: film.sounds.filter(x => !cfg.soundIds.includes(x.id)),
-                  footstepSounds: (film.footstepSounds ?? []).filter((_, i) => i !== ci),
-                })
-              }} title="Supprimer cette liaison (et ses sons)">&times;</button>
             </div>
           )
         })}
