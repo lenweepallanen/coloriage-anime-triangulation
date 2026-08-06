@@ -8,7 +8,7 @@ import type { UploadHint } from '../../../db/projectsStore'
 import { buildFilmTScene } from '../../../utils/filmScene'
 import { FilmTimelineSampler } from '../../../utils/filmTimelineSampler'
 import { sampleFilmPath } from '../../../utils/filmPath'
-import { dedupeTravelAnimClips, pushExclusiveOverlaps, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
+import { dedupeTravelAnimClips, filmIntroTransition, filmOutroTransition, pushExclusiveOverlaps, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
 import { getAudioDurationMs } from '../../../utils/sceneActionDuration'
 import { transitionDurationMs } from '../../../utils/filmDirector'
 import ScenePlayer from '../../scan/ScenePlayer'
@@ -715,13 +715,66 @@ export default function FilmEditorT({ project, onSave }: {
     if (!film) return
     const pl = film.plans.find(x => x.id === planId)
     if (!pl || pl.backdrop == null) return
-    void openPreview({ ...film, plans: [{ ...pl, transitionToNext: undefined }] })
+    void openPreview({ ...film, plans: [{ ...pl, transitionToNext: undefined }], intro: { kind: 'cut' }, outro: { kind: 'cut' } })
   }, [film, openPreview])
   const handleClosePreview = useCallback(() => {
     setPreviewing(false)
     setPreviewCanvas(null)
     previewProjectRef.current = null
   }, [])
+
+  /** Colonne Ouverture / Fermeture du film dans la barre des plans : mêmes
+   *  contrôles que les transitions inter-plans (type + durée + couleur). */
+  const edgeTransitionColumn = (
+    label: string,
+    value: import('../../../types/project').FilmPlanTransition,
+    onChange: (t: import('../../../types/project').FilmPlanTransition) => void,
+  ) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0, alignSelf: 'center' }} onClick={(e) => e.stopPropagation()}>
+      <span style={{ fontSize: 10, opacity: 0.8, textAlign: 'center', whiteSpace: 'nowrap', fontWeight: 600 }}>{label}</span>
+      <select
+        value={transitionToKey(value)}
+        onChange={(e) => onChange(transitionFromKey(e.target.value, value))}
+        style={{ fontSize: 11 }}
+        title={label}
+      >
+        <option value="cut">Aucune</option>
+        <option value="fadeBlack">Fondu couleur</option>
+        <option value="wipe-left">Volet ←</option>
+        <option value="wipe-right">Volet →</option>
+        <option value="wipe-up">Volet ↑</option>
+        <option value="wipe-down">Volet ↓</option>
+        <option value="iris">Iris</option>
+      </select>
+      {value.kind !== 'cut' && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }} title="Durée (secondes)">
+          ⏱
+          <input
+            type="number" min={0.1} max={5} step={0.1}
+            value={transitionDurationMs(value) / 1000}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value)
+              if (!Number.isFinite(v)) return
+              onChange({ ...value, durationMs: Math.round(Math.min(5, Math.max(0.1, v)) * 1000) })
+            }}
+            style={{ width: 48, fontSize: 10, flexShrink: 0 }}
+          />
+          s
+        </label>
+      )}
+      {value.kind !== 'cut' && value.kind !== 'crossfade' && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }} title="Couleur de l'aplat (défaut noir)">
+          🎨
+          <input
+            type="color"
+            value={value.color ?? '#000000'}
+            onChange={(e) => onChange({ ...value, color: e.target.value })}
+            style={{ width: 34, height: 20, padding: 0, flexShrink: 0, cursor: 'pointer' }}
+          />
+        </label>
+      )}
+    </div>
+  )
 
   // --- Rendus ---
   if (converting) {
@@ -792,6 +845,7 @@ export default function FilmEditorT({ project, onSave }: {
       {/* Bandeau des plans + décor du plan actif */}
       <div className="scene-editor-section-card">
         <div style={{ display: 'flex', alignItems: 'stretch', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+          {edgeTransitionColumn('🎬 Ouverture', filmIntroTransition(film), (t) => updateFilm({ intro: t }))}
           {plans.map((pl, i) => {
             const active = pl.id === plan?.id
             return (
@@ -885,6 +939,7 @@ export default function FilmEditorT({ project, onSave }: {
               </div>
             )
           })}
+          {edgeTransitionColumn('🏁 Fermeture', filmOutroTransition(film), (t) => updateFilm({ outro: t }))}
           <button className="btn-secondary btn-sm" onClick={addPlan} style={{ alignSelf: 'center', whiteSpace: 'nowrap' }}>+ Plan</button>
         </div>
         {plan && (
@@ -1166,28 +1221,6 @@ export default function FilmEditorT({ project, onSave }: {
               type="range" min={0.1} max={3} step={0.05}
               value={film.idleSpeedMul ?? 1}
               onChange={(e) => updateFilm({ idleSpeedMul: parseFloat(e.target.value) })}
-            />
-          </div>
-          <div className="scene-editor-field" style={{ maxWidth: 170 }} title="Fondu d'ouverture : noir → 1er plan (0 = démarrage direct)">
-            <label>Fondu d'ouverture (s)</label>
-            <input
-              type="number" min={0} step={0.1}
-              value={(film.introFadeMs ?? 0) / 1000}
-              onChange={(e) => {
-                const v = parseFloat(e.target.value)
-                updateFilm({ introFadeMs: Number.isFinite(v) && v > 0 ? Math.round(v * 1000) : undefined })
-              }}
-            />
-          </div>
-          <div className="scene-editor-field" style={{ maxWidth: 170 }} title="Fondu de fin : dernier plan → noir avant l'écran Bravo (défaut 0,4 s)">
-            <label>Fondu de fin (s)</label>
-            <input
-              type="number" min={0} step={0.1}
-              value={(film.outroFadeMs ?? 400) / 1000}
-              onChange={(e) => {
-                const v = parseFloat(e.target.value)
-                updateFilm({ outroFadeMs: Number.isFinite(v) && v >= 0 ? Math.round(v * 1000) : undefined })
-              }}
             />
           </div>
           <div className="scene-editor-field" title="CALIBRATION du retournement automatique : le sens dans lequel le coloriage est DESSINÉ.">

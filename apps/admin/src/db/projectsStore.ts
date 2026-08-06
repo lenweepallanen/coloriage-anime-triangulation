@@ -433,6 +433,10 @@ interface FilmTDoc {
   footstepsEnabled?: boolean
   /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
   footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[]
+  /** Ouverture/fermeture du film (même modèle que transitionToNext). */
+  intro?: import('../types/project').FilmPlanTransition
+  outro?: import('../types/project').FilmPlanTransition
+  /** @deprecated remplacés par intro/outro — lus en fallback. */
   introFadeMs?: number
   outroFadeMs?: number
   moveAnimationId?: string
@@ -1592,6 +1596,8 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
     ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
+    ...(film.intro != null && { intro: film.intro }),
+    ...(film.outro != null && { outro: film.outro }),
     ...(film.introFadeMs != null && { introFadeMs: film.introFadeMs }),
     ...(film.outroFadeMs != null && { outroFadeMs: film.outroFadeMs }),
     moveSpeedPxPerSec: film.moveSpeedPxPerSec,
@@ -1666,6 +1672,8 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     ...(filmDoc.music != null && { music: { id: filmDoc.music.id, name: filmDoc.music.name, blob: getBlob(filmDoc.music.id), volume: filmDoc.music.volume } }),
     ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
+    ...(filmDoc.intro != null && { intro: filmDoc.intro }),
+    ...(filmDoc.outro != null && { outro: filmDoc.outro }),
     ...(filmDoc.introFadeMs != null && { introFadeMs: filmDoc.introFadeMs }),
     ...(filmDoc.outroFadeMs != null && { outroFadeMs: filmDoc.outroFadeMs }),
     moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,

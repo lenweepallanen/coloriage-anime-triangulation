@@ -24,6 +24,97 @@ function hexToInt(hex: string | undefined, fallback: number): number {
   return m ? parseInt(m[1], 16) : fallback
 }
 
+/**
+ * Ouverture ('reveal') / fermeture ('conceal') du FILM : même vocabulaire visuel
+ * que les transitions de plans, mais sur un seul bord — un aplat couleur
+ * (défaut noir) découvre le 1er plan, ou recouvre le dernier. Pas de snapshot :
+ * il n'y a rien avant le film / après le film.
+ * - fadeBlack / crossfade : fondu couleur (alpha 1→0 ou 0→1)
+ * - wipe : volet coloré qui sort de l'écran (reveal) / entre jusqu'à couvrir (conceal)
+ * - iris : trou circulaire qui s'ouvre (reveal) / se referme (conceal)
+ * En 'conceal', l'aplat RESTE affiché à la fin (le film se termine couvert).
+ */
+export function startFilmEdgeTransition(
+  app: PIXI.Application,
+  overlay: PIXI.Container,
+  transition: FilmPlanTransition,
+  mode: 'reveal' | 'conceal',
+): PlanTransitionRunner {
+  const durationMs = transitionDurationMs(transition)
+  if (transition.kind === 'cut' || durationMs <= 0) {
+    return { update: () => true }
+  }
+  const viewW = app.screen.width
+  const viewH = app.screen.height
+  const color = hexToInt('color' in transition ? transition.color : undefined, 0x000000)
+  let elapsed = 0
+  /** Progression du DÉCOUVREMENT : 0 = écran couvert, 1 = écran dégagé. */
+  const openAt = (t: number): number => (mode === 'reveal' ? t : 1 - t)
+
+  const g = new PIXI.Graphics()
+  overlay.addChild(g)
+  const done = (): boolean => {
+    if (mode === 'reveal') {
+      overlay.removeChild(g)
+      g.destroy()
+    }
+    return true
+  }
+
+  if (transition.kind === 'wipe') {
+    const dir = transition.direction
+    g.beginFill(color)
+    g.drawRect(0, 0, viewW, viewH)
+    g.endFill()
+    return {
+      update(deltaMs: number): boolean {
+        elapsed += deltaMs
+        const t = Math.min(1, elapsed / durationMs)
+        const open = openAt(t)
+        // open 0 → couvre l'écran ; open 1 → entièrement sorti dans `dir`.
+        g.x = dir === 'left' ? -viewW * open : dir === 'right' ? viewW * open : 0
+        g.y = dir === 'up' ? -viewH * open : dir === 'down' ? viewH * open : 0
+        return t >= 1 ? done() : false
+      },
+    }
+  }
+
+  if (transition.kind === 'iris') {
+    const maxRadius = Math.hypot(viewW, viewH) / 2
+    return {
+      update(deltaMs: number): boolean {
+        elapsed += deltaMs
+        const t = Math.min(1, elapsed / durationMs)
+        const open = openAt(t)
+        g.clear()
+        g.beginFill(color)
+        g.drawRect(0, 0, viewW, viewH)
+        if (open > 0) {
+          g.beginHole()
+          g.drawCircle(viewW / 2, viewH / 2, maxRadius * open)
+          g.endHole()
+        }
+        g.endFill()
+        return t >= 1 ? done() : false
+      },
+    }
+  }
+
+  // fadeBlack / crossfade : fondu couleur.
+  g.beginFill(color)
+  g.drawRect(0, 0, viewW, viewH)
+  g.endFill()
+  g.alpha = mode === 'reveal' ? 1 : 0
+  return {
+    update(deltaMs: number): boolean {
+      elapsed += deltaMs
+      const t = Math.min(1, elapsed / durationMs)
+      g.alpha = 1 - openAt(t)
+      return t >= 1 ? done() : false
+    },
+  }
+}
+
 export function startPlanTransition(
   app: PIXI.Application,
   overlay: PIXI.Container,

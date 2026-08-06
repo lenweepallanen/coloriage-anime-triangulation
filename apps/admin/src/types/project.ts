@@ -980,7 +980,9 @@ export type FilmPlanTransition =
    *  historique). Avec `color` : un rectangle de cette couleur balaie l'écran
    *  (couvre à mi-course → swap → découvre le plan suivant). Durée défaut 500 ms. */
   | { kind: 'wipe'; direction: 'left' | 'right' | 'up' | 'down'; durationMs?: number; color?: string }
-  | { kind: 'iris'; durationMs?: number };       // défaut 700
+  /** Iris. `color` utilisée par l'ouverture/fermeture du film (aplat coloré) ;
+   *  ignorée entre deux plans (iris sur snapshot). Durée défaut 700 ms. */
+  | { kind: 'iris'; durationMs?: number; color?: string };
 
 /**
  * LEGACY (moteur + anciens docs) — plan d'un film stocké dans la scène.
@@ -1228,9 +1230,16 @@ export interface FilmT {
    *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
    *  Défaut : true (absent = activé). */
   footstepsEnabled?: boolean;
-  /** Fondu d'OUVERTURE (noir → 1er plan), ms. Défaut 0 = démarrage direct. */
+  /** OUVERTURE du film (couleur → 1er plan) : même modèle que les transitions de
+   *  plans (fondu couleur / volet / iris + durée + couleur). Absent → legacy
+   *  introFadeMs, sinon démarrage direct (cut). */
+  intro?: FilmPlanTransition;
+  /** FERMETURE du film (dernier plan → couleur, avant l'écran Bravo). Absent →
+   *  legacy outroFadeMs, sinon fondu noir 400 ms. */
+  outro?: FilmPlanTransition;
+  /** @deprecated remplacé par `intro` (fondu d'ouverture, ms). Lu en fallback. */
   introFadeMs?: number;
-  /** Fondu de FIN (dernier plan → noir), ms. Défaut 400. */
+  /** @deprecated remplacé par `outro` (fondu de fin, ms). Lu en fallback. */
   outroFadeMs?: number;
   /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
   moveAnimationId?: string;

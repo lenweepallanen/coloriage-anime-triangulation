@@ -111,14 +111,15 @@ export function transitionToKey(t: FilmPlanTransition | undefined): string {
  *  et la couleur de la transition précédente (changement de kind non destructif). */
 export function transitionFromKey(key: string, prev?: FilmPlanTransition): FilmPlanTransition {
   const prevDur = prev && prev.kind !== 'cut' ? prev.durationMs : undefined
-  const prevColor = prev && (prev.kind === 'fadeBlack' || prev.kind === 'wipe') ? prev.color : undefined
+  const prevColor = prev && (prev.kind === 'fadeBlack' || prev.kind === 'wipe' || prev.kind === 'iris') ? prev.color : undefined
   const dur = prevDur != null && prevDur > 0 ? { durationMs: prevDur } : {}
   const col = prevColor != null ? { color: prevColor } : {}
   if (key.startsWith('wipe-')) {
     return { kind: 'wipe', direction: key.slice(5) as 'left' | 'right' | 'up' | 'down', ...dur, ...col }
   }
   if (key === 'fadeBlack') return { kind: 'fadeBlack', ...dur, ...col }
-  if (key === 'crossfade' || key === 'iris') return { kind: key, ...dur }
+  if (key === 'iris') return { kind: 'iris', ...dur, ...col }
+  if (key === 'crossfade') return { kind: 'crossfade', ...dur }
   return { kind: 'cut' }
 }
 

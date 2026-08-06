@@ -2,7 +2,7 @@ import type { Animation, FilmMotionClip, FilmT, FilmTimelinePlan } from '../type
 import { pointAtLen, sampleFilmPath, applyFilmEasing, type FilmPathTable } from './filmPath'
 import { transitionDurationMs } from './filmDirector'
 import {
-  FILM_ENDING_FADE_MS, FILM_FPS, offscreenXBg, resolveMotionRef, sortClips,
+  FILM_FPS, filmIntroTransition, filmOutroTransition, offscreenXBg, resolveMotionRef, sortClips,
   type FilmCharMetrics,
 } from './filmTimeline'
 
@@ -98,8 +98,9 @@ export class FilmTimelineSampler {
     this.planStartMs = film.plans.map(() => Number.NaN)
     const windows: Window[] = []
     let t = 0
-    // Fondu d'OUVERTURE : noir → 1er plan (image figée à son t=0).
-    const introMs = Math.max(0, film.introFadeMs ?? 0)
+    // OUVERTURE : fenêtre de la durée de la transition d'intro (fondu/volet/iris,
+    // rendue par un overlay dans le player) — le 1er plan est figé à son t=0.
+    const introMs = Math.max(0, transitionDurationMs(filmIntroTransition(film)))
     if (introMs > 0 && actives.length > 0) {
       windows.push({ kind: 'intro', startMs: 0, endMs: introMs, prepared: actives[0] })
       t = introMs
@@ -117,7 +118,7 @@ export class FilmTimelineSampler {
       }
     })
     const last = actives[actives.length - 1]
-    const outroMs = Math.max(0, film.outroFadeMs ?? FILM_ENDING_FADE_MS)
+    const outroMs = Math.max(0, transitionDurationMs(filmOutroTransition(film)))
     if (last && outroMs > 0) {
       windows.push({ kind: 'endFade', startMs: t, endMs: t + outroMs, prepared: last })
       t += outroMs
@@ -238,9 +239,10 @@ export class FilmTimelineSampler {
       if (t < cand.endMs) { w = cand; break }
     }
     if (w.kind === 'intro') {
-      const t01 = (t - w.startMs) / Math.max(1, w.endMs - w.startMs)
-      const sIntro = this.samplePlan(w.prepared, 0, t01)
-      return { ...sIntro, phase: 'transition', fadeAlpha: t01 }
+      // Visuel d'ouverture rendu par l'overlay du player (fondu/volet/iris) —
+      // le stage reste plein (fadeAlpha 1), 1er plan figé à t=0 dessous.
+      const sIntro = this.samplePlan(w.prepared, 0, 1)
+      return { ...sIntro, phase: 'transition' }
     }
     if (w.kind === 'plan') {
       return this.samplePlan(w.prepared, t - w.startMs, 1)
@@ -250,10 +252,10 @@ export class FilmTimelineSampler {
       const s = this.samplePlan(w.prepared, w.prepared.durationMs, 1)
       return { ...s, phase: 'transition', transition: { toPlanIndex: w.toPlanIndex, t01 } }
     }
-    // endFade
-    const t01 = (t - w.startMs) / Math.max(1, w.endMs - w.startMs)
-    const s = this.samplePlan(w.prepared, w.prepared.durationMs, 1 - t01)
-    return { ...s, fadeAlpha: 1 - t01 }
+    // endFade — visuel de fermeture rendu par l'overlay du player : le film reste
+    // figé sur la fin du dernier plan pendant que l'overlay le recouvre.
+    const s = this.samplePlan(w.prepared, w.prepared.durationMs, 1)
+    return { ...s, fadeAlpha: 1 }
   }
 
   private samplePlan(p: PreparedPlan, localMs: number, fadeAlpha: number): TimelineSample {

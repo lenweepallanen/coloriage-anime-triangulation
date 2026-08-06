@@ -14,6 +14,19 @@ export const FILM_FPS = 24
 /** Durée du fade de fin de film (identique au moteur v3). */
 export const FILM_ENDING_FADE_MS = 400
 
+/** OUVERTURE du film résolue (fallback legacy introFadeMs → fondu noir ; sinon cut). */
+export function filmIntroTransition(film: Pick<FilmT, 'intro' | 'introFadeMs'>): import('../types/project').FilmPlanTransition {
+  if (film.intro) return film.intro
+  const ms = film.introFadeMs ?? 0
+  return ms > 0 ? { kind: 'fadeBlack', durationMs: ms } : { kind: 'cut' }
+}
+
+/** FERMETURE du film résolue (fallback legacy outroFadeMs ; défaut fondu noir 400 ms). */
+export function filmOutroTransition(film: Pick<FilmT, 'outro' | 'outroFadeMs'>): import('../types/project').FilmPlanTransition {
+  if (film.outro) return film.outro
+  return { kind: 'fadeBlack', durationMs: film.outroFadeMs ?? FILM_ENDING_FADE_MS }
+}
+
 /** Métriques du personnage nécessaires au placement hors-champ précis.
  *  Absentes (éditeur) → approximation au bord du cadre caméra. */
 export interface FilmCharMetrics {
@@ -183,9 +196,9 @@ export function timelineContentEndMs(timeline: FilmPlanTimeline): number {
   return end
 }
 
-/** Durée totale du film : plans + transitions inter-plans + fade de fin. */
+/** Durée totale du film : ouverture + plans + transitions inter-plans + fermeture. */
 export function filmTotalMs(film: FilmT): number {
-  let total = FILM_ENDING_FADE_MS
+  let total = transitionDurationMs(filmIntroTransition(film)) + transitionDurationMs(filmOutroTransition(film))
   film.plans.forEach((pl, i) => {
     total += pl.timeline.durationMs
     if (i < film.plans.length - 1) total += transitionDurationMs(pl.transitionToNext ?? { kind: 'cut' })

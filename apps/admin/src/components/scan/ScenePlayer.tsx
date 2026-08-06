@@ -18,11 +18,12 @@ import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan, imageToScanPixel } from
 import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
 import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
-import { FilmDirector, resolveFilmPlans } from '../../utils/filmDirector'
+import { FilmDirector, resolveFilmPlans, transitionDurationMs } from '../../utils/filmDirector'
 import { FilmTimelineSampler, type TimelineSample } from '../../utils/filmTimelineSampler'
 import { FilmAudioScheduler } from '../../utils/filmAudioScheduler'
 import { computeFootstepSchedule, collectFootstepSoundBlobs } from '../../utils/footstepSync'
-import { startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
+import { startFilmEdgeTransition, startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
+import { filmIntroTransition, filmOutroTransition } from '../../utils/filmTimeline'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
@@ -1192,6 +1193,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       decorWait: boolean
       lastAnimKey: string | null
       lastX?: number
+      /** Fermeture du film (overlay conceal) lancée. */
+      outroLaunched: boolean
       launchedTransitionTo: number
       currentPlanIndex: number
       /** Dernier planIndex POSÉ via applyFilmSample — un changement force un switch
@@ -1219,8 +1222,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, playableIdxByPlan }
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
+      // OUVERTURE du film : l'overlay couvre l'écran DÈS le montage (avant même
+      // le décodage audio) puis découvre le 1er plan — retenu tant que le décor
+      // initial n'est pas prêt (holdForDecor), comme une transition de plan.
+      const introTrans = filmIntroTransition(filmT)
+      if (transitionDurationMs(introTrans) > 0 && introTrans.kind !== 'cut') {
+        planTransitionRunner = startFilmEdgeTransition(app, planTransitionOverlay, introTrans, 'reveal')
+        planTransitionRunner.update(0) // dessine l'état initial (écran couvert)
+      }
     }
 
     let filmDirector: FilmDirector | null = null
@@ -1883,6 +1894,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             fromPlan?.transitionToNext ?? { kind: 'cut' },
             () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true },
           )
+        }
+      }
+
+      // FERMETURE du film : overlay « conceal » lancé à l'entrée de la fenêtre de
+      // fin (même vocabulaire visuel que les transitions de plans, audio continu).
+      if (!rt.outroLaunched && !rt.ended) {
+        const outroTrans = filmOutroTransition(filmT)
+        const outroMs = transitionDurationMs(outroTrans)
+        if (outroMs > 0 && outroTrans.kind !== 'cut' && rt.tMs >= rt.sampler.totalMs - outroMs) {
+          rt.outroLaunched = true
+          if (planTransitionRunner == null) {
+            planTransitionRunner = startFilmEdgeTransition(app, planTransitionOverlay, outroTrans, 'conceal')
+          }
         }
       }
 
