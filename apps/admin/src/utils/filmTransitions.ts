@@ -80,12 +80,16 @@ export function startFilmEdgeTransition(
   }
 
   if (transition.kind === 'iris') {
-    const maxRadius = Math.hypot(viewW, viewH) / 2
+    // Rayon SURDIMENSIONNÉ (×1.3) : le cercle dépasse les coins bien avant la
+    // fin — sans ça les coins restent noirs jusqu'à la dernière frame puis
+    // « poppent » au retrait de l'overlay. Progression smoothstep (douce).
+    const maxRadius = (Math.hypot(viewW, viewH) / 2) * 1.3
     return {
       update(deltaMs: number): boolean {
         elapsed += deltaMs
         const t = Math.min(1, elapsed / durationMs)
-        const open = openAt(t)
+        const lin = openAt(t)
+        const open = lin * lin * (3 - 2 * lin)
         g.clear()
         g.beginFill(color)
         g.drawRect(0, 0, viewW, viewH)
@@ -276,10 +280,12 @@ export function startPlanTransition(
 
   // iris : trou circulaire grandissant au centre du snapshot → ouverture sur le
   // nouveau plan. Masque redessiné chaque frame (rect plein écran + beginHole).
+  // Rayon ×1.3 : le cercle dépasse les coins avant la fin (sinon ils restent
+  // couverts jusqu'à la dernière frame et « poppent » au cleanup).
   mask = new PIXI.Graphics()
   overlay.addChild(mask)
   snapshot.mask = mask
-  const maxRadius = Math.hypot(viewW, viewH) / 2
+  const maxRadius = (Math.hypot(viewW, viewH) / 2) * 1.3
   return {
     update(deltaMs: number): boolean {
       elapsed += deltaMs

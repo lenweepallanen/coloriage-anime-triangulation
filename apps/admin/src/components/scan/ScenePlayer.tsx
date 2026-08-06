@@ -1988,7 +1988,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         // est RETENUE (l'écran reste couvert par le fondu/volet/snapshot) — l'audio
         // continue, et elle se termine dès que le décor est là.
         if (planTransitionRunner) {
-          const holdForDecor = filmRuntime != null && filmRuntime.decorWait && !currentLayers.ready()
+          // Retenue : décor swappé pas prêt, OU film pas encore démarré (décodage
+          // audio) — l'ouverture reste couvrante et se découvre en phase avec
+          // l'horloge du film, pas avec le temps réel du montage.
+          const holdForDecor = filmRuntime != null
+            && (!filmRuntime.started || (filmRuntime.decorWait && !currentLayers.ready()))
           if (!holdForDecor && planTransitionRunner.update(deltaSeconds * 1000)) planTransitionRunner = null
         }
         if (filmRuntime) {
