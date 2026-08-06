@@ -574,10 +574,10 @@ export default function TimelineEditor({
         {trackRow('Animation', timeline.anim.map(c => renderClip(
           { kind: 'anim', id: c.id }, c, FILM_COLORS.action,
           animName(c.animationId), c.fillMode === 'loop' ? '🔁' : '1×',
-          undefined,
-          undefined,
-          TRACK_H,
-          animCycleOverlay(c),
+          undefined,     // titleHint
+          TRACK_H,       // rowH
+          animCycleOverlay(c), // wave (repères de cycles)
+          false,         // pointMode — JAMAIS ponctuel pour un clip animation
         )))}
         {timeline.soundTracks.map((track, ti) => trackRow(
           `Son ${ti + 1}`,
