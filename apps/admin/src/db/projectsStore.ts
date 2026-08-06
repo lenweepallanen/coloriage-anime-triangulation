@@ -751,13 +751,19 @@ const STORAGE_CACHE_METADATA = { cacheControl: 'public, max-age=31536000, immuta
 
 /** Upload avec retry (3 tentatives, backoff) : un échec transitoire au milieu
  *  d'une rafale (duplication ≈ 30 fichiers) ne doit pas laisser un projet
- *  à moitié copié. Échec définitif → throw (remonté à l'appelant). */
-async function uploadBlob(path: string, blob: Blob): Promise<void> {
+ *  à moitié copié. Échec définitif → throw (remonté à l'appelant).
+ *  `extraMeta` : métadonnées additionnelles (ex. contentEncoding gzip). */
+async function uploadBlob(
+  path: string,
+  blob: Blob,
+  extraMeta?: { contentType?: string; contentEncoding?: string },
+): Promise<void> {
   const storageRef = ref(storage, path)
+  const metadata = { ...STORAGE_CACHE_METADATA, ...extraMeta }
   let lastErr: unknown
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await uploadBytes(storageRef, blob, STORAGE_CACHE_METADATA)
+      await uploadBytes(storageRef, blob, metadata)
       invalidateBlobCache(path)
       return
     } catch (err) {
@@ -767,6 +773,46 @@ async function uploadBlob(path: string, blob: Blob): Promise<void> {
     }
   }
   throw lastErr
+}
+
+/** Champs mesh = tableaux de COORDONNÉES pures (Point2D) → arrondis à 0,01 px à
+ *  l'upload (le sous-pixel au-delà est invisible, ~3× plus léger en JSON).
+ *  ⚠ EXCLUS : boneWeights / cotrackerVisibility (poids 0..1, précision utile),
+ *  sam2MasksRLE (entiers RLE), keyframes (métadonnées). */
+const ROUNDED_COORD_FIELDS = new Set<string>([
+  'videoFramesMesh', 'walkZoneFrames', 'walkBodyFrames',
+  'walkBodyFramesSmoothed', 'walkZoneFramesSmoothed',
+  'contourOriginFrames', 'contourAnchorFrames', 'contourSubdivisionFrames', 'contourCannyFrames', 'anchorFrames',
+  'sam2Contours', 'sam2ContourOriginFrames', 'sam2ContourAnchorFrames', 'sam2ContourSubdivisionFrames',
+  'sam2SmoothedAnchorFrames', 'sam2SmoothedSubdivisionFrames', 'sam2SmoothedContourOriginFrames',
+  'cotrackerFrames', 'cotrackerFramesRaw',
+])
+
+/** Replacer JSON : arrondit tout nombre à 2 décimales (2-decimals → chaîne courte). */
+function roundCoord(_key: string, value: unknown): unknown {
+  return typeof value === 'number' ? Math.round(value * 100) / 100 : value
+}
+
+/** Gzip d'un texte via CompressionStream (navigateur récent). null si indispo. */
+async function gzipText(text: string): Promise<Blob | null> {
+  try {
+    const g = globalThis as unknown as { CompressionStream?: new (format: string) => ReadableWritablePair<Uint8Array, Uint8Array> }
+    if (!g.CompressionStream) return null
+    const stream = new Blob([text]).stream().pipeThrough(new g.CompressionStream('gzip'))
+    return await new Response(stream).blob()
+  } catch {
+    return null
+  }
+}
+
+/** Prépare l'upload d'un champ JSON : arrondi (si coordonnées) + gzip (si dispo).
+ *  Le download décompresse de façon TRANSPARENTE (Content-Encoding: gzip). */
+async function buildMeshJSONUpload(field: string, data: unknown): Promise<{ blob: Blob; meta: { contentType: string; contentEncoding?: string } }> {
+  const json = JSON.stringify(data, ROUNDED_COORD_FIELDS.has(field) ? roundCoord : undefined)
+  const gz = await gzipText(json)
+  return gz
+    ? { blob: gz, meta: { contentType: 'application/json', contentEncoding: 'gzip' } }
+    : { blob: new Blob([json], { type: 'application/json' }), meta: { contentType: 'application/json' } }
 }
 
 async function downloadBlob(path: string): Promise<Blob | null> {
@@ -3112,11 +3158,10 @@ export async function updateProject(
         const data = jsonFieldMap[field]
         const isNonEmpty = data != null && (Array.isArray(data) ? data.length > 0 : (typeof data === 'object' ? Object.keys(data).length > 0 : true))
         if (isNonEmpty) {
-          const json = JSON.stringify(data)
-          const blob = new Blob([json], { type: 'application/json' })
           console.log(`[Storage] Uploading ${field} for animation ${animationId}`)
           uploads.push(
-            uploadBlob(storagePath, blob)
+            buildMeshJSONUpload(field, data)
+              .then(({ blob, meta }) => uploadBlob(storagePath, blob, meta))
               .then(() => console.log(`[Storage] ${field} uploaded for animation ${animationId}`))
           )
         }
@@ -3642,16 +3687,22 @@ async function loadAnimationJSONForPlay(
   projectId: string,
   animId: string,
   meshDoc: MeshDoc,
+  opts?: { hasFootsteps?: boolean },
 ): Promise<Partial<ReturnType<typeof loadAnimationJSON> extends Promise<infer T> ? T : never>> {
   const path = (file: string) => animStoragePath(projectId, animId, file)
-  const [videoFramesMesh, walkZoneFrames, walkBodyFrames, walkBodyFramesSmoothed, walkZoneFramesSmoothed] = await Promise.all([
+  // OPTIMISATION téléchargement (play) : le RENDU utilise les frames BRUTES
+  // (walkBodyFrames/walkZoneFrames) — les versions *Smoothed ne sont jamais lues
+  // par un renderer. `walkBodyFramesSmoothed` n'est donc PAS téléchargé au play.
+  // `walkZoneFramesSmoothed` ne sert qu'à caler le TIMING des bruits de pas
+  // (footstepSync, `smoothed ?? brut`) → chargé seulement si l'anim a des pas.
+  const wantsSmoothedZone = opts?.hasFootsteps === true && meshDoc.hasWalkZoneFramesSmoothed
+  const [videoFramesMesh, walkZoneFrames, walkBodyFrames, walkZoneFramesSmoothed] = await Promise.all([
     meshDoc.hasVideoFramesMesh ? downloadJSON<Point2D[][]>(path('videoFramesMesh.json')) : null,
     meshDoc.hasWalkZoneFrames ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFrames.json')) : null,
     meshDoc.hasWalkBodyFrames ? downloadJSON<Point2D[][]>(path('walkBodyFrames.json')) : null,
-    meshDoc.hasWalkBodyFramesSmoothed ? downloadJSON<Point2D[][]>(path('walkBodyFramesSmoothed.json')) : null,
-    meshDoc.hasWalkZoneFramesSmoothed ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFramesSmoothed.json')) : null,
+    wantsSmoothedZone ? downloadJSON<Record<string, Point2D[][]>>(path('walkZoneFramesSmoothed.json')) : null,
   ])
-  return { videoFramesMesh, walkZoneFrames, walkBodyFrames, walkBodyFramesSmoothed, walkZoneFramesSmoothed }
+  return { videoFramesMesh, walkZoneFrames, walkBodyFrames, walkBodyFramesSmoothed: null, walkZoneFramesSmoothed }
 }
 
 /** Charge UNIQUEMENT le doc Firestore (métadonnées, mesh topology, markers,
@@ -3970,6 +4021,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     project.animations.map(async anim => {
       const animDoc = projDoc?.animations.find(a => a.id === anim.id)
       const meshDoc = animDoc?.mesh as MeshDoc | null | undefined
+      const hasFootsteps = animDoc?.hasFootstep1 === true || animDoc?.hasFootstep2 === true
       const [audio, footstep1, footstep2, meshJson] = await Promise.all([
         anim.audioBlob != null
           ? Promise.resolve(anim.audioBlob)
@@ -3980,7 +4032,7 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
         anim.footstepSound2Blob != null
           ? Promise.resolve(anim.footstepSound2Blob)
           : (animDoc?.hasFootstep2 ? downloadBlob(animStoragePath(id, anim.id, 'footstep2')).catch(() => null) : Promise.resolve(null)),
-        meshDoc ? loadAnimationJSONForPlay(id, anim.id, meshDoc) : Promise.resolve({}),
+        meshDoc ? loadAnimationJSONForPlay(id, anim.id, meshDoc, { hasFootsteps }) : Promise.resolve({}),
       ])
       const mesh: MeshData | null = anim.mesh ? { ...anim.mesh, ...(meshJson as Partial<MeshData>) } : null
       return { ...anim, audioBlob: audio, footstepSound1Blob: footstep1, footstepSound2Blob: footstep2, mesh }
