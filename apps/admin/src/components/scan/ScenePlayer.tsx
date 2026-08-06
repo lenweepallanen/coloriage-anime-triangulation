@@ -210,6 +210,61 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     : (film ? resolveFilmPlans(film, scene) : [])
   const filmEnabled = timelineMode || !!(film?.enabled && filmPlans.length > 0)
 
+  // Mode play : layout PORTRAIT (canvas carré centré, titre + sortie en haut,
+  // boutons 1/2/3 puis ⚙/⏸/? sous le canvas). Pas de plein écran ni de lock
+  // d'orientation (résout les soucis iOS). Détecté via la classe body.play-app.
+  const portrait = !modal && typeof document !== 'undefined' && document.body.classList.contains('play-app')
+
+  const bgAspectW = scene.background?.width
+  const bgAspectH = scene.background?.height
+  // Format du CADRE de scène : horizontal 16:9 max (app native jouée en paysage
+  // plein écran). Si le décor est moins large que 16:9, on cale sur son ratio
+  // (tout le décor visible) — même formule que le cadre caméra de l'éditeur film.
+  const frameAspect = Math.min(bgAspectW && bgAspectH ? bgAspectW / bgAspectH : 16 / 9, 16 / 9)
+  // Taille du canvas plein écran paysage (dimensions utiles inversées si la
+  // WebView est restée portrait — le player sera alors tourné de 90° via CSS).
+  const computePlayCardSize = () => {
+    const vw = window.innerWidth, vh = window.innerHeight
+    const isLs = vw > vh
+    const availW = isLs ? vw : vh
+    const availH = isLs ? vh : vw
+    let w = availW
+    let h = w / frameAspect
+    if (h > availH) { h = availH; w = h * frameAspect }
+    return { w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) }
+  }
+  // Carte scène (mode play/scan, hors modal) : en play, PLEIN ÉCRAN PAYSAGE dès le
+  // PREMIER rendu (taille calculée de façon synchrone — aucun flash de l'ancien
+  // layout portrait). En admin/scan paysage, format du fond + marge boutons.
+  const [cardSize, setCardSize] = useState<{ w: number; h: number }>(() =>
+    portrait && !modal && typeof window !== 'undefined' ? computePlayCardSize() : { w: 0, h: 0 })
+  // Paysage FORCÉ par rotation CSS 90° (WebView restée portrait — lock natif KO).
+  // Initialisé de façon synchrone pour la même raison (pas de frame en portrait).
+  const [forcedRotate, setForcedRotate] = useState(() =>
+    portrait && !modal && typeof window !== 'undefined' && window.innerWidth <= window.innerHeight)
+  useEffect(() => {
+    if (modal) return
+    function compute() {
+      const vw = window.innerWidth, vh = window.innerHeight
+      if (portrait) {
+        // HORIZONTAL OBLIGATOIRE (play) : recalcule taille + rotation au resize.
+        setForcedRotate(!(vw > vh))
+        setCardSize(computePlayCardSize())
+        return
+      }
+      const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
+      const PAD = 14
+      const availW = Math.max(160, vw - SIDEBAR - PAD * 2)
+      const availH = Math.max(120, vh - PAD * 2)
+      let h = availH, w = h * frameAspect
+      if (w > availW) { w = availW; h = w / frameAspect }
+      setCardSize({ w: Math.round(w), h: Math.round(h) })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    return () => window.removeEventListener('resize', compute)
+  }, [modal, portrait, frameAspect])
+
   // Preview modal (admin) : canvas contraint au même cadre 16:9 que le play,
   // pour que le cadrage caméra du film soit fidèle. Suit le resize de la modal.
   useEffect(() => {
