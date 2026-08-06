@@ -972,9 +972,14 @@ export type FilmEnding =
 /** Transition visuelle entre deux plans du film. */
 export type FilmPlanTransition =
   | { kind: 'cut' }
-  | { kind: 'fadeBlack'; durationMs?: number }   // défaut 500
+  /** « Fondu couleur » : fondu vers une couleur pleine puis vers le plan suivant.
+   *  `color` hex (défaut #000000 = fondu noir historique). Durée défaut 500 ms. */
+  | { kind: 'fadeBlack'; durationMs?: number; color?: string }
   | { kind: 'crossfade'; durationMs?: number }   // défaut 500
-  | { kind: 'wipe'; direction: 'left' | 'right' | 'up' | 'down'; durationMs?: number } // défaut 500
+  /** Volet. Sans `color` : le snapshot du plan sortant glisse hors écran (comportement
+   *  historique). Avec `color` : un rectangle de cette couleur balaie l'écran
+   *  (couvre à mi-course → swap → découvre le plan suivant). Durée défaut 500 ms. */
+  | { kind: 'wipe'; direction: 'left' | 'right' | 'up' | 'down'; durationMs?: number; color?: string }
   | { kind: 'iris'; durationMs?: number };       // défaut 700
 
 /**

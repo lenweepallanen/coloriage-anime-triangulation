@@ -17,6 +17,13 @@ export interface PlanTransitionRunner {
   update(deltaMs: number): boolean
 }
 
+/** Parse '#rrggbb' → entier PIXI (fallback si invalide/absent). */
+function hexToInt(hex: string | undefined, fallback: number): number {
+  if (!hex) return fallback
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  return m ? parseInt(m[1], 16) : fallback
+}
+
 export function startPlanTransition(
   app: PIXI.Application,
   overlay: PIXI.Container,
@@ -35,8 +42,9 @@ export function startPlanTransition(
   let elapsed = 0
 
   if (transition.kind === 'fadeBlack') {
+    // « Fondu couleur » : noir par défaut, couleur configurable.
     const black = new PIXI.Graphics()
-    black.beginFill(0x000000)
+    black.beginFill(hexToInt(transition.color, 0x000000))
     black.drawRect(0, 0, viewW, viewH)
     black.endFill()
     black.alpha = 0
@@ -58,6 +66,43 @@ export function startPlanTransition(
         if (t >= 1) {
           overlay.removeChild(black)
           black.destroy()
+          return true
+        }
+        return false
+      },
+    }
+  }
+
+  if (transition.kind === 'wipe' && transition.color != null) {
+    // Volet COLORÉ : un rectangle pleine couleur balaie l'écran dans la direction
+    // du volet — il couvre tout à mi-course (swap du plan dessous), puis continue
+    // et découvre le nouveau plan. Pas de snapshot nécessaire.
+    const bar = new PIXI.Graphics()
+    bar.beginFill(hexToInt(transition.color, 0x000000))
+    bar.drawRect(0, 0, viewW, viewH)
+    bar.endFill()
+    overlay.addChild(bar)
+    const dir = transition.direction
+    const setPos = (t: number) => {
+      // t ∈ [0,1] : trajet de 2× l'écran (entre à t=0, couvre à t=0.5, sort à t=1).
+      const travel = 1 - 2 * t
+      bar.x = dir === 'left' ? viewW * travel : dir === 'right' ? -viewW * travel : 0
+      bar.y = dir === 'up' ? viewH * travel : dir === 'down' ? -viewH * travel : 0
+    }
+    setPos(0)
+    let swapped = false
+    return {
+      update(deltaMs: number): boolean {
+        elapsed += deltaMs
+        const t = Math.min(1, elapsed / durationMs)
+        if (t >= 0.5 && !swapped) {
+          swapped = true
+          swapFn()
+        }
+        setPos(t)
+        if (t >= 1) {
+          overlay.removeChild(bar)
+          bar.destroy()
           return true
         }
         return false

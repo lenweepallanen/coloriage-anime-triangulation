@@ -19,7 +19,7 @@ import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../..
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
 import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import { FilmDirector, resolveFilmPlans } from '../../utils/filmDirector'
-import { FilmTimelineSampler } from '../../utils/filmTimelineSampler'
+import { FilmTimelineSampler, type TimelineSample } from '../../utils/filmTimelineSampler'
 import { FilmAudioScheduler } from '../../utils/filmAudioScheduler'
 import { computeFootstepSchedule, collectFootstepSoundBlobs } from '../../utils/footstepSync'
 import { startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
@@ -1145,6 +1145,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       lastX?: number
       launchedTransitionTo: number
       currentPlanIndex: number
+      /** Dernier planIndex POSÉ via applyFilmSample — un changement force un switch
+       *  d'animation SEC (crossfade 0, pas de glissement de maillage inter-plans). */
+      lastPosedPlanIndex: number
+      /** planIndex (film.plans) dont le décor a été effectivement monté par le
+       *  swapFn de la transition — dès lors, le perso est posé sur la pose t=0 du
+       *  NOUVEAU plan (le sampler renvoie encore la pose de fin de l'ancien). */
+      swappedPlanIndex: number
       playableIdxByPlan: Map<number, number>
     } | null = null
     if (timelineMode && filmT) {
@@ -1163,7 +1170,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), playableIdxByPlan }
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
     }
 
@@ -1716,13 +1723,62 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
       if (filmEnabled) app.stage.alpha = filmFadeAlpha
     }
+    /** Applique un sample du sampler au playback : pose (position/échelle/flip)
+     *  + fade + switch d'animation du corps. Extrait de tickFilmTimeline pour être
+     *  appelé AUSSI pendant l'attente audioReady et après un swap de plan — décor
+     *  et perso doivent toujours être posés dans la même frame. */
+    function applyFilmSample(sample: TimelineSample) {
+      const rt = filmRuntime
+      if (!rt) return
+      const prevX = rt.lastX
+      scenePlayback.setFilmPose({
+        x: sample.x, y: sample.y, scaleMul: sample.scaleMul, flip: sample.flip,
+        animId: sample.animationId, animSpeedMul: sample.animSpeedMul,
+      })
+      filmFadeAlpha = sample.fadeAlpha
+      rt.lastX = sample.x
+      const planChanged = sample.planIndex !== rt.lastPosedPlanIndex
+      rt.lastPosedPlanIndex = sample.planIndex
+
+      // Changement d'animation du corps → crossfade + calage de phase du clip.
+      const animKey = sample.animationId
+      if (animKey !== rt.lastAnimKey) {
+        rt.lastAnimKey = animKey
+        // Téléportation (✨ apparition, origine libre, |Δx| > 60 vs tick précédent)
+        // OU changement de plan : switch INSTANTANÉ — un fondu de maillage ferait
+        // « se former » / glisser le perso pendant ~0,4 s.
+        const jumped = planChanged || Math.abs(sample.x - (prevX ?? sample.x)) > 60
+        beginCrossfade(jumped ? 0 : (animKey != null && sample.phase === 'travel' ? 120 : 400), false)
+        if (animKey != null) {
+          setupMovementAnimation(animKey)
+        } else {
+          setupInteractionAnimation(scene.restPoint?.restAnimationId, collectRestPointAnimIds(scene.restPoint ?? null))
+        }
+        const seekTo = Math.max(0, Math.floor(sample.animFrame))
+        if (seekTo > 0) {
+          if (activeBodyPlayback && 'seekFrame' in activeBodyPlayback) (activeBodyPlayback as LoopPlayback).seekFrame(seekTo)
+          if (activeZonePlaybacks) {
+            for (const zp of activeZonePlaybacks) {
+              if ('seekFrame' in zp.playback) (zp.playback as LoopPlayback).seekFrame(seekTo)
+            }
+          }
+        }
+      }
+    }
     /** Tick du mode TIMELINE : horloge → sampler → pose + side-effects aux bornes. */
     function tickFilmTimeline(deltaSeconds: number) {
       const rt = filmRuntime
       if (!rt || !filmT) return
       if (!rt.started) {
         // Attend le décodage des sons : le film démarre avec son audio calé.
-        if (!rt.audioReady) return
+        if (!rt.audioReady) {
+          // Le décor, lui, est monté et rendu dès la 1ʳᵉ frame : on pose le perso
+          // à t=0 (✨ apparition comprise) pour qu'ils apparaissent ENSEMBLE —
+          // sinon il reste sur la pose initiale hors-champ de makeFilmScenePlayback
+          // pendant tout le décodage audio.
+          applyFilmSample(rt.sampler.evaluate(rt.tMs))
+          return
+        }
         rt.started = true
         maybeStartFilmRecording()
         void rt.scheduler.unlock()
@@ -1749,65 +1805,47 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       // Transition de plan : lancée UNE fois à l'entrée de la fenêtre (fondu, volet…).
       if (sample.transition && rt.launchedTransitionTo !== sample.transition.toPlanIndex) {
-        rt.launchedTransitionTo = sample.transition.toPlanIndex
-        rt.currentPlanIndex = sample.transition.toPlanIndex
-        const playableIdx = rt.playableIdxByPlan.get(sample.transition.toPlanIndex)
+        const toPlanIndex = sample.transition.toPlanIndex
+        rt.launchedTransitionTo = toPlanIndex
+        rt.currentPlanIndex = toPlanIndex
+        const playableIdx = rt.playableIdxByPlan.get(toPlanIndex)
         const fromPlan = filmT.plans[sample.planIndex]
         if (playableIdx != null) {
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
             fromPlan?.transitionToNext ?? { kind: 'cut' },
-            () => activatePlan(playableIdx),
+            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex },
           )
         }
       } else if (!sample.transition && sample.planIndex !== rt.currentPlanIndex && planTransitionRunner == null) {
         // CUT (durée 0 → pas de fenêtre de transition dans le sampler) : le plan a
         // changé d'un tick à l'autre — swap du décor immédiat, sinon le perso joue
         // le plan suivant sur l'ANCIEN décor.
+        const toPlanIndex = sample.planIndex
         const fromPlan = filmT.plans[rt.currentPlanIndex]
-        rt.currentPlanIndex = sample.planIndex
-        rt.launchedTransitionTo = sample.planIndex
-        const playableIdx = rt.playableIdxByPlan.get(sample.planIndex)
+        rt.currentPlanIndex = toPlanIndex
+        rt.launchedTransitionTo = toPlanIndex
+        const playableIdx = rt.playableIdxByPlan.get(toPlanIndex)
         if (playableIdx != null) {
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
             fromPlan?.transitionToNext ?? { kind: 'cut' },
-            () => activatePlan(playableIdx),
+            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex },
           )
         }
       }
 
       // Pose du perso — le sampler est la source de vérité (position/échelle/flip).
-      scenePlayback.setFilmPose({
-        x: sample.x, y: sample.y, scaleMul: sample.scaleMul, flip: sample.flip,
-        animId: sample.animationId, animSpeedMul: sample.animSpeedMul,
-      })
-      filmFadeAlpha = sample.fadeAlpha
-      rt.lastX = sample.x
-
-      // Changement d'animation du corps → crossfade + calage de phase du clip.
-      const animKey = sample.animationId
-      if (animKey !== rt.lastAnimKey) {
-        rt.lastAnimKey = animKey
-        // Téléportation (✨ apparition, origine libre, cut) : switch INSTANTANÉ —
-        // un fondu de maillage ferait « se former » le perso pendant ~0,4 s.
-        const jumped = Math.abs(sample.x - (rt.lastX ?? sample.x)) > 60
-        beginCrossfade(jumped ? 0 : (animKey != null && sample.phase === 'travel' ? 120 : 400), false)
-        if (animKey != null) {
-          setupMovementAnimation(animKey)
-        } else {
-          setupInteractionAnimation(scene.restPoint?.restAnimationId, collectRestPointAnimIds(scene.restPoint ?? null))
-        }
-        const seekTo = Math.max(0, Math.floor(sample.animFrame))
-        if (seekTo > 0) {
-          if (activeBodyPlayback && 'seekFrame' in activeBodyPlayback) (activeBodyPlayback as LoopPlayback).seekFrame(seekTo)
-          if (activeZonePlaybacks) {
-            for (const zp of activeZonePlaybacks) {
-              if ('seekFrame' in zp.playback) (zp.playback as LoopPlayback).seekFrame(seekTo)
-            }
-          }
-        }
-      }
+      // Pendant une fenêtre de transition, le sampler renvoie la pose de FIN de
+      // l'ANCIEN plan : dès que le swapFn a monté le nouveau décor (mi-course d'un
+      // fondu couleur, immédiatement pour volet/iris/crossfade), on pose le perso
+      // sur l'état t=0 du NOUVEAU plan — même frame que l'apparition du décor,
+      // zéro frame avec le perso au mauvais endroit.
+      const swappedDuringTransition = sample.transition != null
+        && rt.swappedPlanIndex === sample.transition.toPlanIndex
+      applyFilmSample(swappedDuringTransition && sample.transition
+        ? { ...rt.sampler.evaluatePlanLocal(sample.transition.toPlanIndex, 0), fadeAlpha: sample.fadeAlpha }
+        : sample)
 
       // Barre de progression EXACTE (t / durée totale).
       const pct = Math.min(100, Math.round((rt.tMs / Math.max(1, rt.sampler.totalMs)) * 200) / 2)

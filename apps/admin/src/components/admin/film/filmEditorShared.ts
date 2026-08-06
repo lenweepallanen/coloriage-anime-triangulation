@@ -107,12 +107,18 @@ export function transitionToKey(t: FilmPlanTransition | undefined): string {
   return t.kind === 'wipe' ? `wipe-${t.direction}` : t.kind
 }
 
-export function transitionFromKey(key: string, durationMs?: number): FilmPlanTransition {
-  const dur = durationMs != null && durationMs > 0 ? { durationMs } : {}
+/** Reconstruit la transition depuis la clé du <select>, en PRÉSERVANT la durée
+ *  et la couleur de la transition précédente (changement de kind non destructif). */
+export function transitionFromKey(key: string, prev?: FilmPlanTransition): FilmPlanTransition {
+  const prevDur = prev && prev.kind !== 'cut' ? prev.durationMs : undefined
+  const prevColor = prev && (prev.kind === 'fadeBlack' || prev.kind === 'wipe') ? prev.color : undefined
+  const dur = prevDur != null && prevDur > 0 ? { durationMs: prevDur } : {}
+  const col = prevColor != null ? { color: prevColor } : {}
   if (key.startsWith('wipe-')) {
-    return { kind: 'wipe', direction: key.slice(5) as 'left' | 'right' | 'up' | 'down', ...dur }
+    return { kind: 'wipe', direction: key.slice(5) as 'left' | 'right' | 'up' | 'down', ...dur, ...col }
   }
-  if (key === 'fadeBlack' || key === 'crossfade' || key === 'iris') return { kind: key, ...dur }
+  if (key === 'fadeBlack') return { kind: 'fadeBlack', ...dur, ...col }
+  if (key === 'crossfade' || key === 'iris') return { kind: key, ...dur }
   return { kind: 'cut' }
 }
 

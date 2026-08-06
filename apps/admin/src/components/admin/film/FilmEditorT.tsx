@@ -10,6 +10,7 @@ import { FilmTimelineSampler } from '../../../utils/filmTimelineSampler'
 import { sampleFilmPath } from '../../../utils/filmPath'
 import { dedupeTravelAnimClips, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
 import { getAudioDurationMs } from '../../../utils/sceneActionDuration'
+import { transitionDurationMs } from '../../../utils/filmDirector'
 import ScenePlayer from '../../scan/ScenePlayer'
 import { PreviewModalShell } from '../PreviewModal'
 import CharacterOriginEditor from '../CharacterOriginEditor'
@@ -805,23 +806,62 @@ export default function FilmEditorT({ project, onSave }: {
                     <button className="btn-icon btn-sm btn-danger" onClick={() => removePlan(pl.id)} disabled={plans.length <= 1} title="Supprimer le plan">&times;</button>
                   </div>
                 </div>
-                {i < plans.length - 1 && (
-                  <select
-                    value={transitionToKey(pl.transitionToNext)}
-                    onChange={(e) => patchPlanT(pl.id, { transitionToNext: transitionFromKey(e.target.value) })}
-                    style={{ fontSize: 11 }}
-                    title="Transition vers le plan suivant"
-                  >
-                    <option value="cut">Cut</option>
-                    <option value="fadeBlack">Fondu noir</option>
-                    <option value="crossfade">Fondu enchaîné</option>
-                    <option value="wipe-left">Volet ←</option>
-                    <option value="wipe-right">Volet →</option>
-                    <option value="wipe-up">Volet ↑</option>
-                    <option value="wipe-down">Volet ↓</option>
-                    <option value="iris">Iris</option>
-                  </select>
-                )}
+                {i < plans.length - 1 && (() => {
+                  const tr = pl.transitionToNext
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0, alignItems: 'stretch' }}>
+                      <select
+                        value={transitionToKey(tr)}
+                        onChange={(e) => patchPlanT(pl.id, { transitionToNext: transitionFromKey(e.target.value, tr) })}
+                        style={{ fontSize: 11 }}
+                        title="Transition vers le plan suivant"
+                      >
+                        <option value="cut">Cut</option>
+                        <option value="fadeBlack">Fondu couleur</option>
+                        <option value="crossfade">Fondu enchaîné</option>
+                        <option value="wipe-left">Volet ←</option>
+                        <option value="wipe-right">Volet →</option>
+                        <option value="wipe-up">Volet ↑</option>
+                        <option value="wipe-down">Volet ↓</option>
+                        <option value="iris">Iris</option>
+                      </select>
+                      {tr != null && tr.kind !== 'cut' && (
+                        <label
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }}
+                          title="Durée de la transition (secondes)"
+                        >
+                          ⏱
+                          <input
+                            type="number" min={0.1} max={5} step={0.1}
+                            value={transitionDurationMs(tr) / 1000}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value)
+                              if (!Number.isFinite(v)) return
+                              const durationMs = Math.round(Math.min(5, Math.max(0.1, v)) * 1000)
+                              patchPlanT(pl.id, { transitionToNext: { ...tr, durationMs } })
+                            }}
+                            style={{ width: 48, fontSize: 10, flexShrink: 0 }}
+                          />
+                          s
+                        </label>
+                      )}
+                      {tr != null && (tr.kind === 'fadeBlack' || tr.kind === 'wipe') && (
+                        <label
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }}
+                          title={tr.kind === 'fadeBlack' ? 'Couleur du fondu' : 'Couleur du volet (volet coloré)'}
+                        >
+                          🎨
+                          <input
+                            type="color"
+                            value={tr.color ?? '#000000'}
+                            onChange={(e) => patchPlanT(pl.id, { transitionToNext: { ...tr, color: e.target.value } })}
+                            style={{ width: 34, height: 20, padding: 0, flexShrink: 0, cursor: 'pointer' }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )
           })}
