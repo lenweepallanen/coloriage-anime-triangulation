@@ -1223,6 +1223,10 @@ export interface FilmT {
    *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
    *  Défaut : true (absent = activé). */
   footstepsEnabled?: boolean;
+  /** Fondu d'OUVERTURE (noir → 1er plan), ms. Défaut 0 = démarrage direct. */
+  introFadeMs?: number;
+  /** Fondu de FIN (dernier plan → noir), ms. Défaut 400. */
+  outroFadeMs?: number;
   /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
   moveAnimationId?: string;
   moveSpeedPxPerSec: number;
