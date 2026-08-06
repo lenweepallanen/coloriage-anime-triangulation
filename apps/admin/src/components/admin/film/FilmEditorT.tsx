@@ -1204,6 +1204,17 @@ export default function FilmEditorT({ project, onSave }: {
                   onChange={(e) => patchCfg({ volume: parseFloat(e.target.value) })}
                 />
               </div>
+              <div className="scene-editor-field" style={{ maxWidth: 130 }} title="Ajustement fin de la synchro : négatif = le son part plus tôt, positif = plus tard (ex. si l'impact sonore du mp3 n'est pas à son tout début)">
+                <label style={{ fontSize: 11 }}>Décalage (ms)</label>
+                <input
+                  type="number" step={10}
+                  value={cfg.offsetMs ?? 0}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10)
+                    patchCfg({ offsetMs: Number.isFinite(v) && v !== 0 ? v : undefined })
+                  }}
+                />
+              </div>
               <button className="btn-icon btn-sm btn-danger" onClick={() => {
                 for (const sid of cfg.soundIds) onFilmSoundDeleted(sid)
                 updateFilm({

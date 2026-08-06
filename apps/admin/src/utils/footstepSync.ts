@@ -23,12 +23,18 @@ export function detectFootstepFrames(anim: Animation): number[] {
     for (const y of ys) { min = Math.min(min, y); max = Math.max(max, y) }
     const amp = max - min
     if (amp < 2) return // patte quasi immobile : pas de pas
-    // Maxima locaux (y écran vers le bas = pied au sol) proches du sol.
-    const threshold = max - amp * 0.25
-    for (let i = 1; i < n - 1; i++) {
-      if (ys[i] >= ys[i - 1] && ys[i] >= ys[i + 1] && ys[i] >= threshold) {
+    // Machine à états avec HYSTÉRÉSIS : UN événement par appui, au moment où le
+    // pied TOUCHE le sol (franchit le seuil bas en descendant). Le plateau du
+    // pied posé ne redéclenche pas, il faut d'abord repasser en l'air.
+    const groundAt = max - amp * 0.18
+    const airAt = max - amp * 0.45
+    let onGround = ys[0] >= groundAt
+    for (let i = 1; i < n; i++) {
+      if (!onGround && ys[i] >= groundAt) {
+        onGround = true
         events.push(i)
-        i += 2 // évite les doubles détections sur un plateau
+      } else if (onGround && ys[i] <= airAt) {
+        onGround = false
       }
     }
   }
@@ -93,8 +99,12 @@ export function computeFootstepSchedule(
     let entry = framesCache.get(animId)
     if (!entry) {
       const anim = animations.find(a => a.id === animId)
-      const total = anim?.mesh?.walkBodyFrames?.length ?? anim?.mesh?.videoFramesMesh?.length ?? 0
-      entry = { events: anim ? detectFootstepFrames(anim) : [], total }
+      const raw = anim?.mesh?.walkBodyFrames?.length ?? anim?.mesh?.videoFramesMesh?.length ?? 0
+      // Cycle VISUEL de la LoopPlayback : les crossfadeFrames de fin sont
+      // fondues dans le début → la boucle affichée est plus courte que `raw`.
+      const total = Math.max(1, raw - (anim?.mesh?.crossfadeFrames ?? 7))
+      const events = (anim ? detectFootstepFrames(anim) : []).filter(e => e < total)
+      entry = { events, total }
       framesCache.set(animId, entry)
     }
     return entry
@@ -115,7 +125,7 @@ export function computeFootstepSchedule(
         const t = (e + k * total) * msPerFrame
         if (t >= durationMs) break
         out.push({
-          timeMs: base + startMs + t,
+          timeMs: Math.max(0, base + startMs + t + (cfg.offsetMs ?? 0)),
           soundId: cfg.soundIds[stepCounter++ % cfg.soundIds.length],
           ...(cfg.volume != null && { volume: cfg.volume }),
         })
