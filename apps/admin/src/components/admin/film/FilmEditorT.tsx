@@ -18,6 +18,7 @@ import TimelineEditor, { type TimelineSelection } from './timeline/TimelineEdito
 import ClipInspector from './timeline/ClipInspector'
 import { defaultControlPoints, fileToDecorLayer, formatMs, transitionFromKey, transitionToKey } from './filmEditorShared'
 import { FilmAudioScheduler } from '../../../utils/filmAudioScheduler'
+import { computeFootstepSchedule } from '../../../utils/footstepSync'
 
 /**
  * Éditeur de FILM TIMELINE (v4) : canvas spatial (waypoints, caméra, chemins) en
@@ -148,7 +149,8 @@ export default function FilmEditorT({ project, onSave }: {
     const ctx = editorPlayFilmRef.current
     const planStartMs = ctx.film.plans.map((_, i) => (i === ctx.planIndex ? 0 : Number.NaN))
     const durationMs = ctx.film.plans[ctx.planIndex].timeline.durationMs
-    const sched = new FilmAudioScheduler(ctx.film, planStartMs, durationMs)
+    const sched = new FilmAudioScheduler(ctx.film, planStartMs, durationMs,
+      computeFootstepSchedule(ctx.film, project.animations, planStartMs))
     let disposed = false
     let raf = 0
     sched.ready.then(async () => {
@@ -1133,6 +1135,94 @@ export default function FilmEditorT({ project, onSave }: {
             />
           </label>
         )}
+      </div>
+
+      {/* Bruits de pas synchronisés */}
+      <div className="scene-editor-section-card">
+        <h4 className="scene-editor-section-title">Bruits de pas (synchronisés sur la marche)</h4>
+        <div style={{ fontSize: 11, opacity: 0.65, marginBottom: 8 }}>
+          Liez un ou deux sons de pas à une animation de marche : à la lecture, un son est
+          déclenché à CHAQUE contact au sol (détecté dans l'animation), en alternant pas 1 / pas 2.
+          Plus aucun calage manuel.
+        </div>
+        {(film.footstepSounds ?? []).map((cfg, ci) => {
+          const patchCfg = (partial: Partial<typeof cfg> | null) => {
+            const list = [...(film.footstepSounds ?? [])]
+            if (partial == null) list.splice(ci, 1)
+            else list[ci] = { ...cfg, ...partial }
+            updateFilm({ footstepSounds: list })
+          }
+          const soundName = (id: string) => film.sounds.find(x => x.id === id)?.name ?? '?'
+          return (
+            <div key={ci} style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', padding: '6px 0', borderTop: ci > 0 ? '1px solid var(--border)' : 'none' }}>
+              <div className="scene-editor-field" style={{ minWidth: 200 }}>
+                <label style={{ fontSize: 11 }}>Animation de marche</label>
+                <select value={cfg.animationId} onChange={(e) => patchCfg({ animationId: e.target.value })}>
+                  {readyAnimations.map(a => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
+                </select>
+              </div>
+              {cfg.soundIds.map((sid, si) => (
+                <span key={sid} style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  🦶 {si + 1} : {soundName(sid)}
+                  <button
+                    className="btn-icon btn-sm btn-danger"
+                    onClick={() => {
+                      onFilmSoundDeleted(sid)
+                      updateFilm({
+                        footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: c.soundIds.filter(x => x !== sid) } : c),
+                        sounds: film.sounds.filter(x => x.id !== sid),
+                      })
+                    }}
+                    title="Retirer ce son"
+                  >&times;</button>
+                </span>
+              ))}
+              {cfg.soundIds.length < 2 && (
+                <label className="btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+                  + pas{cfg.soundIds.length + 1}.mp3
+                  <input
+                    type="file" accept="audio/*" style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      e.target.value = ''
+                      if (!file) return
+                      const id = crypto.randomUUID()
+                      onFilmSoundImported(id)
+                      updateFilm({
+                        sounds: [...film.sounds, { id, name: file.name, blob: file }],
+                        footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: [...c.soundIds, id] } : c),
+                      })
+                    }}
+                  />
+                </label>
+              )}
+              <div className="scene-editor-field" style={{ maxWidth: 160 }}>
+                <label style={{ fontSize: 11 }}>Volume : {Math.round((cfg.volume ?? 1) * 100)}%</label>
+                <input
+                  type="range" min={0} max={1} step={0.05}
+                  value={cfg.volume ?? 1}
+                  onChange={(e) => patchCfg({ volume: parseFloat(e.target.value) })}
+                />
+              </div>
+              <button className="btn-icon btn-sm btn-danger" onClick={() => {
+                for (const sid of cfg.soundIds) onFilmSoundDeleted(sid)
+                updateFilm({
+                  sounds: film.sounds.filter(x => !cfg.soundIds.includes(x.id)),
+                  footstepSounds: (film.footstepSounds ?? []).filter((_, i) => i !== ci),
+                })
+              }} title="Supprimer cette liaison (et ses sons)">&times;</button>
+            </div>
+          )
+        })}
+        <button
+          className="btn-secondary btn-sm"
+          style={{ marginTop: 6 }}
+          disabled={readyAnimations.length === 0}
+          onClick={() => {
+            const walkAnim = readyAnimations.find(a => a.id === film.moveAnimationId) ?? readyAnimations[0]
+            updateFilm({ footstepSounds: [...(film.footstepSounds ?? []), { animationId: walkAnim.id, soundIds: [] }] })
+          }}
+        >+ Lier des bruits de pas à une animation</button>
       </div>
 
       {/* Durée totale */}

@@ -421,6 +421,7 @@ interface FilmTDoc {
   /** Bibliothèque de sons (blobs dans film/sounds/{id}). */
   sounds: { id: string; name: string; volume?: number }[]
   music?: SceneSoundMetaDoc
+  footstepSounds?: { animationId: string; soundIds: string[]; volume?: number }[]
   moveAnimationId?: string
   moveSpeedPxPerSec: number
   idleSpeedMul?: number
@@ -1569,6 +1570,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     },
     sounds: film.sounds.map(snd => ({ id: snd.id, name: snd.name, ...(snd.volume != null && { volume: snd.volume }) })),
     ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
+    ...(film.footstepSounds != null && film.footstepSounds.length > 0 && { footstepSounds: film.footstepSounds }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     moveSpeedPxPerSec: film.moveSpeedPxPerSec,
     ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
@@ -1640,6 +1642,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     },
     sounds: (filmDoc.sounds ?? []).map(snd => ({ id: snd.id, name: snd.name, blob: getBlob(snd.id), ...(snd.volume != null && { volume: snd.volume }) })),
     ...(filmDoc.music != null && { music: { id: filmDoc.music.id, name: filmDoc.music.name, blob: getBlob(filmDoc.music.id), volume: filmDoc.music.volume } }),
+    ...(filmDoc.footstepSounds != null && filmDoc.footstepSounds.length > 0 && { footstepSounds: filmDoc.footstepSounds }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
     moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
     ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
@@ -1689,6 +1692,7 @@ function remapFilmTAnimationIds(film: import('../types/project').FilmT | null | 
   return {
     ...film,
     ...(film.moveAnimationId != null && { moveAnimationId: mapId(film.moveAnimationId) }),
+    ...(film.footstepSounds != null && { footstepSounds: film.footstepSounds.map(c => ({ ...c, animationId: mapId(c.animationId) })) }),
     plans: film.plans.map(pl => ({
       ...pl,
       timeline: {

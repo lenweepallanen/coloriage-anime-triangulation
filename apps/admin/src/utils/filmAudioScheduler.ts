@@ -54,12 +54,15 @@ export class FilmAudioScheduler {
   /** Résolue quand tous les buffers sont décodés. */
   readonly ready: Promise<void>
 
+  private oneShots: { timeMs: number; soundId: string; volume?: number }[] = []
+
   /**
    * @param planStartMs Début absolu (ms) de chaque plan de film.plans — mêmes
    *   valeurs que `FilmTimelineSampler.planStartMs` (NaN = plan inactif, ignoré).
    *   Pour la lecture d'un seul plan (éditeur) : `[NaN, …, 0, …, NaN]`.
+   * @param oneShots Sons ponctuels à temps absolu (bruits de pas synchronisés).
    */
-  constructor(film: FilmT, planStartMs: number[], totalMs: number) {
+  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[]) {
     this.ctx = getSharedAudioContext()
     this.master = this.ctx.createGain()
     this.master.connect(this.ctx.destination)
@@ -96,9 +99,11 @@ export class FilmAudioScheduler {
       this.musicId = film.music.id
       this.musicVolume = film.music.volume ?? 1
     }
+    this.oneShots = oneShots ?? []
 
-    // Pré-décodage de tous les sons référencés (+ musique).
+    // Pré-décodage de tous les sons référencés (+ musique + one-shots).
     const wanted = new Set(this.clips.map(c => c.soundId))
+    for (const os of this.oneShots) wanted.add(os.soundId)
     if (this.musicId) wanted.add(this.musicId)
     const soundById = new Map(film.sounds.map(snd => [snd.id, snd]))
     if (film.music) soundById.set(film.music.id, film.music)
@@ -203,6 +208,25 @@ export class FilmAudioScheduler {
     }
 
     for (const c of this.clips) schedule(c)
+    // Bruits de pas : un one-shot par contact au sol (durée = son entier).
+    for (const os of this.oneShots) {
+      if (os.timeMs < this.baseMs) continue
+      const buf = this.buffers.get(os.soundId)
+      if (!buf) continue
+      const source = this.ctx.createBufferSource()
+      source.buffer = buf
+      const gain = this.ctx.createGain()
+      gain.gain.value = os.volume ?? 1
+      source.connect(gain)
+      gain.connect(this.master)
+      const entry: ActiveSource = { source, gain, analyser: null, startMs: os.timeMs, endMs: os.timeMs + buf.duration * 1000, smoothed: 0 }
+      source.onended = () => {
+        try { gain.disconnect() } catch { /* */ }
+        this.active = this.active.filter(a => a !== entry)
+      }
+      source.start(now + (os.timeMs - this.baseMs) / 1000)
+      this.active.push(entry)
+    }
     // Musique de fond : bouclée sur toute la durée restante du film.
     if (this.musicId) {
       schedule({

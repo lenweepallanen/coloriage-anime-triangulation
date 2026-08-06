@@ -1206,6 +1206,10 @@ export interface FilmT {
   sounds: FilmSound[];
   /** Musique de fond globale, bouclée sur toute la durée du film. */
   music?: FilmSound;
+  /** Bruits de pas : sons liés à une animation de marche. À la lecture, un son
+   *  est déclenché à CHAQUE contact au sol détecté dans l'animation (point le
+   *  plus bas du cycle de chaque patte), en alternant les soundIds (pas1/pas2). */
+  footstepSounds?: { animationId: string; soundIds: string[]; volume?: number }[];
   /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
   moveAnimationId?: string;
   moveSpeedPxPerSec: number;
