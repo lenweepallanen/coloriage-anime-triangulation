@@ -1137,6 +1137,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       ended: boolean
       audioReady: boolean
       decorHold: boolean
+      /** true entre un changement de plan et le 1er ready() du nouveau décor —
+       *  le ready() peut vaciller EN COURS de plan (vidéo qui rebuffère) et ne
+       *  doit alors PAS suspendre l'audio (micro-coupures). */
+      decorWait: boolean
       lastAnimKey: string | null
       launchedTransitionTo: number
       playableIdxByPlan: Map<number, number>
@@ -1156,7 +1160,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const scheduler = new FilmAudioScheduler(filmT, sampler.planStartMs, sampler.totalMs,
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
     }
 
@@ -1721,10 +1725,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         void rt.scheduler.unlock()
         rt.scheduler.start(rt.tMs)
       }
-      // Horloge gelée pendant une transition de plan / tant que le décor swappé
-      // n'est pas prêt : on SUSPEND le ctx audio (horloge maîtresse + sons gelés
-      // d'un coup, même mécanisme que la vraie pause).
-      const decorPending = planTransitionRunner != null || !currentLayers.ready()
+      // Horloge gelée UNIQUEMENT autour des changements de plan (transition en
+      // cours, ou nouveau décor pas encore prêt) : on SUSPEND le ctx audio
+      // (horloge maîtresse + sons gelés d'un coup). Un ready() qui vacille EN
+      // COURS de plan (vidéo de fond qui rebuffère) ne coupe PAS le son.
+      const switching = planTransitionRunner != null
+      if (switching) rt.decorWait = true
+      const decorPending = switching || (rt.decorWait && !currentLayers.ready())
+      if (!switching && rt.decorWait && currentLayers.ready()) rt.decorWait = false
       if (decorPending && !rt.decorHold) {
         rt.decorHold = true
         void suspendMouthAudioContext()

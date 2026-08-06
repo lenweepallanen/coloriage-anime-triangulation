@@ -193,8 +193,11 @@ export class FilmAudioScheduler {
       } else {
         g.setValueAtTime(c.volume, when)
       }
-      if (c.fadeOutMs > 0) {
-        const foStart = Math.max(when, endWhen - c.fadeOutMs / 1000)
+      // Fondu de fin : celui du clip, sinon 150 ms AUTO pour les sons bouclés
+      // (coupés à la fin du trajet — un stop sec fait une « coupure » audible).
+      const fadeOutMs = c.fadeOutMs > 0 ? c.fadeOutMs : (c.loop ? 150 : 0)
+      if (fadeOutMs > 0) {
+        const foStart = Math.max(when, endWhen - fadeOutMs / 1000)
         g.setValueAtTime(c.volume, foStart)
         g.linearRampToValueAtTime(0, endWhen)
       }
