@@ -1143,6 +1143,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       decorWait: boolean
       lastAnimKey: string | null
       launchedTransitionTo: number
+      currentPlanIndex: number
       playableIdxByPlan: Map<number, number>
     } | null = null
     if (timelineMode && filmT) {
@@ -1160,7 +1161,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const scheduler = new FilmAudioScheduler(filmT, sampler.planStartMs, sampler.totalMs,
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
+      const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
     }
 
@@ -1744,11 +1746,27 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       else if (!decorPending) rt.tMs += deltaSeconds * 1000
       const sample = rt.sampler.evaluate(rt.tMs)
 
-      // Transition de plan : lancée UNE fois à l'entrée de la fenêtre.
+      // Transition de plan : lancée UNE fois à l'entrée de la fenêtre (fondu, volet…).
       if (sample.transition && rt.launchedTransitionTo !== sample.transition.toPlanIndex) {
         rt.launchedTransitionTo = sample.transition.toPlanIndex
+        rt.currentPlanIndex = sample.transition.toPlanIndex
         const playableIdx = rt.playableIdxByPlan.get(sample.transition.toPlanIndex)
         const fromPlan = filmT.plans[sample.planIndex]
+        if (playableIdx != null) {
+          planTransitionRunner = startPlanTransition(
+            app, planTransitionOverlay,
+            fromPlan?.transitionToNext ?? { kind: 'cut' },
+            () => activatePlan(playableIdx),
+          )
+        }
+      } else if (!sample.transition && sample.planIndex !== rt.currentPlanIndex && planTransitionRunner == null) {
+        // CUT (durée 0 → pas de fenêtre de transition dans le sampler) : le plan a
+        // changé d'un tick à l'autre — swap du décor immédiat, sinon le perso joue
+        // le plan suivant sur l'ANCIEN décor.
+        const fromPlan = filmT.plans[rt.currentPlanIndex]
+        rt.currentPlanIndex = sample.planIndex
+        rt.launchedTransitionTo = sample.planIndex
+        const playableIdx = rt.playableIdxByPlan.get(sample.planIndex)
         if (playableIdx != null) {
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
