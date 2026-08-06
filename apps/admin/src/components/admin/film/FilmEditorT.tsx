@@ -1106,6 +1106,28 @@ export default function FilmEditorT({ project, onSave }: {
               onChange={(e) => updateFilm({ idleSpeedMul: parseFloat(e.target.value) })}
             />
           </div>
+          <div className="scene-editor-field" style={{ maxWidth: 170 }} title="Fondu d'ouverture : noir → 1er plan (0 = démarrage direct)">
+            <label>Fondu d'ouverture (s)</label>
+            <input
+              type="number" min={0} step={0.1}
+              value={(film.introFadeMs ?? 0) / 1000}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                updateFilm({ introFadeMs: Number.isFinite(v) && v > 0 ? Math.round(v * 1000) : undefined })
+              }}
+            />
+          </div>
+          <div className="scene-editor-field" style={{ maxWidth: 170 }} title="Fondu de fin : dernier plan → noir avant l'écran Bravo (défaut 0,4 s)">
+            <label>Fondu de fin (s)</label>
+            <input
+              type="number" min={0} step={0.1}
+              value={(film.outroFadeMs ?? 400) / 1000}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                updateFilm({ outroFadeMs: Number.isFinite(v) && v >= 0 ? Math.round(v * 1000) : undefined })
+              }}
+            />
+          </div>
           <div className="scene-editor-field" title="CALIBRATION du retournement automatique : le sens dans lequel le coloriage est DESSINÉ.">
             <label>Le dessin regarde vers</label>
             <div className="scene-config-panel-type-toggle">

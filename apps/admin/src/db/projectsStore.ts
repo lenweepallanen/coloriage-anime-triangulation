@@ -433,6 +433,8 @@ interface FilmTDoc {
   footstepsEnabled?: boolean
   /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
   footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[]
+  introFadeMs?: number
+  outroFadeMs?: number
   moveAnimationId?: string
   moveSpeedPxPerSec: number
   idleSpeedMul?: number
@@ -1590,6 +1592,8 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
     ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
+    ...(film.introFadeMs != null && { introFadeMs: film.introFadeMs }),
+    ...(film.outroFadeMs != null && { outroFadeMs: film.outroFadeMs }),
     moveSpeedPxPerSec: film.moveSpeedPxPerSec,
     ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
   }
@@ -1662,6 +1666,8 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     ...(filmDoc.music != null && { music: { id: filmDoc.music.id, name: filmDoc.music.name, blob: getBlob(filmDoc.music.id), volume: filmDoc.music.volume } }),
     ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
+    ...(filmDoc.introFadeMs != null && { introFadeMs: filmDoc.introFadeMs }),
+    ...(filmDoc.outroFadeMs != null && { outroFadeMs: filmDoc.outroFadeMs }),
     moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
     ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
   }

@@ -65,6 +65,7 @@ interface PreparedPlan {
 }
 
 type Window =
+  | { kind: 'intro'; startMs: number; endMs: number; prepared: PreparedPlan }
   | { kind: 'plan'; startMs: number; endMs: number; prepared: PreparedPlan }
   | { kind: 'transition'; startMs: number; endMs: number; prepared: PreparedPlan; toPlanIndex: number }
   | { kind: 'endFade'; startMs: number; endMs: number; prepared: PreparedPlan }
@@ -97,6 +98,12 @@ export class FilmTimelineSampler {
     this.planStartMs = film.plans.map(() => Number.NaN)
     const windows: Window[] = []
     let t = 0
+    // Fondu d'OUVERTURE : noir → 1er plan (image figée à son t=0).
+    const introMs = Math.max(0, film.introFadeMs ?? 0)
+    if (introMs > 0 && actives.length > 0) {
+      windows.push({ kind: 'intro', startMs: 0, endMs: introMs, prepared: actives[0] })
+      t = introMs
+    }
     actives.forEach((p, i) => {
       this.planStartMs[p.planIndex] = t
       windows.push({ kind: 'plan', startMs: t, endMs: t + p.durationMs, prepared: p })
@@ -110,9 +117,10 @@ export class FilmTimelineSampler {
       }
     })
     const last = actives[actives.length - 1]
-    if (last) {
-      windows.push({ kind: 'endFade', startMs: t, endMs: t + FILM_ENDING_FADE_MS, prepared: last })
-      t += FILM_ENDING_FADE_MS
+    const outroMs = Math.max(0, film.outroFadeMs ?? FILM_ENDING_FADE_MS)
+    if (last && outroMs > 0) {
+      windows.push({ kind: 'endFade', startMs: t, endMs: t + outroMs, prepared: last })
+      t += outroMs
     }
     this.windows = windows
     this.totalMs = t
@@ -228,6 +236,11 @@ export class FilmTimelineSampler {
     let w = windows[0]
     for (const cand of windows) {
       if (t < cand.endMs) { w = cand; break }
+    }
+    if (w.kind === 'intro') {
+      const t01 = (t - w.startMs) / Math.max(1, w.endMs - w.startMs)
+      const sIntro = this.samplePlan(w.prepared, 0, t01)
+      return { ...sIntro, phase: 'transition', fadeAlpha: t01 }
     }
     if (w.kind === 'plan') {
       return this.samplePlan(w.prepared, t - w.startMs, 1)

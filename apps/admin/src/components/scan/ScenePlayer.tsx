@@ -1142,6 +1142,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
        *  doit alors PAS suspendre l'audio (micro-coupures). */
       decorWait: boolean
       lastAnimKey: string | null
+      lastX?: number
       launchedTransitionTo: number
       currentPlanIndex: number
       playableIdxByPlan: Map<number, number>
@@ -1782,12 +1783,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         animId: sample.animationId, animSpeedMul: sample.animSpeedMul,
       })
       filmFadeAlpha = sample.fadeAlpha
+      rt.lastX = sample.x
 
       // Changement d'animation du corps → crossfade + calage de phase du clip.
       const animKey = sample.animationId
       if (animKey !== rt.lastAnimKey) {
         rt.lastAnimKey = animKey
-        beginCrossfade(animKey != null && sample.phase === 'travel' ? 120 : 400, false)
+        // Téléportation (✨ apparition, origine libre, cut) : switch INSTANTANÉ —
+        // un fondu de maillage ferait « se former » le perso pendant ~0,4 s.
+        const jumped = Math.abs(sample.x - (rt.lastX ?? sample.x)) > 60
+        beginCrossfade(jumped ? 0 : (animKey != null && sample.phase === 'travel' ? 120 : 400), false)
         if (animKey != null) {
           setupMovementAnimation(animKey)
         } else {
