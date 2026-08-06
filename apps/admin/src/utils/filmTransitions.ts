@@ -24,6 +24,53 @@ function hexToInt(hex: string | undefined, fallback: number): number {
   return m ? parseInt(m[1], 16) : fallback
 }
 
+/** Couleur CSS sûre pour canvas 2D (fallback noir). */
+function hexCss(hex: string | undefined, fallback = '#000000'): string {
+  if (!hex) return fallback
+  return /^#?[0-9a-f]{6}$/i.test(hex.trim()) ? (hex.startsWith('#') ? hex : `#${hex}`) : fallback
+}
+
+/**
+ * Plaque d'IRIS dessinée en canvas 2D : aplat plein écran moins un trou
+ * circulaire percé en `destination-out`. ⚠ Ne PAS utiliser Graphics.beginHole
+ * pour ça : dès que le cercle touche/déborde le rectangle (fin d'iris), la
+ * triangulation earcut du « rectangle moins trou » devient invalide et PIXI
+ * peut rendre le rectangle PLEIN → flash noir plein écran sur les dernières
+ * frames. Le canvas gère tous les rayons proprement.
+ */
+function makeIrisPlate(viewW: number, viewH: number, cssColor: string): {
+  sprite: PIXI.Sprite
+  setHoleRadius: (radiusPx: number) => void
+  destroy: () => void
+} {
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.ceil(viewW))
+  canvas.height = Math.max(1, Math.ceil(viewH))
+  const ctx = canvas.getContext('2d')!
+  const tex = PIXI.Texture.from(canvas)
+  const sprite = new PIXI.Sprite(tex)
+  sprite.width = viewW
+  sprite.height = viewH
+  const setHoleRadius = (radiusPx: number): void => {
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = cssColor
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    if (radiusPx > 0) {
+      ctx.globalCompositeOperation = 'destination-out'
+      ctx.beginPath()
+      ctx.arc(canvas.width / 2, canvas.height / 2, radiusPx, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    tex.baseTexture.update()
+  }
+  return {
+    sprite,
+    setHoleRadius,
+    destroy: () => { sprite.destroy({ texture: true, baseTexture: true }) },
+  }
+}
+
 /**
  * Ouverture ('reveal') / fermeture ('conceal') du FILM : même vocabulaire visuel
  * que les transitions de plans, mais sur un seul bord — un aplat couleur
@@ -80,26 +127,32 @@ export function startFilmEdgeTransition(
   }
 
   if (transition.kind === 'iris') {
-    // Rayon SURDIMENSIONNÉ (×1.3) : le cercle dépasse les coins bien avant la
-    // fin — sans ça les coins restent noirs jusqu'à la dernière frame puis
-    // « poppent » au retrait de l'overlay. Progression smoothstep (douce).
-    const maxRadius = (Math.hypot(viewW, viewH) / 2) * 1.3
+    // Plaque canvas (voir makeIrisPlate — beginHole rendrait un flash noir en
+    // fin d'iris). Rayon légèrement surdimensionné + progression smoothstep.
+    overlay.removeChild(g)
+    g.destroy()
+    const plate = makeIrisPlate(viewW, viewH, hexCss('color' in transition ? transition.color : undefined))
+    overlay.addChild(plate.sprite)
+    const maxRadius = (Math.hypot(viewW, viewH) / 2) * 1.08
+    const apply = (t: number): void => {
+      const lin = openAt(t)
+      const open = lin * lin * (3 - 2 * lin)
+      plate.setHoleRadius(maxRadius * open)
+    }
+    apply(0)
     return {
       update(deltaMs: number): boolean {
         elapsed += deltaMs
         const t = Math.min(1, elapsed / durationMs)
-        const lin = openAt(t)
-        const open = lin * lin * (3 - 2 * lin)
-        g.clear()
-        g.beginFill(color)
-        g.drawRect(0, 0, viewW, viewH)
-        if (open > 0) {
-          g.beginHole()
-          g.drawCircle(viewW / 2, viewH / 2, maxRadius * open)
-          g.endHole()
+        apply(t)
+        if (t >= 1) {
+          if (mode === 'reveal') {
+            overlay.removeChild(plate.sprite)
+            plate.destroy()
+          }
+          return true
         }
-        g.endFill()
-        return t >= 1 ? done() : false
+        return false
       },
     }
   }
@@ -279,29 +332,23 @@ export function startPlanTransition(
   }
 
   // iris : trou circulaire grandissant au centre du snapshot → ouverture sur le
-  // nouveau plan. Masque redessiné chaque frame (rect plein écran + beginHole).
-  // Rayon ×1.3 : le cercle dépasse les coins avant la fin (sinon ils restent
-  // couverts jusqu'à la dernière frame et « poppent » au cleanup).
-  mask = new PIXI.Graphics()
-  overlay.addChild(mask)
-  snapshot.mask = mask
-  const maxRadius = (Math.hypot(viewW, viewH) / 2) * 1.3
+  // nouveau plan. Masque = plaque canvas blanche trouée (voir makeIrisPlate —
+  // un Graphics beginHole devient invalide quand le cercle déborde l'écran →
+  // flash plein écran en fin d'iris). Sprite-mask : pas besoin de l'ajouter au
+  // stage (SpriteMaskFilter échantillonne sa texture, transform identité = écran).
+  const plate = makeIrisPlate(viewW, viewH, '#ffffff')
+  snapshot.mask = plate.sprite
+  const maxRadius = (Math.hypot(viewW, viewH) / 2) * 1.08
+  plate.setHoleRadius(0)
   return {
     update(deltaMs: number): boolean {
       elapsed += deltaMs
       const t = Math.min(1, elapsed / durationMs)
-      if (mask) {
-        mask.clear()
-        mask.beginFill(0xffffff)
-        mask.drawRect(0, 0, viewW, viewH)
-        if (t > 0) {
-          mask.beginHole()
-          mask.drawCircle(viewW / 2, viewH / 2, maxRadius * t)
-          mask.endHole()
-        }
-        mask.endFill()
-      }
+      const open = t * t * (3 - 2 * t)
+      plate.setHoleRadius(maxRadius * open)
       if (t >= 1) {
+        if (snapshot) snapshot.mask = null
+        plate.destroy()
         cleanup()
         return true
       }
