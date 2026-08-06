@@ -967,6 +967,25 @@ export default function FilmEditorT({ project, onSave }: {
                     })()}
                   </div>
                 </div>
+                <div className="scene-editor-field" title="Pose un clip d'animation au moment où le perso est SUR ce point (modifiable ensuite sur la timeline : animation, durée, boucle).">
+                  <label style={{ fontSize: 11 }}>Animation à ce point</label>
+                  <button
+                    className="btn-secondary btn-sm"
+                    onClick={() => {
+                      const inc = incomingClipOf(selectedWp.id)
+                      const atMs = inc ? inc.startMs + inc.durationMs + 1 : Math.round(playheadMs)
+                      const animId = film.moveAnimationId ?? readyAnimations[0]?.id
+                      if (!animId) return
+                      const id = crypto.randomUUID()
+                      patchTimeline(plan.id, tl => ({
+                        ...tl,
+                        anim: [...tl.anim, { id, startMs: freeSlotStart(tl.anim, atMs), durationMs: 2000, animationId: animId, fillMode: 'once-hold' as const }],
+                      }))
+                      setSelection({ kind: 'anim', id })
+                      setSelectedWaypointId(null)
+                    }}
+                  >+ Jouer une animation ici</button>
+                </div>
                 <div className="scene-editor-field" title="Regard à l'idle sur ce point. Auto = sens du dernier trajet.">
                   <label style={{ fontSize: 11 }}>Regard au point</label>
                   <div className="scene-config-panel-type-toggle">
@@ -991,7 +1010,7 @@ export default function FilmEditorT({ project, onSave }: {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
             <h4 className="scene-editor-section-title" style={{ margin: 0 }}>Timeline du plan {planIndex + 1}</h4>
             <div style={{ flex: 1 }} />
-            <button className="btn-ghost btn-sm" onClick={addAnimClip} title="Clip d'animation du corps au playhead">+ Anim</button>
+            <button className="btn-secondary btn-sm" onClick={addAnimClip} title="Pose un clip d'animation du corps au playhead (rugir, parler… — prioritaire sur l'anim de marche pendant un trajet)">+ Animation</button>
             <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic sur une piste son = poser un son · Ctrl+molette = zoom · Alt = sans snap</span>
           </div>
           <TimelineEditor
