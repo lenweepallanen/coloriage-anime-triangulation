@@ -107,13 +107,14 @@ export default function ClipInspector({
           const locked = clip.lockedSpeedPxPerSec != null
           return (
             <>
-              {locked ? (
-                <div style={{ fontSize: 11, opacity: 0.75 }}>
-                  Durée : {(clip.durationMs / 1000).toFixed(2)} s (dérivée de la vitesse verrouillée)
-                </div>
-              ) : (
-                numField('Durée (s)', clip.durationMs / 1000, v => onPatchMotion(clip.id, { durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1, title: 'La durée est la donnée maîtresse — la vitesse en découle' })
-              )}
+              {numField('Durée (s)', clip.durationMs / 1000, v => {
+                const durationMs = Math.max(100, Math.round(v * 1000))
+                // 🔒 : changer la durée re-dérive la vitesse verrouillée (sinon
+                // elle ré-imposerait l'ancienne durée au patch suivant).
+                onPatchMotion(clip.id, locked
+                  ? { durationMs, lockedSpeedPxPerSec: Math.max(1, (pathLen / durationMs) * 1000) }
+                  : { durationMs })
+              }, { min: 0.1, title: locked ? 'La vitesse verrouillée est recalculée pour cette durée' : 'La durée est la donnée maîtresse — la vitesse en découle' })}
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, whiteSpace: 'nowrap' }}
                 title="Verrouillé : déplacer les points/courbes recalcule la durée pour garder cette vitesse constante"

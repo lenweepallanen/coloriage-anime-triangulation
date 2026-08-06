@@ -253,7 +253,22 @@ export default function FilmEditorT({ project, onSave }: {
     if (!plan) return
     patchTimeline(plan.id, tl => {
       if (sel.kind === 'motion') {
-        return { ...tl, motion: tl.motion.map(c => c.id === sel.id ? { ...c, ...partial, ...(c.kind === 'appear' ? { durationMs: 0 } : {}) } : c) }
+        return {
+          ...tl,
+          motion: tl.motion.map(c => {
+            if (c.id !== sel.id) return c
+            const next = { ...c, ...partial, ...(c.kind === 'appear' ? { durationMs: 0 } : {}) }
+            // Trajet 🔒 verrouillé : étirer à la poignée RE-DÉRIVE la vitesse
+            // verrouillée depuis la nouvelle durée — sinon applyLockedSpeeds
+            // ré-imposait l'ancienne durée juste après et le clip « rebondissait »
+            // à sa taille d'avant (impossible de l'étirer).
+            if (partial.durationMs != null && c.kind !== 'appear' && c.lockedSpeedPxPerSec != null && next.durationMs > 0) {
+              const len = motionGeom.find(g => g.id === c.id)?.pathLen ?? 0
+              if (len > 0) next.lockedSpeedPxPerSec = Math.max(1, (len / next.durationMs) * 1000)
+            }
+            return next
+          }),
+        }
       }
       if (sel.kind === 'anim') return { ...tl, anim: tl.anim.map(c => c.id === sel.id ? { ...c, ...partial } : c) }
       return {
@@ -271,7 +286,7 @@ export default function FilmEditorT({ project, onSave }: {
           : tr),
       }
     })
-  }, [plan, patchTimeline])
+  }, [plan, patchTimeline, motionGeom])
 
   /** ⧉ Duplique un clip anim/son : copie identique posée juste après l'original
    *  (ancrage ⚓ non copié — la copie est libre). */
