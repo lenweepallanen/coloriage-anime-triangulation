@@ -48,6 +48,7 @@ import CoTrackerBonesLBSStep from './CoTrackerBonesLBSStep'
 import MarcheBonesStep from './MarcheBonesStep'
 import MarcheGaitLegsStep from './MarcheGaitLegsStep'
 import MarcheParamsStep from './MarcheParamsStep'
+import MarcheFootstepsStep from './MarcheFootstepsStep'
 import TriangulationLoopPreview from './TriangulationLoopPreview'
 import InpaintedPreview from './InpaintedPreview'
 
@@ -119,6 +120,7 @@ const MARCHE_STEPS = [
   'LBS',
   'Calcul Animation',
   'Preview Animation',
+  'Bruits de pas',
 ] as const
 
 const MEMBERS_BONES_V3_STEPS = [
@@ -185,6 +187,7 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'LBS': 'LBS',
   'Pattes': 'Pattes',
   'Paramètres marche': 'Params',
+  'Bruits de pas': 'Pas 🦶',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -238,6 +241,7 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Preview Animation': return 'pending'
     case 'Pattes': return mesh?.marcheGaitLegsValidated ? 'done' : 'pending'
     case 'Paramètres marche': return (mesh?.walkParamsValidated && mesh?.walkBodyFrames != null) ? 'done' : 'pending'
+    case 'Bruits de pas': return mesh?.footstepValidated ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -521,6 +525,9 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
         )}
         {activeStep === 'Paramètres marche' && (
           <MarcheParamsStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {activeStep === 'Bruits de pas' && (
+          <MarcheFootstepsStep project={project} animation={animation} onSave={projectSave} />
         )}
       </div>
     </div>

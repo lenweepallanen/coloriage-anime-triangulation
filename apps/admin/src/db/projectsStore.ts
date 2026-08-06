@@ -125,6 +125,11 @@ interface MeshDoc {
   marcheGaitLegIds?: string[]
   marcheGaitLegsValidated?: boolean
   marcheLegPhases?: Record<string, number>
+  // Bruits de pas (étape « Bruits de pas » de la marche)
+  footstepFrames?: number[]
+  footstepVolume?: number
+  footstepOffsetMs?: number
+  footstepValidated?: boolean
 }
 
 // Legacy formats (v1-v3)
@@ -165,6 +170,9 @@ interface AnimationDoc {
   createdAt: number
   hasVideo: boolean
   hasAudio: boolean
+  /** Sons de pas 1/2 (Storage footstep1|footstep2). Optionnels (rétro-compat). */
+  hasFootstep1?: boolean
+  hasFootstep2?: boolean
   audioEnabled: boolean
   mesh: MeshDoc | null
   physicsCode: string | null
@@ -421,6 +429,9 @@ interface FilmTDoc {
   /** Bibliothèque de sons (blobs dans film/sounds/{id}). */
   sounds: { id: string; name: string; volume?: number }[]
   music?: SceneSoundMetaDoc
+  /** Bruits de pas activés (défaut true). Réglages au niveau des animations. */
+  footstepsEnabled?: boolean
+  /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
   footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[]
   moveAnimationId?: string
   moveSpeedPxPerSec: number
@@ -1172,6 +1183,11 @@ function meshToDoc(mesh: MeshData): MeshDoc {
     ...(mesh.marcheGaitLegIds != null && { marcheGaitLegIds: mesh.marcheGaitLegIds }),
     ...(mesh.marcheGaitLegsValidated != null && { marcheGaitLegsValidated: mesh.marcheGaitLegsValidated }),
     ...(mesh.marcheLegPhases != null && { marcheLegPhases: mesh.marcheLegPhases }),
+    // Bruits de pas
+    ...(mesh.footstepFrames != null && { footstepFrames: mesh.footstepFrames }),
+    ...(mesh.footstepVolume != null && { footstepVolume: mesh.footstepVolume }),
+    ...(mesh.footstepOffsetMs != null && { footstepOffsetMs: mesh.footstepOffsetMs }),
+    ...(mesh.footstepValidated != null && { footstepValidated: mesh.footstepValidated }),
   }
 }
 
@@ -1184,6 +1200,8 @@ function animToDoc(anim: Animation): AnimationDoc {
     createdAt: anim.createdAt,
     hasVideo: anim.videoBlob != null,
     hasAudio: anim.audioBlob != null,
+    hasFootstep1: anim.footstepSound1Blob != null,
+    hasFootstep2: anim.footstepSound2Blob != null,
     audioEnabled: anim.audioEnabled ?? false,
     mesh: anim.mesh ? meshToDoc(anim.mesh) : null,
     physicsCode: anim.physicsCode ?? null,
@@ -1570,7 +1588,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     },
     sounds: film.sounds.map(snd => ({ id: snd.id, name: snd.name, ...(snd.volume != null && { volume: snd.volume }) })),
     ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
-    ...(film.footstepSounds != null && film.footstepSounds.length > 0 && { footstepSounds: film.footstepSounds }),
+    ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     moveSpeedPxPerSec: film.moveSpeedPxPerSec,
     ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
@@ -1642,7 +1660,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     },
     sounds: (filmDoc.sounds ?? []).map(snd => ({ id: snd.id, name: snd.name, blob: getBlob(snd.id), ...(snd.volume != null && { volume: snd.volume }) })),
     ...(filmDoc.music != null && { music: { id: filmDoc.music.id, name: filmDoc.music.name, blob: getBlob(filmDoc.music.id), volume: filmDoc.music.volume } }),
-    ...(filmDoc.footstepSounds != null && filmDoc.footstepSounds.length > 0 && { footstepSounds: filmDoc.footstepSounds }),
+    ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
     moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
     ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
@@ -1692,7 +1710,6 @@ function remapFilmTAnimationIds(film: import('../types/project').FilmT | null | 
   return {
     ...film,
     ...(film.moveAnimationId != null && { moveAnimationId: mapId(film.moveAnimationId) }),
-    ...(film.footstepSounds != null && { footstepSounds: film.footstepSounds.map(c => ({ ...c, animationId: mapId(c.animationId) })) }),
     plans: film.plans.map(pl => ({
       ...pl,
       timeline: {
@@ -1999,6 +2016,11 @@ function meshFromDoc(meshDoc: MeshDoc | LegacyMeshDoc): MeshWithoutLargeJSON {
     marcheGaitLegIds: d.marcheGaitLegIds,
     marcheGaitLegsValidated: d.marcheGaitLegsValidated,
     marcheLegPhases: d.marcheLegPhases,
+    // Bruits de pas
+    footstepFrames: d.footstepFrames,
+    footstepVolume: d.footstepVolume,
+    footstepOffsetMs: d.footstepOffsetMs,
+    footstepValidated: d.footstepValidated,
   }
 }
 
@@ -2141,9 +2163,11 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
   // Load all animations in parallel
   const animations = await Promise.all(
     projDoc.animations.map(async (animDoc): Promise<Animation> => {
-      const [videoBlob, audioBlob] = await Promise.all([
+      const [videoBlob, audioBlob, footstepSound1Blob, footstepSound2Blob] = await Promise.all([
         animDoc.hasVideo ? downloadBlob(animStoragePath(id, animDoc.id, 'video')) : Promise.resolve(null),
         animDoc.hasAudio ? downloadBlob(animStoragePath(id, animDoc.id, 'audio')) : Promise.resolve(null),
+        animDoc.hasFootstep1 ? downloadBlob(animStoragePath(id, animDoc.id, 'footstep1')) : Promise.resolve(null),
+        animDoc.hasFootstep2 ? downloadBlob(animStoragePath(id, animDoc.id, 'footstep2')) : Promise.resolve(null),
       ])
 
       let mesh: MeshData | null = null
@@ -2170,6 +2194,8 @@ async function fromDoc(data: Record<string, unknown>): Promise<Project> {
         physicsOverlay: animDoc.physicsOverlay ?? false,
         audioBlob,
         audioEnabled: animDoc.audioEnabled ?? false,
+        footstepSound1Blob,
+        footstepSound2Blob,
       }
     })
   )
@@ -2739,7 +2765,7 @@ export async function getAllProjects(): Promise<Project[]> {
 }
 
 export type AnimationUploadField =
-  | 'video' | 'audio'
+  | 'video' | 'audio' | 'footstep1' | 'footstep2'
   | 'contourOriginKeyframes' | 'contourOriginFrames'
   | 'contourAnchorKeyframes' | 'contourAnchorFrames'
   | 'contourSubdivisionFrames' | 'contourCannyFrames'
@@ -3004,12 +3030,13 @@ export async function updateProject(
         sam2ContourSubdivisionFrames: 'sam2ContourSubdivisionFrames.json',
         sam2SmoothedAnchorFrames: 'sam2SmoothedAnchorFrames.json',
       }
+      // Champs BLOBS (pas de suffixe .json) : vidéo, audio, sons de pas.
+      const BLOB_FIELDS = ['video', 'audio', 'footstep1', 'footstep2'] as const
+      const isBlobField = (BLOB_FIELDS as readonly string[]).includes(field)
       const storagePath = animStoragePath(
         id,
         animationId,
-        field === 'video' ? 'video'
-          : field === 'audio' ? 'audio'
-          : (fileNameForField[field] ?? `${field}.json`)
+        isBlobField ? field : (fileNameForField[field] ?? `${field}.json`)
       )
 
       if (field === 'video' && anim.videoBlob) {
@@ -3024,7 +3051,19 @@ export async function updateProject(
           uploadBlob(storagePath, anim.audioBlob)
             .then(() => console.log(`[Storage] Audio uploaded for animation ${animationId}`))
         )
-      } else if (field !== 'video' && field !== 'audio' && anim.mesh) {
+      } else if (field === 'footstep1' && anim.footstepSound1Blob) {
+        console.log(`[Storage] Uploading footstep1 for animation ${animationId}`)
+        uploads.push(
+          uploadBlob(storagePath, anim.footstepSound1Blob)
+            .then(() => console.log(`[Storage] Footstep1 uploaded for animation ${animationId}`))
+        )
+      } else if (field === 'footstep2' && anim.footstepSound2Blob) {
+        console.log(`[Storage] Uploading footstep2 for animation ${animationId}`)
+        uploads.push(
+          uploadBlob(storagePath, anim.footstepSound2Blob)
+            .then(() => console.log(`[Storage] Footstep2 uploaded for animation ${animationId}`))
+        )
+      } else if (!isBlobField && anim.mesh) {
         const jsonFieldMap: Record<string, unknown> = {
           contourOriginKeyframes: anim.mesh.contourOriginKeyframes,
           contourOriginFrames: anim.mesh.contourOriginFrames,
@@ -3074,6 +3113,8 @@ export async function updateProject(
 const ANIM_JSON_FILES = [
   'video',
   'audio',
+  'footstep1',
+  'footstep2',
   'contourOriginKeyframes.json',
   'contourOriginFrames.json',
   'contourAnchorKeyframes.json',
@@ -3226,7 +3267,8 @@ export async function deleteProject(id: string): Promise<void> {
 // silencieusement perdues à la duplication (le doc annonce has*=true mais le
 // fichier n'existe pas sur le nouveau projet).
 const ANIM_UPLOAD_FIELDS: AnimationUploadField[] = [
-  'video', 'audio', 'contourOriginKeyframes', 'contourOriginFrames',
+  'video', 'audio', 'footstep1', 'footstep2',
+  'contourOriginKeyframes', 'contourOriginFrames',
   'contourAnchorKeyframes', 'contourAnchorFrames',
   'contourSubdivisionFrames', 'contourCannyFrames',
   'anchorKeyframes', 'anchorFrames', 'boneWeights', 'videoFramesMesh',
@@ -3438,7 +3480,11 @@ export async function duplicateProject(sourceId: string, overrides?: DuplicatePr
         hints.push({ animationId: newAnimId, field })
       } else if (field === 'audio' && anim.audioBlob) {
         hints.push({ animationId: newAnimId, field })
-      } else if (field !== 'video' && field !== 'audio' && anim.mesh) {
+      } else if (field === 'footstep1' && anim.footstepSound1Blob) {
+        hints.push({ animationId: newAnimId, field })
+      } else if (field === 'footstep2' && anim.footstepSound2Blob) {
+        hints.push({ animationId: newAnimId, field })
+      } else if (field !== 'video' && field !== 'audio' && field !== 'footstep1' && field !== 'footstep2' && anim.mesh) {
         const val = anim.mesh[field as keyof typeof anim.mesh]
         if (val && (Array.isArray(val) ? val.length > 0 : true)) {
           hints.push({ animationId: newAnimId, field })
@@ -3906,14 +3952,20 @@ export async function loadProjectForPlayDeferred(project: Project): Promise<Proj
     project.animations.map(async anim => {
       const animDoc = projDoc?.animations.find(a => a.id === anim.id)
       const meshDoc = animDoc?.mesh as MeshDoc | null | undefined
-      const [audio, meshJson] = await Promise.all([
+      const [audio, footstep1, footstep2, meshJson] = await Promise.all([
         anim.audioBlob != null
           ? Promise.resolve(anim.audioBlob)
           : downloadBlob(animStoragePath(id, anim.id, 'audio')).catch(() => null),
+        anim.footstepSound1Blob != null
+          ? Promise.resolve(anim.footstepSound1Blob)
+          : (animDoc?.hasFootstep1 ? downloadBlob(animStoragePath(id, anim.id, 'footstep1')).catch(() => null) : Promise.resolve(null)),
+        anim.footstepSound2Blob != null
+          ? Promise.resolve(anim.footstepSound2Blob)
+          : (animDoc?.hasFootstep2 ? downloadBlob(animStoragePath(id, anim.id, 'footstep2')).catch(() => null) : Promise.resolve(null)),
         meshDoc ? loadAnimationJSONForPlay(id, anim.id, meshDoc) : Promise.resolve({}),
       ])
       const mesh: MeshData | null = anim.mesh ? { ...anim.mesh, ...(meshJson as Partial<MeshData>) } : null
-      return { ...anim, audioBlob: audio, mesh }
+      return { ...anim, audioBlob: audio, footstepSound1Blob: footstep1, footstepSound2Blob: footstep2, mesh }
     })
   )
 

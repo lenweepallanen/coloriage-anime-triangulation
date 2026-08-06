@@ -18,7 +18,7 @@ import TimelineEditor, { type TimelineSelection } from './timeline/TimelineEdito
 import ClipInspector from './timeline/ClipInspector'
 import { defaultControlPoints, fileToDecorLayer, formatMs, transitionFromKey, transitionToKey } from './filmEditorShared'
 import { FilmAudioScheduler } from '../../../utils/filmAudioScheduler'
-import { computeFootstepSchedule } from '../../../utils/footstepSync'
+import { computeFootstepSchedule, collectFootstepSoundBlobs } from '../../../utils/footstepSync'
 
 /**
  * Éditeur de FILM TIMELINE (v4) : canvas spatial (waypoints, caméra, chemins) en
@@ -150,7 +150,8 @@ export default function FilmEditorT({ project, onSave }: {
     const planStartMs = ctx.film.plans.map((_, i) => (i === ctx.planIndex ? 0 : Number.NaN))
     const durationMs = ctx.film.plans[ctx.planIndex].timeline.durationMs
     const sched = new FilmAudioScheduler(ctx.film, planStartMs, durationMs,
-      computeFootstepSchedule(ctx.film, project.animations, planStartMs))
+      computeFootstepSchedule(ctx.film, project.animations, planStartMs),
+      collectFootstepSoundBlobs(project.animations))
     let disposed = false
     let raf = 0
     sched.ready.then(async () => {
@@ -1137,143 +1138,25 @@ export default function FilmEditorT({ project, onSave }: {
         )}
       </div>
 
-      {/* Bruits de pas synchronisés */}
+      {/* Bruits de pas — réglés au niveau de l'ANIMATION de marche, le film ne porte qu'un toggle */}
       <div className="scene-editor-section-card">
-        <h4 className="scene-editor-section-title">Bruits de pas (synchronisés sur la marche)</h4>
-        <div style={{ fontSize: 11, opacity: 0.65, marginBottom: 8 }}>
-          Liez un ou deux sons de pas à une animation de marche : à la lecture, un son est
-          déclenché à CHAQUE contact au sol (détecté dans l'animation), en alternant pas 1 / pas 2.
-          Plus aucun calage manuel.
+        <h4 className="scene-editor-section-title">Bruits de pas</h4>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input
+              type="checkbox"
+              checked={film.footstepsEnabled !== false}
+              onChange={(e) => updateFilm({ footstepsEnabled: e.target.checked })}
+            />
+            🦶 Jouer les bruits de pas (réglés sur l'animation de marche)
+          </label>
         </div>
-        {(film.footstepSounds ?? []).map((cfg, ci) => {
-          const patchCfg = (partial: Partial<typeof cfg> | null) => {
-            const list = [...(film.footstepSounds ?? [])]
-            if (partial == null) list.splice(ci, 1)
-            else list[ci] = { ...cfg, ...partial }
-            updateFilm({ footstepSounds: list })
-          }
-          const soundName = (id: string) => film.sounds.find(x => x.id === id)?.name ?? '?'
-          const cfgAnim = project.animations.find(a => a.id === cfg.animationId)
-          const legZoneIds = Object.keys(cfgAnim?.mesh?.walkZoneFramesSmoothed ?? cfgAnim?.mesh?.walkZoneFrames ?? {})
-          const zoneLabel = (zid: string) =>
-            project.projectTriangulation?.zones.find(z => z.id === zid)?.label
-            ?? ({ 'leg-fl': 'Patte AVG', 'leg-fr': 'Patte AVD', 'leg-bl': 'Patte ARG', 'leg-br': 'Patte ARD' } as Record<string, string>)[zid]
-            ?? zid
-          const LBL: React.CSSProperties = { fontSize: 12, opacity: 0.8, minWidth: 150 }
-          const ROWL: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }
-          return (
-            <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0', borderTop: ci > 0 ? '1px solid var(--border)' : 'none' }}>
-              <div style={ROWL}>
-                <span style={{ ...LBL, fontWeight: 600, opacity: 1 }}>Animation de marche</span>
-                <select
-                  value={cfg.animationId}
-                  onChange={(e) => patchCfg({ animationId: e.target.value, zoneIds: undefined })}
-                  style={{ minWidth: 200 }}
-                >
-                  {readyAnimations.map(a => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
-                </select>
-                <div style={{ flex: 1 }} />
-                <button className="btn-icon btn-sm btn-danger" onClick={() => {
-                  for (const sid of cfg.soundIds) onFilmSoundDeleted(sid)
-                  updateFilm({
-                    sounds: film.sounds.filter(x => !cfg.soundIds.includes(x.id)),
-                    footstepSounds: (film.footstepSounds ?? []).filter((_, i) => i !== ci),
-                  })
-                }} title="Supprimer cette liaison (et ses sons)">&times;</button>
-              </div>
-              {legZoneIds.length > 0 && (
-                <div style={ROWL} title="Pattes qui PORTENT (déclenchent un pas au contact du sol). Bipède type T-Rex : cochez uniquement les pattes ARRIÈRE — les avant (et la tête !) balancent sans toucher le sol.">
-                  <span style={LBL}>Pattes au sol</span>
-                  {legZoneIds.map(zid => {
-                    const active = cfg.zoneIds == null || cfg.zoneIds.includes(zid)
-                    return (
-                      <label key={zid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, whiteSpace: 'nowrap' }}>
-                        <input
-                          type="checkbox"
-                          checked={active}
-                          onChange={(e) => {
-                            const current = cfg.zoneIds ?? legZoneIds
-                            const next = e.target.checked
-                              ? [...current.filter(z => z !== zid), zid]
-                              : current.filter(z => z !== zid)
-                            patchCfg({ zoneIds: next.length === legZoneIds.length ? undefined : next })
-                          }}
-                        />
-                        {zoneLabel(zid)}
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-              <div style={ROWL}>
-                <span style={LBL}>Sons (alternés)</span>
-                {cfg.soundIds.map((sid, si) => (
-                  <span key={sid} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-full, 999px)', padding: '3px 10px', whiteSpace: 'nowrap' }}>
-                    🦶{si + 1} {soundName(sid)}
-                    <button
-                      className="btn-icon btn-sm btn-danger"
-                      onClick={() => {
-                        onFilmSoundDeleted(sid)
-                        updateFilm({
-                          footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: c.soundIds.filter(x => x !== sid) } : c),
-                          sounds: film.sounds.filter(x => x.id !== sid),
-                        })
-                      }}
-                      title="Retirer ce son"
-                    >&times;</button>
-                  </span>
-                ))}
-                {cfg.soundIds.length < 2 && (
-                  <label className="btn-secondary btn-sm" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                    + pas{cfg.soundIds.length + 1}.mp3
-                    <input
-                      type="file" accept="audio/*" style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        e.target.value = ''
-                        if (!file) return
-                        const id = crypto.randomUUID()
-                        onFilmSoundImported(id)
-                        updateFilm({
-                          sounds: [...film.sounds, { id, name: file.name, blob: file }],
-                          footstepSounds: (film.footstepSounds ?? []).map((c, i) => i === ci ? { ...c, soundIds: [...c.soundIds, id] } : c),
-                        })
-                      }}
-                    />
-                  </label>
-                )}
-              </div>
-              <div style={ROWL}>
-                <span style={LBL}>Volume : {Math.round((cfg.volume ?? 1) * 100)}%</span>
-                <input
-                  type="range" min={0} max={1} step={0.05}
-                  value={cfg.volume ?? 1}
-                  onChange={(e) => patchCfg({ volume: parseFloat(e.target.value) })}
-                  style={{ width: 160, flexShrink: 0 }}
-                />
-                <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 12, whiteSpace: 'nowrap' }} title="Négatif = le son part plus tôt, positif = plus tard">Décalage (ms)</span>
-                <input
-                  type="number" step={10}
-                  value={cfg.offsetMs ?? 0}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10)
-                    patchCfg({ offsetMs: Number.isFinite(v) && v !== 0 ? v : undefined })
-                  }}
-                  style={{ width: 90, flexShrink: 0 }}
-                />
-              </div>
-            </div>
-          )
-        })}
-        <button
-          className="btn-secondary btn-sm"
-          style={{ marginTop: 6 }}
-          disabled={readyAnimations.length === 0}
-          onClick={() => {
-            const walkAnim = readyAnimations.find(a => a.id === film.moveAnimationId) ?? readyAnimations[0]
-            updateFilm({ footstepSounds: [...(film.footstepSounds ?? []), { animationId: walkAnim.id, soundIds: [] }] })
-          }}
-        >+ Lier des bruits de pas à une animation</button>
+        {!project.animations.some(a => a.mesh?.footstepValidated) && (
+          <div style={{ fontSize: 11, opacity: 0.65, marginTop: 6 }}>
+            Aucune animation de ce projet n'a de bruits de pas validés — réglez-les dans
+            l'étape « Bruits de pas » de l'animation marche.
+          </div>
+        )}
       </div>
 
       {/* Durée totale */}

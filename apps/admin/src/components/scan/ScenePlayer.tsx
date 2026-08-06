@@ -21,7 +21,7 @@ import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type
 import { FilmDirector, resolveFilmPlans } from '../../utils/filmDirector'
 import { FilmTimelineSampler } from '../../utils/filmTimelineSampler'
 import { FilmAudioScheduler } from '../../utils/filmAudioScheduler'
-import { computeFootstepSchedule } from '../../utils/footstepSync'
+import { computeFootstepSchedule, collectFootstepSoundBlobs } from '../../utils/footstepSync'
 import { startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
@@ -1154,7 +1154,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Sons + musique planifiés en WebAudio sur l'horloge du ctx partagé —
       // qui devient l'horloge MAÎTRESSE du film (zéro dérive audio/visuel).
       const scheduler = new FilmAudioScheduler(filmT, sampler.planStartMs, sampler.totalMs,
-        computeFootstepSchedule(filmT, project.animations, sampler.planStartMs))
+        computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
+        collectFootstepSoundBlobs(project.animations))
       filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, lastAnimKey: null, launchedTransitionTo: -1, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
     }

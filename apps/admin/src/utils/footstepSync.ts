@@ -91,10 +91,32 @@ export interface FootstepOneShot {
   volume?: number
 }
 
+/** Clé de son one-shot pour le pas n (1|2) d'une animation — référencée par les
+ *  one-shots et résolue via `extraSounds` du FilmAudioScheduler. */
+export function footstepSoundKey(animId: string, n: 1 | 2): string {
+  return `anim:${animId}:${n}`
+}
+
+/** Map clé → blob des sons de pas attachés aux animations du projet, à passer
+ *  au FilmAudioScheduler (`extraSounds`) pour le pré-décodage. */
+export function collectFootstepSoundBlobs(animations: Animation[]): Map<string, Blob> {
+  const out = new Map<string, Blob>()
+  for (const a of animations) {
+    if (a.footstepSound1Blob) out.set(footstepSoundKey(a.id, 1), a.footstepSound1Blob)
+    if (a.footstepSound2Blob) out.set(footstepSoundKey(a.id, 2), a.footstepSound2Blob)
+  }
+  return out
+}
+
 /**
  * Planning des bruits de pas du film : parcourt les clips motion (anim de marche
- * du trajet) et les AnimClips utilisant une animation liée, et pose un one-shot
- * à chaque contact au sol (cycles bouclés sur la durée du clip).
+ * du trajet) et les AnimClips, et pose un one-shot à chaque contact au sol
+ * (cycles bouclés sur la durée du clip). Les réglages viennent de l'ANIMATION :
+ * `mesh.footstepFrames` (frames validées à l'étape « Bruits de pas »),
+ * `footstepVolume`/`footstepOffsetMs`, sons `footstepSound1/2Blob` alternés.
+ * Sans frames validées : fallback heuristique `detectFootstepFrames` UNIQUEMENT
+ * si l'animation a des sons de pas attachés. Le film ne porte plus qu'un toggle
+ * `footstepsEnabled` (défaut true).
  * `planStartMs` = offsets absolus des plans (NaN = plan inactif), cf. sampler.
  */
 export function computeFootstepSchedule(
@@ -102,26 +124,41 @@ export function computeFootstepSchedule(
   animations: Animation[],
   planStartMs: number[],
 ): FootstepOneShot[] {
-  const configs = new Map((film.footstepSounds ?? [])
-    .filter(c => c.soundIds.length > 0)
-    .map(c => [c.animationId, c]))
-  if (configs.size === 0) return []
-  const framesCache = new Map<string, { events: number[]; total: number }>()
-  const eventsOf = (animId: string, zoneIds?: string[]) => {
-    const key = animId + '|' + (zoneIds?.join(',') ?? '*')
-    let entry = framesCache.get(key)
+  if (film.footstepsEnabled === false) return []
+  interface AnimFootsteps {
+    events: number[]
+    total: number
+    soundKeys: string[]
+    volume?: number
+    offsetMs: number
+  }
+  const framesCache = new Map<string, AnimFootsteps>()
+  const entryOf = (animId: string): AnimFootsteps => {
+    let entry = framesCache.get(animId)
     if (!entry) {
       const anim = animations.find(a => a.id === animId)
+      const soundKeys: string[] = []
+      if (anim?.footstepSound1Blob) soundKeys.push(footstepSoundKey(anim.id, 1))
+      if (anim?.footstepSound2Blob) soundKeys.push(footstepSoundKey(anim.id, 2))
       const raw = anim?.mesh?.walkBodyFrames?.length ?? anim?.mesh?.videoFramesMesh?.length ?? 0
       // Cycle VISUEL de la LoopPlayback : les crossfadeFrames de fin sont
       // fondues dans le début → la boucle affichée est plus courte que `raw`.
       const total = Math.max(1, raw - (anim?.mesh?.crossfadeFrames ?? 7))
-      const events = (anim ? detectFootstepFrames(anim, zoneIds) : []).filter(e => e < total)
-      entry = { events, total }
-      framesCache.set(key, entry)
-      if (import.meta.env.DEV) {
+      const validated = anim?.mesh?.footstepFrames
+      const events = (soundKeys.length === 0 ? []
+        : (validated != null && validated.length > 0 ? [...validated] : (anim ? detectFootstepFrames(anim) : []))
+      ).filter(e => e >= 0 && e < total).sort((a, b) => a - b)
+      entry = {
+        events,
+        total,
+        soundKeys,
+        ...(anim?.mesh?.footstepVolume != null && { volume: anim.mesh.footstepVolume }),
+        offsetMs: anim?.mesh?.footstepOffsetMs ?? 0,
+      }
+      framesCache.set(animId, entry)
+      if (import.meta.env.DEV && soundKeys.length > 0) {
         // eslint-disable-next-line no-console
-        console.log(`[Pas] "${anim?.name ?? animId.slice(0, 8)}" (pattes: ${zoneIds?.join(', ') ?? 'toutes'}) : ${events.length} contact(s)/cycle aux frames [${events.join(', ')}] — cycle ${total} frames ≈ ${Math.round((total / FILM_FPS) * 1000)} ms`)
+        console.log(`[Pas] "${anim?.name ?? animId.slice(0, 8)}" (${validated?.length ? 'frames validées' : 'auto-détection'}) : ${events.length} contact(s)/cycle aux frames [${events.join(', ')}] — cycle ${total} frames ≈ ${Math.round((total / FILM_FPS) * 1000)} ms`)
       }
     }
     return entry
@@ -130,10 +167,9 @@ export function computeFootstepSchedule(
   const out: FootstepOneShot[] = []
   let stepCounter = 0
   const emit = (base: number, startMs: number, durationMs: number, animId: string, speedMul: number) => {
-    const cfg = configs.get(animId)
-    if (!cfg || durationMs <= 0) return
-    const { events, total } = eventsOf(animId, cfg.zoneIds)
-    if (events.length === 0 || total === 0) return
+    if (durationMs <= 0) return
+    const { events, total, soundKeys, volume, offsetMs } = entryOf(animId)
+    if (events.length === 0 || soundKeys.length === 0 || total === 0) return
     const mul = Math.max(0.01, speedMul)
     const msPerFrame = 1000 / (FILM_FPS * mul)
     const cycleMs = total * msPerFrame
@@ -142,9 +178,9 @@ export function computeFootstepSchedule(
         const t = (e + k * total) * msPerFrame
         if (t >= durationMs) break
         out.push({
-          timeMs: Math.max(0, base + startMs + t + (cfg.offsetMs ?? 0)),
-          soundId: cfg.soundIds[stepCounter++ % cfg.soundIds.length],
-          ...(cfg.volume != null && { volume: cfg.volume }),
+          timeMs: Math.max(0, base + startMs + t + offsetMs),
+          soundId: soundKeys[stepCounter++ % soundKeys.length],
+          ...(volume != null && { volume }),
         })
       }
     }

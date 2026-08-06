@@ -61,8 +61,11 @@ export class FilmAudioScheduler {
    *   valeurs que `FilmTimelineSampler.planStartMs` (NaN = plan inactif, ignoré).
    *   Pour la lecture d'un seul plan (éditeur) : `[NaN, …, 0, …, NaN]`.
    * @param oneShots Sons ponctuels à temps absolu (bruits de pas synchronisés).
+   * @param extraSounds Blobs additionnels hors bibliothèque du film, keyés par
+   *   soundId (ex. clés `anim:{animId}:1|2` des sons de pas portés par les
+   *   animations) — ajoutés au pré-décodage, référençables par les one-shots.
    */
-  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[]) {
+  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[], extraSounds?: Map<string, Blob>) {
     this.ctx = getSharedAudioContext()
     this.master = this.ctx.createGain()
     this.master.connect(this.ctx.destination)
@@ -108,7 +111,7 @@ export class FilmAudioScheduler {
     const soundById = new Map(film.sounds.map(snd => [snd.id, snd]))
     if (film.music) soundById.set(film.music.id, film.music)
     this.ready = Promise.all(Array.from(wanted).map(async id => {
-      const blob = soundById.get(id)?.blob
+      const blob = soundById.get(id)?.blob ?? extraSounds?.get(id)
       if (!blob) return
       try {
         const arrayBuf = await blob.arrayBuffer()

@@ -277,6 +277,15 @@ export interface MeshData {
   marcheLegPhases?: Record<string, number>;
   // Étape 3 : params + sortie via walkParams + walkBodyFrames + walkZoneFrames (champs existants)
 
+  // ─── Bruits de pas (étape « Bruits de pas » des animations de marche) ────
+  // Frames de CONTACT AU SOL validées à la main (indices dans le cycle VISUEL,
+  // c.-à-d. < total − crossfadeFrames). Les sons pas1/pas2 sont sur
+  // Animation.footstepSound1Blob / footstepSound2Blob (alternés à la lecture).
+  footstepFrames?: number[];
+  footstepVolume?: number;       // 0..1 (défaut 1)
+  footstepOffsetMs?: number;     // négatif = le son part plus tôt
+  footstepValidated?: boolean;
+
   // Walk animation data (optional — only used by walk animations)
   walkLimbSeparation?: WalkLimbSeparation | null;
   walkLimbSeparationValidated?: boolean;
@@ -677,6 +686,10 @@ export interface Animation {
   physicsOverlay: boolean;
   audioBlob: Blob | null;
   audioEnabled: boolean;
+  /** Sons de pas 1/2 (alternés) réglés à l'étape « Bruits de pas » de la marche.
+   *  Storage : projects/{id}/animations/{animId}/footstep1|footstep2. */
+  footstepSound1Blob?: Blob | null;
+  footstepSound2Blob?: Blob | null;
 }
 
 /**
@@ -1206,13 +1219,10 @@ export interface FilmT {
   sounds: FilmSound[];
   /** Musique de fond globale, bouclée sur toute la durée du film. */
   music?: FilmSound;
-  /** Bruits de pas : sons liés à une animation de marche. À la lecture, un son
-   *  est déclenché à CHAQUE contact au sol détecté dans l'animation (point le
-   *  plus bas du cycle de chaque patte), en alternant les soundIds (pas1/pas2). */
-  /** `zoneIds` : pattes qui PORTENT (contact au sol). Absent = toutes. Bipède
-   *  (T-Rex) : cocher uniquement les pattes arrière — les avant balancent sans
-   *  toucher le sol et créeraient des pas fantômes. */
-  footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[];
+  /** Jouer les bruits de pas réglés au niveau des ANIMATIONS de marche
+   *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
+   *  Défaut : true (absent = activé). */
+  footstepsEnabled?: boolean;
   /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
   moveAnimationId?: string;
   moveSpeedPxPerSec: number;
