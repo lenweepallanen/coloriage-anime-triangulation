@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSharedAudioContext } from '../../../../utils/mouthAudioAnalyser'
 import type { Animation, FilmPlanTimeline, FilmSound } from '../../../../types/project'
-import { exclusiveTrackBounds } from '../../../../utils/filmTimeline'
+import { exclusiveTrackBounds, FILM_FPS } from '../../../../utils/filmTimeline'
 import { FILM_COLORS, formatMs } from '../filmEditorShared'
 
 /**
@@ -346,6 +346,43 @@ export default function TimelineEditor({
   }
 
   const animName = (id: string) => animations.find(a => a.id === id)?.name ?? id.slice(0, 6)
+
+  /** Repères des CYCLES internes d'un clip animation : traits verticaux à chaque
+   *  reprise de boucle ; en « 1× puis figé », trait de fin de passe + zone
+   *  hachurée « figé ». Permet de suivre où en est l'animation dans le bloc. */
+  const animCycleOverlay = (c: { animationId: string; durationMs: number; speedMul?: number; fillMode: 'loop' | 'once-hold' }) => {
+    const a = animations.find(x => x.id === c.animationId)
+    const raw = a?.mesh?.videoFramesMesh?.length ?? a?.mesh?.walkBodyFrames?.length ?? 0
+    if (!raw) return undefined
+    const mul = Math.max(0.01, c.speedMul ?? 1)
+    // Boucle : cycle VISUEL (crossfade de fin fondu dans le début).
+    const effFrames = c.fillMode === 'loop' ? Math.max(1, raw - (a?.mesh?.crossfadeFrames ?? 7)) : raw
+    const cycleMs = (effFrames / (FILM_FPS * mul)) * 1000
+    const w = Math.max(6, msToPx(c.durationMs))
+    const cyclePx = msToPx(cycleMs)
+    if (cyclePx < 4) return undefined
+    const els: React.ReactNode[] = []
+    if (c.fillMode === 'loop') {
+      for (let x = cyclePx, i = 0; x < w - 2 && i < 200; x += cyclePx, i++) {
+        els.push(<div key={i} style={{ position: 'absolute', left: x, top: 2, bottom: 2, width: 1, background: 'rgba(255,255,255,0.55)' }} title="Reprise de la boucle" />)
+      }
+    } else if (cyclePx < w - 2) {
+      els.push(<div key="end" style={{ position: 'absolute', left: cyclePx, top: 2, bottom: 2, width: 2, background: 'rgba(255,255,255,0.7)' }} />)
+      els.push(
+        <div
+          key="frozen"
+          style={{
+            position: 'absolute', left: cyclePx + 2, right: 0, top: 0, bottom: 0,
+            background: 'repeating-linear-gradient(45deg, rgba(0,0,0,0.3) 0 4px, transparent 4px 8px)',
+            fontSize: 8, color: 'rgba(255,255,255,0.75)', display: 'flex', alignItems: 'flex-end',
+            justifyContent: 'flex-end', padding: '0 4px 2px 0',
+          }}
+        >{msToPx(c.durationMs - cycleMs) > 34 ? 'figé' : ''}</div>,
+      )
+    }
+    if (els.length === 0) return undefined
+    return <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>{els}</div>
+  }
   const soundName = (id: string) => sounds.find(x => x.id === id)?.name ?? id.slice(0, 6)
 
   // Graduations : pas adapté au zoom (1 s / 2 s / 5 s).
@@ -445,6 +482,10 @@ export default function TimelineEditor({
         {trackRow('Animation', timeline.anim.map(c => renderClip(
           { kind: 'anim', id: c.id }, c, FILM_COLORS.action,
           animName(c.animationId), c.fillMode === 'loop' ? '🔁' : '1×',
+          undefined,
+          undefined,
+          TRACK_H,
+          animCycleOverlay(c),
         )))}
         {timeline.soundTracks.map((track, ti) => trackRow(
           `Son ${ti + 1}`,
