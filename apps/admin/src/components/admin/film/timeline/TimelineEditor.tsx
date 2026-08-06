@@ -433,17 +433,22 @@ export default function TimelineEditor({
         els.push(<div key={i} style={{ position: 'absolute', left: x, top: 2, bottom: 2, width: 1, background: 'rgba(255,255,255,0.55)' }} title="Reprise de la boucle" />)
       }
     } else if (cyclePx < w - 2) {
-      els.push(<div key="end" style={{ position: 'absolute', left: cyclePx, top: 2, bottom: 2, width: 2, background: 'rgba(255,255,255,0.7)' }} />)
+      // Zone « figé » (après la passe unique) : hachures CLAIRES et discrètes —
+      // la couleur du bloc reste dominante, le clip se lit d'un seul tenant
+      // jusqu'à son bord droit (des hachures sombres donnaient l'impression
+      // que le bloc s'arrêtait à la fin de la passe).
+      els.push(<div key="end" style={{ position: 'absolute', left: cyclePx, top: 2, bottom: 2, width: 1, background: 'rgba(255,255,255,0.55)' }} />)
       els.push(
         <div
           key="frozen"
+          title="Animation figée sur sa dernière frame jusqu'à la fin du bloc (mode 1× puis figé — passer en 🔁 Boucle pour répéter)"
           style={{
-            position: 'absolute', left: cyclePx + 2, right: 0, top: 0, bottom: 0,
-            background: 'repeating-linear-gradient(45deg, rgba(0,0,0,0.3) 0 4px, transparent 4px 8px)',
-            fontSize: 8, color: 'rgba(255,255,255,0.75)', display: 'flex', alignItems: 'flex-end',
-            justifyContent: 'flex-end', padding: '0 4px 2px 0',
+            position: 'absolute', left: cyclePx + 1, right: 0, top: 0, bottom: 0,
+            background: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.12) 0 5px, transparent 5px 10px)',
+            fontSize: 9, color: 'rgba(255,255,255,0.9)', display: 'flex', alignItems: 'flex-end',
+            justifyContent: 'flex-end', padding: '0 4px 2px 0', textShadow: '0 1px 2px rgba(0,0,0,0.8)',
           }}
-        >{msToPx(c.durationMs - cycleMs) > 34 ? 'figé' : ''}</div>,
+        >{msToPx(c.durationMs - cycleMs) > 30 ? '⏸ figé' : ''}</div>,
       )
     }
     if (els.length === 0) return undefined
