@@ -42,6 +42,7 @@ export default function FilmCanvasT({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [wrapW, setWrapW] = useState(800)
+  const [zoom, setZoom] = useState(1)
   const centeredRef = useRef<string | null>(null)
   const [bgImg, setBgImg] = useState<HTMLImageElement | null>(null)
   const [charImg, setCharImg] = useState<HTMLImageElement | null>(null)
@@ -147,21 +148,45 @@ export default function FilmCanvasT({
   const fullW = layerW + 2 * OUT_M
   const fullH = layerH + 2 * OUT_M
   const aspect = fullH > 0 && fullW > 0 ? fullH / fullW : 9 / 16
-  // Le DÉCOR garde ~la largeur de la fenêtre ; le canvas total est donc plus large.
-  const canvasW = layerW > 0 ? Math.round((wrapW - 20) * (fullW / layerW)) : wrapW
+  // Le DÉCOR garde ~la largeur de la fenêtre (× zoom) ; le canvas total est plus large.
+  const canvasW = layerW > 0 ? Math.round((wrapW - 20) * (fullW / layerW) * zoom) : wrapW
   const canvasH = Math.round(canvasW * aspect)
   const sX = fullW > 0 ? canvasW / fullW : 1
   const sY = fullH > 0 ? canvasH / fullH : 1
   const toScreen = (p: Point2D) => ({ x: (p.x + OUT_M) * sX, y: (p.y + OUT_M) * sY })
   const toLayer = (sx: number, sy: number): Point2D => ({ x: sx / sX - OUT_M, y: sy / sY - OUT_M })
 
+  // Zoom Ctrl/Cmd+molette ancré sur le curseur (molette seule = défilement natif).
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || !hasBackdrop) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const cur = zoomRef.current
+      const next = Math.min(4, Math.max(0.3, cur * (e.deltaY < 0 ? 1.2 : 1 / 1.2)))
+      if (next === cur) return
+      const rect = el.getBoundingClientRect()
+      const fx = (e.clientX - rect.left + el.scrollLeft) / Math.max(1, el.scrollWidth)
+      const fy = (e.clientY - rect.top + el.scrollTop) / Math.max(1, el.scrollHeight)
+      setZoom(next)
+      requestAnimationFrame(() => {
+        el.scrollLeft = fx * el.scrollWidth - (e.clientX - rect.left)
+        el.scrollTop = fy * el.scrollHeight - (e.clientY - rect.top)
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [hasBackdrop])
+
   // Centre le scroll sur le décor à l'ouverture (une fois par plan/décor).
   useEffect(() => {
     const el = wrapRef.current
     if (!el || !hasBackdrop || layerW <= 0) return
-    const key = `${plan.id}:${canvasW}`
-    if (centeredRef.current === key) return
-    centeredRef.current = key
+    if (centeredRef.current === plan.id) return
+    centeredRef.current = plan.id
     el.scrollLeft = Math.max(0, OUT_M * sX - (el.clientWidth - layerW * sX) / 2)
     el.scrollTop = Math.max(0, OUT_M * sY - (el.clientHeight - layerH * sY) / 2)
   }, [hasBackdrop, canvasW, plan.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -503,14 +528,22 @@ export default function FilmCanvasT({
     )
   }
 
+  const applyZoom = (next: number) => setZoom(Math.min(4, Math.max(0.3, next)))
   return (
-    <div
-      ref={wrapRef}
-      style={{
-        width: '100%', maxHeight: '62vh', overflow: 'auto',
-        border: '1px solid #333', borderRadius: 4, background: '#101010',
-      }}
-    >
+    <div style={{ position: 'relative' }}>
+      <div style={{ position: 'absolute', top: 6, right: 6, zIndex: 5, display: 'flex', gap: 4, alignItems: 'center', background: 'rgba(20,20,20,0.85)', borderRadius: 6, padding: '2px 6px' }}>
+        <button className="btn-icon btn-sm" onClick={() => applyZoom(zoom / 1.25)} title="Dézoomer (Ctrl/Cmd + molette)">−</button>
+        <span style={{ fontSize: 11, minWidth: 38, textAlign: 'center', color: '#ddd' }}>{Math.round(zoom * 100)}%</span>
+        <button className="btn-icon btn-sm" onClick={() => applyZoom(zoom * 1.25)} title="Zoomer (Ctrl/Cmd + molette)">+</button>
+        <button className="btn-icon btn-sm" onClick={() => { setZoom(1); centeredRef.current = null }} title="Réinitialiser la vue (100 %, centrée sur le décor)">⟲</button>
+      </div>
+      <div
+        ref={wrapRef}
+        style={{
+          width: '100%', maxHeight: '62vh', overflow: 'auto',
+          border: '1px solid #333', borderRadius: 4, background: '#101010',
+        }}
+      >
       <canvas
         ref={canvasRef}
         style={{ display: 'block', width: canvasW, height: canvasH, cursor: 'crosshair', touchAction: 'none' }}
@@ -519,6 +552,7 @@ export default function FilmCanvasT({
         onPointerUp={onPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       />
+      </div>
     </div>
   )
 }
