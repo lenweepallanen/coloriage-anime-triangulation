@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useI18n, type Lang } from '../i18n'
+import NetworkOverlay from './NetworkOverlay'
 
 /**
  * Layout commun des écrans PLAY (hors scan /p/:id) :
@@ -10,6 +11,7 @@ export default function PlayShell() {
   return (
     <div className="play-shell">
       <div className="shell-bg" aria-hidden="true" />
+      <NetworkOverlay />
       <TopMenu />
       <main className="shell-content">
         <Outlet />

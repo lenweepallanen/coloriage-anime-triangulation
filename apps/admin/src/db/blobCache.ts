@@ -1,5 +1,6 @@
 import { ref, getMetadata, getDownloadURL } from 'firebase/storage'
 import { storage } from './firebase'
+import { beginDownload, progressDownload, endDownload } from '../utils/downloadProgress'
 
 /**
  * Cache local des blobs Cloud Storage (IndexedDB).
@@ -114,13 +115,41 @@ export async function cachedDownloadBlob(path: string): Promise<Blob | null> {
     const url = await getDownloadURL(storageRef)
     const response = await fetch(url)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const blob = await response.blob()
+    const blob = await readBlobWithProgress(response)
     stats.misses++
     void idbPut({ path, generation, blob, cachedAt: Date.now() })
     return blob
   } catch (err) {
     console.warn(`[blobCache] Download failed for ${path}:`, err)
     return cached?.blob ?? null
+  }
+}
+
+/**
+ * Lit le corps de la réponse en flux pour alimenter le suivi de progression
+ * GLOBAL (barre + message « connexion lente » côté play). Repli sur
+ * `response.blob()` si le streaming n'est pas disponible (vieux navigateurs).
+ */
+async function readBlobWithProgress(response: Response): Promise<Blob> {
+  const totalBytes = Number(response.headers.get('content-length')) || 0
+  const type = response.headers.get('content-type') || ''
+  const body = response.body
+  if (!body || typeof body.getReader !== 'function') {
+    const id = beginDownload(totalBytes)
+    try { return await response.blob() } finally { endDownload(id) }
+  }
+  const id = beginDownload(totalBytes)
+  try {
+    const reader = body.getReader()
+    const chunks: Uint8Array[] = []
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) { chunks.push(value); progressDownload(id, value.length) }
+    }
+    return new Blob(chunks as BlobPart[], type ? { type } : undefined)
+  } finally {
+    endDownload(id)
   }
 }
 

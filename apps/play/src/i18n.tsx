@@ -12,6 +12,11 @@ const DICT: Record<Lang, Record<string, string>> = {
   fr: {
     'loading': 'Chargement…',
     'loading.hint': 'Cela peut prendre quelques instants…',
+    'net.offline': 'Pas de connexion internet',
+    'net.offline.sub': 'Reconnecte-toi pour continuer',
+    'net.slow': 'Ta connexion est un peu lente…',
+    'net.slow.sub': 'Patiente, ça arrive ! 🐢',
+    'net.downloading': 'Téléchargement en cours…',
     'common.coloring': 'Coloriage',
     'tagline.line1': 'Colorie. Scanne.',
     'tagline.line2.pre': 'Ton coloriage ',
@@ -102,6 +107,11 @@ const DICT: Record<Lang, Record<string, string>> = {
   en: {
     'loading': 'Loading…',
     'loading.hint': 'This can take a few moments…',
+    'net.offline': 'No internet connection',
+    'net.offline.sub': 'Reconnect to continue',
+    'net.slow': 'Your connection is a bit slow…',
+    'net.slow.sub': 'Hang on, almost there! 🐢',
+    'net.downloading': 'Downloading…',
     'common.coloring': 'Coloring',
     'tagline.line1': 'Color. Scan.',
     'tagline.line2.pre': 'Your coloring ',
