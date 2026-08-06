@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { getSharedAudioContext } from '../../../../utils/mouthAudioAnalyser'
 import type { Animation, FilmPlanTimeline, FilmSound } from '../../../../types/project'
 import { exclusiveTrackBounds } from '../../../../utils/filmTimeline'
 import { FILM_COLORS, formatMs } from '../filmEditorShared'
@@ -24,6 +25,8 @@ export interface TimelineEditorProps {
   /** Mutation d'un clip (drag/resize). `commit` = fin de geste (pointerup). */
   onPatchClip: (sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number }) => void
   onRemoveClip: (sel: NonNullable<TimelineSelection>) => void
+  /** ⧉ : duplique le clip (anim/son), copie posée juste après l'original. */
+  onDuplicateClip: (sel: NonNullable<TimelineSelection>) => void
   /** Double-clic sur une piste son : poser un clip à cet instant. */
   onAddSoundAt: (trackIndex: number, atMs: number) => void
   onAddSoundTrack: () => void
@@ -34,11 +37,98 @@ export interface TimelineEditorProps {
 }
 
 const TRACK_H = 34
+/** Pistes SONS plus hautes : la forme d'onde y est dessinée (aide au montage). */
+const SOUND_TRACK_H = 52
 const RULER_H = 22
 const LABEL_W = 92
 
+// --- Crêtes audio (cache par soundId, décodage via le ctx partagé) ---
+const peaksCache = new Map<string, Promise<{ peaks: Float32Array; durationMs: number } | null>>()
+function getPeaks(soundId: string, blob: Blob): Promise<{ peaks: Float32Array; durationMs: number } | null> {
+  let entry = peaksCache.get(soundId)
+  if (!entry) {
+    entry = (async () => {
+      try {
+        const ctx = getSharedAudioContext()
+        const buf: AudioBuffer = await new Promise((resolve, reject) => {
+          blob.arrayBuffer().then(ab => {
+            try {
+              const ret = ctx.decodeAudioData(ab, b => resolve(b), e => reject(e))
+              if (ret && typeof (ret as Promise<AudioBuffer>).then === 'function') (ret as Promise<AudioBuffer>).then(resolve, reject)
+            } catch (e) { reject(e) }
+          }, reject)
+        })
+        const data = buf.getChannelData(0)
+        const buckets = 240
+        const peaks = new Float32Array(buckets)
+        const step = Math.max(1, Math.floor(data.length / buckets))
+        let maxAll = 0
+        for (let b = 0; b < buckets; b++) {
+          let m = 0
+          const start = b * step
+          for (let i = start; i < Math.min(start + step, data.length); i += 4) {
+            const v = Math.abs(data[i])
+            if (v > m) m = v
+          }
+          peaks[b] = m
+          if (m > maxAll) maxAll = m
+        }
+        if (maxAll > 0) for (let b = 0; b < buckets; b++) peaks[b] /= maxAll
+        return { peaks, durationMs: buf.duration * 1000 }
+      } catch {
+        return null
+      }
+    })()
+    peaksCache.set(soundId, entry)
+  }
+  return entry
+}
+
+/** Forme d'onde dessinée DANS un clip son (tuiles répétées si boucle, vitesse ×rate). */
+function Waveform({ soundId, blob, clipMs, rate, loop, widthPx, heightPx }: {
+  soundId: string
+  blob: Blob | null
+  clipMs: number
+  rate: number
+  loop: boolean
+  widthPx: number
+  heightPx: number
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    if (!blob) return
+    let dead = false
+    void getPeaks(soundId, blob).then(res => {
+      const canvas = ref.current
+      if (dead || !res || !canvas) return
+      const w = Math.max(2, Math.round(widthPx))
+      const h = Math.max(2, Math.round(heightPx))
+      canvas.width = w
+      canvas.height = h
+      const ctx2d = canvas.getContext('2d')
+      if (!ctx2d) return
+      ctx2d.clearRect(0, 0, w, h)
+      ctx2d.fillStyle = 'rgba(255,255,255,0.5)'
+      const tileMs = res.durationMs / Math.max(0.01, rate)
+      const tilePx = (tileMs / Math.max(1, clipMs)) * w
+      const tiles = loop ? Math.ceil(w / Math.max(1, tilePx)) : 1
+      const mid = h / 2
+      for (let t = 0; t < tiles; t++) {
+        const x0 = t * tilePx
+        for (let x = 0; x < Math.min(tilePx, w - x0); x += 2) {
+          const bucket = Math.min(res.peaks.length - 1, Math.floor((x / tilePx) * res.peaks.length))
+          const amp = Math.max(0.06, res.peaks[bucket]) * (mid - 2)
+          ctx2d.fillRect(x0 + x, mid - amp, 1.4, amp * 2)
+        }
+      }
+    })
+    return () => { dead = true }
+  }, [soundId, blob, clipMs, rate, loop, widthPx, heightPx])
+  return <canvas ref={ref} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', opacity: 0.9 }} />
+}
+
 export default function TimelineEditor({
-  timeline, animations, sounds, selection, onSelect, onPatchClip, onRemoveClip,
+  timeline, animations, sounds, selection, onSelect, onPatchClip, onRemoveClip, onDuplicateClip,
   onAddSoundAt, onAddSoundTrack, playheadMs, onScrub, playing,
 }: TimelineEditorProps) {
   const [pxPerSec, setPxPerSec] = useState(60)
@@ -201,6 +291,8 @@ export default function TimelineEditor({
     label: string,
     extra?: string,
     titleHint?: string,
+    rowH: number = TRACK_H,
+    wave?: React.ReactNode,
   ) => {
     const isSel = selection != null && selection.kind === sel.kind && selection.id === sel.id
     return (
@@ -214,14 +306,14 @@ export default function TimelineEditor({
           left: msToPx(clip.startMs),
           width: Math.max(6, msToPx(clip.durationMs)),
           top: 3,
-          height: TRACK_H - 6,
+          height: rowH - 6,
           background: color,
           opacity: isSel ? 1 : 0.8,
           border: isSel ? '2px solid #fff' : '1px solid rgba(0,0,0,0.4)',
           borderRadius: 4,
           color: '#fff',
           fontSize: 10,
-          lineHeight: `${TRACK_H - 8}px`,
+          lineHeight: `${rowH - 8}px`,
           padding: '0 6px',
           overflow: 'hidden',
           whiteSpace: 'nowrap',
@@ -231,7 +323,15 @@ export default function TimelineEditor({
           boxSizing: 'border-box',
         }}
       >
-        {label}
+        {wave}
+        <span style={{ position: 'relative', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>{label}</span>
+        {isSel && sel.kind !== 'motion' && (
+          <div
+            onPointerDown={(e) => { e.stopPropagation(); onDuplicateClip(sel) }}
+            title="Dupliquer ce clip (copie posée à la suite)"
+            style={{ position: 'absolute', right: 10, top: 0, bottom: 0, display: 'flex', alignItems: 'center', cursor: 'copy', fontSize: 12, padding: '0 3px' }}
+          >⧉</div>
+        )}
         {/* Poignées de resize */}
         <div
           onPointerDown={(e) => startClipDrag(e, sel, 'resize-l')}
@@ -253,15 +353,15 @@ export default function TimelineEditor({
   const ticks: number[] = []
   for (let t = 0; t <= contentMs / 1000 + stepSec; t += stepSec) ticks.push(t)
 
-  const trackRow = (label: string, children: React.ReactNode, onDblClick?: (atMs: number) => void) => (
+  const trackRow = (label: string, children: React.ReactNode, onDblClick?: (atMs: number) => void, rowH: number = TRACK_H) => (
     <div style={{ display: 'flex', borderTop: '1px solid #2c2c2c' }}>
       <div style={{
         width: LABEL_W, minWidth: LABEL_W, fontSize: 10, opacity: 0.75, padding: '0 6px',
-        lineHeight: `${TRACK_H}px`, background: '#1c1c1c', position: 'sticky', left: 0, zIndex: 3,
+        lineHeight: `${rowH}px`, background: '#1c1c1c', position: 'sticky', left: 0, zIndex: 3,
         overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
       }}>{label}</div>
       <div
-        style={{ position: 'relative', height: TRACK_H, width: contentW, flexShrink: 0 }}
+        style={{ position: 'relative', height: rowH, width: contentW, flexShrink: 0 }}
         onDoubleClick={onDblClick ? (e) => onDblClick(Math.max(0, pxToMs(localX(e)))) : undefined}
       >
         {children}
@@ -351,8 +451,21 @@ export default function TimelineEditor({
           track.map(c => renderClip(
             { kind: 'sound', id: c.id, trackIndex: ti }, c, c.isSpoken ? '#26a69a' : FILM_COLORS.departure,
             `${c.isSpoken ? '🗣 ' : '🔊 '}${soundName(c.soundId)}${c.loop ? ' 🔁' : ''}${c.anchor ? ' ⚓' : ''}`,
+            undefined,
+            undefined,
+            SOUND_TRACK_H,
+            <Waveform
+              soundId={c.soundId}
+              blob={sounds.find(x => x.id === c.soundId)?.blob ?? null}
+              clipMs={c.durationMs}
+              rate={c.rate ?? 1}
+              loop={c.loop === true}
+              widthPx={Math.max(6, msToPx(c.durationMs))}
+              heightPx={SOUND_TRACK_H - 6}
+            />,
           )),
           (atMs) => onAddSoundAt(ti, Math.round(atMs)),
+          SOUND_TRACK_H,
         ))}
         <div style={{ display: 'flex', borderTop: '1px solid #2c2c2c' }}>
           <button

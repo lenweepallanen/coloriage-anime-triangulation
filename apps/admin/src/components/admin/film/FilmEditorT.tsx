@@ -265,6 +265,29 @@ export default function FilmEditorT({ project, onSave }: {
     })
   }, [plan, patchTimeline])
 
+  /** ⧉ Duplique un clip anim/son : copie identique posée juste après l'original
+   *  (ancrage ⚓ non copié — la copie est libre). */
+  const duplicateClip = useCallback((sel: NonNullable<TimelineSelection>) => {
+    if (!plan || sel.kind === 'motion') return
+    const id = crypto.randomUUID()
+    patchTimeline(plan.id, tl => {
+      if (sel.kind === 'anim') {
+        const orig = tl.anim.find(c => c.id === sel.id)
+        if (!orig) return tl
+        return { ...tl, anim: [...tl.anim, { ...orig, id, startMs: freeSlotStart(tl.anim, orig.startMs + orig.durationMs) }] }
+      }
+      const orig = (tl.soundTracks[sel.trackIndex] ?? []).find(c => c.id === sel.id)
+      if (!orig) return tl
+      return {
+        ...tl,
+        soundTracks: tl.soundTracks.map((tr, i) => i === sel.trackIndex
+          ? [...tr, { ...orig, id, startMs: orig.startMs + orig.durationMs, anchor: undefined }]
+          : tr),
+      }
+    })
+    setSelection(sel.kind === 'anim' ? { kind: 'anim', id } : { kind: 'sound', id, trackIndex: sel.trackIndex })
+  }, [plan, patchTimeline])
+
   const removeClip = useCallback((sel: NonNullable<TimelineSelection>) => {
     if (!plan) return
     patchTimeline(plan.id, tl => {
@@ -1024,6 +1047,7 @@ export default function FilmEditorT({ project, onSave }: {
             onSelect={(sel) => { setSelection(sel); if (sel) setSelectedWaypointId(null) }}
             onPatchClip={patchClip}
             onRemoveClip={removeClip}
+            onDuplicateClip={duplicateClip}
             onAddSoundAt={addSoundAt}
             onAddSoundTrack={addSoundTrack}
             playheadMs={playheadMs}
