@@ -10,7 +10,7 @@ const SHARE_TEXT = 'Regarde mon coloriage prendre vie avec PicoPop ! ✨ https:/
  * La copie partagée porte le branding ; la vidéo stockée dans l'app reste intacte.
  */
 interface VideoConcatPlugin {
-  appendOutro(options: { inputPath: string; outputPath: string }): Promise<{ uri: string }>
+  appendOutro(options: { inputPath: string; outputPath: string; posterMs?: number }): Promise<{ uri: string }>
 }
 const VideoConcat = registerPlugin<VideoConcatPlugin>('VideoConcat')
 
@@ -68,7 +68,12 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
               directory: Directory.Cache,
             })
             const outputUri = (await Filesystem.getUri({ path: shareName, directory: Directory.Cache })).uri
-            const result = await VideoConcat.appendOutro({ inputPath: written.uri, outputPath: outputUri })
+            const result = await VideoConcat.appendOutro({
+              inputPath: written.uri,
+              outputPath: outputUri,
+              // Vignette (frame préfixée) : instant choisi dans l'éditeur FILM.
+              ...(record.posterMs != null && { posterMs: record.posterMs }),
+            })
             shareUri = result.uri
             void Filesystem.deleteFile({ path: fileName, directory: Directory.Cache }).catch(() => {})
           }

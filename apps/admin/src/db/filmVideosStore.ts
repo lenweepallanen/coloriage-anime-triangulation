@@ -14,8 +14,11 @@ export interface FilmVideoRecord {
   mimeType: string
   durationMs: number
   blob: Blob
-  /** Vignette JPEG extraite à 1/3 de la durée (galerie, posters). */
+  /** Vignette JPEG (galerie, posters). Extraite à `posterMs` si défini, sinon 1/3. */
   posterBlob?: Blob | null
+  /** Instant (ms) choisi pour la vignette (FilmT.posterMs) — extraction + préfixe
+   *  de partage. null/absent = 1/3 de la durée. */
+  posterMs?: number | null
   /** Nom du coloriage au moment de l'enregistrement (affichage galerie). */
   projectName?: string
 }
@@ -47,7 +50,7 @@ function openDb(): Promise<IDBDatabase | null> {
 
 export async function saveFilmVideo(
   projectId: string,
-  video: { blob: Blob; mimeType: string; durationMs: number; posterBlob?: Blob | null; projectName?: string },
+  video: { blob: Blob; mimeType: string; durationMs: number; posterBlob?: Blob | null; posterMs?: number | null; projectName?: string },
 ): Promise<boolean> {
   const db = await openDb()
   if (!db) return false
@@ -60,6 +63,7 @@ export async function saveFilmVideo(
         durationMs: video.durationMs,
         blob: video.blob,
         posterBlob: video.posterBlob ?? null,
+        posterMs: video.posterMs ?? null,
         projectName: video.projectName,
       }
       const tx = db.transaction(STORE, 'readwrite')
@@ -107,7 +111,7 @@ export async function deleteFilmVideo(projectId: string): Promise<void> {
 export async function getFilmVideoPoster(record: FilmVideoRecord): Promise<Blob | null> {
   if (record.posterBlob) return record.posterBlob
   const { generateVideoPoster } = await import('../utils/videoPoster')
-  const poster = await generateVideoPoster(record.blob).catch(() => null)
+  const poster = await generateVideoPoster(record.blob, 1 / 3, 640, 10000, record.posterMs).catch(() => null)
   if (!poster) return null
   record.posterBlob = poster
   const db = await openDb()

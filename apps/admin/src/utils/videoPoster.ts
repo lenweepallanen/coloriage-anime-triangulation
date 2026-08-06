@@ -1,7 +1,9 @@
 /**
- * Extrait une vignette JPEG d'une vidéo (blob) à une fraction de sa durée
- * (défaut 1/3 — ex. vidéo de 30 s → frame à 10 s). Utilisée comme preview
- * dans la galerie de l'app et comme poster des lecteurs vidéo.
+ * Extrait une vignette JPEG d'une vidéo (blob).
+ *  - `fraction` (défaut 1/3) : instant relatif à la durée (ex. 30 s → 10 s).
+ *  - `atMs` (prioritaire si fourni) : instant ABSOLU (ms), clampé à la durée —
+ *    utilisé quand l'utilisateur a défini une vignette (`FilmT.posterMs`).
+ * Utilisée comme preview de galerie et comme frame préfixée au partage.
  *
  * Piège géré : les vidéos issues de MediaRecorder annoncent souvent
  * `duration = Infinity` au chargement. Workaround standard : seek vers un
@@ -13,6 +15,7 @@ export function generateVideoPoster(
   fraction = 1 / 3,
   maxWidth = 640,
   timeoutMs = 10000,
+  atMs?: number | null,
 ): Promise<Blob | null> {
   return new Promise(resolve => {
     const url = URL.createObjectURL(videoBlob)
@@ -58,7 +61,11 @@ export function generateVideoPoster(
       const duration = Number.isFinite(video.duration) ? video.duration : 0
       if (duration <= 0) { capture(); return }
       phase = 'target'
-      const target = duration * fraction
+      // Instant absolu (posterMs) prioritaire, clampé à la durée réelle ; sinon
+      // fraction. Marge 0,05 s avant la fin pour éviter une frame vide.
+      const target = atMs != null && atMs >= 0
+        ? Math.min(atMs / 1000, Math.max(0, duration - 0.05))
+        : duration * fraction
       if (Math.abs(video.currentTime - target) < 0.05) {
         capture()
         return

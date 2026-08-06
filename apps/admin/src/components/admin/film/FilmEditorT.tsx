@@ -1162,6 +1162,31 @@ export default function FilmEditorT({ project, onSave }: {
               onClick={() => { setEditorPlaying(false); setPlayheadMs(0) }}
               title="Retour au début du plan"
             >⏮</button>
+            {(() => {
+              // Vignette de partage : temps FILM global = début du plan (sampler)
+              // + playhead local. Un marqueur 📸 s'affiche sur la règle si elle
+              // tombe dans CE plan.
+              const planStart = sampler ? sampler.planStartMs[planIndex] : Number.NaN
+              const base = Number.isFinite(planStart) ? planStart : 0
+              const isSet = film.posterMs != null
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    className={`btn-sm ${isSet ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => updateFilm({ posterMs: Math.round(base + playheadMs) })}
+                    title="Capture l'image à cet instant comme VIGNETTE de la vidéo partagée (aperçu iMessage/WhatsApp) et de la galerie. Place le playhead puis clique."
+                  >📸 Vignette {isSet ? 'ici' : 'de partage'}</button>
+                  {isSet && (
+                    <button
+                      className="btn-ghost btn-sm"
+                      onClick={() => updateFilm({ posterMs: undefined })}
+                      title="Revenir à la vignette automatique (1/3 de la vidéo)"
+                      style={{ fontSize: 11 }}
+                    >retirer</button>
+                  )}
+                </div>
+              )
+            })()}
             <div style={{ flex: 1 }} />
             <button className="btn-secondary btn-sm" onClick={addAnimClip} title="Pose un clip d'animation du corps au playhead (rugir, parler… — prioritaire sur l'anim de marche pendant un trajet)">+ Animation</button>
             <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic sur une piste son = poser un son · Ctrl+molette = zoom · Alt = sans snap</span>
@@ -1181,6 +1206,13 @@ export default function FilmEditorT({ project, onSave }: {
             playheadMs={playheadMs}
             onScrub={(ms) => { setEditorPlaying(false); setPlayheadMs(ms) }}
             playing={editorPlaying}
+            posterLocalMs={(() => {
+              if (film.posterMs == null || !sampler) return null
+              const start = sampler.planStartMs[planIndex]
+              if (!Number.isFinite(start)) return null
+              const local = film.posterMs - start
+              return local >= 0 && local <= plan.timeline.durationMs ? local : null
+            })()}
           />
           <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
             <div className="scene-editor-field" style={{ maxWidth: 180 }}>

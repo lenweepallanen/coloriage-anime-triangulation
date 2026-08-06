@@ -439,6 +439,8 @@ interface FilmTDoc {
   /** @deprecated remplacés par intro/outro — lus en fallback. */
   introFadeMs?: number
   outroFadeMs?: number
+  /** Instant (ms) de la vignette de partage/galerie. */
+  posterMs?: number
   moveAnimationId?: string
   moveSpeedPxPerSec: number
   idleSpeedMul?: number
@@ -1600,6 +1602,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     ...(film.outro != null && { outro: film.outro }),
     ...(film.introFadeMs != null && { introFadeMs: film.introFadeMs }),
     ...(film.outroFadeMs != null && { outroFadeMs: film.outroFadeMs }),
+    ...(film.posterMs != null && { posterMs: film.posterMs }),
     moveSpeedPxPerSec: film.moveSpeedPxPerSec,
     ...(film.idleSpeedMul != null && { idleSpeedMul: film.idleSpeedMul }),
   }
@@ -1676,6 +1679,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     ...(filmDoc.outro != null && { outro: filmDoc.outro }),
     ...(filmDoc.introFadeMs != null && { introFadeMs: filmDoc.introFadeMs }),
     ...(filmDoc.outroFadeMs != null && { outroFadeMs: filmDoc.outroFadeMs }),
+    ...(filmDoc.posterMs != null && { posterMs: filmDoc.posterMs }),
     moveSpeedPxPerSec: filmDoc.moveSpeedPxPerSec ?? 260,
     ...(filmDoc.idleSpeedMul != null && { idleSpeedMul: filmDoc.idleSpeedMul }),
   }

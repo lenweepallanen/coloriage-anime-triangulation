@@ -36,6 +36,9 @@ export interface TimelineEditorProps {
   onScrub: (ms: number) => void
   /** Lecture éditeur (Espace) : géré par le parent ; ici juste l'affichage. */
   playing?: boolean
+  /** Instant (ms, LOCAL au plan) de la vignette de partage, si elle tombe dans
+   *  CE plan — affiche un marqueur 📸 sur la règle. null = ailleurs / non défini. */
+  posterLocalMs?: number | null
 }
 
 const TRACK_H = 34
@@ -131,7 +134,7 @@ function Waveform({ soundId, blob, clipMs, rate, loop, widthPx, heightPx }: {
 
 export default function TimelineEditor({
   timeline, animations, sounds, selection, onSelect, onPatchClip, onRemoveClip, onDuplicateClip,
-  onAddSoundAt, onAddSoundTrack, onSetPlanDuration, playheadMs, onScrub, playing,
+  onAddSoundAt, onAddSoundTrack, onSetPlanDuration, playheadMs, onScrub, playing, posterLocalMs,
 }: TimelineEditorProps) {
   const [pxPerSec, setPxPerSec] = useState(60)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -531,6 +534,16 @@ export default function TimelineEditor({
               <div style={{ position: 'absolute', left: 3, top: 0, bottom: 0, width: 2, background: '#ef5350' }} />
               <div style={{ position: 'absolute', left: -1, top: 0, width: 10, height: 8, background: '#ef5350', borderRadius: '0 0 4px 4px' }} />
             </div>
+            {/* Marqueur VIGNETTE de partage (📸) si l'instant tombe dans ce plan. */}
+            {posterLocalMs != null && posterLocalMs >= 0 && posterLocalMs <= contentMs && (
+              <div
+                style={{ position: 'absolute', left: msToPx(posterLocalMs) - 7, top: 0, bottom: 0, width: 14, zIndex: 2, pointerEvents: 'none' }}
+                title={`Vignette de partage à ${formatMs(posterLocalMs)}`}
+              >
+                <div style={{ position: 'absolute', left: 6, top: 0, bottom: 0, width: 2, background: '#26a69a' }} />
+                <div style={{ position: 'absolute', left: -1, top: 0, fontSize: 11, lineHeight: `${RULER_H}px` }}>📸</div>
+              </div>
+            )}
           </div>
         </div>
 

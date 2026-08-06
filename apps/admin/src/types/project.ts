@@ -1241,6 +1241,10 @@ export interface FilmT {
   introFadeMs?: number;
   /** @deprecated remplacé par `outro` (fondu de fin, ms). Lu en fallback. */
   outroFadeMs?: number;
+  /** Instant (ms, temps FILM global) capturé comme vignette de la vidéo : sert
+   *  de poster de galerie ET de première image du fichier partagé (préfixée en
+   *  natif → l'aperçu iMessage/WhatsApp montre cette frame). Absent → 1/3 durée. */
+  posterMs?: number;
   /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
   moveAnimationId?: string;
   moveSpeedPxPerSec: number;

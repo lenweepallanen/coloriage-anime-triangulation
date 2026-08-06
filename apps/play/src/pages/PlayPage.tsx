@@ -36,12 +36,14 @@ export default function PlayPage() {
   const handleFilmRecorded = useCallback(async (r: FilmRecordingResult) => {
     if (!projectId) return
     const save = (async () => {
-      const posterBlob = await generateVideoPoster(r.blob).catch(() => null)
-      await saveFilmVideo(projectId, { ...r, posterBlob, projectName: project?.name })
+      // Instant de vignette choisi dans l'éditeur FILM (temps global) — sinon 1/3.
+      const posterMs = project?.filmT?.posterMs ?? null
+      const posterBlob = await generateVideoPoster(r.blob, 1 / 3, 640, 10000, posterMs).catch(() => null)
+      await saveFilmVideo(projectId, { ...r, posterBlob, posterMs, projectName: project?.name })
     })()
     lastSaveRef.current = save
     await save
-  }, [projectId, project?.name])
+  }, [projectId, project?.name, project?.filmT?.posterMs])
 
   const handleShareFilm = useCallback(async () => {
     if (!projectId || sharing) return
