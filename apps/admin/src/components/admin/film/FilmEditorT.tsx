@@ -1153,14 +1153,46 @@ export default function FilmEditorT({ project, onSave }: {
             updateFilm({ footstepSounds: list })
           }
           const soundName = (id: string) => film.sounds.find(x => x.id === id)?.name ?? '?'
+          const cfgAnim = project.animations.find(a => a.id === cfg.animationId)
+          const legZoneIds = Object.keys(cfgAnim?.mesh?.walkZoneFramesSmoothed ?? cfgAnim?.mesh?.walkZoneFrames ?? {})
+          const zoneLabel = (zid: string) =>
+            project.projectTriangulation?.zones.find(z => z.id === zid)?.label
+            ?? ({ 'leg-fl': 'Patte AVG', 'leg-fr': 'Patte AVD', 'leg-bl': 'Patte ARG', 'leg-br': 'Patte ARD' } as Record<string, string>)[zid]
+            ?? zid
           return (
             <div key={ci} style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', padding: '6px 0', borderTop: ci > 0 ? '1px solid var(--border)' : 'none' }}>
               <div className="scene-editor-field" style={{ minWidth: 200 }}>
                 <label style={{ fontSize: 11 }}>Animation de marche</label>
-                <select value={cfg.animationId} onChange={(e) => patchCfg({ animationId: e.target.value })}>
+                <select value={cfg.animationId} onChange={(e) => patchCfg({ animationId: e.target.value, zoneIds: undefined })}>
                   {readyAnimations.map(a => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
                 </select>
               </div>
+              {legZoneIds.length > 0 && (
+                <div className="scene-editor-field" title="Pattes qui PORTENT (déclenchent un pas au contact du sol). Bipède type T-Rex : cochez uniquement les pattes ARRIÈRE — les avant balancent sans toucher le sol et créeraient des pas fantômes.">
+                  <label style={{ fontSize: 11 }}>Pattes au sol</label>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    {legZoneIds.map(zid => {
+                      const active = cfg.zoneIds == null || cfg.zoneIds.includes(zid)
+                      return (
+                        <label key={zid} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
+                          <input
+                            type="checkbox"
+                            checked={active}
+                            onChange={(e) => {
+                              const current = cfg.zoneIds ?? legZoneIds
+                              const next = e.target.checked
+                                ? [...current.filter(z => z !== zid), zid]
+                                : current.filter(z => z !== zid)
+                              patchCfg({ zoneIds: next.length === legZoneIds.length ? undefined : next })
+                            }}
+                          />
+                          {zoneLabel(zid)}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
               {cfg.soundIds.map((sid, si) => (
                 <span key={sid} style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
                   🦶 {si + 1} : {soundName(sid)}

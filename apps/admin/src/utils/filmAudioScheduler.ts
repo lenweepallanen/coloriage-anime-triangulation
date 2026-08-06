@@ -216,15 +216,25 @@ export class FilmAudioScheduler {
       const source = this.ctx.createBufferSource()
       source.buffer = buf
       const gain = this.ctx.createGain()
-      gain.gain.value = os.volume ?? 1
+      const vol = os.volume ?? 1
       source.connect(gain)
       gain.connect(this.master)
-      const entry: ActiveSource = { source, gain, analyser: null, startMs: os.timeMs, endMs: os.timeMs + buf.duration * 1000, smoothed: 0 }
+      const when = now + (os.timeMs - this.baseMs) / 1000
+      // Un pas = UN impact : si le fichier est long (enregistrement de marche
+      // complet), on ne joue que son attaque (450 ms, fondu 60 ms).
+      const playSec = Math.min(buf.duration, 0.45)
+      gain.gain.setValueAtTime(vol, when)
+      if (buf.duration > playSec) {
+        gain.gain.setValueAtTime(vol, when + playSec - 0.06)
+        gain.gain.linearRampToValueAtTime(0, when + playSec)
+      }
+      const entry: ActiveSource = { source, gain, analyser: null, startMs: os.timeMs, endMs: os.timeMs + playSec * 1000, smoothed: 0 }
       source.onended = () => {
         try { gain.disconnect() } catch { /* */ }
         this.active = this.active.filter(a => a !== entry)
       }
-      source.start(now + (os.timeMs - this.baseMs) / 1000)
+      source.start(when)
+      source.stop(when + playSec)
       this.active.push(entry)
     }
     // Musique de fond : bouclée sur toute la durée restante du film.

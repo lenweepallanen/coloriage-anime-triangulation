@@ -9,8 +9,9 @@ import { FILM_FPS } from './filmTimeline'
  * FilmAudioScheduler joue les one-shots.
  */
 
-/** Frames (entières) des contacts au sol d'une animation de marche. */
-export function detectFootstepFrames(anim: Animation): number[] {
+/** Frames (entières) des contacts au sol d'une animation de marche.
+ *  `zoneIds` : ne considérer que ces pattes (bipède : pattes arrière seules). */
+export function detectFootstepFrames(anim: Animation, zoneIds?: string[]): number[] {
   const mesh = anim.mesh
   if (!mesh) return []
   const events: number[] = []
@@ -44,6 +45,7 @@ export function detectFootstepFrames(anim: Animation): number[] {
     // Zone-based (marche / members-bones / walk) : 1 série par patte,
     // pied = vertex le plus bas de la zone à la frame 0.
     for (const zoneId of Object.keys(zoneFrames)) {
+      if (zoneIds != null && zoneIds.length > 0 && !zoneIds.includes(zoneId)) continue
       const frames = zoneFrames[zoneId]
       if (!frames || frames.length < 6 || !frames[0]?.length) continue
       let footIdx = 0
@@ -95,17 +97,22 @@ export function computeFootstepSchedule(
     .map(c => [c.animationId, c]))
   if (configs.size === 0) return []
   const framesCache = new Map<string, { events: number[]; total: number }>()
-  const eventsOf = (animId: string) => {
-    let entry = framesCache.get(animId)
+  const eventsOf = (animId: string, zoneIds?: string[]) => {
+    const key = animId + '|' + (zoneIds?.join(',') ?? '*')
+    let entry = framesCache.get(key)
     if (!entry) {
       const anim = animations.find(a => a.id === animId)
       const raw = anim?.mesh?.walkBodyFrames?.length ?? anim?.mesh?.videoFramesMesh?.length ?? 0
       // Cycle VISUEL de la LoopPlayback : les crossfadeFrames de fin sont
       // fondues dans le début → la boucle affichée est plus courte que `raw`.
       const total = Math.max(1, raw - (anim?.mesh?.crossfadeFrames ?? 7))
-      const events = (anim ? detectFootstepFrames(anim) : []).filter(e => e < total)
+      const events = (anim ? detectFootstepFrames(anim, zoneIds) : []).filter(e => e < total)
       entry = { events, total }
-      framesCache.set(animId, entry)
+      framesCache.set(key, entry)
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log(`[Pas] "${anim?.name ?? animId.slice(0, 8)}" (pattes: ${zoneIds?.join(', ') ?? 'toutes'}) : ${events.length} contact(s)/cycle aux frames [${events.join(', ')}] — cycle ${total} frames ≈ ${Math.round((total / FILM_FPS) * 1000)} ms`)
+      }
     }
     return entry
   }
@@ -115,7 +122,7 @@ export function computeFootstepSchedule(
   const emit = (base: number, startMs: number, durationMs: number, animId: string, speedMul: number) => {
     const cfg = configs.get(animId)
     if (!cfg || durationMs <= 0) return
-    const { events, total } = eventsOf(animId)
+    const { events, total } = eventsOf(animId, cfg.zoneIds)
     if (events.length === 0 || total === 0) return
     const mul = Math.max(0.01, speedMul)
     const msPerFrame = 1000 / (FILM_FPS * mul)

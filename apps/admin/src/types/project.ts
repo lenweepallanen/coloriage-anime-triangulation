@@ -1209,7 +1209,10 @@ export interface FilmT {
   /** Bruits de pas : sons liés à une animation de marche. À la lecture, un son
    *  est déclenché à CHAQUE contact au sol détecté dans l'animation (point le
    *  plus bas du cycle de chaque patte), en alternant les soundIds (pas1/pas2). */
-  footstepSounds?: { animationId: string; soundIds: string[]; volume?: number; offsetMs?: number }[];
+  /** `zoneIds` : pattes qui PORTENT (contact au sol). Absent = toutes. Bipède
+   *  (T-Rex) : cocher uniquement les pattes arrière — les avant balancent sans
+   *  toucher le sol et créeraient des pas fantômes. */
+  footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[];
   /** Défauts ÉDITEUR pour les nouveaux clips (jamais lus par le moteur). */
   moveAnimationId?: string;
   moveSpeedPxPerSec: number;

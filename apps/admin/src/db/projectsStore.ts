@@ -421,7 +421,7 @@ interface FilmTDoc {
   /** Bibliothèque de sons (blobs dans film/sounds/{id}). */
   sounds: { id: string; name: string; volume?: number }[]
   music?: SceneSoundMetaDoc
-  footstepSounds?: { animationId: string; soundIds: string[]; volume?: number; offsetMs?: number }[]
+  footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[]
   moveAnimationId?: string
   moveSpeedPxPerSec: number
   idleSpeedMul?: number
