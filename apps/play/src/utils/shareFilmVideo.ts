@@ -50,8 +50,10 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
       ])
 
       // Version partagée (film + outro), cachée par timestamp d'enregistrement :
-      // un rescan remplacé change createdAt → re-concat automatique.
-      const shareName = `picopop-share-${record.projectId}-${record.createdAt}.mp4`
+      // un rescan remplacé change createdAt → re-concat automatique. Le suffixe
+      // `-vN` invalide les caches quand le pipeline natif change (ici v2 : fix
+      // couleurs de la vignette préfixée — les .mp4 v1 avaient le rouge/bleu inversé).
+      const shareName = `picopop-share-${record.projectId}-${record.createdAt}-v2.mp4`
       let shareUri: string | null = null
 
       if (ext === 'mp4') {

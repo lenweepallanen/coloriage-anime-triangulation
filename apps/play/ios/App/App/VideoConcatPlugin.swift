@@ -77,8 +77,11 @@ public class VideoConcatPlugin: CAPPlugin, CAPBridgedPlugin {
         ]
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = false
+        // Format BGRA : DOIT correspondre à l'ordre d'octets du CGContext plus bas
+        // (premultipliedFirst + byteOrder32Little = BGRA en mémoire). Avec 32ARGB,
+        // rouge et bleu étaient inversés → toute la vignette virait au violet.
         let attrs: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32ARGB),
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
             kCVPixelBufferWidthKey as String: w,
             kCVPixelBufferHeightKey as String: h,
         ]
