@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   animationHasFrames, filmTIsPlayable,
   type FilmMotionClip, type FilmAnimClip, type FilmSoundClip, type FilmPlanTimeline,
+  type FilmCameraClip, type FilmCameraKind, type FilmCameraRect,
   type FilmT, type FilmTimelinePlan, type FilmWaypoint, type Point2D, type Project,
 } from '../../../types/project'
 import type { UploadHint } from '../../../db/projectsStore'
@@ -271,6 +272,20 @@ export default function FilmEditorT({ project, onSave }: {
         }
       }
       if (sel.kind === 'anim') return { ...tl, anim: tl.anim.map(c => c.id === sel.id ? { ...c, ...partial } : c) }
+      if (sel.kind === 'camera') {
+        return {
+          ...tl,
+          camera: (tl.camera ?? []).map(c => {
+            if (c.id !== sel.id) return c
+            // Ancré ⚓ : déplacer édite l'offset (comme les sons).
+            if (partial.startMs != null && c.anchor != null) {
+              const delta = partial.startMs - c.startMs
+              return { ...c, ...partial, anchor: { ...c.anchor, offsetMs: c.anchor.offsetMs + delta } }
+            }
+            return { ...c, ...partial }
+          }),
+        }
+      }
       return {
         ...tl,
         soundTracks: tl.soundTracks.map((tr, i) => i === sel.trackIndex
@@ -299,6 +314,11 @@ export default function FilmEditorT({ project, onSave }: {
         if (!orig) return tl
         return { ...tl, anim: [...tl.anim, { ...orig, id, startMs: freeSlotStart(tl.anim, orig.startMs + orig.durationMs) }] }
       }
+      if (sel.kind === 'camera') {
+        const orig = (tl.camera ?? []).find(c => c.id === sel.id)
+        if (!orig) return tl
+        return { ...tl, camera: [...(tl.camera ?? []), { ...orig, id, startMs: orig.startMs + orig.durationMs, anchor: undefined }] }
+      }
       const orig = (tl.soundTracks[sel.trackIndex] ?? []).find(c => c.id === sel.id)
       if (!orig) return tl
       return {
@@ -308,7 +328,9 @@ export default function FilmEditorT({ project, onSave }: {
           : tr),
       }
     })
-    setSelection(sel.kind === 'anim' ? { kind: 'anim', id } : { kind: 'sound', id, trackIndex: sel.trackIndex })
+    setSelection(sel.kind === 'anim' ? { kind: 'anim', id }
+      : sel.kind === 'camera' ? { kind: 'camera', id }
+        : { kind: 'sound', id, trackIndex: sel.trackIndex })
   }, [plan, patchTimeline])
 
   const removeClip = useCallback((sel: NonNullable<TimelineSelection>) => {
@@ -316,6 +338,7 @@ export default function FilmEditorT({ project, onSave }: {
     patchTimeline(plan.id, tl => {
       if (sel.kind === 'motion') return { ...tl, motion: tl.motion.filter(c => c.id !== sel.id) }
       if (sel.kind === 'anim') return { ...tl, anim: tl.anim.filter(c => c.id !== sel.id) }
+      if (sel.kind === 'camera') return { ...tl, camera: (tl.camera ?? []).filter(c => c.id !== sel.id) }
       return { ...tl, soundTracks: tl.soundTracks.map((tr, i) => i === sel.trackIndex ? tr.filter(c => c.id !== sel.id) : tr) }
     })
     setSelection(cur => (cur && cur.kind === sel.kind && cur.id === sel.id ? null : cur))
@@ -398,6 +421,72 @@ export default function FilmEditorT({ project, onSave }: {
     if (!plan) return
     patchTimeline(plan.id, tl => ({ ...tl, soundTracks: [...tl.soundTracks, []] }))
   }
+
+  // --- Piste caméra (zoom / pan / secousse / tremblement) ---
+  const patchCamera = useCallback((id: string, partial: Partial<FilmCameraClip>) => {
+    if (!plan) return
+    patchTimeline(plan.id, tl => ({ ...tl, camera: (tl.camera ?? []).map(c => c.id === id ? { ...c, ...partial } : c) }))
+  }, [plan, patchTimeline])
+
+  /** Rectangle cible par défaut : ~55 % du cadre, centré sur cameraX / mi-hauteur. */
+  const defaultCameraRect = useCallback((): FilmCameraRect => {
+    const bgW = plan?.backdrop?.width ?? 1000
+    const bgH = plan?.backdrop?.height ?? 800
+    const frameW = Math.min(bgW, bgH * (16 / 9))
+    const w = frameW * 0.55
+    const h = w * (bgH / Math.max(1, frameW))
+    const cx = plan?.cameraX ?? bgW / 2
+    return { x: Math.round(cx - w / 2), y: Math.round(bgH / 2 - h / 2), w: Math.round(w), h: Math.round(h) }
+  }, [plan])
+
+  /** Ajoute un effet caméra au playhead (ou ancré à un clip cible). */
+  const addCameraClip = useCallback((kind: FilmCameraKind, opts?: { anchorTo?: { clipId: string; durationMs: number } }) => {
+    if (!plan) return
+    const id = crypto.randomUUID()
+    const start = Math.round(playheadMs)
+    patchTimeline(plan.id, tl => {
+      const base: FilmCameraClip = { id, startMs: start, durationMs: 2000, kind }
+      if (kind === 'zoom') { base.rect = defaultCameraRect(); base.durationMs = 3000; base.easing = 'easeInOut' }
+      else if (kind === 'pan') {
+        const r = defaultCameraRect()
+        base.rect = r; base.rectTo = { ...r, x: Math.round(r.x + r.w * 0.5) }; base.durationMs = 3000; base.easing = 'easeInOut'
+      } else if (kind === 'shake') { base.durationMs = 700; base.amplitude = 16; base.frequencyHz = 14; base.rotate = true; base.decay = 'expo' }
+      else { base.durationMs = 2000; base.amplitude = 4; base.frequencyHz = 8 } // rumble
+      if (opts?.anchorTo) {
+        base.anchor = { clipId: opts.anchorTo.clipId, edge: 'start', offsetMs: 0 }
+        base.startMs = 0
+        base.durationMs = Math.max(200, opts.anchorTo.durationMs)
+      }
+      return { ...tl, camera: [...(tl.camera ?? []), base] }
+    })
+    setSelection({ kind: 'camera', id })
+  }, [plan, patchTimeline, playheadMs, defaultCameraRect])
+
+  /** Raccourci : tremblement calé sur le clip de MARCHE (motion travel Walk, sinon 1er clip anim). */
+  const addRumbleForWalk = useCallback(() => {
+    if (!plan) return
+    const walk = plan.timeline.motion.find(m => m.kind !== 'appear' && m.animationId != null)
+      ?? plan.timeline.anim[0]
+    addCameraClip('rumble', walk ? { anchorTo: { clipId: walk.id, durationMs: walk.durationMs } } : undefined)
+  }, [plan, addCameraClip])
+
+  /** Raccourci : secousse calée sur le début du 1er clip d'ACTION (anim once-hold), sinon au playhead. */
+  const addShakeForRoar = useCallback(() => {
+    if (!plan) return
+    const action = plan.timeline.anim.find(a => a.fillMode === 'once-hold') ?? plan.timeline.anim[0]
+    addCameraClip('shake', action ? { anchorTo: { clipId: action.id, durationMs: 700 } } : undefined)
+  }, [plan, addCameraClip])
+
+  /** Double-clic sur la piste caméra : pose un ZOOM à cet instant. */
+  const addCameraClipAt = useCallback((atMs: number) => {
+    if (!plan) return
+    const id = crypto.randomUUID()
+    patchTimeline(plan.id, tl => ({
+      ...tl,
+      camera: [...(tl.camera ?? []), { id, startMs: Math.round(atMs), durationMs: 3000, kind: 'zoom', rect: defaultCameraRect(), easing: 'easeInOut' }],
+    }))
+    setSelection({ kind: 'camera', id })
+  }, [plan, patchTimeline, defaultCameraRect])
 
   // --- Waypoints ---
   const addWaypoint = (pos: Point2D) => {
@@ -1026,6 +1115,7 @@ export default function FilmEditorT({ project, onSave }: {
                 onSetMotionCurve={setMotionCurve}
                 onPatchAnim={patchAnim}
                 onPatchSound={patchSound}
+                onPatchCamera={patchCamera}
                 onRemove={() => removeClip(selection)}
                 anchorTargets={[
                   ...plan.timeline.motion.map((c, i) => ({
@@ -1189,7 +1279,14 @@ export default function FilmEditorT({ project, onSave }: {
             })()}
             <div style={{ flex: 1 }} />
             <button className="btn-secondary btn-sm" onClick={addAnimClip} title="Pose un clip d'animation du corps au playhead (rugir, parler… — prioritaire sur l'anim de marche pendant un trajet)">+ Animation</button>
-            <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic sur une piste son = poser un son · Ctrl+molette = zoom · Alt = sans snap</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 11, opacity: 0.7 }}>🎥</span>
+              <button className="btn-secondary btn-sm" onClick={() => addCameraClip('zoom')} title="Zoom sur un rectangle (réglable dans l'inspecteur + sur le canvas)">Zoom</button>
+              <button className="btn-secondary btn-sm" onClick={() => addCameraClip('pan')} title="Travelling (glissement de la caméra)">Travelling</button>
+              <button className="btn-secondary btn-sm" onClick={addShakeForRoar} title="Secousse d'impact — calée sur l'animation d'action (rugissement) si présente">Secousse</button>
+              <button className="btn-secondary btn-sm" onClick={addRumbleForWalk} title="Tremblement continu — calé sur le clip de marche si présent">Tremblement</button>
+            </div>
+            <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic piste son/caméra = poser · Ctrl+molette = zoom · Alt = sans snap</span>
           </div>
           <TimelineEditor
             timeline={plan.timeline}
@@ -1202,6 +1299,7 @@ export default function FilmEditorT({ project, onSave }: {
             onDuplicateClip={duplicateClip}
             onAddSoundAt={addSoundAt}
             onAddSoundTrack={addSoundTrack}
+            onAddCameraAt={(atMs) => addCameraClipAt(atMs)}
             onSetPlanDuration={(ms) => patchTimeline(plan.id, tl => ({ ...tl, durationMs: Math.max(500, Math.round(ms)) }))}
             playheadMs={playheadMs}
             onScrub={(ms) => { setEditorPlaying(false); setPlayheadMs(ms) }}

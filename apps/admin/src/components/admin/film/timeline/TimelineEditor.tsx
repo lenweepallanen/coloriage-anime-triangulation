@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSharedAudioContext } from '../../../../utils/mouthAudioAnalyser'
-import type { Animation, FilmPlanTimeline, FilmSound } from '../../../../types/project'
+import type { Animation, FilmCameraClip, FilmPlanTimeline, FilmSound } from '../../../../types/project'
 import { exclusiveTrackBounds, FILM_FPS } from '../../../../utils/filmTimeline'
 import { FILM_COLORS, formatMs } from '../filmEditorShared'
+
+/** Couleur de la piste caméra (bleu ciné, distinct des autres pistes). */
+const CAMERA_COLOR = '#4a90d9'
+/** Libellé court d'un effet caméra pour le clip de la timeline. */
+function cameraLabel(c: FilmCameraClip): string {
+  return c.kind === 'zoom' ? '🔍 Zoom'
+    : c.kind === 'pan' ? '↔ Travelling'
+      : c.kind === 'shake' ? '💥 Secousse'
+        : '〰 Tremblement'
+}
 
 /**
  * Timeline d'un plan de film : règle + piste Déplacement + piste Animation +
@@ -14,6 +24,7 @@ import { FILM_COLORS, formatMs } from '../filmEditorShared'
 export type TimelineSelection =
   | { kind: 'motion' | 'anim'; id: string }
   | { kind: 'sound'; id: string; trackIndex: number }
+  | { kind: 'camera'; id: string }
   | null
 
 export interface TimelineEditorProps {
@@ -30,6 +41,8 @@ export interface TimelineEditorProps {
   /** Double-clic sur une piste son : poser un clip à cet instant. */
   onAddSoundAt: (trackIndex: number, atMs: number) => void
   onAddSoundTrack: () => void
+  /** Double-clic sur la piste caméra : poser un effet (zoom par défaut) à cet instant. */
+  onAddCameraAt: (atMs: number) => void
   /** Drag du marqueur rouge « Fin du plan » (durée du plan). */
   onSetPlanDuration: (ms: number) => void
   playheadMs: number
@@ -134,7 +147,7 @@ function Waveform({ soundId, blob, clipMs, rate, loop, widthPx, heightPx }: {
 
 export default function TimelineEditor({
   timeline, animations, sounds, selection, onSelect, onPatchClip, onRemoveClip, onDuplicateClip,
-  onAddSoundAt, onAddSoundTrack, onSetPlanDuration, playheadMs, onScrub, playing, posterLocalMs,
+  onAddSoundAt, onAddSoundTrack, onAddCameraAt, onSetPlanDuration, playheadMs, onScrub, playing, posterLocalMs,
 }: TimelineEditorProps) {
   const [pxPerSec, setPxPerSec] = useState(60)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -221,7 +234,8 @@ export default function TimelineEditor({
   const clipsOf = (sel: NonNullable<TimelineSelection>) =>
     sel.kind === 'motion' ? timeline.motion
       : sel.kind === 'anim' ? timeline.anim
-        : timeline.soundTracks[sel.trackIndex] ?? []
+        : sel.kind === 'camera' ? (timeline.camera ?? [])
+          : timeline.soundTracks[sel.trackIndex] ?? []
 
   const localX = (e: { clientX: number }): number => {
     const el = scrollRef.current
@@ -248,7 +262,8 @@ export default function TimelineEditor({
     }
     const deltaMs = pxToMs(x - drag.grabPx)
     const sel = drag.sel
-    const exclusive = sel.kind !== 'sound'
+    // Pistes EXCLUSIVES (sans chevauchement) = motion & anim. Sons et caméra : overlap libre.
+    const exclusive = sel.kind === 'motion' || sel.kind === 'anim'
     const clips = clipsOf(sel)
     const bounds = exclusive
       ? exclusiveTrackBounds(clips, sel.id)
@@ -592,6 +607,15 @@ export default function TimelineEditor({
           animCycleOverlay(c), // wave (repères de cycles)
           false,         // pointMode — JAMAIS ponctuel pour un clip animation
         )))}
+        {trackRow('🎥 Caméra', (timeline.camera ?? []).map(c => renderClip(
+          { kind: 'camera', id: c.id }, c, CAMERA_COLOR,
+          cameraLabel(c),
+          c.anchor ? '⚓' : undefined,
+          'glisser pour déplacer/redimensionner · double-clic sur la piste = poser un zoom',
+          TRACK_H,
+          undefined,
+          false,
+        )), (atMs) => onAddCameraAt(Math.round(atMs)))}
         {timeline.soundTracks.map((track, ti) => trackRow(
           `Son ${ti + 1}`,
           track.map(c => renderClip(

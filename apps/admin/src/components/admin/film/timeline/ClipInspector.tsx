@@ -1,5 +1,5 @@
 import type React from 'react'
-import type { Animation, FilmAnimClip, FilmMotionClip, FilmPlanTimeline, FilmSound, FilmSoundClip, FilmTravelEasing } from '../../../../types/project'
+import type { Animation, FilmAnimClip, FilmCameraClip, FilmMotionClip, FilmPlanTimeline, FilmSound, FilmSoundClip, FilmTravelEasing } from '../../../../types/project'
 import type { TimelineSelection } from './TimelineEditor'
 import { formatMs } from '../filmEditorShared'
 import { FILM_FPS } from '../../../../utils/filmTimeline'
@@ -39,7 +39,7 @@ function Field({ label, title, children }: { label: React.ReactNode; title?: str
 
 export default function ClipInspector({
   timeline, selection, animations, sounds,
-  onPatchMotion, onSetMotionCurve, onPatchAnim, onPatchSound, onRemove,
+  onPatchMotion, onSetMotionCurve, onPatchAnim, onPatchSound, onPatchCamera, onRemove,
   anchorTargets, motionPathLen,
 }: {
   timeline: FilmPlanTimeline
@@ -51,6 +51,7 @@ export default function ClipInspector({
   onSetMotionCurve: (id: string, count: 0 | 1 | 2) => void
   onPatchAnim: (id: string, partial: Partial<FilmAnimClip>) => void
   onPatchSound: (trackIndex: number, id: string, partial: Partial<FilmSoundClip>) => void
+  onPatchCamera: (id: string, partial: Partial<FilmCameraClip>) => void
   onRemove: () => void
   /** Cibles d'ancrage ⚓ (clips motion + anim du plan, libellés). */
   anchorTargets: { id: string; label: string }[]
@@ -213,6 +214,107 @@ export default function ClipInspector({
             >1× puis figé</button>
           </div>
         </Field>
+      </div>
+    )
+  }
+
+  if (selection.kind === 'camera') {
+    const clip = (timeline.camera ?? []).find(c => c.id === selection.id)
+    if (!clip) return null
+    const patch = (partial: Partial<FilmCameraClip>) => onPatchCamera(clip.id, partial)
+    const kindLabel = clip.kind === 'zoom' ? '🔍 Zoom' : clip.kind === 'pan' ? '↔ Travelling' : clip.kind === 'shake' ? '💥 Secousse' : '〰 Tremblement'
+    const rectField = (label: string, key: 'rect' | 'rectTo') => {
+      const r = clip[key]
+      if (!r) return null
+      const setR = (p: Partial<typeof r>) => patch({ [key]: { ...r, ...p } } as Partial<FilmCameraClip>)
+      return (
+        <Field label={label} title="Cadre cible en pixels du décor (ou règle-le au canvas)">
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['x', 'y', 'w', 'h'] as const).map(k => (
+              <input key={k} type="number" style={{ ...INPUT, width: 62 }} value={Math.round(r[k])}
+                title={k}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setR({ [k]: Math.round(v) }) }} />
+            ))}
+          </div>
+        </Field>
+      )
+    }
+    return (
+      <div style={ROW}>
+        {header(`${kindLabel}`)}
+        <div style={{ fontSize: 11, opacity: 0.65, flexBasis: '100%' }}>
+          {formatMs(clip.startMs)} → {formatMs(clip.startMs + clip.durationMs)}
+          {clip.anchor && ' · ⚓ ancré à un clip'}
+        </div>
+        {numField('Durée (s)', clip.durationMs / 1000, v => patch({ durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1 })}
+
+        {(clip.kind === 'zoom' || clip.kind === 'pan') && (
+          <>
+            {numField('Zoom max ×', clip.maxZoom ?? 3, v => patch({ maxZoom: Math.max(1, v) }), { min: 1, step: 0.1, title: 'Plafond de zoom (une image de décar zoomée trop fort pixellise)' })}
+            <Field label="Allure">
+              <select style={SELECT} value={clip.easing ?? 'easeInOut'} onChange={(e) => patch({ easing: e.target.value as FilmTravelEasing })}>
+                <option value="linear">Constante</option>
+                <option value="easeIn">Départ doux</option>
+                <option value="easeOut">Arrivée douce</option>
+                <option value="easeInOut">Doux départ+arrivée</option>
+              </select>
+            </Field>
+            {rectField(clip.kind === 'pan' ? 'Cadre départ (x/y/l/h)' : 'Cadre cible (x/y/l/h)', 'rect')}
+            {clip.kind === 'pan' && rectField('Cadre arrivée (x/y/l/h)', 'rectTo')}
+          </>
+        )}
+        {clip.kind === 'zoom' && (
+          <>
+            {numField('Zoom-in (s)', (clip.zoomInMs ?? Math.round(clip.durationMs * 0.35)) / 1000, v => patch({ zoomInMs: Math.max(0, Math.round(v * 1000)) }), { min: 0, step: 0.1, title: 'Vitesse d’entrée' })}
+            {numField('Maintien (s)', (clip.holdMs ?? Math.max(0, clip.durationMs - (clip.zoomInMs ?? 0) - (clip.zoomOutMs ?? 0))) / 1000, v => patch({ holdMs: Math.max(0, Math.round(v * 1000)) }), { min: 0, step: 0.1 })}
+            {numField('Zoom-out (s)', (clip.zoomOutMs ?? Math.round(clip.durationMs * 0.35)) / 1000, v => patch({ zoomOutMs: Math.max(0, Math.round(v * 1000)) }), { min: 0, step: 0.1, title: 'Vitesse de retour (0 = pas de retour, push-in permanent)' })}
+          </>
+        )}
+
+        {(clip.kind === 'shake' || clip.kind === 'rumble') && (
+          <>
+            {numField('Intensité (px)', clip.amplitude ?? (clip.kind === 'shake' ? 16 : 4), v => patch({ amplitude: Math.max(0, v) }), { min: 0, step: 1 })}
+            {numField('Fréquence (Hz)', clip.frequencyHz ?? (clip.kind === 'shake' ? 14 : 8), v => patch({ frequencyHz: Math.max(0.1, v) }), { min: 0.1, step: 0.5 })}
+            <Field label="Axe">
+              <select style={SELECT} value={clip.axis ?? 'both'} onChange={(e) => patch({ axis: e.target.value as 'both' | 'x' | 'y' })}>
+                <option value="both">Les deux</option>
+                <option value="x">Horizontal</option>
+                <option value="y">Vertical</option>
+              </select>
+            </Field>
+          </>
+        )}
+        {clip.kind === 'shake' && (
+          <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, whiteSpace: 'nowrap' }} title="Ajoute une micro-rotation à la secousse">
+              <input type="checkbox" checked={clip.rotate === true} onChange={(e) => patch({ rotate: e.target.checked || undefined })} />
+              rotation
+            </label>
+            <Field label="Atténuation">
+              <select style={SELECT} value={clip.decay ?? 'expo'} onChange={(e) => patch({ decay: e.target.value as 'linear' | 'expo' })}>
+                <option value="expo">Rapide (impact)</option>
+                <option value="linear">Linéaire</option>
+              </select>
+            </Field>
+          </>
+        )}
+
+        {/* Ancrage ⚓ : caler le début de l'effet sur un clip motion/anim. */}
+        <Field label="⚓ Ancrer à" title="Le début de l'effet suit ce clip (ex. secousse au rugissement, tremblement à la marche)">
+          <select
+            style={SELECT}
+            value={clip.anchor?.clipId ?? ''}
+            onChange={(e) => {
+              const clipId = e.target.value
+              if (!clipId) patch({ anchor: undefined })
+              else patch({ anchor: { clipId, edge: clip.anchor?.edge ?? 'start', offsetMs: clip.anchor?.offsetMs ?? 0 } })
+            }}
+          >
+            <option value="">— libre (temps absolu) —</option>
+            {anchorTargets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </Field>
+        {clip.anchor && numField('Décalage (s)', clip.anchor.offsetMs / 1000, v => patch({ anchor: { ...clip.anchor!, offsetMs: Math.round(v * 1000) } }), { step: 0.1, min: -600, title: 'Peut être négatif' })}
       </div>
     )
   }
