@@ -230,7 +230,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   const [lamaResultUrl, setLamaResultUrl] = useState<string | null>(null)
   const [limbExtDebugImages, setLimbExtDebugImages] = useState<{ label: string; isolatedUrl: string }[]>([])
   const lamaStartedRef = useRef(false)
-  const processor = useScanProcessor(project)
+  const processor = useScanProcessor(project, { mode })
 
   // Transition from processing to debug (admin) / validation preview (play) when rectified canvas is ready
   useEffect(() => {

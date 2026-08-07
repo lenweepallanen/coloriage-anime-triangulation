@@ -108,7 +108,8 @@ export interface DebugImages {
   meshOverlayUrl: string    // Image croppée + overlay triangulation frame 0
 }
 
-export function useScanProcessor(project: Project) {
+export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'play' }) {
+  const isPlay = opts?.mode === 'play'
   const [processing, setProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [rectifiedCanvas, setRectifiedCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -132,7 +133,12 @@ export function useScanProcessor(project: Project) {
         raw2048Canvas.width = result.imageData.width
         raw2048Canvas.height = result.imageData.height
         raw2048Canvas.getContext('2d')!.putImageData(result.imageData, 0, 0)
-        const raw2048Url = raw2048Canvas.toDataURL()
+        // MÉMOIRE : les data-URLs de debug (2048², ~plusieurs Mo chacune en base64)
+        // ne servent QU'au stage debug ADMIN — jamais affichées en play. Les
+        // générer en play retenait ~3 gros blobs + un canvas d'overlay pile au
+        // moment le plus lourd (scan→animation) → risque de kill de la WebView
+        // par iOS. En play on ne garde que capturedUrl (affichée pendant le calcul).
+        const raw2048Url = isPlay ? '' : raw2048Canvas.toDataURL()
 
         // Garde le scan en 2048×2048 fixe (contrat invariant : pas de rescale vers
         // les dimensions de l'image originale). L'alignement mesh↔scan est résolu
@@ -159,11 +165,9 @@ export function useScanProcessor(project: Project) {
         }
         setContentAlignment(alignment)
 
-        // 3. Image redressée croppée
-        const rectifiedUrl = canvas.toDataURL()
-
-        // 4. Image redressée + overlay maillage frame 0
-        const meshOverlayUrl = buildMeshOverlay(canvas, project, alignment)
+        // 3. Image redressée croppée + 4. overlay maillage — debug ADMIN uniquement.
+        const rectifiedUrl = isPlay ? '' : canvas.toDataURL()
+        const meshOverlayUrl = isPlay ? '' : buildMeshOverlay(canvas, project, alignment)
 
         setDebugImages({ capturedUrl, raw2048Url, rectifiedUrl, meshOverlayUrl })
 
