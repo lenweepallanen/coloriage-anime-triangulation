@@ -1086,12 +1086,22 @@ export default function FilmEditorT({ project, onSave }: {
               </label>
               {enabled && (
                 <>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }} title="Couleur à effacer (clic pour choisir)">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }} title="Couleur à effacer : sélecteur ou code hex (#ffde59)">
                     🎨 couleur
                     <input type="color" value={ov.chromaKeyColor ?? '#ffde59'}
                       onChange={(e) => setOv({ chromaKeyColor: e.target.value })}
                       style={{ width: 34, height: 22, padding: 0, cursor: 'pointer' }} />
-                    <span style={{ fontSize: 11, opacity: 0.6 }}>{ov.chromaKeyColor}</span>
+                    <input
+                      type="text" spellCheck={false} placeholder="#ffde59" maxLength={7}
+                      defaultValue={ov.chromaKeyColor ?? ''}
+                      key={ov.chromaKeyColor ?? ''}
+                      onChange={(e) => {
+                        let v = e.target.value.trim()
+                        if (v && !v.startsWith('#')) v = `#${v}`
+                        if (/^#[0-9a-fA-F]{6}$/.test(v)) setOv({ chromaKeyColor: v.toLowerCase() })
+                      }}
+                      style={{ width: 78, fontSize: 12, fontFamily: 'monospace', padding: '3px 6px', border: '1px solid var(--border)', borderRadius: 4 }}
+                    />
                   </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, whiteSpace: 'nowrap' }} title="Tolérance : plus haut = efface des teintes plus éloignées">
                     tolérance {Math.round((ov.chromaKeyThreshold ?? 0.1) * 100)}
