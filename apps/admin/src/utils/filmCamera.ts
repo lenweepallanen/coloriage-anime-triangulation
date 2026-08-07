@@ -55,7 +55,9 @@ export function evaluateCamera(
     if (t < 0 || t >= clip.durationMs) continue
 
     if (clip.kind === 'zoom' || clip.kind === 'pan') {
-      const maxZoom = Math.max(1, clip.maxZoom ?? 3)
+      // Le ZOOM est défini par la TAILLE du cadre (zoom = largeur pleine ÷ largeur
+      // du cadre). maxZoom n'est qu'un garde-fou anti-pixellisation (défaut large).
+      const maxZoom = Math.max(1, clip.maxZoom ?? 6)
       const rect = clip.rect
       if (!rect) continue
       const easing = clip.easing ?? 'easeInOut'

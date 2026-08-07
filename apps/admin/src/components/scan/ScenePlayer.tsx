@@ -1807,10 +1807,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // aucun effet (zoom 1, shake 0) → rendu inchangé hors effets.
       const cam = sample.camera
       if (cam) {
+        // WYSIWYG : le cadre 16:9 ciblé remplit exactement l'écran → son centre
+        // va au CENTRE de l'écran (donc le haut du cadre = le haut de l'écran).
+        // Zoom : pivot = centre du cadre (coords écran) + position = centre écran.
+        // Sans zoom (zoom=1) : pivot = centre écran → identité (les secousses
+        // s'ajoutent en translation, la rotation tourne autour du centre écran).
+        const cxs = viewW / 2, cys = viewH / 2
+        const zoomed = cam.zoom > 1.0001
         const fsx = (cam.focusX - scenePlayback.backgroundOffsetX) * bgScale
         const fsy = cam.focusY * bgScale
-        cameraContainer.pivot.set(fsx, fsy)
-        cameraContainer.position.set(fsx + cam.shakeX * bgScale, fsy + cam.shakeY * bgScale)
+        cameraContainer.pivot.set(zoomed ? fsx : cxs, zoomed ? fsy : cys)
+        cameraContainer.position.set(cxs + cam.shakeX * bgScale, cys + cam.shakeY * bgScale)
         cameraContainer.scale.set(cam.zoom)
         cameraContainer.rotation = cam.rotation
       }

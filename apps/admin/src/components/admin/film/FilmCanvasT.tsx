@@ -564,13 +564,18 @@ export default function FilmCanvasT({
     } else if (drag.mode === 'camRectResize') {
       const r = selectedCameraClip?.[drag.which]
       if (r) {
+        // Le cadre reste TOUJOURS au format 16:9 de l'écran : on pilote par la
+        // largeur (h = w × 9/16), le coin OPPOSÉ à celui tiré reste fixe.
         const MIN = 40
-        let { x, y, w, h } = r
-        const right = x + w, bottom = y + h
-        if (drag.corner === 'nw') { x = Math.min(px, right - MIN); y = Math.min(py, bottom - MIN); w = right - x; h = bottom - y }
-        else if (drag.corner === 'ne') { y = Math.min(py, bottom - MIN); w = Math.max(MIN, px - x); h = bottom - y }
-        else if (drag.corner === 'sw') { x = Math.min(px, right - MIN); w = right - x; h = Math.max(MIN, py - y) }
-        else { w = Math.max(MIN, px - x); h = Math.max(MIN, py - y) }
+        const AR = 9 / 16
+        const right = r.x + r.w, bottom = r.y + r.h
+        let x = r.x, y = r.y, w = r.w
+        if (drag.corner === 'se') { w = Math.max(MIN, px - r.x) }
+        else if (drag.corner === 'ne') { w = Math.max(MIN, px - r.x) }
+        else if (drag.corner === 'sw') { w = Math.max(MIN, right - px); x = right - w }
+        else { w = Math.max(MIN, right - px); x = right - w } // nw
+        const h = w * AR
+        if (drag.corner === 'ne' || drag.corner === 'nw') y = bottom - h // ancre le bas
         onPatchCameraClip(drag.clipId, { [drag.which]: { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) } } as Partial<FilmCameraClip>)
       }
     } else {

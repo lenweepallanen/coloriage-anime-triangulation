@@ -428,13 +428,14 @@ export default function FilmEditorT({ project, onSave }: {
     patchTimeline(plan.id, tl => ({ ...tl, camera: (tl.camera ?? []).map(c => c.id === id ? { ...c, ...partial } : c) }))
   }, [plan, patchTimeline])
 
-  /** Rectangle cible par défaut : ~55 % du cadre, centré sur cameraX / mi-hauteur. */
+  /** Rectangle cible par défaut : ~55 % du cadre, TOUJOURS au format 16:9 de
+   *  l'écran (h = w × 9/16), centré sur cameraX / mi-hauteur. */
   const defaultCameraRect = useCallback((): FilmCameraRect => {
     const bgW = plan?.backdrop?.width ?? 1000
     const bgH = plan?.backdrop?.height ?? 800
     const frameW = Math.min(bgW, bgH * (16 / 9))
     const w = frameW * 0.55
-    const h = w * (bgH / Math.max(1, frameW))
+    const h = w * (9 / 16)
     const cx = plan?.cameraX ?? bgW / 2
     return { x: Math.round(cx - w / 2), y: Math.round(bgH / 2 - h / 2), w: Math.round(w), h: Math.round(h) }
   }, [plan])

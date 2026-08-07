@@ -223,17 +223,24 @@ export default function ClipInspector({
     if (!clip) return null
     const patch = (partial: Partial<FilmCameraClip>) => onPatchCamera(clip.id, partial)
     const kindLabel = clip.kind === 'zoom' ? '🔍 Zoom' : clip.kind === 'pan' ? '↔ Travelling' : clip.kind === 'shake' ? '💥 Secousse' : '〰 Tremblement'
+    // Cadre TOUJOURS 16:9 (h dérivée de la largeur) → x / y / largeur seulement.
     const rectField = (label: string, key: 'rect' | 'rectTo') => {
       const r = clip[key]
       if (!r) return null
-      const setR = (p: Partial<typeof r>) => patch({ [key]: { ...r, ...p } } as Partial<FilmCameraClip>)
+      const setField = (k: 'x' | 'y' | 'w', v: number) => {
+        const next = k === 'w'
+          ? { ...r, w: Math.round(v), h: Math.round(v * 9 / 16) }
+          : { ...r, [k]: Math.round(v) }
+        patch({ [key]: next } as Partial<FilmCameraClip>)
+      }
+      const cells: { k: 'x' | 'y' | 'w'; lbl: string }[] = [{ k: 'x', lbl: 'x' }, { k: 'y', lbl: 'y' }, { k: 'w', lbl: 'largeur' }]
       return (
-        <Field label={label} title="Cadre cible en pixels du décor (ou règle-le au canvas)">
+        <Field label={`${label} (16:9)`} title="Cadre cible — format écran 16:9 verrouillé (ou règle-le au canvas)">
           <div style={{ display: 'flex', gap: 6 }}>
-            {(['x', 'y', 'w', 'h'] as const).map(k => (
-              <input key={k} type="number" style={{ ...INPUT, width: 62 }} value={Math.round(r[k])}
-                title={k}
-                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setR({ [k]: Math.round(v) }) }} />
+            {cells.map(({ k, lbl }) => (
+              <input key={k} type="number" style={{ ...INPUT, width: 68 }} value={Math.round(r[k])}
+                title={lbl}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setField(k, v) }} />
             ))}
           </div>
         </Field>
@@ -250,7 +257,9 @@ export default function ClipInspector({
 
         {(clip.kind === 'zoom' || clip.kind === 'pan') && (
           <>
-            {numField('Zoom max ×', clip.maxZoom ?? 3, v => patch({ maxZoom: Math.max(1, v) }), { min: 1, step: 0.1, title: 'Plafond de zoom (une image de décar zoomée trop fort pixellise)' })}
+            <div style={{ fontSize: 11, opacity: 0.65, flexBasis: '100%' }}>
+              Le zoom est défini par la TAILLE du cadre (16:9) sur le canvas — cadre plus petit = zoom plus fort.
+            </div>
             <Field label="Allure">
               <select style={SELECT} value={clip.easing ?? 'easeInOut'} onChange={(e) => patch({ easing: e.target.value as FilmTravelEasing })}>
                 <option value="linear">Constante</option>
