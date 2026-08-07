@@ -1070,6 +1070,44 @@ export default function FilmEditorT({ project, onSave }: {
             )}
           </div>
         )}
+        {/* Chroma key de l'avant-plan : rend une couleur transparente (ex. le jaune
+            #ffde59 d'un décor découpé). Marche pour image ET vidéo d'avant-plan. */}
+        {plan?.overlay && (() => {
+          const ov = plan.overlay
+          const enabled = ov.chromaKeyColor != null
+          const setOv = (p: Partial<typeof ov>) => patchPlanT(plan.id, { overlay: { ...ov, ...p } })
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>Avant-plan — transparence :</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }} title="Active la mise en transparence d'une couleur (chroma key)">
+                <input type="checkbox" checked={enabled}
+                  onChange={(e) => setOv({ chromaKeyColor: e.target.checked ? (ov.chromaKeyColor ?? '#ffde59') : null })} />
+                rendre une couleur transparente
+              </label>
+              {enabled && (
+                <>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }} title="Couleur à effacer (clic pour choisir)">
+                    🎨 couleur
+                    <input type="color" value={ov.chromaKeyColor ?? '#ffde59'}
+                      onChange={(e) => setOv({ chromaKeyColor: e.target.value })}
+                      style={{ width: 34, height: 22, padding: 0, cursor: 'pointer' }} />
+                    <span style={{ fontSize: 11, opacity: 0.6 }}>{ov.chromaKeyColor}</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, whiteSpace: 'nowrap' }} title="Tolérance : plus haut = efface des teintes plus éloignées">
+                    tolérance {Math.round((ov.chromaKeyThreshold ?? 0.1) * 100)}
+                    <input type="range" min={0.01} max={0.6} step={0.01} value={ov.chromaKeyThreshold ?? 0.1}
+                      onChange={(e) => setOv({ chromaKeyThreshold: parseFloat(e.target.value) })} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, whiteSpace: 'nowrap' }} title="Adoucit le bord de la découpe (anti-crénelage)">
+                    lissage {Math.round((ov.chromaKeySmoothness ?? 0.12) * 100)}
+                    <input type="range" min={0} max={0.4} step={0.01} value={ov.chromaKeySmoothness ?? 0.12}
+                      onChange={(e) => setOv({ chromaKeySmoothness: parseFloat(e.target.value) })} style={{ width: 90 }} />
+                  </label>
+                </>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {/* Canvas spatial (pleine largeur) + inspecteur EN DESSOUS */}
