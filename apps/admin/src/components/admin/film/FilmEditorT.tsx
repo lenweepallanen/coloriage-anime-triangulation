@@ -897,6 +897,9 @@ export default function FilmEditorT({ project, onSave }: {
   const selectedMotionClip = selection?.kind === 'motion'
     ? plan?.timeline.motion.find(c => c.id === selection.id) ?? null
     : null
+  const selectedCameraClip = selection?.kind === 'camera'
+    ? (plan?.timeline.camera ?? []).find(c => c.id === selection.id) ?? null
+    : null
 
   return (
     <div className="scene-editor">
@@ -1094,6 +1097,8 @@ export default function FilmEditorT({ project, onSave }: {
               selectedMotionClip={selectedMotionClip}
               onSelectTravel={(id) => { setSelection({ kind: 'motion', id }); setSelectedWaypointId(null) }}
               onPatchMotionClip={patchMotion}
+              selectedCameraClip={selectedCameraClip}
+              onPatchCameraClip={patchCamera}
               motionGeom={motionGeom}
               previewPose={previewPose}
               characterImageUrl={charImageUrl}

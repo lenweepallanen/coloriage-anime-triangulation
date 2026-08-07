@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FilmMotionClip, FilmTimelinePlan, FilmWaypoint, Point2D } from '../../../types/project'
+import type { FilmCameraClip, FilmCameraRect, FilmMotionClip, FilmTimelinePlan, FilmWaypoint, Point2D } from '../../../types/project'
 import { CAMERA_HANDLE_H, extractVideoFrame0Url, FILM_COLORS } from './filmEditorShared'
 
 /**
@@ -11,6 +11,7 @@ import { CAMERA_HANDLE_H, extractVideoFrame0Url, FILM_COLORS } from './filmEdito
 export default function FilmCanvasT({
   plan, selectedWaypointId, onSelectWaypoint, onAddWaypoint, onRemoveWaypoint, onPatchWaypoint,
   onPatchPlan, selectedMotionClip, onSelectTravel, onPatchMotionClip, motionGeom, previewPose,
+  selectedCameraClip, onPatchCameraClip,
   characterImageUrl, characterImageSize, characterScale, characterOriginU, characterOriginV, characterFacing,
 }: {
   plan: FilmTimelinePlan
@@ -24,6 +25,9 @@ export default function FilmCanvasT({
   /** Clic sur le pointillé d'un trajet → le sélectionner (inspecteur trajet). */
   onSelectTravel: (id: string) => void
   onPatchMotionClip: (id: string, partial: Partial<FilmMotionClip>) => void
+  /** Effet caméra sélectionné (zoom/pan) → rectangle(s) cible draggable(s) sur le canvas. */
+  selectedCameraClip: FilmCameraClip | null
+  onPatchCameraClip: (id: string, partial: Partial<FilmCameraClip>) => void
   /** Géométrie résolue des clips motion (via le sampler, cohérente avec le moteur). */
   motionGeom: { id: string; from: Point2D; to: Point2D; controlPoints?: Point2D[]; kind: FilmMotionClip['kind'] }[]
   /** Pose du perso au playhead (scrub) : silhouette. null = pas d'aperçu. */
@@ -52,6 +56,8 @@ export default function FilmCanvasT({
     | { mode: 'cp'; clipId: string; cpIndex: number }
     | { mode: 'from'; clipId: string }
     | { mode: 'to'; clipId: string }
+    | { mode: 'camRect'; clipId: string; which: 'rect' | 'rectTo'; grabDx: number; grabDy: number }
+    | { mode: 'camRectResize'; clipId: string; which: 'rect' | 'rectTo'; corner: 'nw' | 'ne' | 'sw' | 'se' }
     | null
   >(null)
 
@@ -194,6 +200,16 @@ export default function FilmCanvasT({
   const frameHalf = Math.max(1, Math.min(layerW > 0 ? layerW : Number.POSITIVE_INFINITY, layerH * (16 / 9)) / 2)
   const frameLeft = plan.cameraX - frameHalf
   const frameRight = plan.cameraX + frameHalf
+
+  // Rectangle(s) cible de l'effet caméra sélectionné (zoom : 1 ; pan : départ+arrivée).
+  const cameraRectsToDraw = (): { rect: FilmCameraRect; label: string; color: string; which: 'rect' | 'rectTo' }[] => {
+    const c = selectedCameraClip
+    if (!c || (c.kind !== 'zoom' && c.kind !== 'pan')) return []
+    const out: { rect: FilmCameraRect; label: string; color: string; which: 'rect' | 'rectTo' }[] = []
+    if (c.rect) out.push({ rect: c.rect, label: c.kind === 'pan' ? 'départ' : '🔍 zoom', color: '#4a90d9', which: 'rect' })
+    if (c.kind === 'pan' && c.rectTo) out.push({ rect: c.rectTo, label: 'arrivée', color: '#f0a04a', which: 'rectTo' })
+    return out
+  }
 
   // --- Rendu ---
   useEffect(() => {
@@ -363,7 +379,26 @@ export default function FilmCanvasT({
       ctx.textAlign = 'left'
       ctx.textBaseline = 'alphabetic'
     })
-  }, [plan, waypoints, selectedWaypointId, selectedMotionClip, motionGeom, previewPose, bgImg, bgVideo, videoTick, charImg, canvasW, canvasH, sX, sY, characterScale, characterOriginU, characterOriginV, characterFacing, characterImageSize, layerH]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Rectangle(s) cible de l'effet caméra sélectionné (zoom/pan).
+    for (const { rect: r, label, color } of cameraRectsToDraw()) {
+      const a = toScreen({ x: r.x, y: r.y })
+      const b = toScreen({ x: r.x + r.w, y: r.y + r.h })
+      ctx.setLineDash([6, 4])
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
+      ctx.setLineDash([])
+      // Poignées de coin
+      ctx.fillStyle = color
+      for (const c of [a, { x: b.x, y: a.y }, { x: a.x, y: b.y }, b]) {
+        ctx.fillRect(c.x - 5, c.y - 5, 10, 10)
+      }
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 11px system-ui'
+      ctx.fillText(label, a.x + 6, a.y + 15)
+    }
+  }, [plan, waypoints, selectedWaypointId, selectedMotionClip, selectedCameraClip, motionGeom, previewPose, bgImg, bgVideo, videoTick, charImg, canvasW, canvasH, sX, sY, characterScale, characterOriginU, characterOriginV, characterFacing, characterImageSize, layerH]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Interactions ---
   const pointerToCanvas = (e: React.PointerEvent<HTMLCanvasElement>): { sx: number; sy: number } => {
@@ -391,6 +426,25 @@ export default function FilmCanvasT({
       return
     }
     if (e.button !== 0) return
+    // Rectangle caméra sélectionné (zoom/pan) : coins = redimensionner, corps = déplacer.
+    for (const { rect: r, which } of cameraRectsToDraw()) {
+      const a = toScreen({ x: r.x, y: r.y })
+      const b = toScreen({ x: r.x + r.w, y: r.y + r.h })
+      const corners: { corner: 'nw' | 'ne' | 'sw' | 'se'; p: Point2D }[] = [
+        { corner: 'nw', p: a }, { corner: 'ne', p: { x: b.x, y: a.y } },
+        { corner: 'sw', p: { x: a.x, y: b.y } }, { corner: 'se', p: b },
+      ]
+      const hitC = corners.find(cc => Math.hypot(cc.p.x - sx, cc.p.y - sy) <= 11)
+      if (hitC && selectedCameraClip) {
+        dragRef.current = { mode: 'camRectResize', clipId: selectedCameraClip.id, which, corner: hitC.corner }
+        capture(); return
+      }
+      if (selectedCameraClip && sx >= a.x && sx <= b.x && sy >= a.y && sy <= b.y) {
+        const lp = toLayer(sx, sy)
+        dragRef.current = { mode: 'camRect', clipId: selectedCameraClip.id, which, grabDx: lp.x - r.x, grabDy: lp.y - r.y }
+        capture(); return
+      }
+    }
     // CPs du clip sélectionné
     if (selectedMotionClip?.controlPoints?.length) {
       for (let ci = 0; ci < selectedMotionClip.controlPoints.length; ci++) {
@@ -503,6 +557,21 @@ export default function FilmCanvasT({
       if (selectedMotionClip && drag.cpIndex < cps.length) {
         cps[drag.cpIndex] = { x: px, y: py }
         onPatchMotionClip(drag.clipId, { controlPoints: cps })
+      }
+    } else if (drag.mode === 'camRect') {
+      const r = selectedCameraClip?.[drag.which]
+      if (r) onPatchCameraClip(drag.clipId, { [drag.which]: { ...r, x: Math.round(p.x - drag.grabDx), y: Math.round(p.y - drag.grabDy) } } as Partial<FilmCameraClip>)
+    } else if (drag.mode === 'camRectResize') {
+      const r = selectedCameraClip?.[drag.which]
+      if (r) {
+        const MIN = 40
+        let { x, y, w, h } = r
+        const right = x + w, bottom = y + h
+        if (drag.corner === 'nw') { x = Math.min(px, right - MIN); y = Math.min(py, bottom - MIN); w = right - x; h = bottom - y }
+        else if (drag.corner === 'ne') { y = Math.min(py, bottom - MIN); w = Math.max(MIN, px - x); h = bottom - y }
+        else if (drag.corner === 'sw') { x = Math.min(px, right - MIN); w = right - x; h = Math.max(MIN, py - y) }
+        else { w = Math.max(MIN, px - x); h = Math.max(MIN, py - y) }
+        onPatchCameraClip(drag.clipId, { [drag.which]: { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) } } as Partial<FilmCameraClip>)
       }
     } else {
       const clamped = layerW > frameHalf * 2
