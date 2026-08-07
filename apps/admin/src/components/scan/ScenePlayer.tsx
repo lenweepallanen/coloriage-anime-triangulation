@@ -633,19 +633,25 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         }
       }
 
+      // L'avant-plan doit COUVRIR exactement la même zone que le fond, quelle que
+      // soit sa résolution native (ex. overlay 1280×720 sur un fond 1600×900) : on
+      // le dimensionne d'après les dimensions du FOND (les deux 16:9 → pas de
+      // déformation), sinon il ne remplit pas le cadre (bord/rectangle visibles).
+      const fgW = (mbg?.width ?? mfg?.width ?? 0) * bgScale
+      const fgH = (mbg?.height ?? mfg?.height ?? 0) * bgScale
       if (mfg?.videoBlob) {
         const chroma = mfg.chromaKeyColor
           ? { color: mfg.chromaKeyColor, threshold: mfg.chromaKeyThreshold ?? 0.1, smoothness: mfg.chromaKeySmoothness ?? 0.12 }
           : undefined
-        const { update, primary } = setupCrossfadeVideo(mfg.videoBlob, mfg.width * bgScale, mfg.height * bgScale, foregroundContainer, chroma)
+        const { update, primary } = setupCrossfadeVideo(mfg.videoBlob, fgW, fgH, foregroundContainer, chroma)
         fgVideoUpdate = update
         foregroundSprite = primary
       } else if (mfg?.imageBlob) {
         const buildFgSprite = (tex: PIXI.Texture, shared: boolean): void => {
           const sprite = new PIXI.Sprite(tex)
           if (shared) (sprite as PIXI.Sprite & { __sharedDecorTex?: boolean }).__sharedDecorTex = true
-          sprite.width = mfg.width * bgScale
-          sprite.height = mfg.height * bgScale
+          sprite.width = fgW
+          sprite.height = fgH
           if (mfg.chromaKeyColor) {
             sprite.filters = [buildChromaKeyFilter(mfg.chromaKeyColor, mfg.chromaKeyThreshold ?? 0.1, mfg.chromaKeySmoothness ?? 0.12)]
           }
