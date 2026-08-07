@@ -254,7 +254,10 @@ export class FilmTimelineSampler {
     }
     if (w.kind === 'transition') {
       const t01 = (t - w.startMs) / Math.max(1, w.endMs - w.startMs)
-      const s = this.samplePlan(w.prepared, w.prepared.durationMs, 1)
+      // Option A : le plan sortant CONTINUE d'avancer son temps local pendant la
+      // transition (idle/anim restent vivants — plus de « pause » figée). La
+      // position tient à la fin des trajets (aucun clip motion au-delà).
+      const s = this.samplePlan(w.prepared, w.prepared.durationMs + (t - w.startMs), 1)
       return { ...s, phase: 'transition', transition: { toPlanIndex: w.toPlanIndex, t01 } }
     }
     // endFade — visuel de fermeture rendu par l'overlay du player : le film reste

@@ -1215,6 +1215,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
        *  swapFn de la transition — dès lors, le perso est posé sur la pose t=0 du
        *  NOUVEAU plan (le sampler renvoie encore la pose de fin de l'ancien). */
       swappedPlanIndex: number
+      /** Horloge film (ms) au moment du swap décor — pour faire AVANCER le nouveau
+       *  plan pendant qu'il est révélé (option A : plan entrant vivant, pas figé). */
+      swapTMs: number
       playableIdxByPlan: Map<number, number>
     } | null = null
     if (timelineMode && filmT) {
@@ -1233,7 +1236,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, playableIdxByPlan }
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
       // OUVERTURE du film : l'overlay couvre l'écran DÈS le montage (avant même
       // le décodage audio) puis découvre le 1er plan — retenu tant que le décor
@@ -1906,7 +1909,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
             fromPlan?.transitionToNext ?? { kind: 'cut' },
-            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true },
+            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true; rt.swapTMs = rt.tMs },
           )
         }
       } else if (!sample.transition && sample.planIndex !== rt.currentPlanIndex && planTransitionRunner == null) {
@@ -1922,7 +1925,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           planTransitionRunner = startPlanTransition(
             app, planTransitionOverlay,
             fromPlan?.transitionToNext ?? { kind: 'cut' },
-            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true },
+            () => { activatePlan(playableIdx); rt.swappedPlanIndex = toPlanIndex; rt.decorWait = true; rt.swapTMs = rt.tMs },
           )
         }
       }
@@ -1941,15 +1944,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
 
       // Pose du perso — le sampler est la source de vérité (position/échelle/flip).
-      // Pendant une fenêtre de transition, le sampler renvoie la pose de FIN de
-      // l'ANCIEN plan : dès que le swapFn a monté le nouveau décor (mi-course d'un
-      // fondu couleur, immédiatement pour volet/iris/crossfade), on pose le perso
-      // sur l'état t=0 du NOUVEAU plan — même frame que l'apparition du décor,
-      // zéro frame avec le perso au mauvais endroit.
+      // Pendant une fenêtre de transition, le sampler renvoie la pose de l'ANCIEN
+      // plan : dès que le swapFn a monté le nouveau décor, on pose le perso sur le
+      // NOUVEAU plan. Option A : on fait AVANCER son temps local (tMs − swapTMs)
+      // pendant qu'il est révélé → le plan entrant est déjà en mouvement (plus de
+      // pause figée). Léger re-jeu du tout début quand la fenêtre du plan démarre,
+      // imperceptible (idle/marche en boucle).
       const swappedDuringTransition = sample.transition != null
         && rt.swappedPlanIndex === sample.transition.toPlanIndex
       applyFilmSample(swappedDuringTransition && sample.transition
-        ? { ...rt.sampler.evaluatePlanLocal(sample.transition.toPlanIndex, 0), fadeAlpha: sample.fadeAlpha }
+        ? { ...rt.sampler.evaluatePlanLocal(sample.transition.toPlanIndex, Math.max(0, rt.tMs - rt.swapTMs)), fadeAlpha: sample.fadeAlpha }
         : sample)
 
       // Barre de progression EXACTE (t / durée totale).
