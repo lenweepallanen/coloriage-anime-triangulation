@@ -2,9 +2,11 @@ import type { Animation, FilmMotionClip, FilmT, FilmTimelinePlan } from '../type
 import { pointAtLen, sampleFilmPath, applyFilmEasing, type FilmPathTable } from './filmPath'
 import { transitionDurationMs } from './filmDirector'
 import {
-  FILM_FPS, filmIntroTransition, filmOutroTransition, offscreenXBg, resolveMotionRef, sortClips,
-  type FilmCharMetrics,
+  FILM_FPS, filmIntroTransition, filmOutroTransition, offscreenXBg, planFrameHalfWidthBg,
+  resolveMotionRef, sortClips, type FilmCharMetrics,
 } from './filmTimeline'
+import { evaluateCamera } from './filmCamera'
+import type { FilmCameraState } from '../types/project'
 
 /**
  * Échantillonneur PUR du film timeline : `evaluate(tMs)` retourne l'état complet
@@ -35,6 +37,8 @@ export interface TimelineSample {
   phase: 'travel' | 'idle' | 'action' | 'transition' | 'ended'
   /** Renseigné pendant une fenêtre de transition inter-plans. */
   transition?: { toPlanIndex: number; t01: number }
+  /** État de la piste caméra (zoom/pan/secousses) à cet instant. */
+  camera: FilmCameraState
 }
 
 interface PreparedMotion {
@@ -226,6 +230,7 @@ export class FilmTimelineSampler {
       return {
         planIndex: 0, planLocalMs: 0, x: 0, y: 0, scaleMul: 1, flip: 1,
         animationId: null, animFrame: 0, animSpeedMul: 1, fadeAlpha: 1, phase: 'ended',
+        camera: { focusX: 0, focusY: 0, zoom: 1, shakeX: 0, shakeY: 0, rotation: 0 },
       }
     }
     const t = Math.max(0, tMs)
@@ -338,6 +343,12 @@ export class FilmTimelineSampler {
     }
 
     const phase: TimelineSample['phase'] = travelling ? 'travel' : (inAnimClip ? 'action' : 'idle')
+    const bgH = p.plan.backdrop?.height ?? 800
+    const camera = evaluateCamera(p.plan.timeline.camera, local, {
+      cx: p.plan.cameraX,
+      cy: bgH / 2,
+      halfW: planFrameHalfWidthBg(p.plan),
+    })
     return {
       planIndex: p.planIndex,
       planLocalMs: local,
@@ -349,6 +360,7 @@ export class FilmTimelineSampler {
       animSpeedMul,
       fadeAlpha,
       phase,
+      camera,
     }
   }
 }

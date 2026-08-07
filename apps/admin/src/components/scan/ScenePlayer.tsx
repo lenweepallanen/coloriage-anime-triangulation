@@ -380,11 +380,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const bgContainer = new PIXI.Container()
     const characterContainer = new PIXI.Container()
     const foregroundContainer = new PIXI.Container()
-    // Ordre z : arrière-plan → personnage (+ overlays) → avant-plan → transitions
-    // de plan (film) → filigrane (ajouté au stage à l'enregistrement) → HUD (DOM).
-    app.stage.addChild(bgContainer)
-    app.stage.addChild(characterContainer)
-    app.stage.addChild(foregroundContainer)
+    // CONTENEUR CAMÉRA (film) : enveloppe décor + perso + avant-plan pour appliquer
+    // les effets de caméra (zoom/pan/secousses) à TOUTE la scène d'un coup. Les
+    // transitions de plan et le filigrane restent HORS caméra (au-dessus, non affectés).
+    const cameraContainer = new PIXI.Container()
+    cameraContainer.addChild(bgContainer)
+    cameraContainer.addChild(characterContainer)
+    cameraContainer.addChild(foregroundContainer)
+    // Ordre z : [caméra: arrière-plan → personnage (+ overlays) → avant-plan] →
+    // transitions de plan (film) → filigrane (ajouté au stage à l'enregistrement) → HUD (DOM).
+    app.stage.addChild(cameraContainer)
     const planTransitionOverlay = new PIXI.Container()
     app.stage.addChild(planTransitionOverlay)
 
@@ -1797,6 +1802,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       })
       filmFadeAlpha = sample.fadeAlpha
       rt.lastX = sample.x
+      // Caméra : transform du conteneur autour du point focal (coords décor →
+      // écran via bgScale + pan courant), + secousse + rotation. Identité quand
+      // aucun effet (zoom 1, shake 0) → rendu inchangé hors effets.
+      const cam = sample.camera
+      if (cam) {
+        const fsx = (cam.focusX - scenePlayback.backgroundOffsetX) * bgScale
+        const fsy = cam.focusY * bgScale
+        cameraContainer.pivot.set(fsx, fsy)
+        cameraContainer.position.set(fsx + cam.shakeX * bgScale, fsy + cam.shakeY * bgScale)
+        cameraContainer.scale.set(cam.zoom)
+        cameraContainer.rotation = cam.rotation
+      }
       const planChanged = sample.planIndex !== rt.lastPosedPlanIndex
       rt.lastPosedPlanIndex = sample.planIndex
 

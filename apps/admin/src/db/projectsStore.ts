@@ -420,6 +420,8 @@ interface FilmTPlanDoc {
   motion: FilmMotionClipDoc[]
   anim: FilmAnimClipDoc[]
   soundTracks: FilmSoundTrackDoc[]
+  /** Piste caméra (effets zoom/pan/shake/rumble). Pas d'array imbriqué → stockée telle quelle. */
+  camera?: import('../types/project').FilmCameraClip[]
 }
 
 interface FilmTDoc {
@@ -1615,6 +1617,25 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     ...(c.fadeOutMs != null && { fadeOutMs: c.fadeOutMs }),
     ...(c.anchor != null && { anchor: c.anchor }),
   })
+  const cleanCameraClip = (c: import('../types/project').FilmCameraClip): import('../types/project').FilmCameraClip => ({
+    id: c.id,
+    startMs: c.startMs,
+    durationMs: c.durationMs,
+    kind: c.kind,
+    ...(c.anchor != null && { anchor: c.anchor }),
+    ...(c.rect != null && { rect: c.rect }),
+    ...(c.rectTo != null && { rectTo: c.rectTo }),
+    ...(c.zoomInMs != null && { zoomInMs: c.zoomInMs }),
+    ...(c.holdMs != null && { holdMs: c.holdMs }),
+    ...(c.zoomOutMs != null && { zoomOutMs: c.zoomOutMs }),
+    ...(c.easing != null && { easing: c.easing }),
+    ...(c.maxZoom != null && { maxZoom: c.maxZoom }),
+    ...(c.amplitude != null && { amplitude: c.amplitude }),
+    ...(c.frequencyHz != null && { frequencyHz: c.frequencyHz }),
+    ...(c.axis != null && { axis: c.axis }),
+    ...(c.rotate === true && { rotate: true }),
+    ...(c.decay != null && { decay: c.decay }),
+  })
   return {
     version: 4,
     plans: film.plans.map((pl): FilmTPlanDoc => ({
@@ -1645,6 +1666,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
       motion: pl.timeline.motion.map(cleanMotion),
       anim: pl.timeline.anim.map(cleanAnim),
       soundTracks: pl.timeline.soundTracks.map(track => ({ clips: track.map(cleanSound) })),
+      ...(pl.timeline.camera != null && pl.timeline.camera.length > 0 && { camera: pl.timeline.camera.map(cleanCameraClip) }),
     })),
     character: {
       scale: film.character.scale,
@@ -1721,6 +1743,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
           ...(c.fadeOutMs != null && { fadeOutMs: c.fadeOutMs }),
           ...(c.anchor != null && { anchor: c.anchor }),
         }))),
+        ...(pl.camera != null && pl.camera.length > 0 && { camera: pl.camera }),
       },
     })),
     character: {

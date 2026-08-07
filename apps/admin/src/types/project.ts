@@ -1194,6 +1194,50 @@ export interface FilmSoundClip {
 }
 
 /** Timeline d'un plan : waypoints spatiaux + pistes de clips. */
+/** Type d'effet de la piste CAMÉRA. */
+export type FilmCameraKind = 'zoom' | 'pan' | 'shake' | 'rumble';
+
+/** Rectangle cible d'un effet caméra, en coordonnées DÉCOR du plan (comme cameraX / waypoints). */
+export interface FilmCameraRect { x: number; y: number; w: number; h: number; }
+
+/**
+ * Clip d'EFFET DE CAMÉRA posé sur la piste caméra d'un plan.
+ * - zoom  : la caméra passe du cadre plein au `rect` (zoom-in), tient, puis revient
+ *           (zoom-out ; 0 = push-in permanent). Le rect définit focale + facteur.
+ * - pan   : glisse de `rect` vers `rectTo` (même échelle) — travelling.
+ * - rumble: petit tremblement CONTINU (marche) sur toute la durée.
+ * - shake : secousse d'impact qui DÉCROÎT (rugissement), + rotation optionnelle.
+ * Ancrable ⚓ à un clip motion/anim (ex. rumble sur Walk, shake sur l'action de rugissement).
+ */
+export interface FilmCameraClip {
+  id: string;
+  startMs: number;
+  durationMs: number;
+  kind: FilmCameraKind;
+  /** Ancrage : startMs dérivé d'un clip motion/anim (comme les sons). */
+  anchor?: { clipId: string; edge: 'start' | 'end'; offsetMs: number };
+  // --- zoom / pan (coords décor) ---
+  rect?: FilmCameraRect;
+  /** pan : rectangle d'arrivée. */
+  rectTo?: FilmCameraRect;
+  /** zoom : durée d'entrée / maintien / sortie (ms). zoomOutMs 0 = pas de retour. */
+  zoomInMs?: number;
+  holdMs?: number;
+  zoomOutMs?: number;
+  easing?: FilmTravelEasing;
+  /** Facteur de zoom max de sécurité (sinon dérivé du rect). */
+  maxZoom?: number;
+  // --- shake / rumble ---
+  /** Amplitude en px DÉCOR (rumble) / intensité (shake). */
+  amplitude?: number;
+  frequencyHz?: number;
+  axis?: 'both' | 'x' | 'y';
+  /** shake : micro-rotation. */
+  rotate?: boolean;
+  /** shake : profil d'atténuation. */
+  decay?: 'linear' | 'expo';
+}
+
 export interface FilmPlanTimeline {
   /** Durée du plan (bord droit de la timeline). */
   durationMs: number;
@@ -1204,6 +1248,22 @@ export interface FilmPlanTimeline {
   anim: FilmAnimClip[];
   /** N pistes sons, superposition libre. */
   soundTracks: FilmSoundClip[][];
+  /** Piste CAMÉRA : effets superposables (zoom / pan / shake / rumble). Absent = aucun. */
+  camera?: FilmCameraClip[];
+}
+
+/** État caméra résolu par le sampler à un instant donné (coords DÉCOR + facteurs). */
+export interface FilmCameraState {
+  /** Point focal (centre du cadrage), coords décor. */
+  focusX: number;
+  focusY: number;
+  /** Facteur de zoom (1 = cadre plein du plan). */
+  zoom: number;
+  /** Décalage de secousse, en px DÉCOR (additif). */
+  shakeX: number;
+  shakeY: number;
+  /** Rotation de secousse (radians). */
+  rotation: number;
 }
 
 /** PLAN d'un film timeline : décor + cadrage + timeline. */
