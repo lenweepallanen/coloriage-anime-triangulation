@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { FilmVideoRecord } from '@shared/db/filmVideosStore'
+import { playUi } from '@shared/utils/uiSound'
 
 /** Texte promo joint à la vidéo partagée (feuille de partage native). */
 const SHARE_TEXT = 'Regarde mon coloriage prendre vie avec PicoPop ! ✨ https://picopop.app'
@@ -99,6 +100,7 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
       }
 
       try {
+        playUi('shareReady') // le fichier est prêt, la feuille va s'ouvrir
         await Share.share({
           text: SHARE_TEXT,
           url: shareUri,
@@ -122,6 +124,7 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
   try {
     const file = new File([record.blob], fileName, { type: record.mimeType })
     if (navigator.canShare?.({ files: [file] })) {
+      playUi('shareReady')
       await navigator.share({ files: [file], text: SHARE_TEXT }).catch(() => {})
       return true
     }

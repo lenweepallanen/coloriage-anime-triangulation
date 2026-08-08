@@ -8,6 +8,7 @@ import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
 import CornerAdjustment from '../components/scan/CornerAdjustment'
 import { useScanProcessor } from '../components/scan/ScanProcessor'
+import { playUi } from '../utils/uiSound'
 // PIXI (plusieurs centaines de Ko) n'est tiré QUE par ces deux players. On les charge
 // en lazy → ils sortent du bundle initial (menu livre / accueil play, qui n'en ont pas
 // besoin). On les précharge ensuite en tâche de fond dès l'entrée sur la page scan
@@ -235,6 +236,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   // Transition from processing to debug (admin) / validation preview (play) when rectified canvas is ready
   useEffect(() => {
     if (processor.rectifiedCanvas && stage === 'processing' && !processor.processing) {
+      playUi('scanDing') // coloriage redressé avec succès
       setStage(mode === 'play' ? 'preview' : 'debug')
     }
   }, [processor.rectifiedCanvas, processor.processing, stage, mode])
@@ -650,7 +652,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
 
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button
-              onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); setStage('animation') }}
+              onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); playUi('whoosh'); setStage('animation') }}
               disabled={lamaStatus === 'generating-mask' || lamaStatus === 'warmup' || lamaStatus === 'inpainting' || deferredLoaded === false}
             >
               {deferredLoaded === false
@@ -692,7 +694,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
             <div className="scan-validate-actions">
               <button
                 className="btn-primary btn-lg"
-                onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); setStage('animation') }}
+                onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); playUi('whoosh'); setStage('animation') }}
                 disabled={deferredLoaded === false}
               >
                 {deferredLoaded === false ? playT('validate.loading') : mode === 'play' ? playT('validate.see') : 'Oui'}

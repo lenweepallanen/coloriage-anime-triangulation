@@ -1,13 +1,40 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useI18n, type Lang } from '../i18n'
 import NetworkOverlay from './NetworkOverlay'
+import { playUi, unlockUiSound, setHapticHook, isUiSoundEnabled, setUiSoundEnabled, type UiSoundName } from '@shared/utils/uiSound'
 
 /**
  * Layout commun des écrans PLAY (hors scan /p/:id) :
  * fond illustré prairie + menu ☰ en haut à droite + barre d'onglets en bas.
  */
 export default function PlayShell() {
+  // Sound design d'UI (global) : déverrouillage audio au 1er geste + tap léger
+  // délégué sur tous les boutons/liens + retour haptique (import dynamique, la
+  // dépendance @capacitor/haptics reste côté play).
+  useEffect(() => {
+    const onFirstGesture = () => unlockUiSound()
+    window.addEventListener('pointerdown', onFirstGesture, { once: true, capture: true })
+
+    const onClick = (e: MouseEvent) => {
+      const el = (e.target as HTMLElement | null)?.closest('button, a, [role="button"], .shell-tab')
+      if (el && el.getAttribute('data-ui-sound') !== 'off') playUi('tap')
+    }
+    document.addEventListener('click', onClick, true)
+
+    let hapticsMod: Promise<typeof import('@capacitor/haptics')> | null = null
+    setHapticHook((_name: UiSoundName) => {
+      hapticsMod ??= import('@capacitor/haptics')
+      void hapticsMod.then(({ Haptics, ImpactStyle }) => Haptics.impact({ style: ImpactStyle.Light })).catch(() => {})
+    })
+
+    return () => {
+      window.removeEventListener('pointerdown', onFirstGesture, { capture: true } as EventListenerOptions)
+      document.removeEventListener('click', onClick, true)
+      setHapticHook(null)
+    }
+  }, [])
+
   return (
     <div className="play-shell">
       <div className="shell-bg" aria-hidden="true" />
@@ -25,6 +52,12 @@ function TopMenu() {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const { lang, setLang, t } = useI18n()
+  const [soundOn, setSoundOn] = useState<boolean>(() => isUiSoundEnabled())
+  const pickSound = (on: boolean) => {
+    setUiSoundEnabled(on)
+    setSoundOn(on)
+    if (on) { unlockUiSound(); playUi('tap') } // petit retour immédiat à l'activation
+  }
 
   const go = (path: string) => {
     setOpen(false)
@@ -71,6 +104,25 @@ function TopMenu() {
                   onClick={() => pickLang('en')}
                 >
                   🇬🇧 EN
+                </button>
+              </div>
+            </div>
+            <div className="shell-menu-lang" data-ui-sound="off">
+              <span>{t('menu.sound')}</span>
+              <div className="shell-menu-lang-btns">
+                <button
+                  className={`shell-lang-btn ${soundOn ? 'shell-lang-btn--active' : ''}`}
+                  data-ui-sound="off"
+                  onClick={() => pickSound(true)}
+                >
+                  🔊 {t('menu.sound.on')}
+                </button>
+                <button
+                  className={`shell-lang-btn ${!soundOn ? 'shell-lang-btn--active' : ''}`}
+                  data-ui-sound="off"
+                  onClick={() => pickSound(false)}
+                >
+                  🔇 {t('menu.sound.off')}
                 </button>
               </div>
             </div>

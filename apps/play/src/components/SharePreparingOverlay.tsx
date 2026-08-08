@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import Mascot from '@shared/components/mascot/Mascot'
+import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 
 /**
@@ -8,6 +10,7 @@ import { useI18n } from '../i18n'
  */
 export default function SharePreparingOverlay() {
   const { t } = useI18n()
+  useEffect(() => { playUi('whoosh') }, [])
   return (
     <div className="scanner-confirm-backdrop share-loading-backdrop" role="alert" aria-busy="true">
       <div className="scanner-confirm soft-card share-loading-card">

@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { playT } from '../../utils/playI18n'
+import { playUi } from '../../utils/uiSound'
 import Mascot from '../mascot/Mascot'
 import { loadOpenCVWorker, detectFrame, setDetectCallback } from '../../utils/perspectiveCorrection'
 import type { Point2D } from '../../types/project'
@@ -255,6 +256,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     try {
       await (track as any).applyConstraints({ advanced: [{ torch: newVal }] })
       setTorchOn(newVal)
+      playUi(newVal ? 'switchOn' : 'switchOff')
     } catch (err: any) {
       console.warn('Torch toggle failed:', err.message)
     }
@@ -362,6 +364,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const capturePhoto = useCallback(() => {
     if (!videoRef.current || !captureCanvasRef.current) return
 
+    playUi('shutter')
     setShowFlash(true)
     setTimeout(() => setShowFlash(false), 200)
 
@@ -671,6 +674,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             </button>
             <button
               onClick={capturePhoto}
+              data-ui-sound="off"
               className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
               aria-label="Capturer"
             >
@@ -679,6 +683,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             {torchSupported && (
               <button
                 onClick={toggleTorch}
+                data-ui-sound="off"
                 className={torchOn ? 'btn-torch btn-torch--on' : 'btn-torch'}
                 aria-label={torchOn ? 'Flash activé' : 'Flash'}
               >

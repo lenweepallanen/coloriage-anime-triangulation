@@ -4,6 +4,7 @@ import jsQR from 'jsqr'
 import { getBook, getBookCover } from '@shared/db/booksStore'
 import type { Book } from '@shared/types/project'
 import { isBookDownloaded, startBackgroundBookDownload } from '../utils/bookDownload'
+import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 import Mascot from '@shared/components/mascot/Mascot'
 
@@ -72,6 +73,7 @@ export default function ScannerPage() {
         flashMessage(t('scanner.book.notfound'))
         return
       }
+      playUi('scanDing')
       if (isBookDownloaded(book)) {
         setStatus({ kind: 'success', text: t('scanner.book.already') })
         setTimeout(() => {
@@ -95,6 +97,7 @@ export default function ScannerPage() {
     // part en arrière-plan, puis retour au menu (badge de progression sur la
     // carte du livre — il est ouvrable immédiatement).
     setStatus({ kind: 'confirm', book, coverUrl, launching: true })
+    playUi('success')
     startBackgroundBookDownload(book)
     setTimeout(() => {
       if (coverUrl) URL.revokeObjectURL(coverUrl)
@@ -114,10 +117,12 @@ export default function ScannerPage() {
     handlingRef.current = true
     const parsed = parseQr(data)
     if (!parsed) {
+      playUi('error')
       flashMessage(t('scanner.unknown'))
       return
     }
     if (parsed.type === 'project') {
+      playUi('scanDing')
       stopCamera()
       // autocam=1 : la caméra du pipeline scan démarre directement (elle
       // était déjà ouverte pour lire le QR — pas de ré-écran « Prêt à scanner ? »)

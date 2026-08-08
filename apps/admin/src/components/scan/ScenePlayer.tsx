@@ -23,6 +23,7 @@ import { FilmTimelineSampler, type TimelineSample } from '../../utils/filmTimeli
 import { FilmAudioScheduler } from '../../utils/filmAudioScheduler'
 import { computeFootstepSchedule, collectFootstepSoundBlobs } from '../../utils/footstepSync'
 import { startFilmEdgeTransition, startPlanTransition, type PlanTransitionRunner } from '../../utils/filmTransitions'
+import { playUi } from '../../utils/uiSound'
 import { filmIntroTransition, filmOutroTransition } from '../../utils/filmTimeline'
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
@@ -1170,6 +1171,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       if (filmEndedRef.current) return
       filmEndedRef.current = true
       setFilmEnded(true)
+      playUi('success') // écran Bravo — moment de récompense
       if (filmRecording) {
         const rec = filmRecording
         filmRecording = null
@@ -1752,6 +1754,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         const rp = scenePlayback.currentRestPoint
         const mapping = rp?.zoneAnimationMappings?.find(m => m.zoneId === zoneId)
         if (mapping) {
+          playUi('playful') // tap sur une zone du personnage
           if (currentMultiPlaybackRef) {
             currentMultiPlaybackRef.requestOneshot(mapping.animationId)
           } else {
