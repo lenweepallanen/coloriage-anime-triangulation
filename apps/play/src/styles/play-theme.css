@@ -2642,25 +2642,34 @@ body.play-app .galerie-card {
 }
 body.play-app .galerie-card-share {
   position: absolute;
-  right: 14px;
-  top: 14px;
-  width: 36px;
-  height: 36px;
+  right: 12px;
+  top: 12px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   border: none;
-  background: var(--accent-violet, #8b7cf0);
-  color: #fff;
-  font-size: 1.05rem;
-  font-weight: 700;
+  /* Cercle BLANC + icône violette (pattern charte) → bien visible sur toute
+     vignette colorée, contrairement au petit cercle violet précédent. */
+  background: var(--paper, #fff);
+  color: var(--accent-violet, #8b7cf0);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(139, 124, 240, 0.4);
-  z-index: 1;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.28);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  z-index: 2;
+}
+body.play-app .galerie-card-share:active {
+  transform: scale(0.94);
+  box-shadow: 0 2px 8px rgba(90, 80, 140, 0.22);
+}
+body.play-app .galerie-card-share svg {
+  width: 24px;
+  height: 24px;
 }
 body.play-app .galerie-card-share:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
 }
 body.play-app .galerie-empty {
   max-width: 480px;

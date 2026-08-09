@@ -214,10 +214,10 @@ function GalleryCard({ entry, onOpen }: { entry: GalleryEntry; onOpen: () => voi
         disabled={sharing}
         aria-label={`${t('gallery.share')} ${name}`}
       >
-        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M12 15V4" />
-          <path d="m7.5 8 4.5-4.5L16.5 8" />
-          <path d="M5 13v6a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6" />
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 14V3" />
+          <path d="m8 6.5 4-4 4 4" />
+          <path d="M5 12v7.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V12" />
         </svg>
       </button>
       {sharing && <SharePreparingOverlay />}
