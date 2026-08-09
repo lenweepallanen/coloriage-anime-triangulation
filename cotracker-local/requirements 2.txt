@@ -1,7 +1,0 @@
-flask
-opencv-python
-numpy
-torch
-torchvision
-einops
-imageio[ffmpeg]

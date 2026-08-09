@@ -16,6 +16,7 @@ interface BookDoc {
   hasCover: boolean
   published?: boolean
   publishedAt?: number | null
+  unlisted?: boolean
   amazonUrl?: string
   bonusUrl?: string
   hasBonusImage?: boolean
@@ -46,6 +47,7 @@ function toDoc(book: Book): BookDoc {
     hasCover: book.coverImageBlob != null,
     published: book.published === true,
     publishedAt: book.publishedAt ?? null,
+    unlisted: book.unlisted === true,
     amazonUrl: book.amazonUrl || 'amazon.com',
     bonusUrl: book.bonusUrl || 'amazon.com',
     hasBonusImage: book.bonusImageBlob != null,
@@ -60,6 +62,7 @@ export async function createBook(name: string): Promise<Book> {
     coverImageBlob: null,
     published: false,
     publishedAt: null,
+    unlisted: false,
     amazonUrl: 'amazon.com',
     bonusUrl: 'amazon.com',
     bonusImageBlob: null,
@@ -82,6 +85,7 @@ export async function getBook(id: string): Promise<Book | undefined> {
     coverImageBlob,
     published: d.published === true,
     publishedAt: d.publishedAt ?? null,
+    unlisted: d.unlisted === true,
     amazonUrl: d.amazonUrl || 'amazon.com',
     bonusUrl: d.bonusUrl || 'amazon.com',
     bonusImageBlob,
@@ -99,6 +103,7 @@ export async function getAllBooks(): Promise<Book[]> {
       coverImageBlob: null,
       published: data.published === true,
       publishedAt: data.publishedAt ?? null,
+      unlisted: data.unlisted === true,
       amazonUrl: data.amazonUrl || 'amazon.com',
       bonusUrl: data.bonusUrl || 'amazon.com',
       bonusImageBlob: null,
@@ -123,6 +128,7 @@ export async function getPublishedBooks(): Promise<Book[]> {
       coverImageBlob: null,
       published: true,
       publishedAt: data.publishedAt ?? null,
+      unlisted: data.unlisted === true,
       amazonUrl: data.amazonUrl || 'amazon.com',
       bonusUrl: data.bonusUrl || 'amazon.com',
       bonusImageBlob: null,

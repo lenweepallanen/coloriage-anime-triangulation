@@ -1498,6 +1498,10 @@ export interface Book {
   /** Si true, le menu livre est accessible publiquement (play.<domaine>/livre/{id}). */
   published: boolean;
   publishedAt: number | null;
+  /** Si true : livre publié mais NON listé dans les grilles de découverte de
+   *  l'app (« LES AUTRES LIVRES », livres liés). Reste ajoutable par son QR et
+   *  visible dans « MES LIVRES » une fois ajouté. Sert aux livres de review. */
+  unlisted: boolean;
   /** Lien Amazon du livre (défaut "amazon.com"). */
   amazonUrl: string;
   /** Lien vers le contenu bonus à télécharger (défaut "amazon.com"). */

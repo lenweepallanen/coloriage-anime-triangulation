@@ -13,6 +13,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // sans duplication.
 export default defineConfig({
   plugins: [react(), basicSsl()],
+  // Build prod : on retire les logs de debug (console.log/debug/info) — beaucoup
+  // viennent du code partagé @shared. On GARDE console.warn/error (diagnostic de
+  // crash). Marqués `pure` → éliminés par le tree-shaking de la build minifiée.
+  esbuild: {
+    pure: ['console.log', 'console.debug', 'console.info'],
+  },
   publicDir: path.resolve(__dirname, '../admin/public'),
   resolve: {
     alias: {

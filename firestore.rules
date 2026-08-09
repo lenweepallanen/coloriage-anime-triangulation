@@ -60,11 +60,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Scans : créés sans auth par play.NDD (utilisateur final).
+    // Scans : réservés à l'admin (debug/qualité). L'app PLAY n'uploade plus
+    // aucun scan (vie privée : la photo reste sur l'appareil) → plus de create
+    // public. Admin only en lecture comme en écriture.
     match /scans/{scanId} {
       allow read: if isAdmin();
-      allow create: if true;
-      allow update, delete: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
   }
 }

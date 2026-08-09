@@ -118,6 +118,17 @@ export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'pl
 
   const handleCapture = useCallback(
     async (blob: Blob, corners: Point2D[] | null) => {
+      // VIE PRIVÉE (play) : on n'accepte QUE des scans avec les 4 repères
+      // détectés. Sans repères, le pipeline basculait en recadrage centré →
+      // n'importe quelle photo (mur, visage) devenait un scan. En play on refuse
+      // (message d'aide) ; l'admin garde le fallback recadrage. L'import d'image
+      // en play passe désormais par une détection de repères (CameraView) et
+      // fournit donc de vrais coins → il satisfait ce contrôle.
+      if (isPlay && (!corners || corners.length !== 4)) {
+        setError("On ne reconnaît pas de coloriage. Vise bien les 4 repères aux coins de la page.")
+        return
+      }
+
       setProcessing(true)
       setError(null)
 
@@ -171,14 +182,20 @@ export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'pl
 
         setDebugImages({ capturedUrl, raw2048Url, rectifiedUrl, meshOverlayUrl })
 
-        // Save scan to Firebase
-        const scanBlob = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            b => b ? resolve(b) : reject(new Error('Failed to convert canvas to blob')),
-            'image/png'
-          )
-        })
-        await createScan(project.id, scanBlob)
+        // VIE PRIVÉE (play) : le scan NE quitte JAMAIS l'appareil. On ne
+        // sérialise ni n'uploade le blob en play — la texture d'animation est le
+        // canvas local. `createScan` (upload Storage + doc Firestore) reste
+        // réservé à l'admin (debug/qualité). Bonus : évite un gros PNG en
+        // mémoire au moment le plus lourd (scan→animation) sur iOS.
+        if (!isPlay) {
+          const scanBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob(
+              b => b ? resolve(b) : reject(new Error('Failed to convert canvas to blob')),
+              'image/png'
+            )
+          })
+          await createScan(project.id, scanBlob)
+        }
 
         setRectifiedCanvas(canvas)
       } catch (err) {

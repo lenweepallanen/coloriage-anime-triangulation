@@ -122,7 +122,9 @@ export default function PlayHomePage() {
   }
 
   const myBooks = books.filter(b => downloadedIds.has(b.id))
-  const otherBooks = books.filter(b => !downloadedIds.has(b.id))
+  // « LES AUTRES LIVRES » (découverte) : on masque les livres non listés
+  // (review). Ils restent ajoutables par QR + visibles dans MES LIVRES.
+  const otherBooks = books.filter(b => !downloadedIds.has(b.id) && !b.unlisted)
   const firstTime = myBooks.length === 0
 
   const openShop = (book: Book) =>

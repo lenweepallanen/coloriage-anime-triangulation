@@ -915,6 +915,137 @@ body.play-app .placeholder-card p {
   font-size: 1.1rem;
   line-height: 1.5;
 }
+
+/* ===== Pages info (Tuto / À propos) ===== */
+body.play-app .info-card {
+  max-width: 520px;
+  width: 100%;
+  padding: 28px 24px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: left;
+}
+body.play-app .info-card--about {
+  align-items: center;
+  text-align: center;
+}
+body.play-app .info-title {
+  margin: 4px 0 0;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  color: #7a52c7;
+  font-size: clamp(1.4rem, 5vw, 1.8rem);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+body.play-app .info-title::before,
+body.play-app .info-title::after {
+  content: '✦';
+  font-size: 0.7em;
+  color: var(--accent-rose, #ff8fae);
+  transform: rotate(-12deg);
+}
+body.play-app .info-title::after { color: var(--accent-sun, #ffcf3f); transform: rotate(12deg); }
+body.play-app .info-intro {
+  margin: 0;
+  font-family: 'Andika', sans-serif;
+  color: var(--ink);
+  font-size: 1.02rem;
+  line-height: 1.5;
+  text-align: center;
+}
+/* Tuto — étapes numérotées */
+body.play-app .tuto-steps {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+body.play-app .tuto-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+body.play-app .tuto-step-num {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--accent-violet, #8b7cf0);
+  color: #fff;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(139, 124, 240, 0.4);
+}
+body.play-app .tuto-step-txt {
+  font-family: 'Andika', sans-serif;
+  color: var(--ink-soft);
+  font-size: 0.98rem;
+  line-height: 1.4;
+}
+body.play-app .tuto-step-txt strong {
+  display: block;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 1.02rem;
+  margin-bottom: 2px;
+}
+body.play-app .tuto-tips {
+  margin: 6px 0 0;
+  font-family: 'Andika', sans-serif;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  background: var(--lavender-soft, #f3eefe);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+/* À propos — liste + liens */
+body.play-app .about-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+body.play-app .about-row {
+  font-family: 'Andika', sans-serif;
+  color: var(--ink-soft);
+  font-size: 0.98rem;
+}
+body.play-app .about-link {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  color: var(--accent-violet, #8b7cf0);
+  text-decoration: none;
+}
+body.play-app .about-link:active { opacity: 0.7; }
+body.play-app .about-privacy-note {
+  margin: 10px 0 0;
+  font-family: 'Andika', sans-serif;
+  color: var(--accent-mint, #57c8a3);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+body.play-app .about-made {
+  margin: 4px 0 0;
+  font-family: 'Fredoka', sans-serif;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+}
 body.play-app .placeholder-logo {
   width: 90px;
   height: auto;
@@ -1737,6 +1868,15 @@ body.play-app .camera-buttons-row--active .btn-capture--ready::after {
 }
 body.play-app .camera-buttons-row--active .btn-capture:active {
   transform: scale(0.93);
+}
+/* Capture grisée tant que les 4 repères ne sont pas détectés (vie privée : on
+   n'autorise que le scan d'un vrai coloriage PicoPop). */
+body.play-app .camera-buttons-row--active .btn-capture:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+body.play-app .camera-buttons-row--active .btn-capture:disabled:active {
+  transform: none;
 }
 body.play-app .btn-capture-label {
   position: absolute;

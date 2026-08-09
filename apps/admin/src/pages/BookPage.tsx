@@ -124,6 +124,20 @@ export default function BookPage() {
     }
   }
 
+  async function handleToggleUnlisted() {
+    if (!book || busy) return
+    setBusy(true)
+    try {
+      const next = !book.unlisted
+      await updateBook({ ...book, unlisted: next })
+      setBook({ ...book, unlisted: next })
+    } catch (err) {
+      alert('Erreur : ' + (err instanceof Error ? err.message : err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function handleCopyUrl() {
     if (!book) return
     try {
@@ -333,6 +347,14 @@ export default function BookPage() {
               {busy ? '…' : book.published ? 'Dépublier' : 'Publier'}
             </button>
           </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12, fontSize: 13, lineHeight: 1.4 }}>
+            <input type="checkbox" checked={book.unlisted} disabled={busy} onChange={handleToggleUnlisted} style={{ marginTop: 2 }} />
+            <span>
+              <strong>Non listé (review)</strong> — le livre reste publié et ajoutable par son QR,
+              mais il est masqué des grilles publiques (« LES AUTRES LIVRES », livres liés).
+              Utile pour un livre de test réviseur qu'on ne partage pas au public.
+            </span>
+          </label>
           {book.published && (
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Lien USER du livre (prod) :</div>

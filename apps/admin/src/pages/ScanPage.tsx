@@ -490,7 +490,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       )}
 
       {stage === 'camera' && (
-        <CameraView onCapture={onCameraCapture} onActiveChange={setCameraActive} autoStart={autoCam} title={`${project.name} — Mode Coloriage`} />
+        <CameraView onCapture={onCameraCapture} onActiveChange={setCameraActive} autoStart={autoCam} requireMarkers={mode === 'play'} title={`${project.name} — Mode Coloriage`} />
       )}
 
       {stage === 'adjust' && capturedBlob && (

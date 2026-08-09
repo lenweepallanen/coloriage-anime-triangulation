@@ -77,9 +77,13 @@ interface Props {
   /** Titre affiché dans la colonne droite en mode paysage (masqué en portrait, où
    *  le titre vient de la pastille .scan-page > h2). */
   title?: string
+  /** VIE PRIVÉE (play) : n'autorise la capture QUE si les 4 repères sont détectés
+   *  (bouton grisé sinon) et bloque l'import sans repères. Empêche de scanner une
+   *  photo quelconque (mur, visage). Défaut false (admin : fallback recadrage OK). */
+  requireMarkers?: boolean
 }
 
-export default function CameraView({ onCapture, title, onActiveChange, autoStart }: Props) {
+export default function CameraView({ onCapture, title, onActiveChange, autoStart, requireMarkers = false }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -262,6 +266,25 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     }
   }, [stream, torchOn])
 
+  // Détection des 4 repères L sur une image statique (worker OpenCV), one-shot.
+  // Utilisé pour valider un import en play. Résout `null` si non détectés / timeout.
+  const detectMarkersOnImageData = useCallback((imageData: ImageData) => {
+    return new Promise<Point2D[] | null>((resolve) => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout>
+      const finish = (result: Point2D[] | null) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        setDetectCallback(null)
+        resolve(result)
+      }
+      timer = setTimeout(() => finish(null), 5000)
+      setDetectCallback((corners) => finish(corners && corners.length === 4 ? corners : null))
+      if (!detectFrame(imageData)) finish(null)
+    })
+  }, [])
+
   const handleImportImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -269,28 +292,68 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
 
     const img = new Image()
     img.onload = () => {
-      const size = Math.min(img.width, img.height)
-      const sx = (img.width - size) / 2
-      const sy = (img.height - size) / 2
+      void (async () => {
+        try {
+          if (!requireMarkers) {
+            // ADMIN : recadrage carré centré (fallback historique, corners=null).
+            const size = Math.min(img.width, img.height)
+            const sx = (img.width - size) / 2
+            const sy = (img.height - size) / 2
+            const canvas = document.createElement('canvas')
+            canvas.width = size
+            canvas.height = size
+            canvas.getContext('2d')!.drawImage(img, sx, sy, size, size, 0, 0, size, size)
+            canvas.toBlob((blob) => {
+              if (blob) onCapture(blob, null)
+              else setError('Erreur lors de l\'import. Veuillez reessayer.')
+            }, 'image/jpeg', 0.95)
+            return
+          }
 
-      const canvas = document.createElement('canvas')
-      canvas.width = size
-      canvas.height = size
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size)
+          // PLAY (vie privée) : on n'accepte l'import QUE si les 4 repères L sont
+          // détectés (une vraie page coloriée PicoPop). Une photo quelconque
+          // (mur, visage) n'a pas de repères → rejet. C'est aussi le flux du
+          // réviseur (importer l'image de test fournie).
+          if (isCameraActive) stopCamera()
+          await loadOpenCVWorker()
 
-      canvas.toBlob((blob) => {
-        if (blob) {
-          onCapture(blob, null)
-        } else {
-          setError('Erreur lors de l\'import. Veuillez reessayer.')
+          // Image pleine résolution = source du warp ; les coins sont dans SON repère.
+          const full = document.createElement('canvas')
+          full.width = img.width
+          full.height = img.height
+          full.getContext('2d')!.drawImage(img, 0, 0)
+
+          // Détection sur une version réduite (~720px), comme le flux caméra.
+          const scale = 720 / Math.max(img.width, img.height)
+          const dw = Math.max(1, Math.round(img.width * scale))
+          const dh = Math.max(1, Math.round(img.height * scale))
+          const small = document.createElement('canvas')
+          small.width = dw
+          small.height = dh
+          const sctx = small.getContext('2d')!
+          sctx.drawImage(img, 0, 0, dw, dh)
+          const detected = await detectMarkersOnImageData(sctx.getImageData(0, 0, dw, dh))
+          if (!detected) {
+            setError(playT('camera.needMarkers'))
+            return
+          }
+          const corners = detected.map((p) => ({
+            x: Math.round(p.x / scale),
+            y: Math.round(p.y / scale),
+          }))
+          full.toBlob((blob) => {
+            if (blob) onCapture(blob, corners)
+            else setError('Erreur lors de l\'import. Veuillez reessayer.')
+          }, 'image/jpeg', 0.95)
+        } catch {
+          setError(playT('camera.needMarkers'))
+        } finally {
+          URL.revokeObjectURL(img.src)
         }
-      }, 'image/jpeg', 0.95)
-
-      URL.revokeObjectURL(img.src)
+      })()
     }
     img.src = URL.createObjectURL(file)
-  }, [onCapture])
+  }, [onCapture, requireMarkers, isCameraActive, stopCamera, detectMarkersOnImageData])
 
   const drawCornerGuide = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, cornerIndex: number, matched: boolean, armLen: number) => {
     ctx.strokeStyle = matched ? '#00FF00' : 'rgba(255, 255, 255, 0.6)'
@@ -395,6 +458,13 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       }))
     }
 
+    // VIE PRIVÉE (play) : pas de capture sans les 4 repères (garde-fou en plus du
+    // bouton grisé, au cas où la stabilité serait perdue juste avant le déclic).
+    if (requireMarkers && (!scaledCorners || scaledCorners.length !== 4)) {
+      setError(playT('camera.needMarkers'))
+      return
+    }
+
     canvas.toBlob((blob) => {
       if (blob) {
         onCapture(blob, scaledCorners)
@@ -403,7 +473,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         setError('Erreur lors de la capture. Veuillez reessayer.')
       }
     }, 'image/jpeg', 0.95)
-  }, [getSquareCrop, onCapture, stopCamera])
+  }, [getSquareCrop, onCapture, stopCamera, requireMarkers])
 
   useEffect(() => {
     if (!isCameraActive) return
@@ -675,10 +745,13 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             <button
               onClick={capturePhoto}
               data-ui-sound="off"
+              disabled={requireMarkers && !allStable}
               className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
               aria-label="Capturer"
             >
-              <span className="btn-capture-label">{playT('camera.capture')}</span>
+              <span className="btn-capture-label">
+                {requireMarkers && !allStable ? playT('camera.aimMarkers') : playT('camera.capture')}
+              </span>
             </button>
             {torchSupported && (
               <button

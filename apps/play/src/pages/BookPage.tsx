@@ -63,7 +63,8 @@ export default function BookPage() {
       // page est rendue, un échec ne masque pas le livre courant.
       try {
         const all = await getPublishedBooks()
-        setOtherBooks(all.filter(x => x.id !== bookId))
+        // Masque les livres non listés (review) des suggestions publiques.
+        setOtherBooks(all.filter(x => x.id !== bookId && !x.unlisted))
       } catch (err) {
         console.error('Collection load failed', err)
       }
