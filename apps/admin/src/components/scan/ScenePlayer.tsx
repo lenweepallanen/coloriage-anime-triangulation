@@ -158,8 +158,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [filmRunId, setFilmRunId] = useState(0)
   // Progression film [0..100], throttlée au demi-pourcent par le ticker.
   const [filmProgressPct, setFilmProgressPct] = useState(0)
-  // Durée totale du film (ms) pour l'affichage écoulé / total de la barre de lecture.
-  const [filmDurationMs, setFilmDurationMs] = useState(0)
   // Son coupé (bouton haut-parleur de la barre) — n'affecte pas l'enregistrement.
   const [filmMuted, setFilmMuted] = useState(false)
   const filmMutedRef = useRef(false)
@@ -172,10 +170,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       return next
     })
   }, [])
-  const fmtFilmTime = (ms: number) => {
-    const s = Math.max(0, Math.round(ms / 1000))
-    return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-  }
   // --- Capture vidéo du film (1ʳᵉ lecture uniquement) ---
   // Capture terminée, en attente de décision (rescan) ou déjà sauvée (1er scan).
   const [pendingRecording, setPendingRecording] = useState<FilmRecordingResult | null>(null)
@@ -1244,10 +1238,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const scheduler = new FilmAudioScheduler(filmT, sampler.planStartMs, sampler.totalMs,
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
-      // Barre de lecture : durée totale + ref pour le bouton son (mute haut-parleur).
+      // Ref pour le bouton son (mute haut-parleur).
       filmSchedulerRef.current = scheduler
       scheduler.setMuted(filmMutedRef.current)
-      setFilmDurationMs(sampler.totalMs)
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
       filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
@@ -2907,13 +2900,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // flottantes — retour/menu au MILIEU des marges crème (calés via cardSize),
     // pilule de lecture en bas. Pas de wordmark par-dessus le film.
     if (filmEnabled) {
-      const filmElapsedMs = filmDurationMs * filmProgressPct / 100
       // Position des boutons : centrés dans la marge (entre bord vidéo et bord
       // écran) = 25% − largeurVidéo/4 ; verticalement près du haut du film.
       const hudTop = cardSize.h ? `calc(50% - ${cardSize.h / 2}px + 6px)` : `calc(10px + env(safe-area-inset-top))`
+      const hudBottom = cardSize.h ? `calc(50% - ${cardSize.h / 2}px + 6px)` : `calc(10px + env(safe-area-inset-bottom))`
       // Milieu de la marge, borné à ≥14px pour ne jamais sortir de l'écran quand
       // la marge est quasi nulle (écran ~16:9).
       const hudSide = cardSize.w ? `max(14px, calc(25% - ${cardSize.w / 4}px))` : '18px'
+      // Barre de progression discrète : intégrée au bas du film (largeur vidéo
+      // moins les coins arrondis), positionnée juste au-dessus du bord inférieur.
+      const progW = cardSize.w ? Math.max(40, cardSize.w - 28) : undefined
+      const progTop = cardSize.h ? `calc(50% + ${cardSize.h / 2}px - 7px)` : undefined
       return (
         <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
           <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSide }} onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
@@ -2932,7 +2929,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
           <div className="filmapp-stage">{canvasEl}</div>
 
-          <div className="filmapp-playerbar" style={cardSize.w ? { width: Math.min(cardSize.w, 560) } : undefined}>
+          {/* Progression DISCRÈTE : fine ligne intégrée au bas du film (repère seul). */}
+          <div className="filmapp-progress" style={{ top: progTop, width: progW }} aria-hidden="true">
+            <div className="filmapp-progress-fill" style={{ width: `${filmProgressPct}%` }} />
+          </div>
+
+          {/* Commandes en bas à droite (alignées au menu) : play/pause + son. */}
+          <div className="filmapp-rcontrols" style={{ right: hudSide, bottom: hudBottom }}>
             <button className="filmapp-round filmapp-play" onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
               {playing ? (
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
@@ -2945,12 +2948,6 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
                 </svg>
               )}
             </button>
-            <span className="filmapp-time">{fmtFilmTime(filmElapsedMs)}</span>
-            <div className="filmapp-track" aria-hidden="true">
-              <div className="filmapp-fill" style={{ width: `${filmProgressPct}%` }} />
-              <div className="filmapp-knob" style={{ left: `${filmProgressPct}%` }} />
-            </div>
-            <span className="filmapp-time">{fmtFilmTime(filmDurationMs)}</span>
             <button className="filmapp-round filmapp-sound" onClick={toggleFilmMute} aria-label={filmMuted ? 'Activer le son' : 'Couper le son'}>
               {filmMuted ? (
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
