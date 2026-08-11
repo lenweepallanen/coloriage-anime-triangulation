@@ -51,8 +51,8 @@ _Source actuelle : projet `coloriage-anime-prod`, base Firestore nommée **`colo
 ## 🟢 Faisable MAINTENANT (sans Firebase)
 
 **Code — 2 correctifs Info.plist (Claude, rapide)**
-- [ ] `ITSAppUsesNonExemptEncryption = false` (évite la question export à chaque envoi)
-- [ ] `NSPhotoLibraryUsageDescription` (l'import ouvre la photothèque) — _`NSCameraUsageDescription` + Motion déjà présents_
+- [x] `ITSAppUsesNonExemptEncryption = false` (évite la question export à chaque envoi)
+- [x] `NSPhotoLibraryUsageDescription` (l'import ouvre la photothèque) — _`NSCameraUsageDescription` + Motion déjà présents_
 
 **Assets (Nicolas)**
 - [ ] **Captures d'écran** : iPhone 6.7″ + 6.5″, Android téléphone + tablette (accueil, film animé, galerie, partage)
@@ -60,7 +60,7 @@ _Source actuelle : projet `coloriage-anime-prod`, base Firestore nommée **`colo
 - [ ] **hello@picopop.app** : boîte mail active
 
 **Textes de fiche (Claude peut rédiger)**
-- [ ] Nom, sous-titre, description, mots-clés, texte promo (FR + EN)
+- [x] Nom, sous-titre, description, mots-clés, texte promo (FR + EN) → `store-listing.md`
 
 ---
 
