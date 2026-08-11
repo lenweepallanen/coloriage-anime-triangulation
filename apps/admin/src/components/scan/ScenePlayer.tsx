@@ -249,15 +249,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const isLs = vw > vh
     const availW = isLs ? vw : vh
     const availH = isLs ? vh : vw
-    // Mode FILM (design app) : le film est encadré entre une barre du haut
-    // (retour/wordmark/menu) et une barre de lecture en bas → on réserve leur
-    // hauteur + des marges latérales pour que la carte 16:9 tienne au milieu.
-    const TOP = filmEnabled ? 66 : 0
-    const BOTTOM = filmEnabled ? 80 : 0
-    const SIDE = filmEnabled ? 22 : 0
-    let w = availW - SIDE * 2
+    // Mode FILM (design app) : QUASI plein écran. Les commandes (barre du haut
+    // + pilule de lecture) FLOTTENT par-dessus le film → on ne réserve qu'une
+    // fine marge pour respirer / laisser voir le cadre blanc.
+    const INSET = filmEnabled ? 12 : 0
+    let w = availW - INSET * 2
     let h = w / frameAspect
-    const usableH = availH - TOP - BOTTOM
+    const usableH = availH - INSET * 2
     if (h > usableH) { h = usableH; w = h * frameAspect }
     return { w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) }
   }

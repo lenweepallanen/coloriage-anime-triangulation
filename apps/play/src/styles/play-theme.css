@@ -3003,44 +3003,67 @@ body.play-app .scene-player-film-knob {
    Remplace le fond noir letterboxé par la vraie DA PicoPop.
    ------------------------------------------------------------------- */
 body.play-app .scene-player--filmapp.scene-player--fullscreen {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 6px;
+  display: block;
   overflow: hidden;
   box-sizing: border-box;
   background: #fdf8ea url('../assets/bg-meadow.webp') center bottom / cover no-repeat;
-  padding:
-    calc(8px + env(safe-area-inset-top))
-    calc(12px + env(safe-area-inset-right))
-    calc(8px + env(safe-area-inset-bottom))
-    calc(12px + env(safe-area-inset-left));
 }
-/* Barre du haut : retour | wordmark | menu */
-body.play-app .filmapp-topbar {
+/* Le film occupe (presque) tout l'écran — centré, commandes flottantes par-dessus. */
+body.play-app .filmapp-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+/* Cadre blanc fin « polaroïd » autour du canvas. Pas d'overflow:hidden + radius
+   sur le conteneur (bug vidéo blanche iOS) — l'arrondi est porté par le canvas. */
+body.play-app .scene-player--filmapp .animation-canvas {
   flex: 0 0 auto;
+  border: 5px solid #fff;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(90, 80, 140, 0.28);
+  overflow: visible;
+}
+body.play-app .scene-player--filmapp .animation-canvas canvas {
+  border-radius: 15px;
+  display: block;
+}
+/* Barre du haut FLOTTANTE : retour | wordmark | menu (scrim doux pour lisibilité) */
+body.play-app .filmapp-topbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 2px 4px 0;
+  pointer-events: none;
+  padding:
+    calc(8px + env(safe-area-inset-top))
+    calc(14px + env(safe-area-inset-right))
+    14px
+    calc(14px + env(safe-area-inset-left));
+  background: linear-gradient(to bottom, rgba(255, 242, 222, 0.8), rgba(255, 242, 222, 0));
 }
+body.play-app .filmapp-topbar > * { pointer-events: auto; }
 body.play-app .filmapp-wordmark {
   flex: 1 1 auto;
   margin: 0;
-  font-size: clamp(1.3rem, 4.6vh, 1.9rem);
+  font-size: clamp(1.25rem, 4.2vh, 1.7rem);
   letter-spacing: 0.5px;
   line-height: 1;
   text-shadow:
     -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff, 2px 2px 0 #fff,
     -2px 0 0 #fff, 2px 0 0 #fff, 0 -2px 0 #fff, 0 2px 0 #fff,
-    0 3px 8px rgba(90, 80, 140, 0.2);
+    0 3px 8px rgba(90, 80, 140, 0.25);
 }
 /* Boutons ronds violets (icône blanche) — retour, menu, lecture, son */
 body.play-app .filmapp-round {
   flex: 0 0 auto;
-  width: clamp(42px, 8.6vh, 54px);
-  height: clamp(42px, 8.6vh, 54px);
+  width: clamp(42px, 8vh, 52px);
+  height: clamp(42px, 8vh, 52px);
   border: none;
   border-radius: 50%;
   background: var(--accent-violet, #8b7cf0);
@@ -3055,49 +3078,45 @@ body.play-app .filmapp-round {
   transition: transform 0.1s ease;
 }
 body.play-app .filmapp-round svg {
-  width: clamp(20px, 4.4vh, 26px);
-  height: clamp(20px, 4.4vh, 26px);
+  width: clamp(20px, 4.2vh, 25px);
+  height: clamp(20px, 4.2vh, 25px);
 }
 body.play-app .filmapp-round:active { transform: scale(0.94) translateZ(0); }
 body.play-app .filmapp-round--ghost { background: transparent; box-shadow: none; pointer-events: none; }
-/* Scène : le film encadré, centré dans l'espace restant */
-body.play-app .filmapp-stage {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-/* Carte blanche « polaroïd » autour du canvas. Pas d'overflow:hidden + radius
-   sur le conteneur (bug vidéo blanche iOS) — l'arrondi est porté par le canvas. */
-body.play-app .scene-player--filmapp .animation-canvas {
-  flex: 0 0 auto;
-  border: 6px solid #fff;
-  border-radius: 22px;
-  background: #fff;
-  box-shadow: 0 10px 26px rgba(90, 80, 140, 0.24);
-  overflow: visible;
-}
-body.play-app .scene-player--filmapp .animation-canvas canvas {
-  border-radius: 16px;
-  display: block;
-}
-/* Barre de lecture : ⏯ | temps | progression | temps | son */
+/* Barre de lecture FLOTTANTE : pilule blanche en bas — ⏯ | temps | progression | temps | son */
 body.play-app .filmapp-playerbar {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 50%;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 20;
+  width: min(94%, 560px);
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: clamp(8px, 1.8vw, 16px);
-  padding: 2px 4px 2px;
+  gap: clamp(8px, 1.8vw, 14px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 22px rgba(90, 80, 140, 0.3);
+}
+body.play-app .filmapp-playerbar .filmapp-round {
+  width: clamp(38px, 7vh, 46px);
+  height: clamp(38px, 7vh, 46px);
+  box-shadow: 0 3px 10px rgba(139, 124, 240, 0.4);
+}
+body.play-app .filmapp-playerbar .filmapp-round svg {
+  width: clamp(18px, 3.6vh, 22px);
+  height: clamp(18px, 3.6vh, 22px);
 }
 body.play-app .filmapp-time {
   flex: 0 0 auto;
   font-family: 'Fredoka', sans-serif;
   font-weight: 600;
-  font-size: clamp(0.85rem, 2.4vh, 1.05rem);
+  font-size: clamp(0.82rem, 2.2vh, 1rem);
   color: var(--ink, #2e2a5e);
   font-variant-numeric: tabular-nums;
-  min-width: 3.2em;
+  min-width: 3.1em;
   text-align: center;
 }
 body.play-app .filmapp-track {
