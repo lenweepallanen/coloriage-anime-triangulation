@@ -3082,11 +3082,21 @@ body.play-app .filmapp-round svg {
 }
 body.play-app .filmapp-round:active { transform: scale(0.94) translateZ(0); }
 body.play-app .filmapp-round--ghost { background: transparent; box-shadow: none; pointer-events: none; }
+/* Retour / menu : flottants, centrés dans la marge (position inline via cardSize) */
+body.play-app .scene-player--filmapp .filmapp-back,
+body.play-app .scene-player--filmapp .filmapp-menu {
+  position: absolute;
+  z-index: 20;
+}
+body.play-app .scene-player--filmapp .filmapp-back { transform: translateX(-50%) translateZ(0); }
+body.play-app .scene-player--filmapp .filmapp-menu { transform: translateX(50%) translateZ(0); }
+body.play-app .scene-player--filmapp .filmapp-back:active { transform: translateX(-50%) scale(0.94) translateZ(0); }
+body.play-app .scene-player--filmapp .filmapp-menu:active { transform: translateX(50%) scale(0.94) translateZ(0); }
 /* Barre de lecture FLOTTANTE : pilule blanche en bas — ⏯ | temps | progression | temps | son */
 body.play-app .filmapp-playerbar {
   position: absolute;
   left: 50%;
-  bottom: calc(5px + env(safe-area-inset-bottom));
+  bottom: calc(2px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 20;
   width: min(94%, 560px);

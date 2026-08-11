@@ -2903,31 +2903,32 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       />
     )
 
-    // MODE FILM (design app PicoPop) : fond crème + décor, film encadré dans une
-    // carte blanche « polaroïd », barre du haut (retour / wordmark / menu) et
-    // barre de lecture en bas (⏯ / temps / progression / temps / son).
+    // MODE FILM (design app PicoPop) : film quasi plein écran, commandes
+    // flottantes — retour/menu au MILIEU des marges crème (calés via cardSize),
+    // pilule de lecture en bas. Pas de wordmark par-dessus le film.
     if (filmEnabled) {
       const filmElapsedMs = filmDurationMs * filmProgressPct / 100
+      // Position des boutons : centrés dans la marge (entre bord vidéo et bord
+      // écran) = 25% − largeurVidéo/4 ; verticalement près du haut du film.
+      const hudTop = cardSize.h ? `calc(50% - ${cardSize.h / 2}px + 6px)` : `calc(10px + env(safe-area-inset-top))`
+      // Milieu de la marge, borné à ≥14px pour ne jamais sortir de l'écran quand
+      // la marge est quasi nulle (écran ~16:9).
+      const hudSide = cardSize.w ? `max(14px, calc(25% - ${cardSize.w / 4}px))` : '18px'
       return (
         <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
-          <div className="filmapp-topbar" style={cardSize.w ? { width: cardSize.w + 12 } : undefined}>
-            <button className="filmapp-round filmapp-back" onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
-              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M19 12H5" />
-                <path d="m11 6-6 6 6 6" />
+          <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSide }} onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M19 12H5" />
+              <path d="m11 6-6 6 6 6" />
+            </svg>
+          </button>
+          {onSettings && (
+            <button className="filmapp-round filmapp-menu" style={{ top: hudTop, right: hudSide }} onClick={onSettings} aria-label="Menu">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" />
               </svg>
             </button>
-            <div className="wordmark filmapp-wordmark" aria-label="PicoPop">
-              {['P', 'i', 'c', 'o', 'P', 'o', 'p'].map((c, i) => <span key={i} aria-hidden="true">{c}</span>)}
-            </div>
-            {onSettings ? (
-              <button className="filmapp-round filmapp-menu" onClick={onSettings} aria-label="Menu">
-                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
-                  <path d="M4 7h16M4 12h16M4 17h16" />
-                </svg>
-              </button>
-            ) : <span className="filmapp-round filmapp-round--ghost" aria-hidden="true" />}
-          </div>
+          )}
 
           <div className="filmapp-stage">{canvasEl}</div>
 
