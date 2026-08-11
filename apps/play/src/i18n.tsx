@@ -2,11 +2,22 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 
 /**
  * i18n minimal FR/EN pour les écrans PLAY (accueil, onglets, menu, pages).
- * Les textes de l'écran scan/animation (@shared) restent en français pour
- * l'instant. Langue persistée dans localStorage('picopop-lang'), défaut FR.
+ * Langue persistée dans localStorage('picopop-lang'). Sans préférence stockée,
+ * on suit la langue de l'appareil (français si l'appareil est en français,
+ * anglais sinon) — un réviseur App Store sur appareil anglophone obtient donc
+ * l'anglais automatiquement. Modifiable via le menu ☰.
  */
 
 export type Lang = 'fr' | 'en'
+
+/** Langue par défaut = langue de l'appareil (FR si français, EN sinon). */
+function detectDeviceLang(): Lang {
+  try {
+    const list = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language]) || []
+    for (const l of list) if (l && l.toLowerCase().startsWith('fr')) return 'fr'
+  } catch { /* navigator indisponible */ }
+  return 'en'
+}
 
 const DICT: Record<Lang, Record<string, string>> = {
   fr: {
@@ -261,7 +272,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       const v = localStorage.getItem('picopop-lang')
       if (v === 'fr' || v === 'en') return v
     } catch { /* stockage indisponible */ }
-    return 'fr'
+    return detectDeviceLang()
   })
 
   const setLang = useCallback((l: Lang) => {

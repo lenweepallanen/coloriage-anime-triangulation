@@ -117,9 +117,17 @@ const DICT: Record<PlayLang, Record<string, string>> = {
 
 function currentLang(): PlayLang {
   try {
-    return localStorage.getItem('picopop-lang') === 'en' ? 'en' : 'fr'
+    const v = localStorage.getItem('picopop-lang')
+    if (v === 'en') return 'en'
+    if (v === 'fr') return 'fr'
+    // Pas de préférence stockée → langue de l'appareil (français si l'appareil
+    // est en français, anglais sinon). Un réviseur sur un appareil anglophone
+    // obtient donc l'anglais automatiquement.
+    const list = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language]) || []
+    for (const l of list) if (l && l.toLowerCase().startsWith('fr')) return 'fr'
+    return 'en'
   } catch {
-    return 'fr'
+    return 'en'
   }
 }
 
