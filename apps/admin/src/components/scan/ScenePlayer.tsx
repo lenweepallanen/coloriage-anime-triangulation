@@ -2910,7 +2910,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // Barre de progression discrète : intégrée au bas du film (largeur vidéo
       // moins les coins arrondis), positionnée juste au-dessus du bord inférieur.
       const progW = cardSize.w ? Math.max(40, cardSize.w - 28) : undefined
-      const progTop = cardSize.h ? `calc(50% + ${cardSize.h / 2}px - 7px)` : undefined
+      const progTop = cardSize.h ? `calc(50% + ${cardSize.h / 2}px - 10px)` : undefined
       return (
         <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
           <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSide }} onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
@@ -2934,34 +2934,33 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             <div className="filmapp-progress-fill" style={{ width: `${filmProgressPct}%` }} />
           </div>
 
-          {/* Commandes en bas à droite (alignées au menu) : play/pause + son. */}
-          <div className="filmapp-rcontrols" style={{ right: hudSide, bottom: hudBottom }}>
-            <button className="filmapp-round filmapp-play" onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
-              {playing ? (
-                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
-                  <rect x="5" y="4" width="5" height="16" rx="2" />
-                  <rect x="14" y="4" width="5" height="16" rx="2" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
-                  <path d="M7 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
-                </svg>
-              )}
-            </button>
-            <button className="filmapp-round filmapp-sound" onClick={toggleFilmMute} aria-label={filmMuted ? 'Activer le son' : 'Couper le son'}>
-              {filmMuted ? (
-                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
-                  <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
-                  <path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
-                  <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
-                  <path d="M15 8.5a5 5 0 0 1 0 7M17.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
-                </svg>
-              )}
-            </button>
-          </div>
+          {/* Son en BAS À GAUCHE (aligné au retour) */}
+          <button className="filmapp-round filmapp-sound" style={{ left: hudSide, bottom: hudBottom }} onClick={toggleFilmMute} aria-label={filmMuted ? 'Activer le son' : 'Couper le son'}>
+            {filmMuted ? (
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
+                <path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
+                <path d="M15 8.5a5 5 0 0 1 0 7M17.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+              </svg>
+            )}
+          </button>
+          {/* Play/Pause en BAS À DROITE (aligné au menu) */}
+          <button className="filmapp-round filmapp-play" style={{ right: hudSide, bottom: hudBottom }} onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
+            {playing ? (
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                <rect x="5" y="4" width="5" height="16" rx="2" />
+                <rect x="14" y="4" width="5" height="16" rx="2" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                <path d="M7 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
+              </svg>
+            )}
+          </button>
           {filmEndOverlay}
         </div>
       )

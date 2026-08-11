@@ -3092,25 +3092,25 @@ body.play-app .scene-player--filmapp .filmapp-back { transform: translateX(-50%)
 body.play-app .scene-player--filmapp .filmapp-menu { transform: translateX(50%) translateZ(0); }
 body.play-app .scene-player--filmapp .filmapp-back:active { transform: translateX(-50%) scale(0.94) translateZ(0); }
 body.play-app .scene-player--filmapp .filmapp-menu:active { transform: translateX(50%) scale(0.94) translateZ(0); }
-/* Commandes bas-droite (play/pause + son) empilées, alignées au menu (right inline). */
-body.play-app .filmapp-rcontrols {
+/* 4 coins : son bas-gauche (aligné retour), play/pause bas-droite (aligné menu). */
+body.play-app .scene-player--filmapp .filmapp-sound,
+body.play-app .scene-player--filmapp .filmapp-play {
   position: absolute;
   z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  transform: translateX(50%) translateZ(0);
-  isolation: isolate;
 }
-/* Progression DISCRÈTE : fine ligne intégrée au bas du film (repère seul). */
+body.play-app .scene-player--filmapp .filmapp-sound { transform: translateX(-50%) translateZ(0); }
+body.play-app .scene-player--filmapp .filmapp-play { transform: translateX(50%) translateZ(0); }
+body.play-app .scene-player--filmapp .filmapp-sound:active { transform: translateX(-50%) scale(0.94) translateZ(0); }
+body.play-app .scene-player--filmapp .filmapp-play:active { transform: translateX(50%) scale(0.94) translateZ(0); }
+/* Progression DISCRÈTE : ligne intégrée au bas du film (repère seul). */
 body.play-app .filmapp-progress {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   z-index: 15;
-  height: 4px;
+  height: 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.45);
   overflow: hidden;
   pointer-events: none;
 }
