@@ -41,6 +41,10 @@ const RMS_SMOOTHING = 0.4
 export class FilmAudioScheduler {
   private ctx: AudioContext
   private master: GainNode
+  /** Gain « haut-parleur » : sur le chemin vers ctx.destination UNIQUEMENT.
+   *  Le mute agit ici → coupe ce que l'utilisateur entend, SANS toucher le bus
+   *  d'enregistrement (la vidéo capturée garde son audio). */
+  private speakerGain: GainNode
   private buffers = new Map<string, AudioBuffer>()
   private clips: FlatClip[] = []
   private musicId: string | null = null
@@ -68,7 +72,10 @@ export class FilmAudioScheduler {
   constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[], extraSounds?: Map<string, Blob>) {
     this.ctx = getSharedAudioContext()
     this.master = this.ctx.createGain()
-    this.master.connect(this.ctx.destination)
+    // master → speakerGain → destination (le mute agit sur speakerGain).
+    this.speakerGain = this.ctx.createGain()
+    this.master.connect(this.speakerGain)
+    this.speakerGain.connect(this.ctx.destination)
     // Tap bus d'enregistrement (import dynamique : évite un cycle de modules).
     void import('./recordingAudioBus').then(({ getRecordingDestination }) => {
       const recDest = getRecordingDestination()
@@ -153,6 +160,11 @@ export class FilmAudioScheduler {
 
   get isStarted(): boolean {
     return this.startedAtCtxSec != null
+  }
+
+  /** Coupe/rétablit le son ENTENDU (haut-parleur) sans affecter l'enregistrement. */
+  setMuted(muted: boolean): void {
+    try { this.speakerGain.gain.value = muted ? 0 : 1 } catch { /* */ }
   }
 
   /** Temps film courant (ms) dérivé de l'horloge du contexte. Gelé si suspendu. */
@@ -319,6 +331,7 @@ export class FilmAudioScheduler {
     this.disposed = true
     this.stopSources()
     try { this.master.disconnect() } catch { /* */ }
+    try { this.speakerGain.disconnect() } catch { /* */ }
     this.buffers.clear()
   }
 }

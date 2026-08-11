@@ -2996,6 +2996,134 @@ body.play-app .scene-player-film-controls .scene-player-film-fill {
 body.play-app .scene-player-film-knob {
   box-shadow: 0 1px 6px rgba(90, 80, 140, 0.35);
 }
+
+/* ---------------------------------------------------------------------
+   Écran PLAY — MODE FILM (design app) : fond crème + décor, film encadré
+   « polaroïd », barre du haut (retour / wordmark / menu) + barre de lecture.
+   Remplace le fond noir letterboxé par la vraie DA PicoPop.
+   ------------------------------------------------------------------- */
+body.play-app .scene-player--filmapp.scene-player--fullscreen {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 6px;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: #fdf8ea url('../assets/bg-meadow.webp') center bottom / cover no-repeat;
+  padding:
+    calc(8px + env(safe-area-inset-top))
+    calc(12px + env(safe-area-inset-right))
+    calc(8px + env(safe-area-inset-bottom))
+    calc(12px + env(safe-area-inset-left));
+}
+/* Barre du haut : retour | wordmark | menu */
+body.play-app .filmapp-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 4px 0;
+}
+body.play-app .filmapp-wordmark {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: clamp(1.3rem, 4.6vh, 1.9rem);
+  letter-spacing: 0.5px;
+  line-height: 1;
+  text-shadow:
+    -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff, 2px 2px 0 #fff,
+    -2px 0 0 #fff, 2px 0 0 #fff, 0 -2px 0 #fff, 0 2px 0 #fff,
+    0 3px 8px rgba(90, 80, 140, 0.2);
+}
+/* Boutons ronds violets (icône blanche) — retour, menu, lecture, son */
+body.play-app .filmapp-round {
+  flex: 0 0 auto;
+  width: clamp(42px, 8.6vh, 54px);
+  height: clamp(42px, 8.6vh, 54px);
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-violet, #8b7cf0);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 5px 14px rgba(139, 124, 240, 0.45);
+  transform: translateZ(0);
+  isolation: isolate;
+  transition: transform 0.1s ease;
+}
+body.play-app .filmapp-round svg {
+  width: clamp(20px, 4.4vh, 26px);
+  height: clamp(20px, 4.4vh, 26px);
+}
+body.play-app .filmapp-round:active { transform: scale(0.94) translateZ(0); }
+body.play-app .filmapp-round--ghost { background: transparent; box-shadow: none; pointer-events: none; }
+/* Scène : le film encadré, centré dans l'espace restant */
+body.play-app .filmapp-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Carte blanche « polaroïd » autour du canvas. Pas d'overflow:hidden + radius
+   sur le conteneur (bug vidéo blanche iOS) — l'arrondi est porté par le canvas. */
+body.play-app .scene-player--filmapp .animation-canvas {
+  flex: 0 0 auto;
+  border: 6px solid #fff;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 10px 26px rgba(90, 80, 140, 0.24);
+  overflow: visible;
+}
+body.play-app .scene-player--filmapp .animation-canvas canvas {
+  border-radius: 16px;
+  display: block;
+}
+/* Barre de lecture : ⏯ | temps | progression | temps | son */
+body.play-app .filmapp-playerbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.8vw, 16px);
+  padding: 2px 4px 2px;
+}
+body.play-app .filmapp-time {
+  flex: 0 0 auto;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(0.85rem, 2.4vh, 1.05rem);
+  color: var(--ink, #2e2a5e);
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2em;
+  text-align: center;
+}
+body.play-app .filmapp-track {
+  flex: 1 1 auto;
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--lavender, #e6ddfa);
+  box-shadow: inset 0 1px 3px rgba(90, 80, 140, 0.18);
+}
+body.play-app .filmapp-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  border-radius: 999px;
+  background: var(--accent-violet, #8b7cf0);
+}
+body.play-app .filmapp-knob {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 2px 8px rgba(90, 80, 140, 0.4);
+}
 /* Écran « Fin » : voile encre + carte blanche sticker, affiché en PORTRAIT
    plein écran via un portail hors du player (qui peut être tourné en CSS).
    L'overlay scrolle si la carte est plus haute que l'écran (cas « Remplacer ? ») ;

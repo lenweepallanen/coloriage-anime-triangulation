@@ -159,6 +159,24 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const [filmRunId, setFilmRunId] = useState(0)
   // Progression film [0..100], throttlée au demi-pourcent par le ticker.
   const [filmProgressPct, setFilmProgressPct] = useState(0)
+  // Durée totale du film (ms) pour l'affichage écoulé / total de la barre de lecture.
+  const [filmDurationMs, setFilmDurationMs] = useState(0)
+  // Son coupé (bouton haut-parleur de la barre) — n'affecte pas l'enregistrement.
+  const [filmMuted, setFilmMuted] = useState(false)
+  const filmMutedRef = useRef(false)
+  const filmSchedulerRef = useRef<import('../../utils/filmAudioScheduler').FilmAudioScheduler | null>(null)
+  const toggleFilmMute = useCallback(() => {
+    setFilmMuted(m => {
+      const next = !m
+      filmMutedRef.current = next
+      filmSchedulerRef.current?.setMuted(next)
+      return next
+    })
+  }, [])
+  const fmtFilmTime = (ms: number) => {
+    const s = Math.max(0, Math.round(ms / 1000))
+    return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+  }
   // --- Capture vidéo du film (1ʳᵉ lecture uniquement) ---
   // Capture terminée, en attente de décision (rescan) ou déjà sauvée (1er scan).
   const [pendingRecording, setPendingRecording] = useState<FilmRecordingResult | null>(null)
@@ -231,9 +249,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const isLs = vw > vh
     const availW = isLs ? vw : vh
     const availH = isLs ? vh : vw
-    let w = availW
+    // Mode FILM (design app) : le film est encadré entre une barre du haut
+    // (retour/wordmark/menu) et une barre de lecture en bas → on réserve leur
+    // hauteur + des marges latérales pour que la carte 16:9 tienne au milieu.
+    const TOP = filmEnabled ? 66 : 0
+    const BOTTOM = filmEnabled ? 80 : 0
+    const SIDE = filmEnabled ? 22 : 0
+    let w = availW - SIDE * 2
     let h = w / frameAspect
-    if (h > availH) { h = availH; w = h * frameAspect }
+    const usableH = availH - TOP - BOTTOM
+    if (h > usableH) { h = usableH; w = h * frameAspect }
     return { w: Math.max(160, Math.round(w)), h: Math.max(120, Math.round(h)) }
   }
   // Carte scène (mode play/scan, hors modal) : en play, PLEIN ÉCRAN PAYSAGE dès le
@@ -266,7 +291,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     compute()
     window.addEventListener('resize', compute)
     return () => window.removeEventListener('resize', compute)
-  }, [modal, portrait, frameAspect])
+  }, [modal, portrait, frameAspect, filmEnabled])
 
   // Preview modal (admin) : canvas contraint au même cadre 16:9 que le play,
   // pour que le cadrage caméra du film soit fidèle. Suit le resize de la modal.
@@ -1237,6 +1262,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const scheduler = new FilmAudioScheduler(filmT, sampler.planStartMs, sampler.totalMs,
         computeFootstepSchedule(filmT, project.animations, sampler.planStartMs),
         collectFootstepSoundBlobs(project.animations))
+      // Barre de lecture : durée totale + ref pour le bouton son (mute haut-parleur).
+      filmSchedulerRef.current = scheduler
+      scheduler.setMuted(filmMutedRef.current)
+      setFilmDurationMs(sampler.totalMs)
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
       filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan }
       scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
@@ -2892,27 +2921,81 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       />
     )
 
-    // PLEIN ÉCRAN PAYSAGE — canvas 16:9 bord à bord centré, HUD superposé.
-    // (Seul layout play : l'ancien layout portrait « bandeau » a été supprimé.)
-    // Mode film : design app épuré (retour rond blanc + ⏸ blanc + barre violette).
-    // Mode interactif : porte + colonne de boutons à droite.
+    // MODE FILM (design app PicoPop) : fond crème + décor, film encadré dans une
+    // carte blanche « polaroïd », barre du haut (retour / wordmark / menu) et
+    // barre de lecture en bas (⏯ / temps / progression / temps / son).
+    if (filmEnabled) {
+      const filmElapsedMs = filmDurationMs * filmProgressPct / 100
+      return (
+        <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
+          <div className="filmapp-topbar">
+            <button className="filmapp-round filmapp-back" onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M19 12H5" />
+                <path d="m11 6-6 6 6 6" />
+              </svg>
+            </button>
+            <div className="wordmark filmapp-wordmark" aria-label="PicoPop">
+              {['P', 'i', 'c', 'o', 'P', 'o', 'p'].map((c, i) => <span key={i} aria-hidden="true">{c}</span>)}
+            </div>
+            {onSettings ? (
+              <button className="filmapp-round filmapp-menu" onClick={onSettings} aria-label="Menu">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                  <path d="M4 7h16M4 12h16M4 17h16" />
+                </svg>
+              </button>
+            ) : <span className="filmapp-round filmapp-round--ghost" aria-hidden="true" />}
+          </div>
+
+          <div className="filmapp-stage">{canvasEl}</div>
+
+          <div className="filmapp-playerbar">
+            <button className="filmapp-round filmapp-play" onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
+              {playing ? (
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                  <rect x="5" y="4" width="5" height="16" rx="2" />
+                  <rect x="14" y="4" width="5" height="16" rx="2" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                  <path d="M7 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
+                </svg>
+              )}
+            </button>
+            <span className="filmapp-time">{fmtFilmTime(filmElapsedMs)}</span>
+            <div className="filmapp-track" aria-hidden="true">
+              <div className="filmapp-fill" style={{ width: `${filmProgressPct}%` }} />
+              <div className="filmapp-knob" style={{ left: `${filmProgressPct}%` }} />
+            </div>
+            <span className="filmapp-time">{fmtFilmTime(filmDurationMs)}</span>
+            <button className="filmapp-round filmapp-sound" onClick={toggleFilmMute} aria-label={filmMuted ? 'Activer le son' : 'Couper le son'}>
+              {filmMuted ? (
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                  <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
+                  <path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                  <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
+                  <path d="M15 8.5a5 5 0 0 1 0 7M17.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+                </svg>
+              )}
+            </button>
+          </div>
+          {filmEndOverlay}
+        </div>
+      )
+    }
+
+    // PLEIN ÉCRAN PAYSAGE — mode interactif : porte + colonne de boutons à droite.
     return (
       <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
         {canvasEl}
-        {filmEnabled ? (
-          <>
-            {filmExitBtn}
-            {filmControls}
-          </>
-        ) : (
-          <>
-            <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
-            <div className="scene-player-hud">
-              {actionsRow}
-              {controlsRow}
-            </div>
-          </>
-        )}
+        <div className="scene-player-exit-row scene-player-exit-row--ls">{exitBtn}</div>
+        <div className="scene-player-hud">
+          {actionsRow}
+          {controlsRow}
+        </div>
         {helpBubble}
         {filmEndOverlay}
       </div>
