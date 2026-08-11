@@ -28,7 +28,6 @@ import { filmIntroTransition, filmOutroTransition } from '../../utils/filmTimeli
 import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sceneActionDuration'
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
-import watermarkUrl from '../../assets/picopop-watermark.png'
 import Mascot from '../mascot/Mascot'
 import { playT } from '../../utils/playI18n'
 
@@ -1002,23 +1001,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // (les HTMLAudio créés ensuite y sont routés en parallèle de la sortie).
     const shouldRecord = filmEnabled && recordFilm === true && filmRunId === 0
     if (shouldRecord) enableRecordingBus()
-    // Filigrane PicoPop incrusté dans la vidéo : sprite ajouté au stage (donc
-    // capturé par captureStream) uniquement pendant la lecture enregistrée.
-    if (shouldRecord) {
-      const wmTexture = PIXI.Texture.from(watermarkUrl)
-      const wmSprite = new PIXI.Sprite(wmTexture)
-      const placeWatermark = () => {
-        const wmWidth = viewW * 0.078
-        wmSprite.width = wmWidth
-        wmSprite.height = wmWidth * (wmTexture.height / wmTexture.width)
-        wmSprite.x = viewW - wmWidth - viewW * 0.005
-        wmSprite.y = viewW * 0.005
-      }
-      if (wmTexture.baseTexture.valid) placeWatermark()
-      else wmTexture.baseTexture.once('loaded', placeWatermark)
-      wmSprite.alpha = 0.95
-      app.stage.addChild(wmSprite)
-    }
+    // (Filigrane PicoPop retiré : redondant avec la wordmark du HUD et jugé
+    // gênant par-dessus le dessin. La marque PicoPop reste dans la barre du HUD.)
     let filmRecording: FilmRecording | null = null
     let filmRecordingStarted = false
     const maybeStartFilmRecording = () => {
@@ -2926,7 +2910,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const filmElapsedMs = filmDurationMs * filmProgressPct / 100
       return (
         <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
-          <div className="filmapp-topbar">
+          <div className="filmapp-topbar" style={cardSize.w ? { width: cardSize.w + 12 } : undefined}>
             <button className="filmapp-round filmapp-back" onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
               <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M19 12H5" />
@@ -2947,7 +2931,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
           <div className="filmapp-stage">{canvasEl}</div>
 
-          <div className="filmapp-playerbar">
+          <div className="filmapp-playerbar" style={cardSize.w ? { width: Math.min(cardSize.w, 560) } : undefined}>
             <button className="filmapp-round filmapp-play" onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
               {playing ? (
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
