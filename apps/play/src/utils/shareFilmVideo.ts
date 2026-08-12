@@ -41,7 +41,8 @@ function blobToBase64(blob: Blob): Promise<string> {
  */
 export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> {
   const ext = fileExtension(record.mimeType)
-  const fileName = `picopop-${record.projectId}.${ext}`
+  const fileName = `picopop-tmp.${ext}`          // fichier temporaire (entrée concat)
+  const prettyName = `PicoPop.${ext}`            // nom VISIBLE simple dans le partage
 
   if (Capacitor.isNativePlatform()) {
     try {
@@ -50,53 +51,43 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
         import('@capacitor/share'),
       ])
 
-      // Version partagée (film + outro), cachée par timestamp d'enregistrement :
-      // un rescan remplacé change createdAt → re-concat automatique. Le suffixe
-      // `-vN` invalide les caches quand le pipeline natif change (ici v2 : fix
-      // couleurs de la vignette préfixée — les .mp4 v1 avaient le rouge/bleu inversé).
-      const shareName = `picopop-share-${record.projectId}-${record.createdAt}-v2.mp4`
+      // Partagé sous un nom SIMPLE (« PicoPop.mp4 »). Pas de cache : on régénère à
+      // chaque partage (concat AVFoundation ~rapide) — plus simple, et zéro risque
+      // de partager une vidéo périmée / d'un autre coloriage.
       let shareUri: string | null = null
 
       if (ext === 'mp4') {
         try {
-          const cached = await Filesystem.stat({ path: shareName, directory: Directory.Cache })
-            .catch(() => null)
-          if (cached) {
-            shareUri = (await Filesystem.getUri({ path: shareName, directory: Directory.Cache })).uri
-          } else {
-            const base64 = await blobToBase64(record.blob)
-            const written = await Filesystem.writeFile({
-              path: fileName,
-              data: base64,
-              directory: Directory.Cache,
-            })
-            const outputUri = (await Filesystem.getUri({ path: shareName, directory: Directory.Cache })).uri
-            const result = await VideoConcat.appendOutro({
-              inputPath: written.uri,
-              outputPath: outputUri,
-              // Vignette (frame préfixée) : instant choisi dans l'éditeur FILM.
-              ...(record.posterMs != null && { posterMs: record.posterMs }),
-            })
-            shareUri = result.uri
-            void Filesystem.deleteFile({ path: fileName, directory: Directory.Cache }).catch(() => {})
-          }
+          const base64 = await blobToBase64(record.blob)
+          const written = await Filesystem.writeFile({
+            path: fileName,
+            data: base64,
+            directory: Directory.Cache,
+          })
+          const outputUri = (await Filesystem.getUri({ path: prettyName, directory: Directory.Cache })).uri
+          const result = await VideoConcat.appendOutro({
+            inputPath: written.uri,
+            outputPath: outputUri,
+            // Vignette (frame préfixée) : instant choisi dans l'éditeur FILM.
+            ...(record.posterMs != null && { posterMs: record.posterMs }),
+          })
+          shareUri = result.uri
+          void Filesystem.deleteFile({ path: fileName, directory: Directory.Cache }).catch(() => {})
         } catch (err) {
           console.warn('[share] concat outro impossible, partage sans outro :', err)
           shareUri = null
         }
       }
 
-      // Fallback (webm, ou concat échouée) : partage de la vidéo brute.
-      let cleanupRaw = false
+      // Fallback (webm, ou concat échouée) : vidéo brute, nom propre aussi.
       if (!shareUri) {
         const base64 = await blobToBase64(record.blob)
         const written = await Filesystem.writeFile({
-          path: fileName,
+          path: prettyName,
           data: base64,
           directory: Directory.Cache,
         })
         shareUri = written.uri
-        cleanupRaw = true
       }
 
       try {
@@ -109,9 +100,7 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
       } catch {
         // Feuille annulée par l'utilisateur : pas une erreur.
       }
-      if (cleanupRaw) {
-        void Filesystem.deleteFile({ path: fileName, directory: Directory.Cache }).catch(() => {})
-      }
+      void Filesystem.deleteFile({ path: prettyName, directory: Directory.Cache }).catch(() => {})
       return true
     } catch (err) {
       console.warn('[share] partage natif impossible :', err)
@@ -122,7 +111,7 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
   // Web : Web Share API niveau 2 (fichiers) si dispo, sinon téléchargement.
   // Pas d'outro côté web (AVFoundation indisponible) — la cible est l'app native.
   try {
-    const file = new File([record.blob], fileName, { type: record.mimeType })
+    const file = new File([record.blob], prettyName, { type: record.mimeType })
     if (navigator.canShare?.({ files: [file] })) {
       playUi('shareReady')
       await navigator.share({ files: [file], text: SHARE_TEXT }).catch(() => {})
@@ -133,7 +122,7 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
     const url = URL.createObjectURL(record.blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = fileName
+    a.download = prettyName
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 10000)
     return true
