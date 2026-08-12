@@ -769,11 +769,13 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       )}
       {showRotateOverlay && (
         <div className="rotate-overlay" role="alert">
-          <svg className="rotate-overlay-phone" viewBox="0 0 48 48" width="88" height="88" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="16" y="6" width="16" height="30" rx="4" />
-            <path d="M22 33.5h4" />
-            <path d="M38 24c0 7.7-6.3 14-14 14" />
-            <path d="m34.5 34 3.5 4 4-3.5" />
+          <svg className="rotate-overlay-phone" viewBox="0 0 48 48" width="92" height="92" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            {/* Téléphone (portrait) */}
+            <rect x="18" y="15" width="12" height="21" rx="3" />
+            <path d="M22.5 33h3" />
+            {/* Flèche de rotation qui s'arque par-dessus le téléphone */}
+            <path d="M35 22 A14 14 0 0 0 13 22" />
+            <path d="M9.5 18 L13 22 L16.5 18" />
           </svg>
           <p className="rotate-overlay-title">{playT('rotate.title')}</p>
           <p className="rotate-overlay-sub">{playT('rotate.sub')}</p>
