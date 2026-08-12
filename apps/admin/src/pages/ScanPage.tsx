@@ -140,13 +140,17 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
     document.body.dataset.scanStage = stage
     return () => { delete document.body.dataset.scanStage }
   }, [mode, stage])
-  // --- App native (mode play) : validation + animation FIGÉES en paysage ---
+  // --- App native (mode play) : SEULE l'ANIMATION (le film) est figée en paysage ---
   // Le lock passe par le polyfill screen.orientation.lock (→ plugin Capacitor
   // en natif, rejeté/no-op sur le web où le comportement responsive demeure).
+  // NB : la VALIDATION du scan (stage 'preview') reste en PORTRAIT — l'overlay
+  // « tourne ton téléphone » ne doit apparaître qu'au lancement de la vidéo, pas
+  // pendant la validation (sinon, l'accéléromètre étant actif pour le niveau à
+  // bulle, il se déclenchait à tort dès la photo prise).
   const isNativeApp =
     typeof globalThis !== 'undefined' &&
     (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.() === true
-  const lockedStage = stage === 'preview' || stage === 'animation'
+  const lockedStage = stage === 'animation'
   useEffect(() => {
     if (mode !== 'play') return
     const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
