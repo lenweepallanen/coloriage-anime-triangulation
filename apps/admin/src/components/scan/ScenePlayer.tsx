@@ -2927,7 +2927,22 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             </button>
           )}
 
-          <div className="filmapp-stage">{canvasEl}</div>
+          <div className="filmapp-stage" onClick={() => setPlaying(p => !p)}>
+            {canvasEl}
+            {/* Gros bouton central : visible seulement en PAUSE (disparaît en lecture).
+                Tap n'importe où sur la vidéo = pause/reprise (onClick du stage). */}
+            {!playing && !filmEnded && (
+              <button
+                className="filmapp-center-play"
+                onClick={(e) => { e.stopPropagation(); setPlaying(true) }}
+                aria-label="Lecture"
+              >
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor" aria-hidden="true">
+                  <path d="M7 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
+                </svg>
+              </button>
+            )}
+          </div>
 
           {/* Progression DISCRÈTE : fine ligne intégrée au bas du film (repère seul). */}
           <div className="filmapp-progress" style={{ top: progTop, width: progW }} aria-hidden="true">

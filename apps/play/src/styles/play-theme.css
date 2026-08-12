@@ -3056,6 +3056,34 @@ body.play-app .filmapp-stage {
   align-items: center;
   justify-content: center;
   z-index: 1;
+  cursor: pointer;
+}
+/* Gros bouton central play (visible seulement en pause) — tap vidéo = pause/reprise. */
+body.play-app .filmapp-center-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 18;
+  width: clamp(66px, 13vh, 90px);
+  height: clamp(66px, 13vh, 90px);
+  border: none;
+  border-radius: 50%;
+  background: rgba(139, 124, 240, 0.9);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 4px; /* centrage optique du triangle ▶ */
+  cursor: pointer;
+  box-shadow: 0 6px 22px rgba(90, 80, 140, 0.45);
+  animation: filmapp-pop 0.14s ease-out;
+}
+body.play-app .filmapp-center-play svg { width: clamp(30px, 6vh, 42px); height: auto; }
+body.play-app .filmapp-center-play:active { transform: translate(-50%, -50%) scale(0.94); }
+@keyframes filmapp-pop {
+  from { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+  to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
 }
 /* Cadre blanc fin « polaroïd » autour du canvas. Pas d'overflow:hidden + radius
    sur le conteneur (bug vidéo blanche iOS) — l'arrondi est porté par le canvas. */
