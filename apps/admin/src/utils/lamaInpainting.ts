@@ -5,7 +5,7 @@
 
 // Cloud Function URL — deployed on coloriage-anime-prod (europe-west1)
 const LAMA_FUNCTION_URL = import.meta.env.VITE_LAMA_FUNCTION_URL
-  || 'https://lama-inpaint-6gzhik6pka-ew.a.run.app'
+  || 'https://lama-inpaint-vasshazrla-ew.a.run.app'
 
 // LaMa works well at 512px — smaller = faster inference, upscaled back after
 const MAX_LAMA_DIM = 512

@@ -9,7 +9,7 @@ boutons pilule par fonction, cartes soft, safe areas. Ne jamais improviser de st
 
 ## Monorepo (npm workspaces)
 
-Le projet est splitté en **deux applications** déployées sur deux domaines distincts, partageant un **seul backend Firebase** (`coloriage-anime-prod`).
+Le projet est splitté en **deux applications** déployées sur deux domaines distincts, partageant un **seul backend Firebase** (`picopop-app`).
 
 ```
 .
@@ -771,7 +771,7 @@ StepUploadHint = string  // champ simple pour les steps (scopé par AdminPage)
 
 **Répertoire** : `functions/` (Python 3.11, `simple-lama-inpainting`)
 
-**URL** : `https://lama-inpaint-6gzhik6pka-ew.a.run.app` (configurable via `VITE_LAMA_FUNCTION_URL`)
+**URL** : `https://lama-inpaint-vasshazrla-ew.a.run.app` (configurable via `VITE_LAMA_FUNCTION_URL`)
 
 **Spécifications** : gen2, 2 CPU, 2GB RAM, timeout 120s, concurrency 1, min-instances 0
 
@@ -788,14 +788,14 @@ gcloud functions deploy lama-inpaint \
   --memory 2048MB --cpu 2 --timeout 120s --concurrency 1 \
   --min-instances 0 --max-instances 3 \
   --source functions/ --entry-point lama_inpaint \
-  --project coloriage-anime-prod --region europe-west1
+  --project picopop-app --region europe-west1
 ```
 
 ## Cloud Function — SAM 2 (segmentation vidéo par zone)
 
 **Répertoire** : `sam2/` (Python 3.11, PyTorch + Meta SAM 2 Hiera Tiny via `git+facebookresearch/sam2`)
 
-**URL** : `https://sam2-segment-6gzhik6pka-ew.a.run.app` (configurable via `VITE_SAM2_FUNCTION_URL`)
+**URL** : `https://sam2-segment-vasshazrla-ew.a.run.app` (configurable via `VITE_SAM2_FUNCTION_URL`)
 
 **Spécifications** : gen2, 4 CPU, 16GB RAM, timeout 540s, concurrency 1, min-instances 0
 
@@ -817,7 +817,7 @@ gcloud functions deploy sam2-segment \
   --memory 16384MB --cpu 4 --timeout 540s --concurrency 1 \
   --min-instances 0 --max-instances 2 \
   --source sam2/ --entry-point sam2_segment \
-  --project coloriage-anime-prod --region europe-west1
+  --project picopop-app --region europe-west1
 ```
 
 ## Serveur local SAM 2 MPS (Mac Apple Silicon)

@@ -21,30 +21,14 @@ _Dernière mise à jour : 2026-08-11._
 
 ---
 
-## ⏳ Bloqué / en attente — Migration Firebase perso → 2RK
-_Nouveau projet Firebase : **`picopop-app`** (compte **2rkpublishing@gmail.com**). À faire AVANT la 1ʳᵉ soumission (sinon rebuild + re-review + re-QR plus tard)._
-_Source actuelle : projet `coloriage-anime-prod`, base Firestore nommée **`coloriages`**, Auth email/password + allowlist `admins/{uid}`._
-
-**Phase 1 — Console `picopop-app` (Nicolas)**
-- [ ] Firestore → Create database → **Production**, région **europe-west (eur3)**, **ID = `coloriages`** (garder le même nom)
-- [ ] Storage → Get started (même région)
-- [ ] Authentication → activer **Email/Password**
-- [ ] Enregistrer une **app Web** → copier le bloc `firebaseConfig` → me le donner (je mets à jour `apps/admin/src/db/firebase.ts`)
-- [ ] Télécharger 2 clés **compte de service** (JSON) : une pour `coloriage-anime-prod`, une pour `picopop-app` (hors repo, ex. `~/firebase-keys/`)
-
-**Phase 2 — Migration données (Claude)**
-- [ ] Script firebase-admin : copie **Firestore** `coloriages`→`coloriages` (mêmes IDs)
-- [ ] `gsutil rsync` : copie **tout le Storage** (vidéos, JSON, images, livres)
-- [ ] Déployer **règles + index** sur `picopop-app`
-
-**Phase 3 — Bascule (Claude)**
-- [ ] Mettre à jour `firebase.ts` (nouvelle config) → `build:play` + `build:admin`
-- [ ] Redeploy **Vercel** (auto sur push main) + **nouvelle build native Xcode**
-
-**Phase 4 — Finitions (Nicolas + Claude)**
-- [ ] Recréer le **compte admin** dans `picopop-app` (Auth → Add user) + doc `admins/{nouvelUID}`
-- [ ] Re-tester le flux complet + vérifier livre TEST + démo
-- [ ] _(plus tard, optionnel)_ redéployer Cloud Functions LaMa/SAM2 sous 2RK (endpoints HTTP, aucune donnée — non bloquant)
+## ✅ FAIT — Migration Firebase perso → 2RK (`picopop-app`)
+_Projet 2RK : **`picopop-app`** (compte `2rkpublishing@gmail.com`), base Firestore **`coloriages`**._
+- [x] Firestore/Storage/Auth (Email/Password) créés ; app Web enregistrée ; config dans `firebase.ts`
+- [x] **Données migrées** : Firestore `projects` (49) + `books` (4) ; **Storage** 1434 objets (~3,1 Go), 0 échec. Ignorés : `scans`/`auditLog`/`loginHistory`/`admins`.
+- [x] **Règles + index** déployés sur `picopop-app` ; `.firebaserc` → `picopop-app`
+- [x] **Compte admin** recréé (`admins/{uid}` pour `lenweepallanen@gmail.com`) ; testé admin + iPhone
+- [x] **Cloud Functions** LaMa + SAM2 redéployées sous `picopop-app` (URLs `…-vasshazrla-ew.a.run.app`, publiques, HTTP 200)
+- [ ] _(quand tout est validé)_ supprimer l'ancien projet `coloriage-anime-prod` + révoquer les clés de service + retirer l'accès Éditeur/Owner de `nicolas.rocher38@gmail.com`
 
 ---
 

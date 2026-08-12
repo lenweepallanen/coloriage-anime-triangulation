@@ -244,8 +244,12 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         const track = mediaStream.getVideoTracks()[0]
         if (track) {
           const caps = (track as any).getCapabilities?.()
-          // Web (Android) : capacité torche ; iOS natif : toujours dispo via plugin.
-          if (caps?.torch || nativeIOS) {
+          // Torche : UNIQUEMENT si le web l'expose (Android). Sur iOS natif, la
+          // piloter (AVCaptureDevice.lockForConfiguration) INTERROMPT le flux
+          // vidéo de la WebView → preview toute noire (limite iOS, 2 sessions
+          // caméra concurrentes). De plus, le flash crée des reflets qui font
+          // échouer la détection des repères. → bouton masqué sur iOS.
+          if (caps?.torch) {
             setTorchSupported(true)
           }
         }

@@ -12,7 +12,7 @@ import type { SAM2Zone, SAM2Prompt, RLEMask } from '../types/project'
 
 // Cloud Function URL — deployed on coloriage-anime-prod (europe-west1)
 const SAM2_FUNCTION_URL = import.meta.env.VITE_SAM2_FUNCTION_URL
-  || 'https://sam2-segment-6gzhik6pka-ew.a.run.app'
+  || 'https://sam2-segment-vasshazrla-ew.a.run.app'
 
 export type SAM2Phase = 'warmup' | 'uploading' | 'segmenting'
 
