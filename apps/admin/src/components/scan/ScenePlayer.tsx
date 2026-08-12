@@ -2938,7 +2938,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
                 aria-label="Lecture"
               >
                 <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor" aria-hidden="true">
-                  <path d="M7 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
+                  <path d="M5 4.8c0-1.2 1.3-1.9 2.3-1.3l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.3-.1-2.3-1.3V4.8z" />
                 </svg>
               </button>
             )}

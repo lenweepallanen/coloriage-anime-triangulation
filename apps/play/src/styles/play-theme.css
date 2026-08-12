@@ -3074,7 +3074,6 @@ body.play-app .filmapp-center-play {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-left: 4px; /* centrage optique du triangle ▶ */
   cursor: pointer;
   box-shadow: 0 6px 22px rgba(90, 80, 140, 0.45);
   animation: filmapp-pop 0.14s ease-out;
