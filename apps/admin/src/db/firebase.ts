@@ -4,12 +4,12 @@ import { getStorage } from 'firebase/storage'
 import { getAuth, initializeAuth, indexedDBLocalPersistence } from 'firebase/auth'
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBI-0Au1E8ABeVxFidRaA2yZYiWSAYHjuo",
-  authDomain: "coloriage-anime-prod.firebaseapp.com",
-  projectId: "coloriage-anime-prod",
-  storageBucket: "coloriage-anime-prod.firebasestorage.app",
-  messagingSenderId: "856883678527",
-  appId: "1:856883678527:web:f3bcf9d71299811758978a"
+  apiKey: "AIzaSyA1m8-JwadyFr_jqvQcJB0BhFWY0fqWnq0",
+  authDomain: "picopop-app.firebaseapp.com",
+  projectId: "picopop-app",
+  storageBucket: "picopop-app.firebasestorage.app",
+  messagingSenderId: "155769142491",
+  appId: "1:155769142491:web:a6b721dce8de9acb8760fe"
 }
 
 // App native Capacitor (iOS/Android) : le bridge natif injecte window.Capacitor
