@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core'
+import { isTabletDevice } from '@shared/utils/playI18n'
 
 // Bootstrap natif (Capacitor). No-op complet sur le web : la version Vercel
 // garde strictement le comportement actuel. Aucun code partagé (@shared) ne
@@ -39,12 +40,15 @@ export async function initNative(): Promise<void> {
   }
 
   // Plein écran immersif + écran jamais en veille pendant le jeu.
-  // App verrouillée PORTRAIT par défaut (menus stables) ; l'écran scan/animation
-  // bascule lui-même en paysage via screen.orientation.lock (polyfillé ci-dessus).
+  // TÉLÉPHONE : verrouillé PORTRAIT par défaut (menus stables) ; l'écran
+  // scan/animation bascule lui-même en paysage via screen.orientation.lock.
+  // TABLETTE : orientation LIBRE (les 4 sens) — l'iPad tourne nativement, on ne
+  // simule donc plus le paysage par rotation CSS (cf. ScanPage/ScenePlayer).
+  const tablet = isTabletDevice()
   await Promise.allSettled([
     StatusBar.hide(),
     KeepAwake.keepAwake(),
-    ScreenOrientation.lock({ orientation: 'portrait' }),
+    tablet ? ScreenOrientation.unlock() : ScreenOrientation.lock({ orientation: 'portrait' }),
   ])
 }
 

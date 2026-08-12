@@ -36,9 +36,12 @@ export default function PlayPage() {
   const handleFilmRecorded = useCallback(async (r: FilmRecordingResult) => {
     if (!projectId) return
     const save = (async () => {
-      // Instant de vignette choisi dans l'éditeur FILM (temps global) — sinon 1/3.
-      const posterMs = project?.filmT?.posterMs ?? null
-      const posterBlob = await generateVideoPoster(r.blob, 1 / 3, 640, 10000, posterMs).catch(() => null)
+      // Vignette capturée DIRECTEMENT depuis le rendu PIXI pendant la lecture
+      // (fiable iPhone/iPad) → prioritaire. Sinon, repli par extraction d'une frame
+      // de la vidéo (peut échouer sur iPad : seek des vidéos MediaRecorder KO).
+      const posterMs = r.posterMs ?? project?.filmT?.posterMs ?? null
+      const posterBlob = r.posterBlob
+        ?? await generateVideoPoster(r.blob, 1 / 3, 640, 10000, project?.filmT?.posterMs ?? null).catch(() => null)
       await saveFilmVideo(projectId, { ...r, posterBlob, posterMs, projectName: project?.name })
     })()
     lastSaveRef.current = save

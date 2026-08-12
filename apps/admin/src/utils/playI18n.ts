@@ -25,7 +25,10 @@ const DICT: Record<PlayLang, Record<string, string>> = {
     'validate.see': 'Voir l’animation',
     'validate.retry': 'Recommencer',
     'validate.loading': 'Chargement…',
+    'validate.preparing': 'On réveille ton coloriage…',
+    'validate.preparingSub': 'Cela peut prendre quelques instants',
     'rotate.title': 'Tourne ton téléphone !',
+    'rotate.title#tab': 'Tourne ta tablette !',
     'rotate.sub': 'Ton coloriage s’anime en mode paysage.',
     'pause.title': 'Pause',
     'pause.continue': 'Continuer',
@@ -44,12 +47,14 @@ const DICT: Record<PlayLang, Record<string, string>> = {
     'camera.capture': 'Capturer',
     'camera.aimMarkers': 'Vise les 4 repères',
     'camera.holdFlat': 'Tiens le téléphone bien à plat',
+    'camera.holdFlat#tab': 'Tiens la tablette bien à plat',
     'camera.tipsAria': 'Conseils pour une bonne photo',
     'camera.tipsTitle': 'Pour une belle photo :',
     'camera.tip1': 'Pose la page bien à plat',
     'camera.tip2': 'Lumière douce, sans reflet',
     'camera.tip3': 'Les 4 repères bien visibles',
     'camera.tip4': 'Téléphone parallèle au papier',
+    'camera.tip4#tab': 'Tablette parallèle au papier',
     'camera.needMarkers': "On ne reconnaît pas de coloriage. Vise bien les 4 repères aux coins de la page.",
     'camera.cancel': 'Annuler',
     'camera.idle.text': 'Nous ouvrons la caméra\npour scanner ton coloriage.',
@@ -65,6 +70,7 @@ const DICT: Record<PlayLang, Record<string, string>> = {
     'camera.issue.tooDark': 'Il fait un peu sombre — ajoute de la lumière !',
     'camera.issue.tooBright': 'Trop de lumière — éloigne un peu la lampe',
     'camera.issue.glare': 'Il y a un reflet — penche un peu le téléphone',
+    'camera.issue.glare#tab': 'Il y a un reflet — penche un peu la tablette',
     'camera.issue.blurry': 'C’est flou — ne bouge plus !',
     'camera.issue.lowContrast': 'On voit mal les coins — ajoute de la lumière',
   },
@@ -84,7 +90,10 @@ const DICT: Record<PlayLang, Record<string, string>> = {
     'validate.see': 'See the animation',
     'validate.retry': 'Start over',
     'validate.loading': 'Loading…',
+    'validate.preparing': 'Waking up your coloring…',
+    'validate.preparingSub': 'This can take a few moments',
     'rotate.title': 'Turn your phone!',
+    'rotate.title#tab': 'Turn your tablet!',
     'rotate.sub': 'Your coloring comes to life in landscape.',
     'pause.title': 'Pause',
     'pause.continue': 'Continue',
@@ -103,12 +112,14 @@ const DICT: Record<PlayLang, Record<string, string>> = {
     'camera.capture': 'Capture',
     'camera.aimMarkers': 'Aim at the 4 markers',
     'camera.holdFlat': 'Hold the phone flat',
+    'camera.holdFlat#tab': 'Hold the tablet flat',
     'camera.tipsAria': 'Tips for a good photo',
     'camera.tipsTitle': 'For a great photo:',
     'camera.tip1': 'Lay the page nice and flat',
     'camera.tip2': 'Soft light, no glare',
     'camera.tip3': 'All 4 markers visible',
     'camera.tip4': 'Phone parallel to the paper',
+    'camera.tip4#tab': 'Tablet parallel to the paper',
     'camera.needMarkers': "We can't recognize a coloring page. Line up the 4 corner markers.",
     'camera.cancel': 'Cancel',
     'camera.idle.text': 'We are opening the camera\nto scan your coloring.',
@@ -124,6 +135,7 @@ const DICT: Record<PlayLang, Record<string, string>> = {
     'camera.issue.tooDark': 'It’s a bit dark — add some light!',
     'camera.issue.tooBright': 'Too much light — move the lamp away a little',
     'camera.issue.glare': 'There’s a glare — tilt your phone a little',
+    'camera.issue.glare#tab': 'There’s a glare — tilt your tablet a little',
     'camera.issue.blurry': 'It’s blurry — hold still!',
     'camera.issue.lowContrast': 'The corners are hard to see — add some light',
   },
@@ -145,8 +157,38 @@ function currentLang(): PlayLang {
   }
 }
 
-/** Traduction d'une chaîne partagée play (fallback : FR, puis la clé). */
+let _tabletCache: boolean | null = null
+/**
+ * Détecte une tablette (iPad, tablette Android). Utilisé pour adapter le
+ * vocabulaire « téléphone » → « tablette » dans les messages play.
+ * Heuristique robuste : UA + iPadOS déguisé en Mac + géométrie (petit côté ≥ 600px
+ * = tablette ; un iPhone Pro Max fait ≤ 430px de petit côté).
+ */
+export function isTabletDevice(): boolean {
+  if (_tabletCache !== null) return _tabletCache
+  let result = false
+  try {
+    const ua = navigator.userAgent || ''
+    const touch = navigator.maxTouchPoints || 0
+    if (/iPad/.test(ua)) result = true
+    else if (/Macintosh/.test(ua) && touch > 1) result = true // iPadOS 13+ se fait passer pour Mac
+    else if (/Android/.test(ua) && !/Mobile/.test(ua)) result = true // tablettes Android sans « Mobile »
+    else {
+      const minSide = Math.min(window.innerWidth || 0, window.innerHeight || 0)
+      if (minSide >= 600) result = true
+    }
+  } catch { result = false }
+  _tabletCache = result
+  return result
+}
+
+/** Traduction d'une chaîne partagée play (fallback : FR, puis la clé).
+ *  Sur tablette, une variante `<clé>#tab` est utilisée si elle existe. */
 export function playT(key: string): string {
   const lang = currentLang()
+  if (isTabletDevice()) {
+    const tab = DICT[lang][key + '#tab'] ?? DICT.fr[key + '#tab']
+    if (tab) return tab
+  }
   return DICT[lang][key] ?? DICT.fr[key] ?? key
 }

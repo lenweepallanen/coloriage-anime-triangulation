@@ -1,7 +1,7 @@
 # PicoPop — TODO avant soumission App Store + Google Play
 
 _Catégorie **générale** (pas « Enfants »). Éditeur affiché visé : **2RK**._
-_Dernière mise à jour : 2026-08-11._
+_Dernière mise à jour : 2026-08-12._
 
 ---
 
@@ -32,6 +32,16 @@ _Projet 2RK : **`picopop-app`** (compte `2rkpublishing@gmail.com`), base Firesto
 
 ---
 
+## ✅ FAIT — Session 12 août : validation + finitions iPad
+- [x] **CORS du bucket `picopop-app`** configuré (`origin ['*']`) — sans ça, covers/images ne chargeaient pas sur une install neuve (emoji livre / « coloring not ready »)
+- [x] **iPad** : orientation libre native (plus de figement/rotation forcée), overlay « tourne ta tablette » (détection tablette), marges/boutons du film adaptés, écran caméra paysage propre (plus de bouton « Cancel » ni déformation)
+- [x] **Film** : ne redémarre plus à la rotation, bon format dès le 1er basculement, écran de chargement « On réveille ton coloriage… / Cela peut prendre quelques instants »
+- [x] **Vignettes vidéo** (galerie + card) : capturées depuis le rendu PIXI (fiables iPhone **et** iPad)
+- [x] **Nouveau : bouton « Importer un QR »** dans le scanner (décode un QR depuis une image) — utile sans caméra + accessibilité
+- [x] **Testé sur simulateur iPad Pro 13″** (build Debug) : flux scan → film OK
+
+---
+
 ## 🟢 Faisable MAINTENANT (sans Firebase)
 
 **Code — 2 correctifs Info.plist (Claude, rapide)**
@@ -39,7 +49,8 @@ _Projet 2RK : **`picopop-app`** (compte `2rkpublishing@gmail.com`), base Firesto
 - [x] `NSPhotoLibraryUsageDescription` (l'import ouvre la photothèque) — _`NSCameraUsageDescription` + Motion déjà présents_
 
 **Assets (Nicolas)**
-- [ ] **Captures d'écran** : iPhone 6.7″ + 6.5″, Android téléphone + tablette (accueil, film animé, galerie, partage)
+- [x] **Captures d'écran iOS** : iPhone (6.7″) + iPad (13″, 2064×2752 / 2752×2064) prises via simulateur → sur le Bureau
+- [ ] **Captures Android** (Play) : téléphone + tablette — _possible de réutiliser les visuels iOS (ratios acceptés)_
 - [ ] Vérifier l'**icône 1024px** dans le catalogue d'assets
 - [ ] **hello@picopop.app** : boîte mail active
 

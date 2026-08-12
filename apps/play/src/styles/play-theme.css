@@ -741,6 +741,25 @@ body.play-app .scanner-video {
   object-fit: cover;
   display: block;
 }
+/* Bouton discret « Importer un QR » (sans caméra, ou QR reçu en image) */
+body.play-app .scanner-import-qr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px auto 0;
+  padding: 0.6em 1.3em;
+  border: none;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--accent-violet);
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.98rem;
+  box-shadow: var(--sticker-shadow);
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+body.play-app .scanner-import-qr:active { transform: scale(0.96); box-shadow: var(--sticker-shadow-lg); }
 body.play-app .scanner-status {
   display: flex;
   align-items: center;
@@ -2679,22 +2698,45 @@ body.play-app .camera-title { display: none; }
     max-width: 340px;
     margin-top: 0;
   }
+  /* Paysage = MÊME apparence qu'en portrait, tournée d'un quart de tour : la barre
+     de contrôles devient une COLONNE au lieu d'une rangée. On NE touche PAS à la
+     largeur des boutons ronds (galerie/obturateur/conseils gardent leur taille
+     fixe — sinon `width:auto` les écrase en ellipses). */
   body.play-app .camera-buttons-row {
     flex-direction: column;
-    align-items: stretch;
-    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(12px, 2.4vh, 22px);
   }
-  /* Boutons de même largeur (toute la largeur de la colonne plafonnée).
-     « Démarrer » est enveloppé dans .camera-start-wrap → on étire aussi le wrapper
-     et le bouton interne. */
-  body.play-app .camera-buttons-row > * {
-    width: 100%;
+  /* IDLE (avant caméra) : pilules « Ouvrir la caméra » / « Importer » centrées,
+     largeur confortable. */
+  body.play-app .camera-buttons--idle-state .camera-buttons-row .btn-start-camera,
+  body.play-app .camera-buttons--idle-state .camera-buttons-row .btn-import {
+    width: auto;
+    min-width: 220px;
+    justify-content: center;
   }
   body.play-app .camera-start-wrap {
     display: flex;
+    justify-content: center;
+    align-items: center;
   }
-  body.play-app .camera-start-wrap > .btn-start-camera {
-    width: 100%;
+  /* ACTIF : même carte blanche arrondie qu'en portrait (galerie / obturateur /
+     conseils), mais empilée verticalement. Pas d'« Annuler » (le bouton retour
+     violet sert de sortie), comme en portrait. */
+  body.play-app .camera-buttons-row--active {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(16px, 3vh, 26px);
+    padding: 16px 14px;
+    background: #ffffff;
+    border-radius: 24px;
+    box-shadow: 0 6px 16px rgba(90, 80, 140, 0.16);
+    flex-wrap: nowrap;
+  }
+  body.play-app .camera-buttons-row--active .btn-cancel {
+    display: none;
   }
   /* Boîte d'erreur éventuelle : reste dans la colonne droite */
   body.play-app .camera-error-box {
@@ -3419,6 +3461,32 @@ body.play-app .scan-validate-mascot {
   display: flex;
   justify-content: center;
   margin-bottom: -4px;
+}
+
+/* Écran de chargement des animations après un scan réussi (étoile + anneau).
+   Remplace la carte de validation tant que deferredLoaded === false, pour que
+   l'utilisateur voie clairement que « ça travaille » et non que c'est déjà fini. */
+body.play-app .scan-preparing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  text-align: center;
+  min-height: var(--scan-square, 62vh);
+  padding: 20px 18px calc(24px + env(safe-area-inset-bottom));
+  /* Descendu un peu sous le header pour respirer */
+  margin-top: clamp(28px, 11vh, 96px);
+}
+body.play-app .scan-preparing-mascot {
+  display: flex;
+  justify-content: center;
+}
+body.play-app .scan-preparing .boot-spinner {
+  border-top-color: var(--accent-violet);
+}
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .scan-preparing .boot-spinner { animation: none; }
 }
 
 /* Ligne mascotte centrée (choix scanner, menu livre…) — une par écran */

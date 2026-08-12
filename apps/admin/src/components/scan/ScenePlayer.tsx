@@ -29,7 +29,7 @@ import { estimateActionDurationMs, estimateFilmDurations } from '../../utils/sce
 import { startFilmRecording, type FilmRecording, type FilmRecordingResult } from '../../utils/filmRecorder'
 import { enableRecordingBus, disableRecordingBus, routeElementForRecording } from '../../utils/recordingAudioBus'
 import Mascot from '../mascot/Mascot'
-import { playT } from '../../utils/playI18n'
+import { playT, isTabletDevice } from '../../utils/playI18n'
 
 /** Build a pseudo-WalkLimbSeparation from a ProjectTriangulation for zone mesh rendering. */
 function buildPseudoSeparation(tri: ProjectTriangulation): WalkLimbSeparation {
@@ -238,14 +238,20 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // Taille du canvas plein écran paysage (dimensions utiles inversées si la
   // WebView est restée portrait — le player sera alors tourné de 90° via CSS).
   const computePlayCardSize = () => {
+    const tablet = isTabletDevice()
     const vw = window.innerWidth, vh = window.innerHeight
     const isLs = vw > vh
-    const availW = isLs ? vw : vh
-    const availH = isLs ? vh : vw
-    // Mode FILM (design app) : QUASI plein écran. Les commandes (barre du haut
-    // + pilule de lecture) FLOTTENT par-dessus le film → on ne réserve qu'une
-    // fine marge pour respirer / laisser voir le cadre blanc.
-    const INSET = filmEnabled ? 12 : 0
+    // Tablette : orientation RÉELLE (l'iPad tourne nativement, pas de rotation CSS).
+    // Téléphone : on simule toujours le paysage → on raisonne sur le grand côté.
+    const availW = tablet ? vw : (isLs ? vw : vh)
+    const availH = tablet ? vh : (isLs ? vh : vw)
+    // Mode FILM (design app) : même logique que sur TÉLÉPHONE (commandes flottantes
+    // dans les marges LATÉRALES, à côté de la vidéo). Sur TÉLÉPHONE les marges
+    // latérales sont naturellement larges (19,5:9 vs 16:9) → fin inset (12px). Sur
+    // TABLETTE (~4:3) le film est contraint par la largeur : on réserve un inset
+    // latéral suffisant (68px) pour loger les boutons À CÔTÉ de la vidéo, comme sur
+    // iPhone. Les bandes haut/bas restent du letterbox 16:9 (inévitable sur 4:3).
+    const INSET = filmEnabled ? (tablet ? 68 : 12) : 0
     let w = availW - INSET * 2
     let h = w / frameAspect
     const usableH = availH - INSET * 2
@@ -260,15 +266,19 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   // Paysage FORCÉ par rotation CSS 90° (WebView restée portrait — lock natif KO).
   // Initialisé de façon synchrone pour la même raison (pas de frame en portrait).
   const [forcedRotate, setForcedRotate] = useState(() =>
-    portrait && !modal && typeof window !== 'undefined' && window.innerWidth <= window.innerHeight)
+    portrait && !modal && !isTabletDevice() && typeof window !== 'undefined' && window.innerWidth <= window.innerHeight)
   useEffect(() => {
     if (modal) return
+    const setCard = (nw: number, nh: number) =>
+      setCardSize(prev => (prev.w === nw && prev.h === nh ? prev : { w: nw, h: nh }))
     function compute() {
       const vw = window.innerWidth, vh = window.innerHeight
       if (portrait) {
-        // HORIZONTAL OBLIGATOIRE (play) : recalcule taille + rotation au resize.
-        setForcedRotate(!(vw > vh))
-        setCardSize(computePlayCardSize())
+        // HORIZONTAL OBLIGATOIRE (téléphone) : recalcule taille + rotation au resize.
+        // Tablette : jamais de rotation CSS (l'iPad tourne nativement).
+        setForcedRotate(!isTabletDevice() && !(vw > vh))
+        const { w, h } = computePlayCardSize()
+        setCard(w, h)
         return
       }
       const SIDEBAR = 132 // espace réservé à gauche pour ⚙ + boutons 1/2/3 (incl. l'écart)
@@ -277,11 +287,35 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const availH = Math.max(120, vh - PAD * 2)
       let h = availH, w = h * frameAspect
       if (w > availW) { w = availW; h = w / frameAspect }
-      setCardSize({ w: Math.round(w), h: Math.round(h) })
+      setCard(Math.round(w), Math.round(h))
     }
-    compute()
-    window.addEventListener('resize', compute)
-    return () => window.removeEventListener('resize', compute)
+    // iOS/WKWebView : à la rotation, `resize`/`orientationchange` se déclenchent
+    // AVANT que window.innerWidth/Height ne soient à jour → dimensions périmées
+    // (film mal dimensionné au 1ᵉʳ passage). On recalcule donc immédiatement PUIS
+    // en différé (rAF + timers) pour rattraper les dimensions stabilisées.
+    let raf = 0
+    const timers: number[] = []
+    const scheduleCompute = () => {
+      compute()
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(compute)
+      timers.forEach(clearTimeout)
+      timers.length = 0
+      timers.push(window.setTimeout(compute, 160))
+      timers.push(window.setTimeout(compute, 420))
+    }
+    scheduleCompute()
+    window.addEventListener('resize', scheduleCompute)
+    window.addEventListener('orientationchange', scheduleCompute)
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', scheduleCompute)
+    return () => {
+      window.removeEventListener('resize', scheduleCompute)
+      window.removeEventListener('orientationchange', scheduleCompute)
+      vv?.removeEventListener('resize', scheduleCompute)
+      cancelAnimationFrame(raf)
+      timers.forEach(clearTimeout)
+    }
   }, [modal, portrait, frameAspect, filmEnabled])
 
   // Preview modal (admin) : canvas contraint au même cadre 16:9 que le play,
@@ -357,6 +391,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       try { screen.orientation?.unlock?.() } catch { /* */ }
     }
   }, [modal, portrait])
+
+  // Construire la scène UNE fois que la carte a une taille (build-once) : on ne
+  // reconstruit PLUS quand la taille change (rotation) → le film ne redémarre pas.
+  // Le redimensionnement live est géré par handleResize (scale uniforme du stage).
+  const cardReady = cardSize.w > 0
 
   // PIXI setup
   useEffect(() => {
@@ -1004,6 +1043,30 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       filmRecordingStarted = true
       filmRecording = startFilmRecording(app.view as HTMLCanvasElement)
     }
+    // Vignette du film capturée DIRECTEMENT depuis le rendu PIXI (renderer.extract)
+    // pendant la lecture, à ~35 % du film (après l'intro) : fiable sur iOS, là où
+    // extraire une frame de la vidéo MediaRecorder donne du noir (seek KO).
+    let filmPosterBlob: Blob | null = null
+    let filmPosterMs = 0
+    let filmPosterCaptured = false
+    const captureFilmPoster = (tMs: number) => {
+      if (filmPosterCaptured) return
+      filmPosterCaptured = true
+      filmPosterMs = tMs
+      try {
+        const cvs = app.renderer.extract.canvas(app.stage) as HTMLCanvasElement
+        const w = cvs.width || 1, scale = Math.min(1, 640 / w)
+        if (scale < 1 && cvs.width && cvs.height) {
+          const small = document.createElement('canvas')
+          small.width = Math.round(cvs.width * scale)
+          small.height = Math.round(cvs.height * scale)
+          small.getContext('2d')?.drawImage(cvs, 0, 0, small.width, small.height)
+          small.toBlob?.(b => { if (b) filmPosterBlob = b }, 'image/jpeg', 0.82)
+        } else {
+          cvs.toBlob?.(b => { if (b) filmPosterBlob = b }, 'image/jpeg', 0.82)
+        }
+      } catch { /* extract indisponible : fallback vidéo côté PlayPage */ }
+    }
 
     // --- Audio elements for animation sounds ---
     const animAudioElements = new Map<string, HTMLAudioElement>()
@@ -1071,10 +1134,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     const triangleZoneMap = buildTriangleZoneMap(mesh.triangles, project.bodyZones ?? [])
     let latestPositions: Point2D[] = allPoints
 
-    const screenToImage = (sx: number, sy: number): { x: number; y: number } => ({
-      x: (sx - charOffsetX) / charScale,
-      y: (sy - charOffsetY) / charScale,
-    })
+    const screenToImage = (sx: number, sy: number): { x: number; y: number } => {
+      // Le stage peut être scalé/décalé après une rotation (resize live sans rebuild) :
+      // on repasse d'abord des pixels canvas aux coords internes viewW×viewH.
+      const st = app.stage
+      const lx = (sx - st.position.x) / (st.scale.x || 1)
+      const ly = (sy - st.position.y) / (st.scale.y || 1)
+      return { x: (lx - charOffsetX) / charScale, y: (ly - charOffsetY) / charScale }
+    }
 
     const canvas = app.view as HTMLCanvasElement
     canvas.style.touchAction = 'none'
@@ -1178,9 +1245,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         filmRecording = null
         rec.stop().then(r => {
           if (!r.blob || r.blob.size === 0) return
-          setPendingRecording(r)
+          // Vignette capturée depuis le rendu PIXI (fiable iPhone/iPad) si dispo.
+          const withPoster: FilmRecordingResult = filmPosterBlob
+            ? { ...r, posterBlob: filmPosterBlob, posterMs: filmPosterMs }
+            : r
+          setPendingRecording(withPoster)
           if (!confirmReplaceOnEnd) {
-            onFilmRecordedRef.current?.(r)
+            onFilmRecordedRef.current?.(withPoster)
             setRecordingSaved(true)
           }
         }).catch(() => {})
@@ -1967,6 +2038,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const pct = Math.min(100, Math.round((rt.tMs / Math.max(1, rt.sampler.totalMs)) * 200) / 2)
       if (pct !== lastFilmPct) { lastFilmPct = pct; setFilmProgressPct(pct) }
 
+      // Vignette : capturée une fois passé ~35 % du film (après l'intro).
+      if (shouldRecord && !filmPosterCaptured && rt.tMs >= rt.sampler.totalMs * 0.35) {
+        captureFilmPoster(rt.tMs)
+      }
+
       if (!rt.ended && rt.tMs >= rt.sampler.totalMs) {
         rt.ended = true
         rt.scheduler.stop()
@@ -2418,11 +2494,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       }
     }
 
+    // Resize SANS reconstruire la scène (donc SANS relancer le film) : le cadre
+    // garde toujours le même ratio (frameAspect) → la rotation ne change QUE
+    // l'échelle globale. On redimensionne le renderer et on applique un scale
+    // uniforme au stage (coords internes = viewW×viewH figées au montage). C'est
+    // pour ça que cardSize N'EST PLUS dans les deps de l'effet (plus de rebuild).
     function handleResize() {
-      if (!containerRef.current) return
-      app.renderer.resize(containerRef.current.clientWidth, containerRef.current.clientHeight)
+      if (!containerRef.current || !appRef.current) return
+      const cw = containerRef.current.clientWidth, ch = containerRef.current.clientHeight
+      if (cw < 1 || ch < 1) return
+      app.renderer.resize(cw, ch)
+      const s = Math.min(cw / viewW, ch / viewH)
+      app.stage.scale.set(s)
+      app.stage.position.set((cw - viewW * s) / 2, (ch - viewH * s) / 2)
     }
     window.addEventListener('resize', handleResize)
+    const resizeObs = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
+    resizeObs?.observe(containerRef.current)
 
     const getMultiPlayback = () => currentMultiPlaybackRef
     // Ré-attaché après chaque recréation de ScenePlayback (changement de plan film).
@@ -2456,6 +2544,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       resumeMouthAudioContext()
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('resize', handleResize)
+      resizeObs?.disconnect()
       for (const v of bgVideoElements) { v.pause(); v.src = ''; v.remove() }
       for (const url of bgImageUrls) URL.revokeObjectURL(url)
       for (const audio of animAudioElements.values()) { audio.pause() }
@@ -2468,7 +2557,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
-  }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardSize.w, cardSize.h, filmRunId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardReady, filmRunId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const playSceneAction = useCallback(async (action: SceneAction | undefined, btnId: string) => {
     if (!action || action.steps.length === 0) return
@@ -2904,23 +2993,23 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       // écran) = 25% − largeurVidéo/4 ; verticalement près du haut du film.
       const hudTop = cardSize.h ? `calc(50% - ${cardSize.h / 2}px + 6px)` : `calc(10px + env(safe-area-inset-top))`
       const hudBottom = cardSize.h ? `calc(50% - ${cardSize.h / 2}px + 6px)` : `calc(10px + env(safe-area-inset-bottom))`
-      // Milieu de la marge, borné à ≥14px pour ne jamais sortir de l'écran quand
-      // la marge est quasi nulle (écran ~16:9).
       const hudSide = cardSize.w ? `max(14px, calc(25% - ${cardSize.w / 4}px))` : '18px'
+      const hudSideLeft = hudSide
+      const hudSideRight = hudSide
       // Barre de progression discrète : intégrée au bas du film (largeur vidéo
       // moins les coins arrondis), positionnée juste au-dessus du bord inférieur.
       const progW = cardSize.w ? Math.max(40, cardSize.w - 28) : undefined
       const progTop = cardSize.h ? `calc(50% + ${cardSize.h / 2}px - 10px)` : undefined
       return (
         <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
-          <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSide }} onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
+          <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSideLeft }} onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M19 12H5" />
               <path d="m11 6-6 6 6 6" />
             </svg>
           </button>
           {onSettings && (
-            <button className="filmapp-round filmapp-menu" style={{ top: hudTop, right: hudSide }} onClick={onSettings} aria-label="Menu">
+            <button className="filmapp-round filmapp-menu" style={{ top: hudTop, right: hudSideRight }} onClick={onSettings} aria-label="Menu">
               <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
                 <path d="M4 7h16M4 12h16M4 17h16" />
               </svg>
@@ -2950,7 +3039,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           </div>
 
           {/* Son en BAS À GAUCHE (aligné au retour) */}
-          <button className="filmapp-round filmapp-sound" style={{ left: hudSide, bottom: hudBottom }} onClick={toggleFilmMute} aria-label={filmMuted ? 'Activer le son' : 'Couper le son'}>
+          <button className="filmapp-round filmapp-sound" style={{ left: hudSideLeft, bottom: hudBottom }} onClick={toggleFilmMute} aria-label={filmMuted ? 'Activer le son' : 'Couper le son'}>
             {filmMuted ? (
               <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
                 <path d="M11 5 6.5 9H3v6h3.5L11 19V5z" />
@@ -2964,7 +3053,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             )}
           </button>
           {/* Play/Pause en BAS À DROITE (aligné au menu) */}
-          <button className="filmapp-round filmapp-play" style={{ right: hudSide, bottom: hudBottom }} onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
+          <button className="filmapp-round filmapp-play" style={{ right: hudSideRight, bottom: hudBottom }} onClick={() => setPlaying(p => !p)} aria-label={playing ? 'Pause' : 'Lecture'}>
             {playing ? (
               <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
                 <rect x="5" y="4" width="5" height="16" rx="2" />

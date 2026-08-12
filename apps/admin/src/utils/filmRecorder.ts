@@ -10,6 +10,10 @@ export interface FilmRecordingResult {
   blob: Blob
   mimeType: string
   durationMs: number
+  /** Vignette capturée DIRECTEMENT depuis le rendu PIXI pendant la lecture
+   *  (fiable sur iOS, contrairement à l'extraction d'une frame de la vidéo). */
+  posterBlob?: Blob | null
+  posterMs?: number | null
 }
 
 export interface FilmRecording {

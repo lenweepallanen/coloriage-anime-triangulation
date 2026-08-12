@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import jsQR from 'jsqr'
 import { getBook, getBookCover } from '@shared/db/booksStore'
@@ -51,6 +51,7 @@ export default function ScannerPage() {
   const rafRef = useRef(0)
   const handlingRef = useRef(false)
   const lastDecodeRef = useRef(0)
+  const qrFileRef = useRef<HTMLInputElement | null>(null)
 
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
@@ -131,6 +132,41 @@ export default function ScannerPage() {
     }
     void handleBookQr(parsed.id)
   }, [flashMessage, handleBookQr, navigate, stopCamera, t])
+
+  // Décodage d'un QR depuis une IMAGE choisie (Photos) — utile sans caméra
+  // (simulateur, caméra HS) ou pour un QR reçu en capture d'écran.
+  const handleImportQr = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const maxSide = 1200
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
+        const w = Math.max(1, Math.round(img.width * scale))
+        const h = Math.max(1, Math.round(img.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        if (!ctx) { URL.revokeObjectURL(url); return }
+        ctx.drawImage(img, 0, 0, w, h)
+        const data = ctx.getImageData(0, 0, w, h)
+        const code = jsQR(data.data, w, h)
+        URL.revokeObjectURL(url)
+        handlingRef.current = false
+        if (code?.data) handleDecoded(code.data)
+        else { playUi('error'); flashMessage(t('scanner.unknown')) }
+      } catch {
+        URL.revokeObjectURL(url)
+        flashMessage(t('scanner.unknown'))
+      }
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); flashMessage(t('scanner.unknown')) }
+    img.src = url
+  }, [handleDecoded, flashMessage, t])
 
   // Caméra + boucle de décodage (jsQR sur frame réduite, ~7 fois/s)
   useEffect(() => {
@@ -251,10 +287,26 @@ export default function ScannerPage() {
         </p>
       </div>
 
+      <input
+        ref={qrFileRef}
+        type="file"
+        accept="image/*"
+        onChange={handleImportQr}
+        style={{ display: 'none' }}
+      />
+
       {status.kind === 'camera-error' ? (
         <div className="placeholder-card soft-card scanner-error-card">
           <Mascot size={80} mood="oops" />
           <p className="text-preline">{t('scanner.camera.error')}</p>
+          <button className="scanner-import-qr" onClick={() => qrFileRef.current?.click()}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+              <circle cx="9" cy="10" r="1.6" />
+              <path d="m4.5 17 4.5-4.5 3.5 3.5 3-3 4 4" />
+            </svg>
+            {t('scanner.importQr')}
+          </button>
         </div>
       ) : (
         <>
@@ -262,6 +314,14 @@ export default function ScannerPage() {
             <video ref={videoRef} className="scanner-video" playsInline muted autoPlay />
             <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
           </div>
+          <button className="scanner-import-qr" onClick={() => qrFileRef.current?.click()}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+              <circle cx="9" cy="10" r="1.6" />
+              <path d="m4.5 17 4.5-4.5 3.5 3.5 3-3 4 4" />
+            </svg>
+            {t('scanner.importQr')}
+          </button>
           {status.kind === 'confirm' && (
             <div className="scanner-confirm-backdrop" role="dialog" aria-modal="true">
               <div className="scanner-confirm soft-card">

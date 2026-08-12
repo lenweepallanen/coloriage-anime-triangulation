@@ -9,6 +9,13 @@
  * `duration = Infinity` au chargement. Workaround standard : seek vers un
  * temps immense → le navigateur résout alors la vraie durée → on seek au
  * point voulu, puis on capture.
+ *
+ * Pièges iOS / WKWebView (sinon vignette noire ou nulle → fallback 🎬) :
+ *  - un <video> HORS DOM (ou display:none) ne décode PAS ses frames → drawImage
+ *    renvoie du noir. On l'attache off-screen (rendu mais invisible).
+ *  - `onseeked` précède souvent le décodage réel → on attend une frame VRAIMENT
+ *    peinte via `requestVideoFrameCallback` (fallback : petit délai).
+ *  - lecture muette lancée puis mise en pause pour forcer le décodage.
  */
 export function generateVideoPoster(
   videoBlob: Blob,
@@ -21,8 +28,18 @@ export function generateVideoPoster(
     const url = URL.createObjectURL(videoBlob)
     const video = document.createElement('video')
     video.muted = true
+    video.defaultMuted = true
     video.playsInline = true
+    video.setAttribute('muted', '')
+    video.setAttribute('playsinline', '')
+    video.setAttribute('webkit-playsinline', '')
     video.preload = 'auto'
+    // iOS/WKWebView : le <video> DOIT être dans le DOM (et pas display:none) pour
+    // décoder ses frames. On l'attache off-screen, rendu mais invisible.
+    video.style.cssText =
+      'position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1;'
+    document.body.appendChild(video)
+
     let done = false
     /** 'resolving-duration' = seek immense en cours (durée Infinity). */
     let phase: 'idle' | 'resolving-duration' | 'target' = 'idle'
@@ -32,14 +49,21 @@ export function generateVideoPoster(
       done = true
       window.clearTimeout(timer)
       try { URL.revokeObjectURL(url) } catch { /* */ }
+      try { video.pause() } catch { /* */ }
       video.removeAttribute('src')
       try { video.load() } catch { /* */ }
+      try { video.remove() } catch { /* */ }
       resolve(blob)
     }
 
     const timer = window.setTimeout(() => finish(null), timeoutMs)
 
-    const capture = () => {
+    // Attend une frame réellement peinte avant de capturer (iOS).
+    const rvfc = (video as unknown as {
+      requestVideoFrameCallback?: (cb: () => void) => number
+    }).requestVideoFrameCallback?.bind(video)
+
+    const draw = () => {
       try {
         const w = video.videoWidth
         const h = video.videoHeight
@@ -55,6 +79,13 @@ export function generateVideoPoster(
       } catch {
         finish(null)
       }
+    }
+
+    const capture = () => {
+      // La frame décodée n'est pas garantie peinte à l'instant de `onseeked` sur
+      // iOS : on attend un callback de frame vidéo, sinon un petit délai de repli.
+      if (rvfc) rvfc(() => draw())
+      else window.setTimeout(draw, 80)
     }
 
     const seekToTarget = () => {
@@ -79,6 +110,10 @@ export function generateVideoPoster(
 
     video.onerror = () => finish(null)
     video.onloadedmetadata = () => {
+      // iOS : forcer le décodage par une lecture muette brève (autorisée sans
+      // geste car muet), immédiatement mise en pause.
+      const p = video.play?.()
+      if (p && typeof p.then === 'function') p.then(() => { try { video.pause() } catch { /* */ } }).catch(() => { /* */ })
       if (Number.isFinite(video.duration) && video.duration > 0) {
         seekToTarget()
       } else {
@@ -101,5 +136,6 @@ export function generateVideoPoster(
     }
 
     video.src = url
+    try { video.load() } catch { /* */ }
   })
 }

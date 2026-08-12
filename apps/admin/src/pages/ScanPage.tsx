@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { useParams, Navigate, useSearchParams, useNavigate } from 'react-router-dom'
 import PauseOverlay, { SettingsButton } from '../components/scan/PauseOverlay'
-import { playT } from '../utils/playI18n'
+import { playT, isTabletDevice } from '../utils/playI18n'
 import Mascot from '../components/mascot/Mascot'
 import { hasFilmVideo } from '../db/filmVideosStore'
 import { useProject } from '../hooks/useProject'
@@ -150,9 +150,13 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   const isNativeApp =
     typeof globalThis !== 'undefined' &&
     (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.() === true
+  // TABLETTE : l'app tourne librement (les 4 orientations gérées par iOS). On ne
+  // verrouille RIEN et on ne simule pas le paysage — donc pas d'overlay « tourne
+  // ta tablette » ni de rotation CSS. Réservé au TÉLÉPHONE (verrouillé portrait).
+  const isTablet = isTabletDevice()
   const lockedStage = stage === 'animation'
   useEffect(() => {
-    if (mode !== 'play') return
+    if (mode !== 'play' || isTablet) return
     const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
     const backToPortrait = () => {
       // Natif : on re-verrouille en portrait (politique globale de l'app) ;
@@ -172,14 +176,14 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       backToPortrait()
     }
     return backToPortrait
-  }, [mode, lockedStage])
+  }, [mode, lockedStage, isTablet])
 
   // Orientation PHYSIQUE du téléphone (gravité) : quand l'écran est verrouillé
   // paysage mais que l'enfant tient le téléphone à la verticale, on affiche
   // l'overlay « tourne ton téléphone » et on met la scène en pause.
   const [heldPortrait, setHeldPortrait] = useState(false)
   useEffect(() => {
-    if (!isNativeApp || mode !== 'play' || !lockedStage) {
+    if (!isNativeApp || mode !== 'play' || !lockedStage || isTablet) {
       setHeldPortrait(false)
       return
     }
@@ -217,8 +221,8 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       cancelled = true
       if (attached) window.removeEventListener('devicemotion', onMotion)
     }
-  }, [isNativeApp, mode, lockedStage])
-  const showRotateOverlay = heldPortrait && isNativeApp && mode === 'play' && lockedStage
+  }, [isNativeApp, mode, lockedStage, isTablet])
+  const showRotateOverlay = heldPortrait && isNativeApp && mode === 'play' && lockedStage && !isTablet
 
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null)
   // URL de la photo capturée (visuel « scan en cours » du mode play)
@@ -461,6 +465,12 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
     setStage('camera')
   }
 
+  // Play : après un scan réussi, les animations/le film se téléchargent encore en
+  // arrière-plan (deferredLoaded). Pendant ce temps on montre un écran de chargement
+  // explicite (étoile Picopop + spinner) au lieu de la carte de validation, qui donne
+  // à tort l'impression que tout est déjà prêt.
+  const preparing = mode === 'play' && stage === 'preview' && deferredLoaded === false
+
   return (
     <div className="scan-page">
       {mode === 'play' && stage !== 'animation' && (
@@ -477,13 +487,13 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
                 : stage === 'adjust'
                   ? 'Ajuste les coins'
                   : stage === 'preview'
-                    ? playT('scan.title.success')
+                    ? (preparing ? playT('validate.preparing') : playT('scan.title.success'))
                     : playT('scan.title.scanning')}
             </h2>
             {(stage === 'camera' && (cameraActive || autoCam)) || stage === 'processing' ? (
               <p className="scan-header-sub">{playT('scan.sub.keepFrame')}</p>
             ) : stage === 'preview' ? (
-              <p className="scan-header-sub">{playT('scan.sub.ready')}</p>
+              <p className="scan-header-sub">{preparing ? playT('validate.preparingSub') : playT('scan.sub.ready')}</p>
             ) : stage === 'adjust' ? (
               <p className="scan-header-sub">Ajuste les coins de ton coloriage</p>
             ) : null}
@@ -672,7 +682,15 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
         </div>
       )}
 
-      {stage === 'preview' && processor.rectifiedCanvas && (
+      {/* Play : écran de chargement explicite pendant le téléchargement des animations. */}
+      {stage === 'preview' && processor.rectifiedCanvas && preparing && (
+        <div className="scan-preparing">
+          <div className="scan-preparing-mascot"><Mascot size={116} mood="excited" gaze="scan" halo /></div>
+          <span className="boot-spinner" aria-hidden="true" />
+        </div>
+      )}
+
+      {stage === 'preview' && processor.rectifiedCanvas && !preparing && (
         <div className={`scan-validate${landscape ? ' scan-validate--landscape' : ''}`}>
           <Suspense fallback={<div className="loading">Chargement…</div>}>
             <AnimationPlayer
@@ -772,8 +790,17 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
           {/* Téléphone NET (sans flèche) : l'animation CSS le fait pivoter
               portrait→paysage → le geste de rotation se lit tout seul. */}
           <svg className="rotate-overlay-phone" viewBox="0 0 48 48" width="88" height="88" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="17" y="8" width="14" height="32" rx="4.5" />
-            <path d="M21 36h6" />
+            {isTabletDevice() ? (
+              <>
+                <rect x="13" y="9" width="22" height="30" rx="3.5" />
+                <path d="M21 35h6" />
+              </>
+            ) : (
+              <>
+                <rect x="17" y="8" width="14" height="32" rx="4.5" />
+                <path d="M21 36h6" />
+              </>
+            )}
           </svg>
           <p className="rotate-overlay-title">{playT('rotate.title')}</p>
           <p className="rotate-overlay-sub">{playT('rotate.sub')}</p>
