@@ -98,6 +98,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const [showFlash, setShowFlash] = useState(false)
   const [torchOn, setTorchOn] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
+  const [showTips, setShowTips] = useState(false) // popover conseils (remplace le flash sur iOS)
   const [opencvLoading, setOpencvLoading] = useState(true)
   // Niveau à bulle : inclinaison du téléphone (degrés, null = mouvement indispo).
   const [levelTilt, setLevelTilt] = useState<number | null>(null)
@@ -777,6 +778,17 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
           </div>
         )}
 
+        {/* Conseils (bouton 💡) — remplace le flash sur iOS. Tap pour fermer. */}
+        {isCameraActive && showTips && (
+          <div className="camera-tips-popover" onClick={() => setShowTips(false)} role="button" tabIndex={0}>
+            <strong>{playT('camera.tipsTitle')}</strong>
+            <p>{playT('camera.tip1')}</p>
+            <p>{playT('camera.tip2')}</p>
+            <p>{playT('camera.tip3')}</p>
+            <p>{playT('camera.tip4')}</p>
+          </div>
+        )}
+
         {!isCameraActive && !warmingUp && document.body.classList.contains('play-app') && (
           <div className="camera-idle-hero">
             <div className="camera-idle-illustration" aria-hidden="true">
@@ -890,7 +902,20 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
                 </svg>
               </button>
             )}
-            {!torchSupported && <span className="camera-controls-spacer" aria-hidden="true" />}
+            {!torchSupported && (
+              <button
+                className={showTips ? 'btn-tips btn-tips--on' : 'btn-tips'}
+                onClick={() => setShowTips(v => !v)}
+                aria-label={playT('camera.tipsAria')}
+                aria-pressed={showTips}
+              >
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9.5 18h5" />
+                  <path d="M10 21h4" />
+                  <path d="M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.5 1 2.3V16h6v-.2c0-.8.4-1.7 1-2.3A6 6 0 0 0 12 3Z" />
+                </svg>
+              </button>
+            )}
             <button onClick={stopCamera} className="btn-cancel">
               {playT('camera.cancel')}
             </button>

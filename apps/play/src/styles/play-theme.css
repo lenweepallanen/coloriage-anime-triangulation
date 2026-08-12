@@ -1883,6 +1883,54 @@ body.play-app .btn-gallery:active,
 body.play-app .camera-buttons-row--active .btn-torch:active {
   transform: scale(0.92);
 }
+/* Bouton Conseils (💡) — remplace le flash sur iOS, équilibre la barre */
+body.play-app .camera-buttons-row--active .btn-tips {
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-violet, #8b7cf0);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+body.play-app .camera-buttons-row--active .btn-tips:active { transform: scale(0.92); }
+body.play-app .camera-buttons-row--active .btn-tips--on { box-shadow: 0 0 0 4px rgba(139, 124, 240, 0.4); }
+/* Popover conseils : carte blanche en bas du carré caméra, tap pour fermer */
+body.play-app .camera-tips-popover {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: min(88%, 320px);
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 16px;
+  padding: 12px 16px;
+  box-shadow: 0 8px 22px rgba(90, 80, 140, 0.3);
+  text-align: left;
+  cursor: pointer;
+}
+body.play-app .camera-tips-popover strong {
+  display: block;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  color: var(--ink, #2e2a5e);
+  font-size: 0.98rem;
+  margin-bottom: 6px;
+}
+body.play-app .camera-tips-popover p {
+  margin: 3px 0;
+  font-family: 'Andika', sans-serif;
+  color: var(--ink-soft, #6f6a92);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
 /* Obturateur : grand cercle blanc à anneau */
 body.play-app .camera-buttons-row--active .btn-capture {
   width: 64px;
