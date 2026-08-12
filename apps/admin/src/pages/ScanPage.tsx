@@ -739,7 +739,11 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
         <Suspense fallback={<div className="loading">Chargement…</div>}>
           {playerProject.scene && !!playerProject.scene.background && playerProject.scene.restPoint != null && filmPlayerReady
             ? <ScenePlayer
-                forcePaused={showRotateOverlay || undefined}
+                // Booléen (pas `|| undefined`) : sinon, en repassant à false au
+                // moment où l'on tourne en paysage, ScenePlayer recevait `undefined`
+                // et n'exécutait jamais setPlaying(true) → le film restait en pause
+                // (écran noir). En booléen : true=pause (portrait), false=reprise.
+                forcePaused={showRotateOverlay}
                 project={playerProject}
                 scanCanvas={processor.rectifiedCanvas}
                 lamaCanvas={lamaCanvas}
