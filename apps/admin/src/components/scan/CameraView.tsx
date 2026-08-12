@@ -548,10 +548,19 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         dctx.drawImage(canvas, 0, 0, dw, dw)
         const precise = await detectMarkersOnImageData(dctx.getImageData(0, 0, dw, dw))
         if (precise && precise.length === 4) {
-          scaledCorners = precise.map(p => ({
+          const preciseScaled = precise.map(p => ({
             x: Math.round(p.x / detScale),
             y: Math.round(p.y / detScale),
           }))
+          // Garde-fou : n'accepter la re-détection HD que si elle CONCORDE avec la
+          // détection live (chaque coin, même ordre TL/TR/BR/BL, proche) — sinon
+          // c'est un quad faux/tourné → on garde les coins temps réel.
+          const tol = size * 0.12
+          const consistent = !scaledCorners || preciseScaled.every((p, i) => {
+            const q = scaledCorners![i]
+            return Math.hypot(p.x - q.x, p.y - q.y) <= tol
+          })
+          if (consistent) scaledCorners = preciseScaled
         }
       } catch { /* garde le fallback temps réel */ }
     }

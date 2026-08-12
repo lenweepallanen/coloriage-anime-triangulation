@@ -311,13 +311,15 @@ function findCornersInBinary(binary, gray, w, h) {
     return { corners: null, debug };
   }
 
-  // Trier: TL, TR, BR, BL
-  selected.sort((a, b) => (a.x + a.y) - (b.x + b.y));
-  const tl = selected[0];
-  const br = selected[3];
-  const rem = [selected[1], selected[2]];
-  const tr = rem[0].x > rem[1].x ? rem[0] : rem[1];
-  const bl = rem[0].x > rem[1].x ? rem[1] : rem[0];
+  // Ordonnancement TL/TR/BR/BL ROBUSTE : trier par Y (les 2 plus hauts = rangée
+  // du haut), puis chaque rangée par X. Bien plus stable que la diagonale (x+y),
+  // qui désignait le mauvais coin sur une page ~carrée à peine tournée → image
+  // sortie tournée/miroir.
+  const byY = selected.slice().sort((a, b) => a.y - b.y);
+  const top = byY.slice(0, 2).sort((a, b) => a.x - b.x);     // [TL, TR]
+  const bottom = byY.slice(2, 4).sort((a, b) => a.x - b.x);  // [BL, BR]
+  const tl = top[0], tr = top[1];
+  const bl = bottom[0], br = bottom[1];
 
   const sorted = [tl, tr, br, bl];
 
