@@ -106,6 +106,15 @@ function validateQuadrilateral(corners, w, h) {
     return false;
   }
 
+  // 3b. Perspective (raccourci fronto-parallèle) : si un côté est ~2× l'opposé,
+  // la page est trop inclinée → rejet (filet léger ; le niveau à bulle guide déjà).
+  const wRatio = Math.max(topW, botW) / Math.max(Math.min(topW, botW), 1);
+  const hRatio = Math.max(leftH, rightH) / Math.max(Math.min(leftH, rightH), 1);
+  if (wRatio > 1.9 || hRatio > 1.9) {
+    console.log('Worker: quad rejeté - perspective trop forte (wR=' + wRatio.toFixed(2) + ', hR=' + hRatio.toFixed(2) + ')');
+    return false;
+  }
+
   // 4. Les 4 coins doivent être dispersés (pas regroupés dans un coin de l'image)
   const centerX = (tl.x + tr.x + br.x + bl.x) / 4;
   const centerY = (tl.y + tr.y + br.y + bl.y) / 4;
@@ -140,8 +149,11 @@ function validateBrightInterior(gray, corners) {
     { x: (tr.x + bl.x * 3) / 4, y: (tr.y + bl.y * 3) / 4 },
   ];
 
+  // Seuil ABAISSÉ (150→120) + ratio ASSOUPLI (0.5→0.34) pour tolérer une ombre
+  // ou un reflet en travers de la page (cas courant sur une table) — sinon une
+  // page pourtant bien cadrée est refusée « intérieur sombre ».
   let brightCount = 0;
-  const brightThresh = 150;
+  const brightThresh = 120;
   for (const p of checkPoints) {
     const px = Math.max(0, Math.min(gray.cols - 1, Math.round(p.x)));
     const py = Math.max(0, Math.min(gray.rows - 1, Math.round(p.y)));
@@ -150,7 +162,7 @@ function validateBrightInterior(gray, corners) {
   }
 
   const ratio = brightCount / checkPoints.length;
-  if (ratio < 0.5) {
+  if (ratio < 0.34) {
     console.log('Worker: quad rejeté - intérieur sombre (' + brightCount + '/' + checkPoints.length + ' points clairs)');
     return false;
   }

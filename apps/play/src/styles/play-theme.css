@@ -1765,6 +1765,47 @@ body.play-app .camera-guide-overlay {
   background: transparent;
   border-radius: 16px;
 }
+/* Niveau à bulle : cible (cercle) + bulle qui se centre quand le tél est à plat.
+   Rose quand incliné → menthe quand OK. */
+body.play-app .camera-level {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 76px;
+  height: 76px;
+  z-index: 6;
+  pointer-events: none;
+}
+body.play-app .camera-level-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.85);
+  background: rgba(46, 42, 94, 0.16);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.15s ease;
+}
+body.play-app .camera-level-ring::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 30px; height: 30px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px dashed rgba(255, 255, 255, 0.7);
+}
+body.play-app .camera-level-bubble {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--accent-rose, #ff8fae);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s ease;
+}
+body.play-app .camera-level--ok .camera-level-bubble { background: var(--accent-mint, #57c8a3); }
+body.play-app .camera-level--ok .camera-level-ring { border-color: var(--accent-mint, #57c8a3); }
 /* Barre de statut : suit l'arrondi du conteneur (haut) */
 body.play-app .camera-status-bar {
   border-top-left-radius: 19px;

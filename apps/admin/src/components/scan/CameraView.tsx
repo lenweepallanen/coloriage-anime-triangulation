@@ -99,6 +99,9 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const [torchOn, setTorchOn] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
   const [opencvLoading, setOpencvLoading] = useState(true)
+  // Niveau à bulle : inclinaison du téléphone (degrés, null = mouvement indispo).
+  const [levelTilt, setLevelTilt] = useState<number | null>(null)
+  const [bubble, setBubble] = useState({ x: 0, y: 0 })
 
   const matchedGuidesRef = useRef([false, false, false, false])
   const stableFramesRef = useRef(0)
@@ -109,6 +112,12 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const qualityRef = useRef<{ issues: QualityIssue[] }>({ issues: [] })
 
   const MATCH_THRESHOLD = 0.30
+  const TILT_MAX_DEG = 12       // au-delà : capture bloquée (téléphone trop incliné)
+  const LEVEL_TRAVEL = 70       // sensibilité bulle ; clampée à ±28px (cf. overlay)
+
+  // Inclinaison connue et acceptable ? (si mouvement indispo → on ne bloque pas)
+  const motionAvailable = levelTilt !== null
+  const isLevel = levelTilt === null || levelTilt <= TILT_MAX_DEG
 
   const getSquareCrop = useCallback((video: HTMLVideoElement) => {
     const vw = video.videoWidth
@@ -177,6 +186,15 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
 
   const startCamera = async () => {
     try {
+      // Niveau à bulle : sur iOS, l'accéléromètre exige une permission demandée
+      // dans un geste utilisateur (ce clic). Best-effort — si refusé, pas de gate.
+      try {
+        const DME = (window as unknown as { DeviceMotionEvent?: { requestPermission?: () => Promise<string> } }).DeviceMotionEvent
+        if (DME && typeof DME.requestPermission === 'function') {
+          await DME.requestPermission().catch(() => { /* refusé */ })
+        }
+      } catch { /* non supporté */ }
+
       // Start loading OpenCV worker in parallel
       loadOpenCVWorker().catch(err => {
         console.warn('OpenCV worker load failed:', err)
@@ -265,6 +283,31 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       console.warn('Torch toggle failed:', err.message)
     }
   }, [stream, torchOn])
+
+  // Niveau à bulle : lit le vecteur gravité (accéléromètre). À plat (écran vers
+  // la page), la gravité est ~sur l'axe Z → inclinaison ≈ 0 → bulle centrée.
+  useEffect(() => {
+    if (!isCameraActive) return
+    let lastTs = 0
+    const onMotion = (e: DeviceMotionEvent) => {
+      const g = e.accelerationIncludingGravity
+      if (!g || g.x == null || g.y == null || g.z == null) return
+      const now = performance.now()
+      if (now - lastTs < 60) return   // ~16 Hz suffisant, évite le sur-rendu
+      lastTs = now
+      const gx = g.x, gy = g.y, gz = g.z
+      const horiz = Math.sqrt(gx * gx + gy * gy)
+      const tiltDeg = Math.atan2(horiz, Math.abs(gz)) * 180 / Math.PI
+      setLevelTilt(tiltDeg)
+      const G = 9.81
+      setBubble({
+        x: Math.max(-1, Math.min(1, gx / G)),
+        y: Math.max(-1, Math.min(1, -gy / G)),
+      })
+    }
+    window.addEventListener('devicemotion', onMotion)
+    return () => window.removeEventListener('devicemotion', onMotion)
+  }, [isCameraActive])
 
   // Détection des 4 repères L sur une image statique (worker OpenCV), one-shot.
   // Utilisé pour valider un import en play. Résout `null` si non détectés / timeout.
@@ -424,8 +467,14 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     })
   }, [getGuidePositions, drawCornerGuide])
 
-  const capturePhoto = useCallback(() => {
+  const capturePhoto = useCallback(async () => {
     if (!videoRef.current || !captureCanvasRef.current) return
+
+    // Téléphone trop incliné : on bloque (le niveau à bulle guide vers « à plat »).
+    if (requireMarkers && !isLevel) {
+      setError(playT('camera.holdFlat'))
+      return
+    }
 
     playUi('shutter')
     setShowFlash(true)
@@ -447,6 +496,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size)
 
+    // Coins temps réel (640 px), remis à l'échelle capture — utilisés en FALLBACK.
     let scaledCorners: Point2D[] | null = null
     const corners = lastDetectedCornersRef.current
     const { w: downW } = downscaleDimsRef.current
@@ -456,6 +506,28 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         x: Math.round(c.x * scaleFactor),
         y: Math.round(c.y * scaleFactor),
       }))
+    }
+
+    // PLAY : RE-DÉTECTION des repères en HAUTE RÉSOLUTION sur la photo capturée
+    // (les coins temps réel 640 px sont trop grossiers → homographie imprécise →
+    // crop décalé). On détecte à ~1280 px puis on remet à l'échelle capture.
+    if (requireMarkers) {
+      try {
+        const detScale = Math.min(1, 1280 / size)
+        const dw = Math.max(1, Math.round(size * detScale))
+        const dc = document.createElement('canvas')
+        dc.width = dw
+        dc.height = dw
+        const dctx = dc.getContext('2d')!
+        dctx.drawImage(canvas, 0, 0, dw, dw)
+        const precise = await detectMarkersOnImageData(dctx.getImageData(0, 0, dw, dw))
+        if (precise && precise.length === 4) {
+          scaledCorners = precise.map(p => ({
+            x: Math.round(p.x / detScale),
+            y: Math.round(p.y / detScale),
+          }))
+        }
+      } catch { /* garde le fallback temps réel */ }
     }
 
     // VIE PRIVÉE (play) : pas de capture sans les 4 repères (garde-fou en plus du
@@ -473,7 +545,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         setError('Erreur lors de la capture. Veuillez reessayer.')
       }
     }, 'image/jpeg', 0.95)
-  }, [getSquareCrop, onCapture, stopCamera, requireMarkers])
+  }, [getSquareCrop, onCapture, stopCamera, requireMarkers, detectMarkersOnImageData, isLevel])
 
   useEffect(() => {
     if (!isCameraActive) return
@@ -601,6 +673,8 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
 
   const getStatusText = () => {
     if (opencvLoading) return playT('camera.status.loading')
+    // Trop incliné : prioritaire (capture bloquée) — invite à mettre à plat.
+    if (requireMarkers && !isLevel) return playT('camera.holdFlat')
     if (allStable && !qualityIssue) return playT('camera.status.ready')
 
     if (qualityIssue === 'tooDark' || qualityIssue === 'tooBright' || qualityIssue === 'glare') {
@@ -620,6 +694,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   }
 
   const getStatusClass = () => {
+    if (requireMarkers && !isLevel) return 'camera-status-bar--warning'
     if (allStable && !qualityIssue) return 'camera-status-bar--success'
     if (qualityIssue === 'tooDark' || qualityIssue === 'tooBright' || qualityIssue === 'glare') {
       return 'camera-status-bar--error'
@@ -645,6 +720,16 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
           <canvas ref={overlayRef} className="camera-guide-overlay" />
         )}
 
+        {/* Niveau à bulle : aligne le disque dans le cercle = téléphone à plat. */}
+        {isCameraActive && requireMarkers && motionAvailable && (
+          <div className={`camera-level${isLevel ? ' camera-level--ok' : ''}`} aria-hidden="true">
+            <div className="camera-level-ring" />
+            <div
+              className="camera-level-bubble"
+              style={{ transform: `translate(calc(-50% + ${Math.max(-28, Math.min(28, Math.round(bubble.x * LEVEL_TRAVEL)))}px), calc(-50% + ${Math.max(-28, Math.min(28, Math.round(bubble.y * LEVEL_TRAVEL)))}px))` }}
+            />
+          </div>
+        )}
 
         {isCameraActive && (
           <div className={`camera-status-bar ${getStatusClass()}`}>
@@ -745,12 +830,12 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             <button
               onClick={capturePhoto}
               data-ui-sound="off"
-              disabled={requireMarkers && !allStable}
-              className={allStable && !qualityIssue ? 'btn-capture btn-capture--ready' : 'btn-capture'}
+              disabled={requireMarkers && (!allStable || !isLevel)}
+              className={allStable && !qualityIssue && isLevel ? 'btn-capture btn-capture--ready' : 'btn-capture'}
               aria-label="Capturer"
             >
               <span className="btn-capture-label">
-                {requireMarkers && !allStable ? playT('camera.aimMarkers') : playT('camera.capture')}
+                {requireMarkers && !isLevel ? playT('camera.holdFlat') : requireMarkers && !allStable ? playT('camera.aimMarkers') : playT('camera.capture')}
               </span>
             </button>
             {torchSupported && (
