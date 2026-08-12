@@ -119,6 +119,12 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const motionAvailable = levelTilt !== null
   const isLevel = levelTilt === null || levelTilt <= TILT_MAX_DEG
 
+  // iOS natif : la torche ne se pilote pas via l'API web → on passe par le plugin
+  // Capacitor (bridge global, sans dépendance @capacitor/core dans admin).
+  type CapBridge = { isNativePlatform?: () => boolean; getPlatform?: () => string; Plugins?: { VideoConcat?: { setTorch?: (o: { on: boolean }) => Promise<{ available?: boolean; on?: boolean }> } } }
+  const capBridge = (typeof window !== 'undefined' ? (window as unknown as { Capacitor?: CapBridge }).Capacitor : undefined)
+  const nativeIOS = capBridge?.isNativePlatform?.() === true && capBridge?.getPlatform?.() === 'ios'
+
   const getSquareCrop = useCallback((video: HTMLVideoElement) => {
     const vw = video.videoWidth
     const vh = video.videoHeight
@@ -238,7 +244,8 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         const track = mediaStream.getVideoTracks()[0]
         if (track) {
           const caps = (track as any).getCapabilities?.()
-          if (caps?.torch) {
+          // Web (Android) : capacité torche ; iOS natif : toujours dispo via plugin.
+          if (caps?.torch || nativeIOS) {
             setTorchSupported(true)
           }
         }
@@ -255,6 +262,10 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       detectionTimerRef.current = null
     }
     setDetectCallback(null)
+    // Coupe la torche native si elle était allumée (sinon elle reste allumée).
+    if (nativeIOS && torchOn) {
+      capBridge?.Plugins?.VideoConcat?.setTorch?.({ on: false }).catch(() => { /* */ })
+    }
     if (stream) {
       stream.getTracks().forEach(track => track.stop())
     }
@@ -268,13 +279,28 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     matchedGuidesRef.current = [false, false, false, false]
     stableFramesRef.current = 0
     qualityRef.current = { issues: [] }
-  }, [stream])
+  }, [stream, nativeIOS, torchOn, capBridge])
 
   const toggleTorch = useCallback(async () => {
+    const newVal = !torchOn
+    // iOS natif : plugin AVFoundation (l'API web ne marche pas dans WKWebView).
+    if (nativeIOS) {
+      try {
+        const res = await capBridge?.Plugins?.VideoConcat?.setTorch?.({ on: newVal })
+        if (res && res.available !== false) {
+          setTorchOn(newVal)
+          playUi(newVal ? 'switchOn' : 'switchOff')
+          return
+        }
+      } catch (err) {
+        console.warn('Native torch failed:', err)
+      }
+      return
+    }
+    // Web (Android) : API MediaStreamTrack.
     if (!stream) return
     const track = stream.getVideoTracks()[0]
     if (!track) return
-    const newVal = !torchOn
     try {
       await (track as any).applyConstraints({ advanced: [{ torch: newVal }] })
       setTorchOn(newVal)
@@ -282,7 +308,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     } catch (err: any) {
       console.warn('Torch toggle failed:', err.message)
     }
-  }, [stream, torchOn])
+  }, [stream, torchOn, nativeIOS, capBridge])
 
   // Niveau à bulle : lit le vecteur gravité (accéléromètre). À plat (écran vers
   // la page), la gravité est ~sur l'axe Z → inclinaison ≈ 0 → bulle centrée.

@@ -22,8 +22,35 @@ public class VideoConcatPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "VideoConcatPlugin"
     public let jsName = "VideoConcat"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "appendOutro", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "appendOutro", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setTorch", returnType: CAPPluginReturnPromise)
     ]
+
+    /**
+     * Allume/éteint la lampe torche (flash) de la caméra arrière via AVFoundation.
+     * L'API web `MediaStreamTrack.applyConstraints({torch})` ne fonctionne pas sur
+     * iOS (WKWebView) — on pilote donc le matériel côté natif.
+     * JS : VideoConcat.setTorch({ on: true|false }) → { available: Bool, on: Bool }
+     */
+    @objc func setTorch(_ call: CAPPluginCall) {
+        let on = call.getBool("on") ?? false
+        guard let device = AVCaptureDevice.default(for: .video), device.hasTorch else {
+            call.resolve(["available": false, "on": false])
+            return
+        }
+        do {
+            try device.lockForConfiguration()
+            if on {
+                try device.setTorchModeOn(level: 1.0)
+            } else {
+                device.torchMode = .off
+            }
+            device.unlockForConfiguration()
+            call.resolve(["available": true, "on": on])
+        } catch {
+            call.reject("Torch error : \(error.localizedDescription)")
+        }
+    }
 
     private func fileURL(_ raw: String) -> URL {
         if raw.hasPrefix("file://"), let u = URL(string: raw) { return u }
