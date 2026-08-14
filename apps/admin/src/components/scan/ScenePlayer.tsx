@@ -2812,8 +2812,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   }
   // Fin du film (play) : l'écran Bravo est un écran PORTRAIT — on reverrouille
   // l'orientation en portrait à la fin, et en paysage quand on relance (Revoir).
+  // TABLETTE : orientation LIBRE — on ne verrouille JAMAIS (même politique que
+  // native.ts / ScanPage). Sinon le lock 'portrait' de fin de film « colle » et
+  // l'écran recap (ScannedProjectPage) reste letterboxé en colonne portrait.
   useEffect(() => {
-    if (!portrait || !filmEnabled || modal) return
+    if (!portrait || !filmEnabled || modal || isTabletDevice()) return
     const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
     try { void so?.lock?.(filmEnded ? 'portrait' : 'landscape')?.catch(() => {}) } catch { /* */ }
   }, [filmEnded, portrait, filmEnabled, modal])

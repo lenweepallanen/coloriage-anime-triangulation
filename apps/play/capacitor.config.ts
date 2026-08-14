@@ -7,7 +7,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 // ⚠️ appId : identifiant définitif une fois publié sur les stores.
 // Modifiable librement tant qu'aucune version n'est soumise.
 const config: CapacitorConfig = {
-  appId: 'com.printrevolution.coloriageanime',
+  appId: 'app.picopop.mobile',
   appName: 'Picopop',
   webDir: 'dist',
   server: {

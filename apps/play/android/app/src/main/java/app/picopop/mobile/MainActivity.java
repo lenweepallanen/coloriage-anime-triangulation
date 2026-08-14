@@ -1,4 +1,4 @@
-package com.printrevolution.coloriageanime;
+package app.picopop.mobile;
 
 import com.getcapacitor.BridgeActivity;
 

@@ -49,7 +49,7 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
   const project = projectProp !== undefined ? projectProp : fallback.project
   const loading = loadingProp !== undefined ? loadingProp : fallback.loading
 
-  if (loading) return <div className="loading">Chargement...</div>
+  if (loading) return <div className="loading">{playT('validate.loading')}</div>
   if (!project) return <Navigate to="/" replace />
 
   // Géométrie disponible : soit pipeline legacy (mesh.triangles), soit pipeline autonome.
@@ -692,7 +692,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
 
       {stage === 'preview' && processor.rectifiedCanvas && !preparing && (
         <div className={`scan-validate${landscape ? ' scan-validate--landscape' : ''}`}>
-          <Suspense fallback={<div className="loading">Chargement…</div>}>
+          <Suspense fallback={<div className="loading">{playT('validate.loading')}</div>}>
             <AnimationPlayer
               // Remount au changement d'orientation → PIXI refit la nouvelle taille de conteneur
               key={landscape ? 'ls' : 'pt'}
@@ -754,7 +754,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
         // on tombe à tort sur AnimationPlayer (mauvais HUD + perso non rendu) tant
         // que le blob n'est pas hydraté. Le blob est garanti chargé au clic « Oui »
         // (bouton gated sur deferredLoaded).
-        <Suspense fallback={<div className="loading">Chargement…</div>}>
+        <Suspense fallback={<div className="loading">{playT('validate.loading')}</div>}>
           {playerProject.scene && !!playerProject.scene.background && playerProject.scene.restPoint != null && filmPlayerReady
             ? <ScenePlayer
                 // Booléen (pas `|| undefined`) : sinon, en repassant à false au
@@ -775,7 +775,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
                 onShareFilm={onShareFilm}
               />
             : !filmPlayerReady
-              ? <div className="loading">Chargement…</div>
+              ? <div className="loading">{playT('validate.loading')}</div>
               : <AnimationPlayer
                 project={project}
                 scanCanvas={processor.rectifiedCanvas}

@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Picopop</string>
     <string name="title_activity_main">Picopop</string>
-    <string name="package_name">com.printrevolution.coloriageanime</string>
-    <string name="custom_url_scheme">com.printrevolution.coloriageanime</string>
+    <string name="package_name">app.picopop.mobile</string>
+    <string name="custom_url_scheme">app.picopop.mobile</string>
 </resources>
