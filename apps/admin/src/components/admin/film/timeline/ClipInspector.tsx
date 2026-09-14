@@ -338,6 +338,7 @@ export default function ClipInspector({
     <div style={ROW}>
       {header(`Clip son — ${soundName}`)}
       {numField('Durée (s)', clip.durationMs / 1000, v => patch({ durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1, title: 'Tronque ou étend (loop) le son' })}
+      {numField('Début dans le son (s)', (clip.offsetMs ?? 0) / 1000, v => patch({ offsetMs: v > 0 ? Math.round(v * 1000) : undefined }), { min: 0, step: 0.1, title: 'Point de départ de la lecture dans le fichier. Rogner le bord GAUCHE du clip sur la timeline l’augmente (le début du son est coupé). 0 = début du fichier' })}
       <Field label={`Volume : ${Math.round((clip.volume ?? 1) * 100)}%`}>
         <input
           type="range" min={0} max={1} step={0.05}

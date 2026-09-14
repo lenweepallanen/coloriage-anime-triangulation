@@ -1181,6 +1181,10 @@ export interface FilmSoundClip {
   durationMs: number;
   /** Réf vers la bibliothèque FilmT.sounds (chemins Storage film/sounds/{id}). */
   soundId: string;
+  /** Point de départ de la lecture DANS le fichier son (ms de fichier, indépendant
+   *  de `rate`). Défaut 0. Rogner le bord GAUCHE du clip sur la timeline augmente
+   *  cette valeur : le début du son est coupé, la fin reste calée. */
+  offsetMs?: number;
   volume?: number;
   rate?: number;
   loop?: boolean;

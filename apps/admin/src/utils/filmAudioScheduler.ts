@@ -18,6 +18,8 @@ interface FlatClip {
   startMs: number
   endMs: number
   soundId: string
+  /** Début de lecture dans le fichier (ms de fichier) — rognage du début du clip. */
+  offsetMs: number
   volume: number
   rate: number
   loop: boolean
@@ -109,6 +111,7 @@ export class FilmAudioScheduler {
             startMs: base + clip.startMs,
             endMs: base + clip.startMs + clip.durationMs + (bridges ? transitionGapMs : 0),
             soundId: clip.soundId,
+            offsetMs: Math.max(0, clip.offsetMs ?? 0),
             volume: clip.volume ?? 1,
             rate: Math.max(0.01, clip.rate ?? 1),
             loop: clip.loop === true,
@@ -186,8 +189,9 @@ export class FilmAudioScheduler {
       if (!buf || c.endMs <= this.baseMs) return
       const delaySec = Math.max(0, (c.startMs - this.baseMs) / 1000)
       const offsetTimelineSec = Math.max(0, (this.baseMs - c.startMs) / 1000)
-      // offset du BUFFER : le playbackRate accélère le temps buffer.
-      let offsetBufSec = offsetTimelineSec * c.rate
+      // offset du BUFFER : rognage du début du clip (temps fichier) + position de
+      // reprise dans le clip (le playbackRate accélère le temps buffer).
+      let offsetBufSec = c.offsetMs / 1000 + offsetTimelineSec * c.rate
       if (c.loop && buf.duration > 0) offsetBufSec = offsetBufSec % buf.duration
       else if (offsetBufSec >= buf.duration) return // déjà terminé à fromMs
 
@@ -275,6 +279,7 @@ export class FilmAudioScheduler {
         startMs: 0,
         endMs: this.totalMs,
         soundId: this.musicId,
+        offsetMs: 0,
         volume: this.musicVolume,
         rate: 1,
         loop: true,

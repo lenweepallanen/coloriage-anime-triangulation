@@ -33,8 +33,10 @@ export interface TimelineEditorProps {
   sounds: FilmSound[]
   selection: TimelineSelection
   onSelect: (sel: TimelineSelection) => void
-  /** Mutation d'un clip (drag/resize). `commit` = fin de geste (pointerup). */
-  onPatchClip: (sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number }) => void
+  /** Mutation d'un clip (drag/resize). `commit` = fin de geste (pointerup).
+   *  `offsetMs` (sons uniquement) : rognage du début du fichier — la poignée
+   *  GAUCHE d'un clip son coupe le début du son, pas sa fin. */
+  onPatchClip: (sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number; offsetMs?: number }) => void
   onRemoveClip: (sel: NonNullable<TimelineSelection>) => void
   /** ⧉ : duplique le clip (anim/son), copie posée juste après l'original. */
   onDuplicateClip: (sel: NonNullable<TimelineSelection>) => void
@@ -102,13 +104,15 @@ function getPeaks(soundId: string, blob: Blob): Promise<{ peaks: Float32Array; d
   return entry
 }
 
-/** Forme d'onde dessinée DANS un clip son (tuiles répétées si boucle, vitesse ×rate). */
-function Waveform({ soundId, blob, clipMs, rate, loop, widthPx, heightPx }: {
+/** Forme d'onde dessinée DANS un clip son (tuiles répétées si boucle, vitesse ×rate,
+ *  décalée de `offsetMs` = début rogné du fichier). */
+function Waveform({ soundId, blob, clipMs, rate, loop, offsetMs, widthPx, heightPx }: {
   soundId: string
   blob: Blob | null
   clipMs: number
   rate: number
   loop: boolean
+  offsetMs: number
   widthPx: number
   heightPx: number
 }) {
@@ -127,21 +131,21 @@ function Waveform({ soundId, blob, clipMs, rate, loop, widthPx, heightPx }: {
       if (!ctx2d) return
       ctx2d.clearRect(0, 0, w, h)
       ctx2d.fillStyle = 'rgba(255,255,255,0.5)'
-      const tileMs = res.durationMs / Math.max(0.01, rate)
-      const tilePx = (tileMs / Math.max(1, clipMs)) * w
-      const tiles = loop ? Math.ceil(w / Math.max(1, tilePx)) : 1
+      const fileMsTotal = Math.max(1, res.durationMs)
       const mid = h / 2
-      for (let t = 0; t < tiles; t++) {
-        const x0 = t * tilePx
-        for (let x = 0; x < Math.min(tilePx, w - x0); x += 2) {
-          const bucket = Math.min(res.peaks.length - 1, Math.floor((x / tilePx) * res.peaks.length))
-          const amp = Math.max(0.06, res.peaks[bucket]) * (mid - 2)
-          ctx2d.fillRect(x0 + x, mid - amp, 1.4, amp * 2)
-        }
+      for (let x = 0; x < w; x += 2) {
+        // Pixel → temps timeline dans le clip → temps FICHIER (rognage + vitesse).
+        const tMs = (x / w) * Math.max(1, clipMs)
+        let fileMs = offsetMs + tMs * Math.max(0.01, rate)
+        if (loop) fileMs = fileMs % fileMsTotal
+        else if (fileMs >= fileMsTotal) break
+        const bucket = Math.min(res.peaks.length - 1, Math.floor((fileMs / fileMsTotal) * res.peaks.length))
+        const amp = Math.max(0.06, res.peaks[bucket]) * (mid - 2)
+        ctx2d.fillRect(x, mid - amp, 1.4, amp * 2)
       }
     })
     return () => { dead = true }
-  }, [soundId, blob, clipMs, rate, loop, widthPx, heightPx])
+  }, [soundId, blob, clipMs, rate, loop, offsetMs, widthPx, heightPx])
   return <canvas ref={ref} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', opacity: 0.9 }} />
 }
 
@@ -195,7 +199,11 @@ export default function TimelineEditor({
 
   // --- Drag clip / poignées / playhead ---
   const dragRef = useRef<
-    | { mode: 'move' | 'resize-l' | 'resize-r'; sel: NonNullable<TimelineSelection>; grabPx: number; origStart: number; origDur: number; snapTargets: number[] }
+    | {
+        mode: 'move' | 'resize-l' | 'resize-r'; sel: NonNullable<TimelineSelection>; grabPx: number; origStart: number; origDur: number; snapTargets: number[]
+        /** Sons : rognage du début (ms fichier) et vitesse au début du geste — la poignée gauche édite le rognage. */
+        origOffset: number; rate: number
+      }
     | { mode: 'scrub' }
     | { mode: 'planEnd' }
     | null
@@ -282,7 +290,18 @@ export default function TimelineEditor({
       let start = snapMs(Math.round(drag.origStart + deltaMs), drag.snapTargets, noSnap)
       start = Math.max(bounds.minStartMs, Math.min(drag.origStart + drag.origDur - 100, start))
       start = Math.max(0, start)
-      onPatchClip(sel, { startMs: Math.round(start), durationMs: Math.round(drag.origStart + drag.origDur - start) })
+      if (sel.kind === 'sound') {
+        // Clip SON : la fin reste calée, on ROGNE LE DÉBUT DU FICHIER (offsetMs).
+        // Tirer vers la gauche ré-expose le début rogné, jamais au-delà du début
+        // du fichier (offset 0) — sauf en boucle, où le son se répète.
+        const rate = Math.max(0.01, drag.rate)
+        const clip = clipsOf(sel).find(c => c.id === sel.id) as { loop?: boolean } | undefined
+        if (!clip?.loop) start = Math.max(start, drag.origStart - drag.origOffset / rate)
+        const offset = Math.max(0, Math.round(drag.origOffset + (start - drag.origStart) * rate))
+        onPatchClip(sel, { startMs: Math.round(start), durationMs: Math.round(drag.origStart + drag.origDur - start), offsetMs: offset })
+      } else {
+        onPatchClip(sel, { startMs: Math.round(start), durationMs: Math.round(drag.origStart + drag.origDur - start) })
+      }
     } else {
       // Pas de clamp contre le clip suivant : l'étirement le POUSSE (ripple,
       // résolu par pushExclusiveOverlaps dans le patcher central).
@@ -356,7 +375,11 @@ export default function TimelineEditor({
     onSelect(sel)
     const clip = clipsOf(sel).find(c => c.id === sel.id)
     if (!clip) return
-    dragRef.current = { mode, sel, grabPx: localX(e), origStart: clip.startMs, origDur: clip.durationMs, snapTargets: collectSnapTargets(sel.id) }
+    const snd = sel.kind === 'sound' ? (clip as { offsetMs?: number; rate?: number }) : null
+    dragRef.current = {
+      mode, sel, grabPx: localX(e), origStart: clip.startMs, origDur: clip.durationMs, snapTargets: collectSnapTargets(sel.id),
+      origOffset: Math.max(0, snd?.offsetMs ?? 0), rate: Math.max(0.01, snd?.rate ?? 1),
+    }
     lastPointerRef.current = { clientX: e.clientX, altKey: e.altKey }
     startAutoScroll()
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
@@ -630,6 +653,7 @@ export default function TimelineEditor({
               clipMs={c.durationMs}
               rate={c.rate ?? 1}
               loop={c.loop === true}
+              offsetMs={c.offsetMs ?? 0}
               widthPx={Math.max(6, msToPx(c.durationMs))}
               heightPx={SOUND_TRACK_H - 6}
             />,

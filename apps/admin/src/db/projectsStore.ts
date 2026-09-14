@@ -394,6 +394,8 @@ interface FilmSoundClipDoc {
   startMs: number
   durationMs: number
   soundId: string
+  /** Rognage du début (ms de fichier). Absent = 0. */
+  offsetMs?: number
   volume?: number
   rate?: number
   loop?: boolean
@@ -1609,6 +1611,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     startMs: c.startMs,
     durationMs: c.durationMs,
     soundId: c.soundId,
+    ...(c.offsetMs != null && c.offsetMs > 0 && { offsetMs: c.offsetMs }),
     ...(c.volume != null && { volume: c.volume }),
     ...(c.rate != null && { rate: c.rate }),
     ...(c.loop === true && { loop: true }),
@@ -1735,6 +1738,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
         })),
         soundTracks: (pl.soundTracks ?? []).map(track => (track.clips ?? []).map(c => ({
           id: c.id, startMs: c.startMs, durationMs: c.durationMs, soundId: c.soundId,
+          ...(c.offsetMs != null && c.offsetMs > 0 && { offsetMs: c.offsetMs }),
           ...(c.volume != null && { volume: c.volume }),
           ...(c.rate != null && { rate: c.rate }),
           ...(c.loop === true && { loop: true }),

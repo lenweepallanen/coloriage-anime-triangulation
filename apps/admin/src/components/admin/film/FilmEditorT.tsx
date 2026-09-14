@@ -250,7 +250,7 @@ export default function FilmEditorT({ project, onSave }: {
   }, [])
 
   // --- Clips : mutations depuis la timeline / l'inspecteur ---
-  const patchClip = useCallback((sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number }) => {
+  const patchClip = useCallback((sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number; offsetMs?: number }) => {
     if (!plan) return
     patchTimeline(plan.id, tl => {
       if (sel.kind === 'motion') {
