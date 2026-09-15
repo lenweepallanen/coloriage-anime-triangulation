@@ -1260,6 +1260,51 @@ export default function FilmEditorT({ project, onSave }: {
         })()}
       </div>
 
+      {/* APERÇU de la vue globale : le plan sous le playhead global, décor calé,
+          silhouette posée (lecture seule — l'édition se fait dans la vue Plan). */}
+      {view === 'global' && film && sampler && (() => {
+        const s = sampler.evaluate(globalPlayheadMs)
+        const pl = film.plans[s.planIndex]
+        if (!pl) return null
+        const idx = s.planIndex
+        return (
+          <div className="scene-editor-section-card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+              <h4 className="scene-editor-section-title" style={{ margin: 0 }}>
+                Aperçu — plan {idx + 1}{pl.name ? ` « ${pl.name} »` : ''} · {formatMs(s.planLocalMs)}
+                {s.phase === 'transition' ? ' · transition' : s.phase === 'ended' ? ' · fin' : ''}
+              </h4>
+              <span style={{ fontSize: 10, opacity: 0.55 }}>Décor calé sur le playhead (image par image). Lecture seule : cliquer sur « 🎬 Plan » pour éditer. Effets caméra, fondus et animation du perso : voir « ▶ Prévisualiser ».</span>
+            </div>
+            <FilmCanvasT
+              plan={pl}
+              selectedWaypointId={null}
+              onSelectWaypoint={() => { /* lecture seule */ }}
+              onAddWaypoint={() => { /* lecture seule */ }}
+              onRemoveWaypoint={() => { /* lecture seule */ }}
+              onPatchWaypoint={() => { /* lecture seule */ }}
+              onPatchPlan={() => { /* lecture seule */ }}
+              selectedMotionClip={null}
+              onSelectTravel={() => { /* lecture seule */ }}
+              onPatchMotionClip={() => { /* lecture seule */ }}
+              selectedCameraClip={null}
+              onPatchCameraClip={() => { /* lecture seule */ }}
+              motionGeom={[]}
+              previewPose={{ x: s.x, y: s.y, scaleMul: s.scaleMul, flip: s.flip }}
+              characterImageUrl={charImageUrl}
+              characterImageSize={charImageSize}
+              characterScale={film.character.scale}
+              characterOriginU={film.character.originU}
+              characterOriginV={film.character.originV}
+              characterFacing={film.character.facing}
+              backdropSeekMs={s.planLocalMs}
+              backdropPlaying={editorPlaying}
+              readOnly
+            />
+          </div>
+        )
+      })()}
+
       {/* TIMELINE GLOBALE : plans figés + pistes sons globales (temps film absolu) */}
       {view === 'global' && film && sampler && (
         <div className="scene-editor-section-card">
@@ -1357,6 +1402,8 @@ export default function FilmEditorT({ project, onSave }: {
               characterOriginU={film.character.originU}
               characterOriginV={film.character.originV}
               characterFacing={film.character.facing}
+              backdropSeekMs={playheadMs}
+              backdropPlaying={editorPlaying}
             />
           </div>
           <div style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 12, boxSizing: 'border-box' }}>

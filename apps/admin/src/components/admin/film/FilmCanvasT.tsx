@@ -13,7 +13,16 @@ export default function FilmCanvasT({
   onPatchPlan, selectedMotionClip, onSelectTravel, onPatchMotionClip, motionGeom, previewPose,
   selectedCameraClip, onPatchCameraClip,
   characterImageUrl, characterImageSize, characterScale, characterOriginU, characterOriginV, characterFacing,
+  backdropSeekMs = null, backdropPlaying = false, readOnly = false,
 }: {
+  /** Temps LOCAL du plan (ms) sur lequel caler la VIDÉO de décor (modulo sa durée) :
+   *  le scrub devient image par image, synchro avec le playhead. null = ancienne
+   *  boucle libre (décor qui tourne indépendamment du playhead). */
+  backdropSeekMs?: number | null
+  /** Lecture en cours : la vidéo joue (recalée si elle dérive) au lieu d'être figée. */
+  backdropPlaying?: boolean
+  /** Lecture seule (vue globale) : aucune interaction pointeur, affichage seulement. */
+  readOnly?: boolean
   plan: FilmTimelinePlan
   selectedWaypointId: string | null
   onSelectWaypoint: (id: string | null) => void
@@ -101,10 +110,12 @@ export default function FilmCanvasT({
     vid.muted = true
     vid.loop = true
     vid.playsInline = true
+    vid.preload = 'auto'
     vid.src = url
     const onReady = () => {
       setBgVideo(vid)
-      vid.play().catch(() => {})
+      // Décor calé sur le playhead : l'effet de synchro ci-dessous pilote play/pause/seek.
+      if (backdropSeekRef.current == null) vid.play().catch(() => {})
     }
     vid.addEventListener('loadeddata', onReady)
     return () => {
@@ -121,6 +132,42 @@ export default function FilmCanvasT({
     if (!bgVideo) return
     const id = window.setInterval(() => setVideoTick(t => (t + 1) % 1_000_000), 1000 / 24)
     return () => window.clearInterval(id)
+  }, [bgVideo])
+
+  // --- SYNCHRO du décor vidéo sur le playhead (temps local du plan, modulo la
+  // durée de la vidéo — même règle que le player qui la boucle). Scrub = vidéo
+  // figée sur l'image exacte ; lecture = la vidéo joue et est recalée si elle
+  // dérive de plus de 250 ms (changement de plan, seek du scheduler…).
+  const backdropSeekRef = useRef<number | null>(backdropSeekMs)
+  backdropSeekRef.current = backdropSeekMs
+  useEffect(() => {
+    if (!bgVideo) return
+    if (backdropSeekMs == null) {
+      if (bgVideo.paused) bgVideo.play().catch(() => {})
+      return
+    }
+    const dur = bgVideo.duration
+    if (!Number.isFinite(dur) || dur <= 0) return
+    const target = ((Math.max(0, backdropSeekMs) / 1000) % dur)
+    if (backdropPlaying) {
+      if (bgVideo.paused) {
+        bgVideo.currentTime = target
+        bgVideo.play().catch(() => {})
+      } else if (Math.abs(bgVideo.currentTime - target) > 0.25) {
+        bgVideo.currentTime = target
+      }
+    } else {
+      if (!bgVideo.paused) bgVideo.pause()
+      if (Math.abs(bgVideo.currentTime - target) > 0.02) bgVideo.currentTime = target
+    }
+  }, [bgVideo, backdropSeekMs, backdropPlaying])
+
+  // Redessine dès que la vidéo a fini de se positionner (scrub image par image).
+  useEffect(() => {
+    if (!bgVideo) return
+    const onSeeked = () => setVideoTick(t => (t + 1) % 1_000_000)
+    bgVideo.addEventListener('seeked', onSeeked)
+    return () => bgVideo.removeEventListener('seeked', onSeeked)
   }, [bgVideo])
 
   useEffect(() => {
@@ -620,10 +667,10 @@ export default function FilmCanvasT({
       >
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: canvasW, height: canvasH, cursor: 'crosshair', touchAction: 'none' }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
+        style={{ display: 'block', width: canvasW, height: canvasH, cursor: readOnly ? 'default' : 'crosshair', touchAction: 'none' }}
+        onPointerDown={readOnly ? undefined : onPointerDown}
+        onPointerMove={readOnly ? undefined : onPointerMove}
+        onPointerUp={readOnly ? undefined : onPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       />
       </div>
