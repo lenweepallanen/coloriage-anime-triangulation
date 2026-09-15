@@ -83,6 +83,10 @@ export class FilmTimelineSampler {
   private preparedByIndex: PreparedPlan[]
   private windows: Window[]
   private animFrameCount: Map<string, number>
+  /** Longueur du CYCLE VISUEL joué par LoopPlayback = frames − crossfade (les N
+   *  dernières frames sont fondues dans les premières) — même règle que le
+   *  planning des bruits de pas. Sert à caler l'oscillation verticale. */
+  private animCycleLen: Map<string, number>
   private nativeRight: boolean
 
   constructor(film: FilmT, animations: Animation[], opts?: { charMetrics?: FilmCharMetrics | null }) {
@@ -92,6 +96,11 @@ export class FilmTimelineSampler {
       a.id,
       a.mesh?.videoFramesMesh?.length ?? a.mesh?.walkBodyFrames?.length ?? 0,
     ]))
+    this.animCycleLen = new Map(animations.map(a => {
+      const raw = a.mesh?.videoFramesMesh?.length ?? a.mesh?.walkBodyFrames?.length ?? 0
+      const cf = Math.min(a.mesh?.crossfadeFrames ?? 7, Math.floor(raw / 2))
+      return [a.id, Math.max(1, raw - cf)]
+    }))
     const metrics = opts?.charMetrics ?? null
 
     this.preparedByIndex = film.plans.map((plan, planIndex) => this.preparePlan(plan, planIndex, metrics))
@@ -311,6 +320,8 @@ export class FilmTimelineSampler {
     let animFrame = 0
     let animSpeedMul = 1
     let inAnimClip = false
+    /** Frames écoulées depuis le début du clip (NON modulées) — base du cycle visuel. */
+    let animRawFrames = 0
     for (const a of timeline.anim) {
       if (local >= a.startMs && local < a.startMs + a.durationMs) {
         const mul = Math.max(0.01, a.speedMul ?? 1)
@@ -321,6 +332,7 @@ export class FilmTimelineSampler {
         animFrame = n > 0
           ? (a.fillMode === 'loop' ? raw % n : Math.min(raw, n - 1))
           : 0
+        animRawFrames = a.fillMode === 'loop' ? raw : Math.min(raw, Math.max(0, n - 1))
         inAnimClip = true
         break
       }
@@ -338,6 +350,7 @@ export class FilmTimelineSampler {
         animationId = travelAnimId
         animSpeedMul = mul
         animFrame = n > 0 ? raw % n : 0
+        animRawFrames = raw
       } else {
         const idleMul = Math.max(0.01, this.film.idleSpeedMul ?? 1)
         animSpeedMul = idleMul
@@ -346,11 +359,13 @@ export class FilmTimelineSampler {
     }
 
     // --- Oscillation verticale calée sur le cycle de l'animation (battement d'ailes) ---
+    // Cycle = boucle VISUELLE (frames − crossfade), phasé sur le début du clip,
+    // exactement comme le curseur de LoopPlayback → en phase avec les ailes.
     if (animationId != null) {
       const bob = this.film.animBob?.[animationId]
-      const n = this.animFrameCount.get(animationId) ?? 0
-      if (bob && bob.amplitudePx > 0 && n > 0) {
-        const cycle = (animFrame % n) / n + (bob.phase ?? 0)
+      const cycleLen = this.animCycleLen.get(animationId) ?? 0
+      if (bob && bob.amplitudePx > 0 && cycleLen > 0) {
+        const cycle = (animRawFrames % cycleLen) / cycleLen + (bob.phase ?? 0)
         y -= bob.amplitudePx * scale * Math.sin(cycle * Math.PI * 2)
       }
     }
