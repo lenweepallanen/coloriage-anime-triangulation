@@ -115,9 +115,8 @@ export default function FilmCanvasT({
     vid.src = url
     const onReady = () => {
       bgVideoRef.current = vid
+      // L'effet de synchro ci-dessous pilote play/pause/seek dès que l'état change.
       setBgVideo(vid)
-      // Décor calé sur le playhead : l'effet de synchro ci-dessous pilote play/pause/seek.
-      if (backdropSeekRef.current == null) vid.play().catch(() => {})
     }
     vid.addEventListener('loadeddata', onReady)
     return () => {
@@ -143,8 +142,6 @@ export default function FilmCanvasT({
   // dérive de plus de 250 ms (changement de plan, seek du scheduler…).
   // L'élément vidéo est piloté via une ref (mutations play/pause/seek), l'état
   // `bgVideo` ne sert qu'à déclencher les redessins.
-  const backdropSeekRef = useRef<number | null>(backdropSeekMs)
-  useEffect(() => { backdropSeekRef.current = backdropSeekMs }, [backdropSeekMs])
   useEffect(() => {
     const vid = bgVideoRef.current
     if (!vid || !bgVideo) return
