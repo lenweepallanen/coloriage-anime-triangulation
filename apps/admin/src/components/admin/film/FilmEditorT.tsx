@@ -1748,6 +1748,53 @@ export default function FilmEditorT({ project, onSave }: {
         )}
       </div>
 
+      {/* Oscillation verticale par animation : le perso monte/descend d'une sinusoïde
+          par cycle de l'animation (calée sur ses frames) — vol qui pompe avec les ailes. */}
+      <div className="scene-editor-section-card">
+        <h4 className="scene-editor-section-title">Oscillation verticale (calée sur le cycle de l'animation)</h4>
+        <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8 }}>
+          Une sinusoïde par cycle de l'animation : le perso monte et descend en rythme avec ses frames
+          (ex. battement d'ailes). Amplitude en px décor (× échelle du perso), 0 = aucune. Phase = décalage
+          du point haut dans le cycle, en % (0 = point haut au début du cycle, 50 = point bas).
+          S'applique partout où l'animation joue : sur place, en trajet, en clip.
+        </div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {readyAnimations.map(a => {
+            const bob = film.animBob?.[a.id]
+            const setBob = (partial: { amplitudePx?: number; phase?: number }) => {
+              const next = { amplitudePx: bob?.amplitudePx ?? 0, phase: bob?.phase ?? 0, ...partial }
+              const map = { ...(film.animBob ?? {}) }
+              if (next.amplitudePx > 0) map[a.id] = { amplitudePx: next.amplitudePx, ...(next.phase !== 0 && { phase: next.phase }) }
+              else delete map[a.id]
+              updateFilm({ animBob: Object.keys(map).length > 0 ? map : undefined })
+            }
+            return (
+              <div key={a.id} style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap', padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', alignSelf: 'center' }}>〰 {a.name}</span>
+                <div className="scene-editor-field" style={{ maxWidth: 120 }} title="Amplitude en px décor (0 = pas d'oscillation)">
+                  <label style={{ fontSize: 11 }}>Amplitude (px)</label>
+                  <input
+                    type="number" min={0} max={400} step={1}
+                    value={bob?.amplitudePx ?? 0}
+                    onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBob({ amplitudePx: Math.max(0, Math.round(v)) }) }}
+                  />
+                </div>
+                <div className="scene-editor-field" style={{ maxWidth: 120 }} title="Décalage du point haut dans le cycle (% du cycle)">
+                  <label style={{ fontSize: 11 }}>Phase (%)</label>
+                  <input
+                    type="number" min={0} max={100} step={5}
+                    value={Math.round((bob?.phase ?? 0) * 100)}
+                    disabled={!bob || bob.amplitudePx <= 0}
+                    onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBob({ phase: Math.min(1, Math.max(0, v / 100)) }) }}
+                  />
+                </div>
+              </div>
+            )
+          })}
+          {readyAnimations.length === 0 && <span style={{ fontSize: 12, opacity: 0.6 }}>Aucune animation calculée.</span>}
+        </div>
+      </div>
+
       {/* Bruits de pas — réglés au niveau de l'ANIMATION de marche, le film ne porte qu'un toggle */}
       <div className="scene-editor-section-card">
         <h4 className="scene-editor-section-title">Bruits de pas</h4>

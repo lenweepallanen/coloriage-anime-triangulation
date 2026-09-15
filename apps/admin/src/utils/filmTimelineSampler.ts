@@ -345,6 +345,16 @@ export class FilmTimelineSampler {
       }
     }
 
+    // --- Oscillation verticale calée sur le cycle de l'animation (battement d'ailes) ---
+    if (animationId != null) {
+      const bob = this.film.animBob?.[animationId]
+      const n = this.animFrameCount.get(animationId) ?? 0
+      if (bob && bob.amplitudePx > 0 && n > 0) {
+        const cycle = (animFrame % n) / n + (bob.phase ?? 0)
+        y -= bob.amplitudePx * scale * Math.sin(cycle * Math.PI * 2)
+      }
+    }
+
     const phase: TimelineSample['phase'] = travelling ? 'travel' : (inAnimClip ? 'action' : 'idle')
     const bgH = p.plan.backdrop?.height ?? 800
     const camera = evaluateCamera(p.plan.timeline.camera, local, {

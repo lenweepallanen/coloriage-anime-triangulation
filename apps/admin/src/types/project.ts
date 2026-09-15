@@ -1295,6 +1295,12 @@ export interface FilmT {
    *  être à cheval sur deux plans. Édités dans la timeline globale (plans figés).
    *  Pas d'ancrage ⚓ à ce niveau. Absent = aucune. */
   globalSoundTracks?: FilmSoundClip[][];
+  /** OSCILLATION VERTICALE par animation (clé = Animation.id) : le perso monte et
+   *  descend d'une sinusoïde par CYCLE de l'animation (calée sur ses frames), pour
+   *  un vol qui « pompe » avec les battements d'ailes. `amplitudePx` en px décor
+   *  (× échelle du perso), `phase` = décalage en fraction de cycle (0..1, défaut 0).
+   *  Appliquée partout où l'animation joue (idle, trajets, clips). Absent = aucune. */
+  animBob?: Record<string, { amplitudePx: number; phase?: number }>;
   /** Jouer les bruits de pas réglés au niveau des ANIMATIONS de marche
    *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
    *  Défaut : true (absent = activé). */

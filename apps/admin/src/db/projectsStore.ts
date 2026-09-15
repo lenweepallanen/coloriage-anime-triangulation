@@ -435,6 +435,8 @@ interface FilmTDoc {
   music?: SceneSoundMetaDoc
   /** Pistes sons GLOBALES (temps film absolu), wrappées {clips} comme les pistes de plan. */
   globalSoundTracks?: FilmSoundTrackDoc[]
+  /** Oscillation verticale par animation (clé = animationId). */
+  animBob?: Record<string, { amplitudePx: number; phase?: number }>
   /** Bruits de pas activés (défaut true). Réglages au niveau des animations. */
   footstepsEnabled?: boolean
   /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
@@ -1683,6 +1685,11 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
     ...(film.globalSoundTracks != null && film.globalSoundTracks.length > 0
       && { globalSoundTracks: film.globalSoundTracks.map(track => ({ clips: track.map(cleanSound) })) }),
+    ...(film.animBob != null && Object.keys(film.animBob).length > 0 && {
+      animBob: Object.fromEntries(Object.entries(film.animBob)
+        .filter(([, b]) => b.amplitudePx > 0)
+        .map(([id, b]) => [id, { amplitudePx: b.amplitudePx, ...(b.phase != null && b.phase !== 0 && { phase: b.phase }) }])),
+    }),
     ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     ...(film.intro != null && { intro: film.intro }),
@@ -1774,6 +1781,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
         ...(c.fadeOutMs != null && { fadeOutMs: c.fadeOutMs }),
       }))),
     }),
+    ...(filmDoc.animBob != null && Object.keys(filmDoc.animBob).length > 0 && { animBob: filmDoc.animBob }),
     ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
     ...(filmDoc.intro != null && { intro: filmDoc.intro }),
