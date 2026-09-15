@@ -433,6 +433,8 @@ interface FilmTDoc {
   /** Bibliothèque de sons (blobs dans film/sounds/{id}). */
   sounds: { id: string; name: string; volume?: number }[]
   music?: SceneSoundMetaDoc
+  /** Pistes sons GLOBALES (temps film absolu), wrappées {clips} comme les pistes de plan. */
+  globalSoundTracks?: FilmSoundTrackDoc[]
   /** Bruits de pas activés (défaut true). Réglages au niveau des animations. */
   footstepsEnabled?: boolean
   /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
@@ -1679,6 +1681,8 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
     },
     sounds: film.sounds.map(snd => ({ id: snd.id, name: snd.name, ...(snd.volume != null && { volume: snd.volume }) })),
     ...(film.music != null && { music: sceneSoundMetaToDoc(film.music) }),
+    ...(film.globalSoundTracks != null && film.globalSoundTracks.length > 0
+      && { globalSoundTracks: film.globalSoundTracks.map(track => ({ clips: track.map(cleanSound) })) }),
     ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     ...(film.intro != null && { intro: film.intro }),
@@ -1758,6 +1762,18 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     },
     sounds: (filmDoc.sounds ?? []).map(snd => ({ id: snd.id, name: snd.name, blob: getBlob(snd.id), ...(snd.volume != null && { volume: snd.volume }) })),
     ...(filmDoc.music != null && { music: { id: filmDoc.music.id, name: filmDoc.music.name, blob: getBlob(filmDoc.music.id), volume: filmDoc.music.volume } }),
+    ...(filmDoc.globalSoundTracks != null && filmDoc.globalSoundTracks.length > 0 && {
+      globalSoundTracks: filmDoc.globalSoundTracks.map(track => (track.clips ?? []).map((c): import('../types/project').FilmSoundClip => ({
+        id: c.id, startMs: c.startMs, durationMs: c.durationMs, soundId: c.soundId,
+        ...(c.offsetMs != null && c.offsetMs > 0 && { offsetMs: c.offsetMs }),
+        ...(c.volume != null && { volume: c.volume }),
+        ...(c.rate != null && { rate: c.rate }),
+        ...(c.loop === true && { loop: true }),
+        ...(c.isSpoken === true && { isSpoken: true }),
+        ...(c.fadeInMs != null && { fadeInMs: c.fadeInMs }),
+        ...(c.fadeOutMs != null && { fadeOutMs: c.fadeOutMs }),
+      }))),
+    }),
     ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
     ...(filmDoc.intro != null && { intro: filmDoc.intro }),

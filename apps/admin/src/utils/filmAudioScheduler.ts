@@ -70,8 +70,12 @@ export class FilmAudioScheduler {
    * @param extraSounds Blobs additionnels hors bibliothèque du film, keyés par
    *   soundId (ex. clés `anim:{animId}:1|2` des sons de pas portés par les
    *   animations) — ajoutés au pré-décodage, référençables par les one-shots.
+   * @param opts.globalOffsetMs Instant FILM ABSOLU qui correspond au t=0 de ce
+   *   scheduler — pour la lecture d'un seul plan dans l'éditeur (= début absolu
+   *   du plan), afin que les pistes GLOBALES (film.globalSoundTracks) tombent au
+   *   bon endroit. 0 (défaut) = lecture du film entier.
    */
-  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[], extraSounds?: Map<string, Blob>) {
+  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[], extraSounds?: Map<string, Blob>, opts?: { globalOffsetMs?: number }) {
     this.ctx = getSharedAudioContext()
     this.master = this.ctx.createGain()
     // master → speakerGain → destination (le mute agit sur speakerGain).
@@ -122,6 +126,26 @@ export class FilmAudioScheduler {
         }
       }
     })
+    // Pistes GLOBALES : temps film absolu, à cheval sur les plans. Un clip qui
+    // commence avant le t=0 du scheduler est repris en cours (schedule() gère
+    // les débuts négatifs via offsetTimelineSec).
+    const gOff = opts?.globalOffsetMs ?? 0
+    for (const track of film.globalSoundTracks ?? []) {
+      for (const clip of track) {
+        this.clips.push({
+          startMs: clip.startMs - gOff,
+          endMs: clip.startMs - gOff + clip.durationMs,
+          soundId: clip.soundId,
+          offsetMs: Math.max(0, clip.offsetMs ?? 0),
+          volume: clip.volume ?? 1,
+          rate: Math.max(0.01, clip.rate ?? 1),
+          loop: clip.loop === true,
+          isSpoken: clip.isSpoken === true,
+          fadeInMs: clip.fadeInMs ?? 0,
+          fadeOutMs: clip.fadeOutMs ?? 0,
+        })
+      }
+    }
     if (film.music?.blob) {
       this.musicId = film.music.id
       this.musicVolume = film.music.volume ?? 1

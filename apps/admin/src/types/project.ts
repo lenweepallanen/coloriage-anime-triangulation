@@ -1290,6 +1290,11 @@ export interface FilmT {
   sounds: FilmSound[];
   /** Musique de fond globale, bouclée sur toute la durée du film. */
   music?: FilmSound;
+  /** Pistes sons GLOBALES : clips en temps FILM ABSOLU (ms depuis le début du film,
+   *  intro comprise), posés « par-dessus » les plans — un son de poursuite peut
+   *  être à cheval sur deux plans. Édités dans la timeline globale (plans figés).
+   *  Pas d'ancrage ⚓ à ce niveau. Absent = aucune. */
+  globalSoundTracks?: FilmSoundClip[][];
   /** Jouer les bruits de pas réglés au niveau des ANIMATIONS de marche
    *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
    *  Défaut : true (absent = activé). */

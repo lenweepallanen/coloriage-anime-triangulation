@@ -54,6 +54,13 @@ export interface TimelineEditorProps {
   /** Instant (ms, LOCAL au plan) de la vignette de partage, si elle tombe dans
    *  CE plan — affiche un marqueur 📸 sur la règle. null = ailleurs / non défini. */
   posterLocalMs?: number | null
+  /** Mode TIMELINE GLOBALE du film : pas de pistes déplacement / animation /
+   *  caméra, durée non éditable (= durée du film), les pistes sons sont les
+   *  pistes GLOBALES (temps film absolu, à cheval sur les plans). */
+  globalMode?: boolean
+  /** Rangées FIGÉES (lecture seule) affichées au-dessus des pistes sons : plans,
+   *  transitions, musique… Leurs bords servent de cibles de snap. */
+  readOnlyRows?: { label: string; blocks: { id: string; startMs: number; durationMs: number; label: string; color: string }[] }[]
 }
 
 const TRACK_H = 34
@@ -152,6 +159,7 @@ function Waveform({ soundId, blob, clipMs, rate, loop, offsetMs, widthPx, height
 export default function TimelineEditor({
   timeline, animations, sounds, selection, onSelect, onPatchClip, onRemoveClip, onDuplicateClip,
   onAddSoundAt, onAddSoundTrack, onAddCameraAt, onSetPlanDuration, playheadMs, onScrub, playing, posterLocalMs,
+  globalMode = false, readOnlyRows,
 }: TimelineEditorProps) {
   const [pxPerSec, setPxPerSec] = useState(60)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -221,6 +229,8 @@ export default function TimelineEditor({
     eat(timeline.motion)
     eat(timeline.anim)
     for (const tr of timeline.soundTracks) eat(tr)
+    // Rangées figées (plans, transitions, musique en mode global) : leurs bords aussi.
+    for (const row of readOnlyRows ?? []) eat(row.blocks)
     const stepSec = pxPerSec >= 90 ? 1 : pxPerSec >= 35 ? 2 : 5
     for (let t = 0; t <= contentMs; t += stepSec * 1000) out.push(t)
     return out
@@ -502,8 +512,8 @@ export default function TimelineEditor({
   const ticks: number[] = []
   for (let t = 0; t <= contentMs / 1000 + stepSec; t += stepSec) ticks.push(t)
 
-  const trackRow = (label: string, children: React.ReactNode, onDblClick?: (atMs: number) => void, rowH: number = TRACK_H) => (
-    <div style={{ display: 'flex', borderTop: '1px solid #2c2c2c' }}>
+  const trackRow = (label: string, children: React.ReactNode, onDblClick?: (atMs: number) => void, rowH: number = TRACK_H, key?: string) => (
+    <div key={key} style={{ display: 'flex', borderTop: '1px solid #2c2c2c' }}>
       <div style={{
         width: LABEL_W, minWidth: LABEL_W, fontSize: 10, opacity: 0.75, padding: '0 6px',
         lineHeight: `${rowH}px`, background: '#1c1c1c', position: 'sticky', left: 0, zIndex: 3,
@@ -559,15 +569,17 @@ export default function TimelineEditor({
                 mais on peut la tirer pour ajouter du temps ou raccourcir). */}
             <div
               onPointerDown={(e) => {
-                if (e.button !== 0) return
+                if (e.button !== 0 || globalMode) return
                 e.stopPropagation()
                 dragRef.current = { mode: 'planEnd' }
                 lastPointerRef.current = { clientX: e.clientX, altKey: e.altKey }
                 startAutoScroll()
                 ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
               }}
-              style={{ position: 'absolute', left: msToPx(timeline.durationMs) - 4, top: 0, bottom: 0, width: 9, cursor: 'ew-resize', zIndex: 2 }}
-              title={`Fin du plan (${formatMs(timeline.durationMs)}) — glisser pour ajuster la durée`}
+              style={{ position: 'absolute', left: msToPx(timeline.durationMs) - 4, top: 0, bottom: 0, width: 9, cursor: globalMode ? 'default' : 'ew-resize', zIndex: 2 }}
+              title={globalMode
+                ? `Fin du film (${formatMs(timeline.durationMs)}) — se règle par les plans et les transitions`
+                : `Fin du plan (${formatMs(timeline.durationMs)}) — glisser pour ajuster la durée`}
             >
               <div style={{ position: 'absolute', left: 3, top: 0, bottom: 0, width: 2, background: '#ef5350' }} />
               <div style={{ position: 'absolute', left: -1, top: 0, width: 10, height: 8, background: '#ef5350', borderRadius: '0 0 4px 4px' }} />
@@ -585,8 +597,22 @@ export default function TimelineEditor({
           </div>
         </div>
 
+        {/* Rangées FIGÉES (mode global : plans / transitions / musique) */}
+        {(readOnlyRows ?? []).map((row, ri) => trackRow(row.label, row.blocks.map(b => (
+          <div
+            key={b.id}
+            title={`${b.label} · ${formatMs(b.startMs)} → ${formatMs(b.startMs + b.durationMs)}`}
+            style={{
+              position: 'absolute', left: msToPx(b.startMs), width: Math.max(4, msToPx(b.durationMs)),
+              top: 5, height: TRACK_H - 10, background: b.color, opacity: 0.6, borderRadius: 4,
+              color: '#fff', fontSize: 10, lineHeight: `${TRACK_H - 10}px`, padding: '0 6px',
+              overflow: 'hidden', whiteSpace: 'nowrap', boxSizing: 'border-box', pointerEvents: 'none',
+            }}
+          >{b.label}</div>
+        )), undefined, TRACK_H, `ro-${ri}`))}
+
         {/* Pistes */}
-        {trackRow('Déplacement', (() => {
+        {!globalMode && trackRow('Déplacement', (() => {
           const wpIdx = (id: string) => timeline.waypoints.findIndex(w => w.id === id)
           const toLabel = (c: (typeof timeline.motion)[number]) =>
             c.to.kind === 'waypoint' ? `📍${wpIdx(c.to.id) + 1}`
@@ -622,7 +648,7 @@ export default function TimelineEditor({
             </>
           )
         })())}
-        {trackRow('Animation', timeline.anim.map(c => renderClip(
+        {!globalMode && trackRow('Animation', timeline.anim.map(c => renderClip(
           { kind: 'anim', id: c.id }, c, FILM_COLORS.action,
           animName(c.animationId), c.fillMode === 'loop' ? '🔁' : '1×',
           undefined,     // titleHint
@@ -630,7 +656,7 @@ export default function TimelineEditor({
           animCycleOverlay(c), // wave (repères de cycles)
           false,         // pointMode — JAMAIS ponctuel pour un clip animation
         )))}
-        {trackRow('🎥 Caméra', (timeline.camera ?? []).map(c => renderClip(
+        {!globalMode && trackRow('🎥 Caméra', (timeline.camera ?? []).map(c => renderClip(
           { kind: 'camera', id: c.id }, c, CAMERA_COLOR,
           cameraLabel(c),
           c.anchor ? '⚓' : undefined,
@@ -640,7 +666,7 @@ export default function TimelineEditor({
           false,
         )), (atMs) => onAddCameraAt(Math.round(atMs)))}
         {timeline.soundTracks.map((track, ti) => trackRow(
-          `Son ${ti + 1}`,
+          globalMode ? `🌐 Son ${ti + 1}` : `Son ${ti + 1}`,
           track.map(c => renderClip(
             { kind: 'sound', id: c.id, trackIndex: ti }, c, c.isSpoken ? '#26a69a' : FILM_COLORS.departure,
             `${c.isSpoken ? '🗣 ' : '🔊 '}${soundName(c.soundId)}${c.loop ? ' 🔁' : ''}${c.anchor ? ' ⚓' : ''}`,

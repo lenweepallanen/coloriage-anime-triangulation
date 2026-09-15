@@ -39,13 +39,17 @@ export default function FilmEditorT({ project, onSave }: {
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null)
   const [playheadMs, setPlayheadMs] = useState(0)
   const [editorPlaying, setEditorPlaying] = useState(false)
+  // Vue TIMELINE GLOBALE : plans figés + pistes sons globales (temps film absolu).
+  const [view, setView] = useState<'plan' | 'global'>('plan')
+  const [globalSelection, setGlobalSelection] = useState<TimelineSelection>(null)
+  const [globalPlayheadMs, setGlobalPlayheadMs] = useState(0)
   const [saving, setSaving] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [previewCanvas, setPreviewCanvas] = useState<HTMLCanvasElement | null>(null)
   const previewProjectRef = useRef<Project | null>(null)
   const pendingSoundHintsRef = useRef<UploadHint[]>([])
   const soundImportRef = useRef<HTMLInputElement | null>(null)
-  const pendingSoundTargetRef = useRef<{ trackIndex: number; atMs: number } | null>(null)
+  const pendingSoundTargetRef = useRef<{ trackIndex: number; atMs: number; global?: boolean } | null>(null)
 
   // Chargement : filmT du projet, sinon conversion v3 → timeline (une fois).
   useEffect(() => {
@@ -136,12 +140,13 @@ export default function FilmEditorT({ project, onSave }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Le plan actif change ou est édité → on stoppe la lecture (les sons re-partiraient faux).
-  useEffect(() => { setEditorPlaying(false) }, [activePlanId])
+  // Le plan actif change, la vue change ou le plan est édité → on stoppe la
+  // lecture (les sons re-partiraient faux).
+  useEffect(() => { setEditorPlaying(false) }, [activePlanId, view])
 
   const editorPlayFilmRef = useRef<{ film: FilmT; planIndex: number; fromMs: number } | null>(null)
   useEffect(() => {
-    if (!editorPlaying) return
+    if (!editorPlaying || view === 'global') return
     if (!film || !plan || planIndex < 0) { setEditorPlaying(false); return }
     editorPlayFilmRef.current = {
       film,
@@ -151,9 +156,13 @@ export default function FilmEditorT({ project, onSave }: {
     const ctx = editorPlayFilmRef.current
     const planStartMs = ctx.film.plans.map((_, i) => (i === ctx.planIndex ? 0 : Number.NaN))
     const durationMs = ctx.film.plans[ctx.planIndex].timeline.durationMs
+    // Début ABSOLU du plan dans le film → les pistes sons GLOBALES (à cheval sur
+    // les plans) sont entendues au bon endroit pendant la lecture d'un seul plan.
+    const absStart = new FilmTimelineSampler(ctx.film, project.animations).planStartMs[ctx.planIndex]
     const sched = new FilmAudioScheduler(ctx.film, planStartMs, durationMs,
       computeFootstepSchedule(ctx.film, project.animations, planStartMs),
-      collectFootstepSoundBlobs(project.animations))
+      collectFootstepSoundBlobs(project.animations),
+      { globalOffsetMs: Number.isFinite(absStart) ? absStart : 0 })
     let disposed = false
     let raf = 0
     sched.ready.then(async () => {
@@ -183,6 +192,45 @@ export default function FilmEditorT({ project, onSave }: {
     // ne re-planifient pas l'audio (rejouer pour les entendre).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorPlaying])
+
+  // --- Lecture ÉDITEUR en vue GLOBALE : audio du FILM ENTIER (tous les plans,
+  // pistes globales, musique, bruits de pas) + playhead absolu. Le canvas n'est
+  // pas synchronisé : cette vue sert au montage des sons à cheval sur les plans.
+  useEffect(() => {
+    if (!editorPlaying || view !== 'global') return
+    if (!film || !sampler || sampler.totalMs <= 0) { setEditorPlaying(false); return }
+    const total = sampler.totalMs
+    const fromMs = globalPlayheadMs >= total - 20 ? 0 : globalPlayheadMs
+    const sched = new FilmAudioScheduler(film, sampler.planStartMs, total,
+      computeFootstepSchedule(film, project.animations, sampler.planStartMs),
+      collectFootstepSoundBlobs(project.animations))
+    let disposed = false
+    let raf = 0
+    sched.ready.then(async () => {
+      if (disposed) return
+      await sched.unlock()
+      sched.start(fromMs)
+      const tick = () => {
+        if (disposed) return
+        const t = sched.currentTimeMs()
+        if (t >= total) {
+          setGlobalPlayheadMs(total)
+          setEditorPlaying(false)
+          return
+        }
+        setGlobalPlayheadMs(t)
+        raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame(tick)
+    })
+    return () => {
+      disposed = true
+      cancelAnimationFrame(raf)
+      sched.stop()
+      sched.dispose()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorPlaying, view])
 
   // --- Patchers (toute mutation de clips repasse par resolveSoundAnchors) ---
   const patchPlanT = useCallback((planId: string, partial: Partial<FilmTimelinePlan>) => {
@@ -401,18 +449,29 @@ export default function FilmEditorT({ project, onSave }: {
   }
   const handleSoundFile = async (file: File) => {
     const target = pendingSoundTargetRef.current
-    if (!film || !plan || !target) return
+    if (!film || !target) return
+    if (!target.global && !plan) return
     pendingSoundTargetRef.current = null
     const soundId = crypto.randomUUID()
     const durMs = Math.max(200, Math.round(await getAudioDurationMs(file)))
+    const clipId = crypto.randomUUID()
+    const clip: FilmSoundClip = { id: clipId, startMs: target.atMs, durationMs: durMs, soundId }
+    if (target.global) {
+      // Piste GLOBALE : le son est ajouté à la bibliothèque et posé en temps film absolu.
+      setFilm(prev => prev ? {
+        ...prev,
+        sounds: [...prev.sounds, { id: soundId, name: file.name, blob: file }],
+        globalSoundTracks: (prev.globalSoundTracks?.length ? prev.globalSoundTracks : [[]]).map((tr, i) => i === target.trackIndex ? [...tr, clip] : tr),
+      } : prev)
+      onFilmSoundImported(soundId)
+      setGlobalSelection({ kind: 'sound', id: clipId, trackIndex: target.trackIndex })
+      return
+    }
     updateFilm({ sounds: [...film.sounds, { id: soundId, name: file.name, blob: file }] })
     onFilmSoundImported(soundId)
-    const clipId = crypto.randomUUID()
-    patchTimeline(plan.id, tl => ({
+    patchTimeline(plan!.id, tl => ({
       ...tl,
-      soundTracks: tl.soundTracks.map((tr, i) => i === target.trackIndex
-        ? [...tr, { id: clipId, startMs: target.atMs, durationMs: durMs, soundId }]
-        : tr),
+      soundTracks: tl.soundTracks.map((tr, i) => i === target.trackIndex ? [...tr, clip] : tr),
     }))
     setSelection({ kind: 'sound', id: clipId, trackIndex: target.trackIndex })
   }
@@ -421,6 +480,77 @@ export default function FilmEditorT({ project, onSave }: {
     if (!plan) return
     patchTimeline(plan.id, tl => ({ ...tl, soundTracks: [...tl.soundTracks, []] }))
   }
+
+  // --- TIMELINE GLOBALE : pistes sons en temps film absolu, à cheval sur les plans ---
+  const patchGlobalTracks = useCallback((mut: (tracks: FilmSoundClip[][]) => FilmSoundClip[][]) => {
+    setFilm(prev => {
+      if (!prev) return prev
+      const next = mut(prev.globalSoundTracks ?? [])
+      return { ...prev, globalSoundTracks: next }
+    })
+  }, [])
+  const addGlobalSoundAt = (trackIndex: number, atMs: number) => {
+    pendingSoundTargetRef.current = { trackIndex, atMs, global: true }
+    soundImportRef.current?.click()
+  }
+  // La vue affiche déjà une piste vide quand il n'y en a aucune → en ajouter une = 2 pistes.
+  const addGlobalSoundTrack = () => patchGlobalTracks(tracks => (tracks.length ? [...tracks, []] : [[], []]))
+  const patchGlobalClip = useCallback((sel: NonNullable<TimelineSelection>, partial: { startMs?: number; durationMs?: number; offsetMs?: number }) => {
+    if (sel.kind !== 'sound') return
+    patchGlobalTracks(tracks => tracks.map((tr, i) => i === sel.trackIndex ? tr.map(c => c.id === sel.id ? { ...c, ...partial } : c) : tr))
+  }, [patchGlobalTracks])
+  const patchGlobalSound = useCallback((trackIndex: number, id: string, partial: Partial<FilmSoundClip>) => {
+    patchGlobalTracks(tracks => tracks.map((tr, i) => i === trackIndex ? tr.map(c => c.id === id ? { ...c, ...partial } : c) : tr))
+  }, [patchGlobalTracks])
+  const removeGlobalClip = useCallback((sel: NonNullable<TimelineSelection>) => {
+    if (sel.kind !== 'sound') return
+    patchGlobalTracks(tracks => tracks.map((tr, i) => i === sel.trackIndex ? tr.filter(c => c.id !== sel.id) : tr))
+    setGlobalSelection(cur => (cur && cur.kind === 'sound' && cur.id === sel.id ? null : cur))
+  }, [patchGlobalTracks])
+  const duplicateGlobalClip = useCallback((sel: NonNullable<TimelineSelection>) => {
+    if (sel.kind !== 'sound') return
+    const id = crypto.randomUUID()
+    patchGlobalTracks(tracks => tracks.map((tr, i) => {
+      if (i !== sel.trackIndex) return tr
+      const orig = tr.find(c => c.id === sel.id)
+      return orig ? [...tr, { ...orig, id, startMs: orig.startMs + orig.durationMs, anchor: undefined }] : tr
+    }))
+    setGlobalSelection({ kind: 'sound', id, trackIndex: sel.trackIndex })
+  }, [patchGlobalTracks])
+
+  /** Pseudo-timeline pour la vue globale : durée = film entier, seules les pistes
+   *  sons (globales) sont réelles. Au moins une piste vide pour pouvoir poser. */
+  const globalTimeline = useMemo((): FilmPlanTimeline => ({
+    durationMs: sampler?.totalMs ?? 0,
+    waypoints: [], motion: [], anim: [],
+    soundTracks: film?.globalSoundTracks?.length ? film.globalSoundTracks : [[]],
+  }), [sampler, film?.globalSoundTracks])
+
+  /** Rangées FIGÉES de la vue globale : plans + transitions (ouverture/fermeture
+   *  comprises) et musique de fond (bouclée depuis 0 sur tout le film). */
+  const globalRows = useMemo(() => {
+    if (!film || !sampler) return []
+    type Block = { id: string; startMs: number; durationMs: number; label: string; color: string }
+    const planBlocks: Block[] = []
+    const active = film.plans
+      .map((pl, i) => ({ pl, i, start: sampler.planStartMs[i] }))
+      .filter(p => Number.isFinite(p.start))
+      .sort((a, b) => a.start - b.start)
+    active.forEach((p, k) => {
+      if (k === 0 && p.start > 0) planBlocks.push({ id: 'intro', startMs: 0, durationMs: p.start, label: '🎬 ouverture', color: '#455a64' })
+      planBlocks.push({ id: p.pl.id, startMs: p.start, durationMs: p.pl.timeline.durationMs, label: `🎬 ${p.i + 1} ${p.pl.name ?? ''}`.trim(), color: '#5c6bc0' })
+      const end = p.start + p.pl.timeline.durationMs
+      const nextStart = active[k + 1]?.start ?? sampler.totalMs
+      if (nextStart - end > 0) {
+        planBlocks.push({ id: `trans-${p.pl.id}`, startMs: end, durationMs: nextStart - end, label: k === active.length - 1 ? '🎬 fermeture' : '⇄', color: '#455a64' })
+      }
+    })
+    const rows = [{ label: 'Plans (figés)', blocks: planBlocks }]
+    if (film.music) {
+      rows.push({ label: '🎵 Musique', blocks: [{ id: 'music', startMs: 0, durationMs: sampler.totalMs, label: `🎵 ${film.music.name} (boucle)`, color: '#8e24aa' }] })
+    }
+    return rows
+  }, [film, sampler])
 
   // --- Piste caméra (zoom / pan / secousse / tremblement) ---
   const patchCamera = useCallback((id: string, partial: Partial<FilmCameraClip>) => {
@@ -918,6 +1048,16 @@ export default function FilmEditorT({ project, onSave }: {
         <h3>🎬 Film <span style={{ fontSize: 11, opacity: 0.55, fontWeight: 400 }}>timeline</span></h3>
         <div className="scene-editor-header-actions">
           <button
+            className={`btn-sm ${view === 'plan' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setView('plan')}
+            title="Éditer le plan actif (canvas, trajets, animations, sons du plan)"
+          >🎬 Plan</button>
+          <button
+            className={`btn-sm ${view === 'global' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setView('global')}
+            title="Timeline globale du film : plans figés, pistes sons à cheval sur les plans (poursuite, musique…)"
+          >🌐 Timeline globale</button>
+          <button
             className="btn-secondary btn-sm"
             onClick={handlePreview}
             disabled={saving || !canPreview}
@@ -1120,8 +1260,69 @@ export default function FilmEditorT({ project, onSave }: {
         })()}
       </div>
 
+      {/* TIMELINE GLOBALE : plans figés + pistes sons globales (temps film absolu) */}
+      {view === 'global' && film && sampler && (
+        <div className="scene-editor-section-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+            <h4 className="scene-editor-section-title" style={{ margin: 0 }}>🌐 Timeline globale du film</h4>
+            <button
+              className="btn-icon btn-sm"
+              onClick={() => setEditorPlaying(p => !p)}
+              title={editorPlaying ? 'Pause (Espace)' : 'Lecture AUDIO du film entier depuis le playhead (Espace) — plans, pistes globales, musique'}
+              disabled={sampler.totalMs <= 0}
+            >{editorPlaying ? '⏸' : '▶'}</button>
+            <button
+              className="btn-icon btn-sm"
+              onClick={() => { setEditorPlaying(false); setGlobalPlayheadMs(0) }}
+              title="Retour au début du film"
+            >⏮</button>
+            <span style={{ fontSize: 11, opacity: 0.7 }}>{formatMs(globalPlayheadMs)} / {formatMs(sampler.totalMs)}</span>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 10, opacity: 0.55 }}>Plans et musique figés (éditables dans la vue Plan) · double-clic sur une piste 🌐 = poser un son à cheval sur les plans · Espace = écouter le film entier · Ctrl+molette = zoom · Alt = sans snap</span>
+          </div>
+          <TimelineEditor
+            timeline={globalTimeline}
+            animations={readyAnimations}
+            sounds={film.sounds}
+            selection={globalSelection}
+            onSelect={setGlobalSelection}
+            onPatchClip={patchGlobalClip}
+            onRemoveClip={removeGlobalClip}
+            onDuplicateClip={duplicateGlobalClip}
+            onAddSoundAt={addGlobalSoundAt}
+            onAddSoundTrack={addGlobalSoundTrack}
+            onAddCameraAt={() => { /* pas de caméra au niveau global */ }}
+            onSetPlanDuration={() => { /* durée = film, non éditable ici */ }}
+            playheadMs={globalPlayheadMs}
+            onScrub={(ms) => { setEditorPlaying(false); setGlobalPlayheadMs(ms) }}
+            playing={editorPlaying}
+            posterLocalMs={film.posterMs ?? null}
+            globalMode
+            readOnlyRows={globalRows}
+          />
+          {globalSelection && globalSelection.kind === 'sound' && (
+            <div style={{ marginTop: 8 }}>
+              <ClipInspector
+                timeline={globalTimeline}
+                selection={globalSelection}
+                animations={readyAnimations}
+                sounds={film.sounds}
+                onPatchMotion={() => { /* n/a */ }}
+                onSetMotionCurve={() => { /* n/a */ }}
+                onPatchAnim={() => { /* n/a */ }}
+                onPatchSound={patchGlobalSound}
+                onPatchCamera={() => { /* n/a */ }}
+                onRemove={() => removeGlobalClip(globalSelection)}
+                anchorTargets={[]}
+                motionPathLen={() => 0}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Canvas spatial (pleine largeur) + inspecteur EN DESSOUS */}
-      {plan && (
+      {view === 'plan' && plan && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ width: '100%' }}>
             <span style={{ fontSize: 12, opacity: 0.7, display: 'block', marginBottom: 6 }}>
@@ -1292,7 +1493,7 @@ export default function FilmEditorT({ project, onSave }: {
       )}
 
       {/* Timeline du plan actif */}
-      {plan && (
+      {view === 'plan' && plan && (
         <div className="scene-editor-section-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
             <h4 className="scene-editor-section-title" style={{ margin: 0 }}>Timeline du plan {planIndex + 1}</h4>
