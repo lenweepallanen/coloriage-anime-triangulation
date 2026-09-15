@@ -977,7 +977,8 @@ export default function FilmEditorT({ project, onSave }: {
               if (!Number.isFinite(v)) return
               onChange({ ...value, durationMs: Math.round(Math.min(5, Math.max(0.1, v)) * 1000) })
             }}
-            style={{ width: 48, fontSize: 10, flexShrink: 0 }}
+            // Assez large pour la valeur ET les flèches +/− du champ numérique.
+            style={{ width: 68, minWidth: 68, fontSize: 11, padding: '2px 4px', boxSizing: 'border-box', flexShrink: 0 }}
           />
           s
         </label>
@@ -1147,7 +1148,8 @@ export default function FilmEditorT({ project, onSave }: {
                               const durationMs = Math.round(Math.min(5, Math.max(0.1, v)) * 1000)
                               patchPlanT(pl.id, { transitionToNext: { ...tr, durationMs } })
                             }}
-                            style={{ width: 48, fontSize: 10, flexShrink: 0 }}
+                            // Assez large pour la valeur ET les flèches +/− du champ numérique.
+                            style={{ width: 68, minWidth: 68, fontSize: 11, padding: '2px 4px', boxSizing: 'border-box', flexShrink: 0 }}
                           />
                           s
                         </label>
