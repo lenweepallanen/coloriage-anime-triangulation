@@ -26,6 +26,9 @@ interface Props {
  */
 export default function MarcheFootstepsStep({ project, animation, onSave }: Props) {
   const mesh = animation.mesh
+  // Hors marche (idle en boucle type battement d'ailes) : libellés génériques + choix point bas / haut.
+  const isWalk = animation.type === 'marche' || animation.type === 'walk'
+  const [detectMode, setDetectMode] = useState<'low' | 'high'>('low')
   const tri = project.projectTriangulation
 
   const bodyFrames = mesh?.walkBodyFramesSmoothed ?? mesh?.walkBodyFrames ?? null
@@ -45,7 +48,7 @@ export default function MarcheFootstepsStep({ project, animation, onSave }: Prop
   const [markers, setMarkers] = useState<number[]>(() => [...(mesh?.footstepFrames ?? [])].sort((a, b) => a - b))
   const [sound1, setSound1] = useState<Blob | null>(animation.footstepSound1Blob ?? null)
   const [sound2, setSound2] = useState<Blob | null>(animation.footstepSound2Blob ?? null)
-  const [soundNames, setSoundNames] = useState<[string, string]>(['pas 1', 'pas 2'])
+  const [soundNames, setSoundNames] = useState<[string, string]>(isWalk ? ['pas 1', 'pas 2'] : ['son 1', 'son 2'])
   const [volume, setVolume] = useState<number>(mesh?.footstepVolume ?? 1)
   const [offsetMs, setOffsetMs] = useState<number>(mesh?.footstepOffsetMs ?? 0)
   const [detectZones, setDetectZones] = useState<Set<string>>(() => new Set(legZoneIds))
@@ -245,7 +248,7 @@ export default function MarcheFootstepsStep({ project, animation, onSave }: Prop
 
   const handleAutoDetect = () => {
     const zoneIds = detectZones.size > 0 && detectZones.size < legZoneIds.length ? [...detectZones] : undefined
-    const detected = detectFootstepFrames(animation, zoneIds).filter(f => f < visualTotal)
+    const detected = detectFootstepFrames(animation, zoneIds, isWalk ? 'low' : detectMode).filter(f => f < visualTotal)
     setMarkers(detected.sort((a, b) => a - b))
   }
 
@@ -352,18 +355,23 @@ export default function MarcheFootstepsStep({ project, animation, onSave }: Prop
         </div>
         <div style={{ fontSize: 11, opacity: 0.6 }}>
           {markers.length} contact(s)/cycle aux frames [{markers.join(', ')}] — cycle {visualTotal} frames ≈ {Math.round(cycleMs)} ms.
-          Pendant la lecture, chaque marqueur joue un son (alternance pas 1 / pas 2).
+          Pendant la lecture, chaque marqueur joue un son (alternance son 1 / son 2 — un seul son suffit).
         </div>
       </div>
 
       {/* ─── Panneau réglages ─── */}
       <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Bruits de pas 🦶</h3>
+        <h3 style={{ margin: 0, fontSize: 16 }}>{isWalk ? 'Bruits de pas 🦶' : 'Sons du cycle 🔊'}</h3>
+        {!isWalk && (
+          <div style={{ fontSize: 11, opacity: 0.7 }}>
+            Un son joué à chaque frame marquée, à chaque cycle de l'animation (ex. battement d'ailes) — partout où elle joue dans le film. Sans son chargé, rien ne change.
+          </div>
+        )}
 
         {legZoneIds.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={LBL} title="Pattes qui PORTENT (contact au sol). Bipède type T-Rex : cochez uniquement les pattes ARRIÈRE.">
-              Pattes au sol (auto-détection)
+            <span style={LBL} title={isWalk ? 'Pattes qui PORTENT (contact au sol). Bipède type T-Rex : cochez uniquement les pattes ARRIÈRE.' : 'Zones dont le mouvement définit le cycle (ex. les ailes).'}>
+              {isWalk ? 'Pattes au sol (auto-détection)' : 'Zones à analyser (auto-détection)'}
             </span>
             <div style={ROW}>
               {legZoneIds.map(zid => (
@@ -383,8 +391,17 @@ export default function MarcheFootstepsStep({ project, animation, onSave }: Prop
             </div>
           </div>
         )}
+        {!isWalk && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }} title="Instant du cycle qui déclenche le son : point le plus bas (fin de battement vers le bas) ou le plus haut">
+            Déclencher au
+            <select value={detectMode} onChange={(e) => setDetectMode(e.target.value as 'low' | 'high')} style={{ fontSize: 12 }}>
+              <option value="low">point bas (aile en bas)</option>
+              <option value="high">point haut (aile en haut)</option>
+            </select>
+          </label>
+        )}
         <button className="btn-sm btn-secondary" onClick={handleAutoDetect}>
-          ⚙ Auto-détecter les contacts
+          {isWalk ? '⚙ Auto-détecter les contacts' : '⚙ Auto-détecter les battements'}
         </button>
 
         {/* Sons pas 1 / pas 2 */}

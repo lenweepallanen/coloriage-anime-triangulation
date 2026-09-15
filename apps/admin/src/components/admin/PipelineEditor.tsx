@@ -111,6 +111,7 @@ const COTRACKER_BONES_STEPS = [
   'LBS',
   'Calcul Animation',
   'Preview Animation',
+  'Sons du cycle',
 ] as const
 
 const MARCHE_STEPS = [
@@ -188,6 +189,7 @@ const STEP_SHORT_LABELS: Record<string, string> = {
   'Pattes': 'Pattes',
   'Paramètres marche': 'Params',
   'Bruits de pas': 'Pas 🦶',
+  'Sons du cycle': 'Sons 🔊',
 }
 
 type StepStatus = 'done' | 'active' | 'pending'
@@ -242,6 +244,8 @@ function getStepStatus(step: string, activeStep: string, mesh: MeshData | null, 
     case 'Pattes': return mesh?.marcheGaitLegsValidated ? 'done' : 'pending'
     case 'Paramètres marche': return (mesh?.walkParamsValidated && mesh?.walkBodyFrames != null) ? 'done' : 'pending'
     case 'Bruits de pas': return mesh?.footstepValidated ? 'done' : 'pending'
+    // Sons calés sur le cycle d'une animation en boucle (battement d'ailes…) : même modèle que les pas.
+    case 'Sons du cycle': return mesh?.footstepValidated ? 'done' : 'pending'
     default: return 'pending'
   }
 }
@@ -527,6 +531,10 @@ export default function PipelineEditor({ project, animation, stepView, stepSave,
           <MarcheParamsStep project={project} animation={animation} onSave={projectSave} />
         )}
         {activeStep === 'Bruits de pas' && (
+          <MarcheFootstepsStep project={project} animation={animation} onSave={projectSave} />
+        )}
+        {/* Idle en boucle (cotracker-bones) : sons calés sur le cycle — même étape, libellés génériques */}
+        {activeStep === 'Sons du cycle' && (
           <MarcheFootstepsStep project={project} animation={animation} onSave={projectSave} />
         )}
       </div>

@@ -1805,13 +1805,13 @@ export default function FilmEditorT({ project, onSave }: {
               checked={film.footstepsEnabled !== false}
               onChange={(e) => updateFilm({ footstepsEnabled: e.target.checked })}
             />
-            🦶 Jouer les bruits de pas (réglés sur l'animation de marche)
+            🔊 Jouer les sons calés sur les animations (bruits de pas, battements d'ailes… réglés sur chaque animation)
           </label>
         </div>
         {!project.animations.some(a => a.mesh?.footstepValidated) && (
           <div style={{ fontSize: 11, opacity: 0.65, marginTop: 6 }}>
-            Aucune animation de ce projet n'a de bruits de pas validés — réglez-les dans
-            l'étape « Bruits de pas » de l'animation marche.
+            Aucune animation de ce projet n'a de sons de cycle validés — réglez-les dans
+            l'étape « Bruits de pas » (marche) ou « Sons du cycle » (idle cotracker-bones) de l'animation.
           </div>
         )}
       </div>

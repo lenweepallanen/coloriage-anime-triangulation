@@ -10,13 +10,17 @@ import { FILM_FPS } from './filmTimeline'
  */
 
 /** Frames (entières) des contacts au sol d'une animation de marche.
- *  `zoneIds` : ne considérer que ces pattes (bipède : pattes arrière seules). */
-export function detectFootstepFrames(anim: Animation, zoneIds?: string[]): number[] {
+ *  `zoneIds` : ne considérer que ces pattes (bipède : pattes arrière seules).
+ *  `mode` : 'low' (défaut) = point le PLUS BAS du vertex extrême de la zone (pied
+ *  posé, fin de battement d'aile vers le bas) ; 'high' = point le plus HAUT
+ *  (haut du battement). Même algorithme, série inversée. */
+export function detectFootstepFrames(anim: Animation, zoneIds?: string[], mode: 'low' | 'high' = 'low'): number[] {
   const mesh = anim.mesh
   if (!mesh) return []
   const events: number[] = []
 
-  const collectFromSeries = (ys: number[]): void => {
+  const collectFromSeries = (ysIn: number[]): void => {
+    const ys = mode === 'high' ? ysIn.map(v => -v) : ysIn
     const n = ys.length
     if (n < 6) return
     // Lissage circulaire (moyenne 3) pour tuer le bruit des plateaux.
