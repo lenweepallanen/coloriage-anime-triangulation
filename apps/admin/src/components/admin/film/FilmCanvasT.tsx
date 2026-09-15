@@ -74,6 +74,7 @@ export default function FilmCanvasT({
   const backdropImageBlob = plan.backdrop?.imageBlob ?? null
   const backdropVideoBlob = plan.backdrop?.videoBlob ?? null
   const [bgVideo, setBgVideo] = useState<HTMLVideoElement | null>(null)
+  const bgVideoRef = useRef<HTMLVideoElement | null>(null)
   useEffect(() => {
     let cancelled = false
     let url: string | null = null
@@ -113,6 +114,7 @@ export default function FilmCanvasT({
     vid.preload = 'auto'
     vid.src = url
     const onReady = () => {
+      bgVideoRef.current = vid
       setBgVideo(vid)
       // Décor calé sur le playhead : l'effet de synchro ci-dessous pilote play/pause/seek.
       if (backdropSeekRef.current == null) vid.play().catch(() => {})
@@ -123,6 +125,7 @@ export default function FilmCanvasT({
       vid.pause()
       vid.src = ''
       URL.revokeObjectURL(url)
+      bgVideoRef.current = null
       setBgVideo(null)
     }
   }, [backdropVideoBlob])
@@ -138,27 +141,30 @@ export default function FilmCanvasT({
   // durée de la vidéo — même règle que le player qui la boucle). Scrub = vidéo
   // figée sur l'image exacte ; lecture = la vidéo joue et est recalée si elle
   // dérive de plus de 250 ms (changement de plan, seek du scheduler…).
+  // L'élément vidéo est piloté via une ref (mutations play/pause/seek), l'état
+  // `bgVideo` ne sert qu'à déclencher les redessins.
   const backdropSeekRef = useRef<number | null>(backdropSeekMs)
-  backdropSeekRef.current = backdropSeekMs
+  useEffect(() => { backdropSeekRef.current = backdropSeekMs }, [backdropSeekMs])
   useEffect(() => {
-    if (!bgVideo) return
+    const vid = bgVideoRef.current
+    if (!vid || !bgVideo) return
     if (backdropSeekMs == null) {
-      if (bgVideo.paused) bgVideo.play().catch(() => {})
+      if (vid.paused) vid.play().catch(() => {})
       return
     }
-    const dur = bgVideo.duration
+    const dur = vid.duration
     if (!Number.isFinite(dur) || dur <= 0) return
     const target = ((Math.max(0, backdropSeekMs) / 1000) % dur)
     if (backdropPlaying) {
-      if (bgVideo.paused) {
-        bgVideo.currentTime = target
-        bgVideo.play().catch(() => {})
-      } else if (Math.abs(bgVideo.currentTime - target) > 0.25) {
-        bgVideo.currentTime = target
+      if (vid.paused) {
+        vid.currentTime = target
+        vid.play().catch(() => {})
+      } else if (Math.abs(vid.currentTime - target) > 0.25) {
+        vid.currentTime = target
       }
     } else {
-      if (!bgVideo.paused) bgVideo.pause()
-      if (Math.abs(bgVideo.currentTime - target) > 0.02) bgVideo.currentTime = target
+      if (!vid.paused) vid.pause()
+      if (Math.abs(vid.currentTime - target) > 0.02) vid.currentTime = target
     }
   }, [bgVideo, backdropSeekMs, backdropPlaying])
 
