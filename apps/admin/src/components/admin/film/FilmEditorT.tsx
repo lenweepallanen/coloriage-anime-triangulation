@@ -28,6 +28,52 @@ import { computeFootstepSchedule, collectFootstepSoundBlobs } from '../../../uti
  * en bas, inspecteur du clip ou du waypoint sélectionné à droite. Le QUAND est la
  * donnée maîtresse : tout est clip positionné en millisecondes.
  */
+/**
+ * Durée (s) compacte avec boutons − / + : remplace le <input type="number"> natif
+ * dont les flèches du navigateur masquaient la valeur dans les bandeaux étroits.
+ * Saisie directe possible dans le champ texte (virgule ou point acceptés).
+ */
+function DurationStepper({ valueMs, minMs, maxMs, stepMs, onChange, title }: {
+  valueMs: number
+  minMs: number
+  maxMs: number
+  stepMs: number
+  onChange: (ms: number) => void
+  title?: string
+}) {
+  const clamp = (ms: number) => Math.round(Math.min(maxMs, Math.max(minMs, ms)))
+  const shown = (valueMs / 1000).toFixed(1).replace('.', ',')
+  // Saisie libre pendant la frappe (brouillon), validée au blur / Entrée.
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = () => {
+    if (draft == null) return
+    const v = parseFloat(draft.replace(',', '.'))
+    if (Number.isFinite(v)) onChange(clamp(v * 1000))
+    setDraft(null)
+  }
+  const btn = {
+    width: 18, height: 18, lineHeight: '16px', padding: 0, fontSize: 12, borderRadius: 4,
+    border: '1px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text)',
+    cursor: 'pointer', flexShrink: 0,
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }} title={title}>
+      ⏱
+      <button type="button" style={btn} onClick={() => onChange(clamp(valueMs - stepMs))} title="− 0,1 s">−</button>
+      <input
+        type="text" inputMode="decimal"
+        value={draft ?? shown}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); (e.target as HTMLInputElement).blur() } }}
+        style={{ width: 34, minWidth: 34, textAlign: 'center', fontSize: 11, padding: '2px 3px', boxSizing: 'border-box', flexShrink: 0 }}
+      />
+      <button type="button" style={btn} onClick={() => onChange(clamp(valueMs + stepMs))} title="+ 0,1 s">+</button>
+      <span style={{ fontSize: 10, opacity: 0.8 }}>s</span>
+    </span>
+  )
+}
+
 export default function FilmEditorT({ project, onSave }: {
   project: Project
   onSave: (project: Project, hints?: UploadHint[]) => Promise<void>
@@ -967,21 +1013,12 @@ export default function FilmEditorT({ project, onSave }: {
         <option value="iris">Iris</option>
       </select>
       {value.kind !== 'cut' && (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }} title="Durée (secondes)">
-          ⏱
-          <input
-            type="number" min={0.1} max={5} step={0.1}
-            value={transitionDurationMs(value) / 1000}
-            onChange={(e) => {
-              const v = parseFloat(e.target.value)
-              if (!Number.isFinite(v)) return
-              onChange({ ...value, durationMs: Math.round(Math.min(5, Math.max(0.1, v)) * 1000) })
-            }}
-            // Assez large pour la valeur ET les flèches +/− du champ numérique.
-            style={{ width: 68, minWidth: 68, fontSize: 11, padding: '2px 4px', boxSizing: 'border-box', flexShrink: 0 }}
-          />
-          s
-        </label>
+        <DurationStepper
+          valueMs={transitionDurationMs(value)}
+          minMs={100} maxMs={5000} stepMs={100}
+          onChange={(durationMs) => onChange({ ...value, durationMs })}
+          title="Durée (secondes)"
+        />
       )}
       {value.kind !== 'cut' && value.kind !== 'crossfade' && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }} title="Couleur de l'aplat (défaut noir)">
@@ -1134,25 +1171,12 @@ export default function FilmEditorT({ project, onSave }: {
                         <option value="iris">Iris</option>
                       </select>
                       {tr != null && tr.kind !== 'cut' && (
-                        <label
-                          style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'nowrap' }}
+                        <DurationStepper
+                          valueMs={transitionDurationMs(tr)}
+                          minMs={100} maxMs={5000} stepMs={100}
+                          onChange={(durationMs) => patchPlanT(pl.id, { transitionToNext: { ...tr, durationMs } })}
                           title="Durée de la transition (secondes)"
-                        >
-                          ⏱
-                          <input
-                            type="number" min={0.1} max={5} step={0.1}
-                            value={transitionDurationMs(tr) / 1000}
-                            onChange={(e) => {
-                              const v = parseFloat(e.target.value)
-                              if (!Number.isFinite(v)) return
-                              const durationMs = Math.round(Math.min(5, Math.max(0.1, v)) * 1000)
-                              patchPlanT(pl.id, { transitionToNext: { ...tr, durationMs } })
-                            }}
-                            // Assez large pour la valeur ET les flèches +/− du champ numérique.
-                            style={{ width: 68, minWidth: 68, fontSize: 11, padding: '2px 4px', boxSizing: 'border-box', flexShrink: 0 }}
-                          />
-                          s
-                        </label>
+                        />
                       )}
                       {tr != null && (tr.kind === 'fadeBlack' || tr.kind === 'wipe') && (
                         <label
