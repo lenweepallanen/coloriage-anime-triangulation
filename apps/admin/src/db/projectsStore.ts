@@ -439,6 +439,8 @@ interface FilmTDoc {
   animBob?: Record<string, { amplitudePx: number; phase?: number }>
   /** Bruits de pas activés (défaut true). Réglages au niveau des animations. */
   footstepsEnabled?: boolean
+  /** Gain film des sons calés sur les animations (défaut 1). */
+  footstepsVolume?: number
   /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
   footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[]
   /** Ouverture/fermeture du film (même modèle que transitionToNext). */
@@ -1691,6 +1693,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
         .map(([id, b]) => [id, { amplitudePx: b.amplitudePx, ...(b.phase != null && b.phase !== 0 && { phase: b.phase }) }])),
     }),
     ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
+    ...(film.footstepsVolume != null && film.footstepsVolume !== 1 && { footstepsVolume: film.footstepsVolume }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     ...(film.intro != null && { intro: film.intro }),
     ...(film.outro != null && { outro: film.outro }),
@@ -1783,6 +1786,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     }),
     ...(filmDoc.animBob != null && Object.keys(filmDoc.animBob).length > 0 && { animBob: filmDoc.animBob }),
     ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
+    ...(filmDoc.footstepsVolume != null && { footstepsVolume: filmDoc.footstepsVolume }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
     ...(filmDoc.intro != null && { intro: filmDoc.intro }),
     ...(filmDoc.outro != null && { outro: filmDoc.outro }),

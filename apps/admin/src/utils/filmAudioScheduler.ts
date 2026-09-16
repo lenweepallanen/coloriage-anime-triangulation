@@ -60,7 +60,7 @@ export class FilmAudioScheduler {
   /** Résolue quand tous les buffers sont décodés. */
   readonly ready: Promise<void>
 
-  private oneShots: { timeMs: number; soundId: string; volume?: number }[] = []
+  private oneShots: { timeMs: number; soundId: string; volume?: number; maxMs?: number }[] = []
 
   /**
    * @param planStartMs Début absolu (ms) de chaque plan de film.plans — mêmes
@@ -75,7 +75,7 @@ export class FilmAudioScheduler {
    *   du plan), afin que les pistes GLOBALES (film.globalSoundTracks) tombent au
    *   bon endroit. 0 (défaut) = lecture du film entier.
    */
-  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number }[], extraSounds?: Map<string, Blob>, opts?: { globalOffsetMs?: number }) {
+  constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number; maxMs?: number }[], extraSounds?: Map<string, Blob>, opts?: { globalOffsetMs?: number }) {
     this.ctx = getSharedAudioContext()
     this.master = this.ctx.createGain()
     // master → speakerGain → destination (le mute agit sur speakerGain).
@@ -281,8 +281,9 @@ export class FilmAudioScheduler {
       gain.connect(this.master)
       const when = now + (os.timeMs - this.baseMs) / 1000
       // Un pas = UN impact : si le fichier est long (enregistrement de marche
-      // complet), on ne joue que son attaque (450 ms, fondu 60 ms).
-      const playSec = Math.min(buf.duration, 0.45)
+      // complet), on ne joue que son attaque (450 ms par défaut, fondu 60 ms).
+      // Les sons de cycle d'un idle (battement d'ailes) passent maxMs = 1500.
+      const playSec = Math.min(buf.duration, (os.maxMs ?? 450) / 1000)
       gain.gain.setValueAtTime(vol, when)
       if (buf.duration > playSec) {
         gain.gain.setValueAtTime(vol, when + playSec - 0.06)

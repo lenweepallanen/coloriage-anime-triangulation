@@ -1305,6 +1305,10 @@ export interface FilmT {
    *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
    *  Défaut : true (absent = activé). */
   footstepsEnabled?: boolean;
+  /** Gain FILM des sons calés sur les animations (pas, battements d'ailes) :
+   *  multiplie le volume réglé sur chaque animation. 1 = inchangé, jusqu'à 3
+   *  pour les faire ressortir du mixage. Absent = 1. */
+  footstepsVolume?: number;
   /** OUVERTURE du film (couleur → 1er plan) : même modèle que les transitions de
    *  plans (fondu couleur / volet / iris + durée + couleur). Absent → legacy
    *  introFadeMs, sinon démarrage direct (cut). */

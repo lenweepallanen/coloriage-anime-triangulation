@@ -1769,23 +1769,26 @@ export default function FilmEditorT({ project, onSave }: {
               updateFilm({ animBob: Object.keys(map).length > 0 ? map : undefined })
             }
             return (
-              <div key={a.id} style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap', padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', alignSelf: 'center' }}>〰 {a.name}</span>
-                <div className="scene-editor-field" style={{ maxWidth: 120 }} title="Amplitude en px décor (0 = pas d'oscillation)">
-                  <label style={{ fontSize: 11 }}>Amplitude (px)</label>
+              <div key={a.id} style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', alignSelf: 'center', minWidth: 90 }}>〰 {a.name}</span>
+                {/* Blocs libellé AU-DESSUS du champ, largeur fixe — pas de .scene-editor-field (min-width 180 px, chevauche). */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }} title="Amplitude en px décor (0 = pas d'oscillation)">
+                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>Amplitude (px)</span>
                   <input
                     type="number" min={0} max={400} step={1}
                     value={bob?.amplitudePx ?? 0}
                     onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBob({ amplitudePx: Math.max(0, Math.round(v)) }) }}
+                    style={{ width: 90, minWidth: 90, padding: '6px 8px', boxSizing: 'border-box' }}
                   />
                 </div>
-                <div className="scene-editor-field" style={{ maxWidth: 120 }} title="Décalage du point haut dans le cycle (% du cycle)">
-                  <label style={{ fontSize: 11 }}>Phase (%)</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }} title="Décalage du point haut dans le cycle (% du cycle)">
+                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>Phase (%)</span>
                   <input
                     type="number" min={0} max={100} step={5}
                     value={Math.round((bob?.phase ?? 0) * 100)}
                     disabled={!bob || bob.amplitudePx <= 0}
                     onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBob({ phase: Math.min(1, Math.max(0, v / 100)) }) }}
+                    style={{ width: 90, minWidth: 90, padding: '6px 8px', boxSizing: 'border-box' }}
                   />
                 </div>
               </div>
@@ -1806,6 +1809,19 @@ export default function FilmEditorT({ project, onSave }: {
               onChange={(e) => updateFilm({ footstepsEnabled: e.target.checked })}
             />
             🔊 Jouer les sons calés sur les animations (bruits de pas, battements d'ailes… réglés sur chaque animation)
+          </label>
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, whiteSpace: 'nowrap' }}
+            title="Gain du film sur ces sons : multiplie le volume réglé sur chaque animation. 100 % = inchangé, au-delà pour les faire ressortir du mixage (musique, voix)"
+          >
+            Volume : {Math.round((film.footstepsVolume ?? 1) * 100)} %
+            <input
+              type="range" min={0} max={3} step={0.05}
+              style={{ width: 160, accentColor: 'var(--color-primary)' }}
+              value={film.footstepsVolume ?? 1}
+              disabled={film.footstepsEnabled === false}
+              onChange={(e) => { const v = parseFloat(e.target.value); updateFilm({ footstepsVolume: Number.isFinite(v) && v !== 1 ? v : undefined }) }}
+            />
           </label>
         </div>
         {!project.animations.some(a => a.mesh?.footstepValidated) && (

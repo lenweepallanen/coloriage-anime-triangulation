@@ -93,6 +93,9 @@ export interface FootstepOneShot {
   timeMs: number
   soundId: string
   volume?: number
+  /** Durée max jouée du fichier (ms). Pas : 450 (un pas = un impact) ; sons de
+   *  cycle d'un idle (battement d'ailes, whoosh) : 1500. Absent = 450. */
+  maxMs?: number
 }
 
 /** Clé de son one-shot pour le pas n (1|2) d'une animation — référencée par les
@@ -129,12 +132,16 @@ export function computeFootstepSchedule(
   planStartMs: number[],
 ): FootstepOneShot[] {
   if (film.footstepsEnabled === false) return []
+  // Gain FILM (réglé dans l'éditeur) × volume réglé sur l'animation.
+  const filmGain = Math.max(0, film.footstepsVolume ?? 1)
   interface AnimFootsteps {
     events: number[]
     total: number
     soundKeys: string[]
     volume?: number
     offsetMs: number
+    /** Marche : impact court (450 ms) ; idle en boucle (ailes…) : son plus long (1,5 s). */
+    maxMs: number
   }
   const framesCache = new Map<string, AnimFootsteps>()
   const entryOf = (animId: string): AnimFootsteps => {
@@ -158,6 +165,7 @@ export function computeFootstepSchedule(
         soundKeys,
         ...(anim?.mesh?.footstepVolume != null && { volume: anim.mesh.footstepVolume }),
         offsetMs: anim?.mesh?.footstepOffsetMs ?? 0,
+        maxMs: (anim?.type === 'marche' || anim?.type === 'walk') ? 450 : 1500,
       }
       framesCache.set(animId, entry)
       if (import.meta.env.DEV && soundKeys.length > 0) {
@@ -172,7 +180,7 @@ export function computeFootstepSchedule(
   let stepCounter = 0
   const emit = (base: number, startMs: number, durationMs: number, animId: string, speedMul: number) => {
     if (durationMs <= 0) return
-    const { events, total, soundKeys, volume, offsetMs } = entryOf(animId)
+    const { events, total, soundKeys, volume, offsetMs, maxMs } = entryOf(animId)
     if (events.length === 0 || soundKeys.length === 0 || total === 0) return
     const mul = Math.max(0.01, speedMul)
     const msPerFrame = 1000 / (FILM_FPS * mul)
@@ -184,7 +192,8 @@ export function computeFootstepSchedule(
         out.push({
           timeMs: Math.max(0, base + startMs + t + offsetMs),
           soundId: soundKeys[stepCounter++ % soundKeys.length],
-          ...(volume != null && { volume }),
+          volume: (volume ?? 1) * filmGain,
+          maxMs,
         })
       }
     }
