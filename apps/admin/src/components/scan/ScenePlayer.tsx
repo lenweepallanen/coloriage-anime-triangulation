@@ -1935,6 +1935,17 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           }
         }
       }
+      // VITESSE de lecture du sampler (animSpeedMul du clip anim / du trajet) :
+      // elle peut changer SANS changement d'animation (idle 0,5× au point, puis
+      // le MÊME idle à 3,1× pendant le trajet) — les LoopPlayback créés au
+      // switch gardaient l'ancienne vitesse (le son, lui, suivait le sampler).
+      const mul = Math.max(0.01, sample.animSpeedMul ?? 1)
+      if (activeBodyPlayback instanceof LoopPlayback && activeBodyPlayback.speed !== mul) activeBodyPlayback.speed = mul
+      if (activeZonePlaybacks) {
+        for (const zp of activeZonePlaybacks) {
+          if (zp.playback instanceof LoopPlayback && zp.playback.speed !== mul) zp.playback.speed = mul
+        }
+      }
     }
     /** Tick du mode TIMELINE : horloge → sampler → pose + side-effects aux bornes. */
     function tickFilmTimeline(deltaSeconds: number) {
