@@ -89,10 +89,14 @@ export function evaluateCamera(
 
     // --- Secousses (additives) ---
     const axis = clip.axis ?? 'both'
-    const freq = Math.max(0.1, clip.frequencyHz ?? (clip.kind === 'rumble' ? 8 : 14))
-    const amp = clip.amplitude ?? (clip.kind === 'rumble' ? 4 : 16)
+    const freq = Math.max(0.05, clip.frequencyHz ?? (clip.kind === 'rumble' ? 8 : clip.kind === 'bob' ? 2 : 14))
+    const amp = clip.amplitude ?? (clip.kind === 'rumble' ? 4 : clip.kind === 'bob' ? 20 : 16)
     const tSec = t / 1000
-    if (clip.kind === 'rumble') {
+    if (clip.kind === 'bob') {
+      // Oscillation VERTICALE sinusoïdale régulière (vol qui pompe avec les ailes) :
+      // point haut à t = 0 (phase 0), fréquence à caler sur le cycle de l'animation.
+      out.shakeY += -amp * Math.cos(2 * Math.PI * (freq * tSec + (clip.phase ?? 0)))
+    } else if (clip.kind === 'rumble') {
       // Oscillation régulière et continue (marche).
       const ox = Math.sin(2 * Math.PI * freq * tSec)
       const oy = Math.sin(2 * Math.PI * freq * tSec + 1.7)

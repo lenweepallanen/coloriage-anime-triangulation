@@ -1199,7 +1199,7 @@ export interface FilmSoundClip {
 
 /** Timeline d'un plan : waypoints spatiaux + pistes de clips. */
 /** Type d'effet de la piste CAMÉRA. */
-export type FilmCameraKind = 'zoom' | 'pan' | 'shake' | 'rumble';
+export type FilmCameraKind = 'zoom' | 'pan' | 'shake' | 'rumble' | 'bob';
 
 /** Rectangle cible d'un effet caméra, en coordonnées DÉCOR du plan (comme cameraX / waypoints). */
 export interface FilmCameraRect { x: number; y: number; w: number; h: number; }
@@ -1211,6 +1211,9 @@ export interface FilmCameraRect { x: number; y: number; w: number; h: number; }
  * - pan   : glisse de `rect` vers `rectTo` (même échelle) — travelling.
  * - rumble: petit tremblement CONTINU (marche) sur toute la durée.
  * - shake : secousse d'impact qui DÉCROÎT (rugissement), + rotation optionnelle.
+ * - bob   : OSCILLATION VERTICALE sinusoïdale régulière (vol qui pompe avec les
+ *           ailes) — `amplitude` px décor, `frequencyHz` (à caler sur le cycle de
+ *           l'animation : FPS × vitesse ÷ frames du cycle), `phase` 0..1.
  * Ancrable ⚓ à un clip motion/anim (ex. rumble sur Walk, shake sur l'action de rugissement).
  */
 export interface FilmCameraClip {
@@ -1240,6 +1243,8 @@ export interface FilmCameraClip {
   rotate?: boolean;
   /** shake : profil d'atténuation. */
   decay?: 'linear' | 'expo';
+  /** bob : décalage de phase en fraction de période (0..1, défaut 0). */
+  phase?: number;
 }
 
 export interface FilmPlanTimeline {
@@ -1295,12 +1300,6 @@ export interface FilmT {
    *  être à cheval sur deux plans. Édités dans la timeline globale (plans figés).
    *  Pas d'ancrage ⚓ à ce niveau. Absent = aucune. */
   globalSoundTracks?: FilmSoundClip[][];
-  /** OSCILLATION VERTICALE par animation (clé = Animation.id) : le perso monte et
-   *  descend d'une sinusoïde par CYCLE de l'animation (calée sur ses frames), pour
-   *  un vol qui « pompe » avec les battements d'ailes. `amplitudePx` en px décor
-   *  (× échelle du perso), `phase` = décalage en fraction de cycle (0..1, défaut 0).
-   *  Appliquée partout où l'animation joue (idle, trajets, clips). Absent = aucune. */
-  animBob?: Record<string, { amplitudePx: number; phase?: number }>;
   /** Jouer les bruits de pas réglés au niveau des ANIMATIONS de marche
    *  (mesh.footstepFrames validées + Animation.footstepSound1/2Blob).
    *  Défaut : true (absent = activé). */

@@ -222,7 +222,31 @@ export default function ClipInspector({
     const clip = (timeline.camera ?? []).find(c => c.id === selection.id)
     if (!clip) return null
     const patch = (partial: Partial<FilmCameraClip>) => onPatchCamera(clip.id, partial)
-    const kindLabel = clip.kind === 'zoom' ? '🔍 Zoom' : clip.kind === 'pan' ? '↔ Travelling' : clip.kind === 'shake' ? '💥 Secousse' : '〰 Tremblement'
+    const kindLabel = clip.kind === 'zoom' ? '🔍 Zoom' : clip.kind === 'pan' ? '↔ Travelling' : clip.kind === 'shake' ? '💥 Secousse' : clip.kind === 'bob' ? '↕ Oscillation' : '〰 Tremblement'
+    /** Cycle VISUEL d'une animation (frames − crossfade, comme LoopPlayback) → fréquence en Hz à la vitesse donnée. */
+    const animCycleHz = (animationId: string, speedMul: number): number | null => {
+      const a = animations.find(x => x.id === animationId)
+      const raw = a?.mesh?.videoFramesMesh?.length ?? a?.mesh?.walkBodyFrames?.length ?? 0
+      if (raw <= 0) return null
+      const cycle = Math.max(1, raw - Math.min(a?.mesh?.crossfadeFrames ?? 7, Math.floor(raw / 2)))
+      return (FILM_FPS * Math.max(0.01, speedMul)) / cycle
+    }
+    /** Animation jouée au début de l'effet : clip anim qui le chevauche, sinon trajet avec animation. */
+    const animUnderClip = (): { name: string; hz: number } | null => {
+      const t0 = clip.startMs
+      const ac = timeline.anim.find(a => t0 >= a.startMs && t0 < a.startMs + a.durationMs) ?? timeline.anim[0]
+      if (ac) {
+        const hz = animCycleHz(ac.animationId, ac.speedMul ?? 1)
+        if (hz) return { name: animations.find(x => x.id === ac.animationId)?.name ?? 'animation', hz }
+      }
+      const mc = timeline.motion.find(m => m.animationId != null && t0 >= m.startMs && t0 < m.startMs + m.durationMs)
+        ?? timeline.motion.find(m => m.animationId != null)
+      if (mc?.animationId) {
+        const hz = animCycleHz(mc.animationId, mc.animSpeedMul ?? 1)
+        if (hz) return { name: animations.find(x => x.id === mc.animationId)?.name ?? 'animation', hz }
+      }
+      return null
+    }
     // Cadre TOUJOURS 16:9 (h dérivée de la largeur) → x / y / largeur seulement.
     const rectField = (label: string, key: 'rect' | 'rectTo') => {
       const r = clip[key]
@@ -280,6 +304,27 @@ export default function ClipInspector({
           </>
         )}
 
+        {clip.kind === 'bob' && (() => {
+          const under = animUnderClip()
+          return (
+            <>
+              <div style={{ fontSize: 11, opacity: 0.65, flexBasis: '100%' }}>
+                La caméra monte et descend en sinusoïde régulière. Cale la fréquence sur le cycle de l'animation
+                (battement d'ailes) pour que le vol « pompe » avec les ailes ; la phase décale le point haut.
+              </div>
+              {numField('Amplitude (px)', clip.amplitude ?? 20, v => patch({ amplitude: Math.max(0, v) }), { min: 0, step: 1, title: 'Hauteur de l’oscillation en px décor' })}
+              {numField('Fréquence (Hz)', Math.round((clip.frequencyHz ?? 2) * 1000) / 1000, v => patch({ frequencyHz: Math.max(0.05, v) }), { min: 0.05, step: 0.05, title: 'Oscillations par seconde' })}
+              {numField('Phase (%)', Math.round((clip.phase ?? 0) * 100), v => patch({ phase: (((v % 100) + 100) % 100) / 100 }), { min: 0, step: 5, title: 'Décalage du point haut dans la période (0 = point haut au début de l’effet)' })}
+              {under && (
+                <button
+                  type="button" className="btn-secondary btn-sm"
+                  onClick={() => patch({ frequencyHz: Math.round(under.hz * 1000) / 1000 })}
+                  title={`Fréquence = 1 oscillation par cycle de « ${under.name} » (frames − crossfade, à sa vitesse de lecture) = ${under.hz.toFixed(3)} Hz`}
+                >⟲ Caler sur « {under.name} » ({under.hz.toFixed(2)} Hz)</button>
+              )}
+            </>
+          )
+        })()}
         {(clip.kind === 'shake' || clip.kind === 'rumble') && (
           <>
             {numField('Intensité (px)', clip.amplitude ?? (clip.kind === 'shake' ? 16 : 4), v => patch({ amplitude: Math.max(0, v) }), { min: 0, step: 1 })}

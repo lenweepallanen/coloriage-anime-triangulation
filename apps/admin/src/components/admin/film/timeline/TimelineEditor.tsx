@@ -11,6 +11,7 @@ function cameraLabel(c: FilmCameraClip): string {
   return c.kind === 'zoom' ? '🔍 Zoom'
     : c.kind === 'pan' ? '↔ Travelling'
       : c.kind === 'shake' ? '💥 Secousse'
+      : c.kind === 'bob' ? '↕ Oscillation'
         : '〰 Tremblement'
 }
 

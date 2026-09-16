@@ -9,7 +9,7 @@ import type { UploadHint } from '../../../db/projectsStore'
 import { buildFilmTScene } from '../../../utils/filmScene'
 import { FilmTimelineSampler } from '../../../utils/filmTimelineSampler'
 import { sampleFilmPath } from '../../../utils/filmPath'
-import { dedupeTravelAnimClips, filmIntroTransition, filmOutroTransition, pushExclusiveOverlaps, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
+import { FILM_FPS, dedupeTravelAnimClips, filmIntroTransition, filmOutroTransition, pushExclusiveOverlaps, resolveSoundAnchors, timelineContentEndMs } from '../../../utils/filmTimeline'
 import { getAudioDurationMs } from '../../../utils/sceneActionDuration'
 import { transitionDurationMs } from '../../../utils/filmDirector'
 import ScenePlayer from '../../scan/ScenePlayer'
@@ -617,7 +617,7 @@ export default function FilmEditorT({ project, onSave }: {
   }, [plan])
 
   /** Ajoute un effet caméra au playhead (ou ancré à un clip cible). */
-  const addCameraClip = useCallback((kind: FilmCameraKind, opts?: { anchorTo?: { clipId: string; durationMs: number } }) => {
+  const addCameraClip = useCallback((kind: FilmCameraKind, opts?: { anchorTo?: { clipId: string; durationMs: number }; frequencyHz?: number }) => {
     if (!plan) return
     const id = crypto.randomUUID()
     const start = Math.round(playheadMs)
@@ -628,6 +628,7 @@ export default function FilmEditorT({ project, onSave }: {
         const r = defaultCameraRect()
         base.rect = r; base.rectTo = { ...r, x: Math.round(r.x + r.w * 0.5) }; base.durationMs = 3000; base.easing = 'easeInOut'
       } else if (kind === 'shake') { base.durationMs = 700; base.amplitude = 16; base.frequencyHz = 14; base.rotate = true; base.decay = 'expo' }
+      else if (kind === 'bob') { base.durationMs = 3000; base.amplitude = 20; base.frequencyHz = opts?.frequencyHz ?? 2 }
       else { base.durationMs = 2000; base.amplitude = 4; base.frequencyHz = 8 } // rumble
       if (opts?.anchorTo) {
         base.anchor = { clipId: opts.anchorTo.clipId, edge: 'start', offsetMs: 0 }
@@ -646,6 +647,30 @@ export default function FilmEditorT({ project, onSave }: {
       ?? plan.timeline.anim[0]
     addCameraClip('rumble', walk ? { anchorTo: { clipId: walk.id, durationMs: walk.durationMs } } : undefined)
   }, [plan, addCameraClip])
+
+  /** Raccourci : OSCILLATION verticale calée sur l'animation en cours (clip anim au
+   *  playhead, sinon trajet avec animation) : durée = celle du clip, fréquence =
+   *  1 oscillation par cycle visuel de l'animation (frames − crossfade, à sa vitesse). */
+  const addBobForAnim = useCallback(() => {
+    if (!plan) return
+    const cycleHz = (animationId: string, speedMul: number): number | undefined => {
+      const a = project.animations.find(x => x.id === animationId)
+      const raw = a?.mesh?.videoFramesMesh?.length ?? a?.mesh?.walkBodyFrames?.length ?? 0
+      if (raw <= 0) return undefined
+      const cycle = Math.max(1, raw - Math.min(a?.mesh?.crossfadeFrames ?? 7, Math.floor(raw / 2)))
+      return Math.round(((FILM_FPS * Math.max(0.01, speedMul)) / cycle) * 1000) / 1000
+    }
+    const t0 = Math.round(playheadMs)
+    const ac = plan.timeline.anim.find(a => t0 >= a.startMs && t0 < a.startMs + a.durationMs) ?? plan.timeline.anim[0]
+    const mc = plan.timeline.motion.find(m => m.animationId != null && t0 >= m.startMs && t0 < m.startMs + m.durationMs)
+      ?? plan.timeline.motion.find(m => m.animationId != null)
+    const target = ac
+      ? { id: ac.id, durationMs: ac.durationMs, hz: cycleHz(ac.animationId, ac.speedMul ?? 1) }
+      : mc?.animationId ? { id: mc.id, durationMs: mc.durationMs, hz: cycleHz(mc.animationId, mc.animSpeedMul ?? 1) } : null
+    addCameraClip('bob', target
+      ? { anchorTo: { clipId: target.id, durationMs: target.durationMs }, ...(target.hz != null && { frequencyHz: target.hz }) }
+      : undefined)
+  }, [plan, addCameraClip, playheadMs, project.animations])
 
   /** Raccourci : secousse calée sur le début du 1er clip d'ACTION (anim once-hold), sinon au playhead. */
   const addShakeForRoar = useCallback(() => {
@@ -1613,6 +1638,7 @@ export default function FilmEditorT({ project, onSave }: {
               <button className="btn-secondary btn-sm" onClick={() => addCameraClip('pan')} title="Travelling (glissement de la caméra)">Travelling</button>
               <button className="btn-secondary btn-sm" onClick={addShakeForRoar} title="Secousse d'impact — calée sur l'animation d'action (rugissement) si présente">Secousse</button>
               <button className="btn-secondary btn-sm" onClick={addRumbleForWalk} title="Tremblement continu — calé sur le clip de marche si présent">Tremblement</button>
+              <button className="btn-secondary btn-sm" onClick={addBobForAnim} title="Oscillation verticale régulière — calée sur le cycle de l'animation en cours (battement d'ailes) : 1 oscillation par cycle">Oscillation</button>
             </div>
             <span style={{ fontSize: 10, opacity: 0.55 }}>Espace = lecture avec sons · Double-clic piste son/caméra = poser · Ctrl+molette = zoom · Alt = sans snap</span>
           </div>
@@ -1746,56 +1772,6 @@ export default function FilmEditorT({ project, onSave }: {
             />
           </label>
         )}
-      </div>
-
-      {/* Oscillation verticale par animation : le perso monte/descend d'une sinusoïde
-          par cycle de l'animation (calée sur ses frames) — vol qui pompe avec les ailes. */}
-      <div className="scene-editor-section-card">
-        <h4 className="scene-editor-section-title">Oscillation verticale (calée sur le cycle de l'animation)</h4>
-        <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8 }}>
-          Une sinusoïde par cycle de l'animation : le perso monte et descend en rythme avec ses frames
-          (ex. battement d'ailes). Amplitude en px décor (× échelle du perso), 0 = aucune. Phase = décalage
-          du point haut dans le cycle, en % (0 = point haut au début du cycle, 50 = point bas).
-          S'applique partout où l'animation joue : sur place, en trajet, en clip.
-        </div>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          {readyAnimations.map(a => {
-            const bob = film.animBob?.[a.id]
-            const setBob = (partial: { amplitudePx?: number; phase?: number }) => {
-              const next = { amplitudePx: bob?.amplitudePx ?? 0, phase: bob?.phase ?? 0, ...partial }
-              const map = { ...(film.animBob ?? {}) }
-              if (next.amplitudePx > 0) map[a.id] = { amplitudePx: next.amplitudePx, ...(next.phase !== 0 && { phase: next.phase }) }
-              else delete map[a.id]
-              updateFilm({ animBob: Object.keys(map).length > 0 ? map : undefined })
-            }
-            return (
-              <div key={a.id} style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', alignSelf: 'center', minWidth: 90 }}>〰 {a.name}</span>
-                {/* Blocs libellé AU-DESSUS du champ, largeur fixe — pas de .scene-editor-field (min-width 180 px, chevauche). */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }} title="Amplitude en px décor (0 = pas d'oscillation)">
-                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>Amplitude (px)</span>
-                  <input
-                    type="number" min={0} max={400} step={1}
-                    value={bob?.amplitudePx ?? 0}
-                    onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBob({ amplitudePx: Math.max(0, Math.round(v)) }) }}
-                    style={{ width: 90, minWidth: 90, padding: '6px 8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }} title="Décalage du point haut dans le cycle (% du cycle)">
-                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>Phase (%)</span>
-                  <input
-                    type="number" min={0} max={100} step={5}
-                    value={Math.round((bob?.phase ?? 0) * 100)}
-                    disabled={!bob || bob.amplitudePx <= 0}
-                    onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBob({ phase: Math.min(1, Math.max(0, v / 100)) }) }}
-                    style={{ width: 90, minWidth: 90, padding: '6px 8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-              </div>
-            )
-          })}
-          {readyAnimations.length === 0 && <span style={{ fontSize: 12, opacity: 0.6 }}>Aucune animation calculée.</span>}
-        </div>
       </div>
 
       {/* Bruits de pas — réglés au niveau de l'ANIMATION de marche, le film ne porte qu'un toggle */}
