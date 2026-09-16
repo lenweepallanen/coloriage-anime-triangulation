@@ -1002,6 +1002,30 @@ export default function FilmEditorT({ project, onSave }: {
     })
   }, [project])
   const handlePreview = useCallback(() => { if (film) void openPreview(film) }, [film, openPreview])
+
+  // --- EXPORT VIDÉO : la prévisualisation est jouée en temps réel avec la capture
+  // du player (canvas PIXI + bus audio → MediaRecorder, même mécanisme que la
+  // vidéo partagée de l'app play) ; le fichier est téléchargé à la fin du film.
+  // Safari/WKWebView → MP4 (H.264/AAC) ; Chrome/Firefox → WebM (le format dépend
+  // du navigateur, cf. filmRecorder.pickMimeType).
+  const [exportMode, setExportMode] = useState(false)
+  const handleExport = useCallback(() => {
+    if (!film) return
+    setExportMode(true)
+    void openPreview(film)
+  }, [film, openPreview])
+  const downloadRecording = useCallback((r: { blob: Blob; mimeType: string; durationMs: number }) => {
+    const ext = /mp4/i.test(r.mimeType) ? 'mp4' : 'webm'
+    const safeName = (project.name || 'film').replace(/[\\/:*?"<>|]+/g, '-').trim()
+    const url = URL.createObjectURL(r.blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${safeName} - film.${ext}`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  }, [project.name])
   const handlePreviewPlan = useCallback((planId: string) => {
     if (!film) return
     const pl = film.plans.find(x => x.id === planId)
@@ -1011,6 +1035,7 @@ export default function FilmEditorT({ project, onSave }: {
   const handleClosePreview = useCallback(() => {
     setPreviewing(false)
     setPreviewCanvas(null)
+    setExportMode(false)
     previewProjectRef.current = null
   }, [])
 
@@ -1126,6 +1151,14 @@ export default function FilmEditorT({ project, onSave }: {
             disabled={saving || !canPreview}
             title={canPreview ? 'Jouer le film avec l’image originale (sans scan)' : 'Il faut une animation calculée, une image et au moins un plan avec décor + clips'}
           >▶ Prévisualiser</button>
+          <button
+            className="btn-secondary btn-sm"
+            onClick={handleExport}
+            disabled={saving || !canPreview}
+            title={canPreview
+              ? 'Joue le film en temps réel et télécharge la vidéo (image + son) à la fin — MP4 sur Safari, WebM sur Chrome/Firefox'
+              : 'Il faut une animation calculée, une image et au moins un plan avec décor + clips'}
+          >⬇ Exporter vidéo</button>
           <button className="btn-primary btn-sm" onClick={handleSave} disabled={saving}>
             {saving ? 'Sauvegarde...' : 'Sauvegarder'}
           </button>
@@ -1822,6 +1855,8 @@ export default function FilmEditorT({ project, onSave }: {
             scanCanvas={previewCanvas}
             onClose={handleClosePreview}
             modal
+            recordFilm={exportMode}
+            onFilmRecorded={exportMode ? downloadRecording : undefined}
           />
         )}
       </PreviewModalShell>
