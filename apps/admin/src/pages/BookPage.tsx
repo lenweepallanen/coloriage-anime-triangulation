@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getBook, updateBook, deleteBook } from '../db/booksStore'
-import { getProjectsByBook, getProjectThumbnail, setProjectBook, duplicateProject } from '../db/projectsStore'
+import { getProjectsByBook, getProjectCardThumbnail, setProjectBook, duplicateProject } from '../db/projectsStore'
 import { buildBookPlayUrl, buildBookPlayUrlLocal, setBookPublished } from '../db/publishProject'
 import { downloadQrPng } from '../utils/qrGenerator'
 import type { Book, Project } from '../types/project'
@@ -437,7 +437,7 @@ function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicat
 
   useEffect(() => {
     let revoke: string | null = null
-    getProjectThumbnail(project.id).then(blob => {
+    getProjectCardThumbnail(project).then(blob => {
       if (blob) {
         const url = URL.createObjectURL(blob)
         revoke = url
@@ -445,7 +445,7 @@ function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicat
       }
     })
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
-  }, [project.id])
+  }, [project.id, project.hasThumbnail])
 
   return (
     <div

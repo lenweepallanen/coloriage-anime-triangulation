@@ -2762,6 +2762,19 @@ export async function getProjectThumbnail(projectId: string): Promise<Blob | nul
   return downloadBlob(`projects/${projectId}/originalImage`)
 }
 
+/**
+ * Vignette d'une carte projet (admin) : la vignette dédiée affichée dans le menu du
+ * livre côté play (`projects/{id}/thumbnail`) quand elle existe, sinon l'image
+ * originale du coloriage en secours.
+ */
+export async function getProjectCardThumbnail(project: { id: string; hasThumbnail?: boolean }): Promise<Blob | null> {
+  if (project.hasThumbnail) {
+    const blob = await downloadBlob(`projects/${project.id}/thumbnail`)
+    if (blob) return blob
+  }
+  return getProjectThumbnail(project.id)
+}
+
 export async function createProject(name: string): Promise<Project> {
   const project: Project = {
     id: crypto.randomUUID(),
@@ -2882,6 +2895,7 @@ export async function getAllProjects(): Promise<Project[]> {
       published: projDoc.published === true,
       publishedAt: projDoc.publishedAt ?? null,
       bookId: projDoc.bookId ?? null,
+      hasThumbnail: projDoc.hasThumbnail === true,
       bookOrder: projDoc.bookOrder ?? projDoc.createdAt ?? 0,
       thumbnailBlob: null,
     }

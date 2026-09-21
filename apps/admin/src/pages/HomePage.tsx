@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { getAllProjects, createProject, deleteProject, duplicateProject, getProjectThumbnail, setProjectBook } from '../db/projectsStore'
+import { getAllProjects, createProject, deleteProject, duplicateProject, getProjectCardThumbnail, setProjectBook } from '../db/projectsStore'
 import { createBook, getAllBooks, getBookCover, deleteBook } from '../db/booksStore'
 import { duplicateProjectIntoBook } from '../db/booksStore'
 import type { Project, Book } from '../types/project'
@@ -260,7 +260,7 @@ function ProjectCard({
 
   useEffect(() => {
     let revoke: string | null = null
-    getProjectThumbnail(project.id).then(blob => {
+    getProjectCardThumbnail(project).then(blob => {
       if (blob) {
         const url = URL.createObjectURL(blob)
         revoke = url
@@ -268,7 +268,7 @@ function ProjectCard({
       }
     })
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
-  }, [project.id])
+  }, [project.id, project.hasThumbnail])
 
   useEffect(() => {
     if (!menuOpen) return
