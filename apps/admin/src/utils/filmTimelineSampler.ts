@@ -82,16 +82,20 @@ export class FilmTimelineSampler {
   private film: FilmT
   private preparedByIndex: PreparedPlan[]
   private windows: Window[]
-  private animFrameCount: Map<string, number>
+  /** Par animation : nombre de frames brut + période de boucle VISUELLE
+   *  (frames − crossfade, comme `LoopPlayback`) — la phase renvoyée doit
+   *  correspondre au cycle réellement affiché, sinon elle dérive à chaque tour. */
+  private animFrameCount: Map<string, { n: number; loopLen: number }>
   private nativeRight: boolean
 
   constructor(film: FilmT, animations: Animation[], opts?: { charMetrics?: FilmCharMetrics | null }) {
     this.film = film
     this.nativeRight = film.character.facing !== 'left'
-    this.animFrameCount = new Map(animations.map(a => [
-      a.id,
-      a.mesh?.videoFramesMesh?.length ?? a.mesh?.walkBodyFrames?.length ?? 0,
-    ]))
+    this.animFrameCount = new Map(animations.map(a => {
+      const n = a.mesh?.videoFramesMesh?.length ?? a.mesh?.walkBodyFrames?.length ?? 0
+      const cf = Math.min(a.mesh?.crossfadeFrames ?? 7, Math.floor(n / 2))
+      return [a.id, { n, loopLen: Math.max(1, n - cf) }]
+    }))
     const metrics = opts?.charMetrics ?? null
 
     this.preparedByIndex = film.plans.map((plan, planIndex) => this.preparePlan(plan, planIndex, metrics))
@@ -315,11 +319,12 @@ export class FilmTimelineSampler {
       if (local >= a.startMs && local < a.startMs + a.durationMs) {
         const mul = Math.max(0.01, a.speedMul ?? 1)
         const raw = (FILM_FPS * mul * (local - a.startMs)) / 1000
-        const n = this.animFrameCount.get(a.animationId) ?? 0
+        const fc = this.animFrameCount.get(a.animationId)
+        const n = fc?.n ?? 0
         animationId = a.animationId
         animSpeedMul = mul
         animFrame = n > 0
-          ? (a.fillMode === 'loop' ? raw % n : Math.min(raw, n - 1))
+          ? (a.fillMode === 'loop' ? raw % (fc?.loopLen ?? n) : Math.min(raw, n - 1))
           : 0
         inAnimClip = true
         break
@@ -334,10 +339,10 @@ export class FilmTimelineSampler {
       if (travelAnimId != null && activeMotion) {
         const mul = Math.max(0.01, activeMotion.clip.animSpeedMul ?? 1)
         const raw = (FILM_FPS * mul * (local - activeMotion.startMs)) / 1000
-        const n = this.animFrameCount.get(travelAnimId) ?? 0
+        const fc = this.animFrameCount.get(travelAnimId)
         animationId = travelAnimId
         animSpeedMul = mul
-        animFrame = n > 0 ? raw % n : 0
+        animFrame = fc && fc.n > 0 ? raw % fc.loopLen : 0
       } else {
         const idleMul = Math.max(0.01, this.film.idleSpeedMul ?? 1)
         animSpeedMul = idleMul

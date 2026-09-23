@@ -23,21 +23,80 @@ function getCtx(): AudioContext {
   return sharedCtx;
 }
 
+/* ---------------------------------------------------------------------------
+   Pilotage SÉRIALISÉ de l'état du contexte partagé (horloge maîtresse du film).
+   Les appels suspend()/resume() sont asynchrones : un resume lancé une frame
+   après un suspend encore en vol voyait 'running' et ne faisait rien, puis le
+   suspend atterrissait → contexte bloqué, film figé. On mémorise l'ÉTAT VOULU
+   et on l'applique dans une chaîne de promesses : la dernière demande gagne.
+   iOS/WebKit ajoute un état non standard 'interrupted' (appel, Siri…) : on le
+   traite comme suspendu et on re-tente la reprise au 'statechange'.
+   --------------------------------------------------------------------------- */
+let wantRunning = false
+let chain: Promise<void> = Promise.resolve()
+let stateListenerBound = false
+
+function bindStateListener(ctx: AudioContext): void {
+  if (stateListenerBound) return
+  stateListenerBound = true
+  ctx.addEventListener?.('statechange', () => {
+    const st = ctx.state as string
+    if (wantRunning && (st === 'suspended' || st === 'interrupted')) {
+      // Fin d'interruption iOS / suspension inattendue : on relance (différé,
+      // la reprise immédiate pendant l'interruption est refusée).
+      window.setTimeout(() => { if (wantRunning) void applyDesiredState() }, 250)
+    }
+  })
+}
+
+function applyDesiredState(): Promise<void> {
+  chain = chain.then(async () => {
+    if (!sharedCtx) return
+    const st = sharedCtx.state as string
+    try {
+      if (wantRunning && (st === 'suspended' || st === 'interrupted')) await sharedCtx.resume()
+      else if (!wantRunning && st === 'running') await sharedCtx.suspend()
+    } catch { /* refus (hors geste utilisateur…) : le statechange/le prochain appel réessaiera */ }
+  })
+  return chain
+}
+
+/**
+ * Fixe l'état VOULU du contexte partagé (true = horloge qui tourne). Sérialisé :
+ * sûr à appeler depuis plusieurs endroits (pause film, attente décor). */
+export function setSharedAudioContextRunning(run: boolean): Promise<void> {
+  wantRunning = run
+  if (sharedCtx) bindStateListener(sharedCtx)
+  return applyDesiredState()
+}
+
 /**
  * Suspend l'AudioContext partagé (pause film) : gèle l'horloge et la lecture des
  * BufferSource en cours SANS déclencher leur `onended`. Reprise via
  * `resumeMouthAudioContext`. No-op si aucun contexte n'a été créé.
  */
 export async function suspendMouthAudioContext(): Promise<void> {
-  if (sharedCtx && sharedCtx.state === 'running') {
-    try { await sharedCtx.suspend(); } catch { /* */ }
-  }
+  if (!sharedCtx) return
+  await setSharedAudioContextRunning(false)
 }
 
 export async function resumeMouthAudioContext(): Promise<void> {
-  if (sharedCtx && sharedCtx.state === 'suspended') {
-    try { await sharedCtx.resume(); } catch { /* */ }
-  }
+  if (!sharedCtx) return
+  await setSharedAudioContextRunning(true)
+}
+
+/**
+ * Déblocage au sein d'un GESTE utilisateur (iOS) : crée le contexte si besoin et
+ * demande la reprise. Résout quand le contexte tourne, ou après `timeoutMs`
+ * (le film démarre alors sur son horloge de secours plutôt que de rester figé).
+ */
+export async function unlockSharedAudioContext(timeoutMs = 1500): Promise<boolean> {
+  const ctx = getCtx()
+  bindStateListener(ctx)
+  wantRunning = true
+  const done = applyDesiredState().then(() => ctx.state === 'running')
+  const timeout = new Promise<boolean>(resolve => window.setTimeout(() => resolve(ctx.state === 'running'), timeoutMs))
+  return Promise.race([done, timeout])
 }
 
 /** AudioContext partagé de l'app (lazy). Utilisé par le bus d'enregistrement vidéo. */

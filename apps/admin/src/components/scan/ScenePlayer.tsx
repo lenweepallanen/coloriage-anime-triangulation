@@ -17,7 +17,7 @@ import type { ZoneMeshSetup } from '../../utils/zoneMeshRenderer'
 import { inpaintHiddenFaceOnScan, flowExtrudeLimbOnScan, imageToScanPixel } from '../../utils/hiddenFaceTexture'
 import { EyeBlinkOverlay, buildEyeAttachMeshes, getMouthAttachMesh } from '../../utils/eyeBlinkOverlay'
 import { MouthOverlay, computeMouthPolygonFrame0 } from '../../utils/mouthOverlay'
-import { loadMouthAudio, suspendMouthAudioContext, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
+import { loadMouthAudio, setSharedAudioContextRunning, resumeMouthAudioContext, type MouthAudioPlayer } from '../../utils/mouthAudioAnalyser'
 import { FilmDirector, resolveFilmPlans, transitionDurationMs } from '../../utils/filmDirector'
 import { FilmTimelineSampler, type TimelineSample } from '../../utils/filmTimelineSampler'
 import { FilmAudioScheduler } from '../../utils/filmAudioScheduler'
@@ -1309,6 +1309,16 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       playableIdxByPlan: Map<number, number>
       /** Début (performance.now) de la retenue d'ouverture/transition, plafonnée à 4 s. */
       holdSince: number
+      /** Déblocage audio demandé (une fois audioReady) / obtenu ou expiré. */
+      unlockRequested: boolean
+      unlocked: boolean
+      /** Dernier tMs pour lequel les maillages ont été avancés (horloge unique). */
+      lastAdvancedTMs: number
+      /** Horloge de secours : dernier temps lu sur le ctx + depuis quand il ne bouge plus. */
+      lastCtxTMs: number
+      ctxStalledSince: number
+      /** Dernier échantillon posé (phase d'animation = vérité pour les maillages). */
+      lastSample: TimelineSample | null
     } | null = null
     if (timelineMode && filmT) {
       // charW_bg(scale)/bgH est CONSTANT entre plans (= refW·baseCharScale/viewH) →
@@ -1329,7 +1339,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       filmSchedulerRef.current = scheduler
       scheduler.setMuted(filmMutedRef.current)
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan, holdSince: 0 }
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan, holdSince: 0, unlockRequested: false, unlocked: false, lastAdvancedTMs: 0, lastCtxTMs: -1, ctxStalledSince: 0, lastSample: null }
       // Décodage audio plafonné à 3 s : un blob qui traîne ne doit jamais laisser l'écran
       // couvert indéfiniment — le film démarre, les sons pas encore décodés sont absents.
       const readyTimeout = new Promise<void>(resolve => window.setTimeout(resolve, 3000))
@@ -1899,6 +1909,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
      *  appelé AUSSI pendant l'attente audioReady et après un swap de plan — décor
      *  et perso doivent toujours être posés dans la même frame. */
     function applyFilmSample(sample: TimelineSample) {
+      if (filmRuntime) filmRuntime.lastSample = sample
       const rt = filmRuntime
       if (!rt) return
       const prevX = rt.lastX
@@ -1932,6 +1943,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
       // Changement d'animation du corps → crossfade + calage de phase du clip.
       const animKey = sample.animationId
+      if (animKey === rt.lastAnimKey && planChanged) {
+        // Même animation, nouveau plan : la phase du sampler repart de 0 → on recale
+        // les maillages (sinon décalage constant avec les sons de cycle).
+        const seekTo = Math.max(0, Math.floor(sample.animFrame))
+        if (activeBodyPlayback && 'seekFrame' in activeBodyPlayback) (activeBodyPlayback as LoopPlayback).seekFrame(seekTo)
+        if (activeZonePlaybacks) for (const zp of activeZonePlaybacks) { if ('seekFrame' in zp.playback) (zp.playback as LoopPlayback).seekFrame(seekTo) }
+      }
       if (animKey !== rt.lastAnimKey) {
         rt.lastAnimKey = animKey
         // Téléportation (✨ apparition, origine libre, |Δx| > 60 vs tick précédent)
@@ -1980,10 +1998,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           applyFilmSample(rt.sampler.evaluate(rt.tMs))
           return
         }
+        // Déblocage de l'AudioContext ATTENDU (1,5 s max) avant start() : sinon
+        // start() planifie sur un contexte suspendu (iOS) → horloge maîtresse figée,
+        // film gelé ou muet jusqu'au prochain geste.
+        if (!rt.unlockRequested) {
+          rt.unlockRequested = true
+          rt.scheduler.unlock(1500).then(() => { if (filmRuntime) filmRuntime.unlocked = true }, () => { if (filmRuntime) filmRuntime.unlocked = true })
+        }
+        if (!rt.unlocked) { applyFilmSample(rt.sampler.evaluate(rt.tMs)); return }
         rt.started = true
         maybeStartFilmRecording()
-        void rt.scheduler.unlock()
         rt.scheduler.start(rt.tMs)
+        rt.lastAdvancedTMs = rt.tMs
       }
       // L'audio (musique, ambiances, dialogues) reste CONTINU pendant les
       // transitions de plans : plus AUCUN suspend du ctx pendant la fenêtre —
@@ -1997,14 +2023,35 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const decorPending = rt.decorWait && planTransitionRunner == null
       if (decorPending && !rt.decorHold) {
         rt.decorHold = true
-        void suspendMouthAudioContext()
+        void setSharedAudioContextRunning(false)
       } else if (!decorPending && rt.decorHold) {
         rt.decorHold = false
-        if (playingRef.current) void resumeMouthAudioContext()
+        if (playingRef.current) void setSharedAudioContextRunning(true)
       }
-      if (rt.scheduler.isStarted) rt.tMs = rt.scheduler.currentTimeMs()
+      if (rt.scheduler.isStarted) {
+        // Horloge maîtresse = AudioContext. Si le contexte est (re)suspendu par iOS
+        // et ne repart pas (interruption, refus de resume), l'horloge ne bouge plus :
+        // au bout de 500 ms sans avancée alors qu'on est censé jouer, on bascule sur
+        // l'horloge murale (film muet mais vivant) et on redemande la reprise.
+        const ctxT = rt.scheduler.currentTimeMs()
+        const nowP = performance.now()
+        if (ctxT !== rt.lastCtxTMs) { rt.lastCtxTMs = ctxT; rt.ctxStalledSince = nowP; rt.tMs = ctxT }
+        else if (!decorPending && playingRef.current && nowP - rt.ctxStalledSince > 500) {
+          rt.tMs += deltaSeconds * 1000
+          if (!rt.scheduler.clockRunning) void setSharedAudioContextRunning(true)
+        } else {
+          rt.tMs = ctxT
+        }
+      }
       else if (!decorPending) rt.tMs += deltaSeconds * 1000
       const sample = rt.sampler.evaluate(rt.tMs)
+      // Sonde de diagnostic : temps film / horloge audio / phase animation / plan.
+      ;(window as unknown as { __filmDebug?: unknown }).__filmDebug = {
+        tMs: rt.tMs, ctxMs: rt.scheduler.isStarted ? rt.scheduler.currentTimeMs() : null,
+        clockRunning: rt.scheduler.clockRunning, planIndex: sample.planIndex, animFrame: sample.animFrame,
+        meshFrame: activeBodyPlayback && 'currentFrame' in activeBodyPlayback ? (activeBodyPlayback as LoopPlayback).currentFrame : null,
+        phase: sample.phase, decorHold: rt.decorHold, started: rt.started, unlocked: rt.unlocked,
+      }
 
       // Transition de plan : lancée UNE fois à l'entrée de la fenêtre (fondu, volet…).
       if (sample.transition && rt.launchedTransitionTo !== sample.transition.toPlanIndex) {
@@ -2061,7 +2108,10 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const swappedDuringTransition = sample.transition != null
         && rt.swappedPlanIndex === sample.transition.toPlanIndex
       applyFilmSample(swappedDuringTransition && sample.transition
-        ? { ...rt.sampler.evaluatePlanLocal(sample.transition.toPlanIndex, Math.max(0, rt.tMs - rt.swapTMs)), fadeAlpha: sample.fadeAlpha }
+        // Le plan entrant est posé à SON temps absolu (planStartMs) — figé à t=0 tant que
+        // sa fenêtre n'a pas commencé. « Avancer dès le swap » faisait RECULER le temps
+        // local à la fin de la transition (geste rejoué, voix une seule fois).
+        ? { ...rt.sampler.evaluatePlanLocal(sample.transition.toPlanIndex, Math.max(0, rt.tMs - (rt.sampler.planStartMs[sample.transition.toPlanIndex] ?? rt.swapTMs))), fadeAlpha: sample.fadeAlpha }
         : sample)
 
       // Barre de progression EXACTE (t / durée totale).
@@ -2115,13 +2165,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
         filmWasPlaying = playingRef.current
         if (!filmWasPlaying) {
           for (const a of animSoundAudiosRef.current) a.pause()
-          suspendMouthAudioContext()
+          void setSharedAudioContextRunning(false)
           btnTimerFrozenRef.current = true
           for (const v of bgVideoElements) v.pause()
           filmRecording?.pause()
         } else {
           for (const a of animSoundAudiosRef.current) { if (!a.ended) a.play().catch(() => {}) }
-          resumeMouthAudioContext()
+          if (!(filmRuntime?.decorHold)) void setSharedAudioContextRunning(true)
           btnTimerFrozenRef.current = false
           filmRecording?.resume()
           // Vidéos : relancées automatiquement par l'updater crossfade.
@@ -2210,14 +2260,40 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
 
         // Pendant un fondu segment→rest, on ramp la nouvelle playback (rest) avec smoothstep
         // pour masquer le "démarrage à pleine vitesse" de la rest pendant que le segment est encore visible.
-        if (currentAdvanceEaseIn && crossfadeProgress < 1) {
-          const ramp = smoothstep(Math.min(crossfadeProgress, 1))
-          currentAdvance(delta * ramp)
-        } else {
-          currentAdvance(delta)
+        // Mode film : les LoopPlayback avançaient au ticker PIXI (delta plafonné à
+        // 100 ms/frame) pendant que l'audio suivait l'AudioContext → à chaque frame
+        // longue, les maillages prenaient du retard sur les sons de cycle et la
+        // caméra. Désormais UNE seule horloge : le delta des maillages est celui du
+        // temps du film (gelé pendant une attente décor, comme l'audio).
+        let advDelta = delta
+        let seeked = false
+        if (filmRuntime && filmRuntime.started) {
+          const dMs = Math.max(0, Math.min(250, filmRuntime.tMs - filmRuntime.lastAdvancedTMs))
+          filmRuntime.lastAdvancedTMs = filmRuntime.tMs
+          advDelta = (dMs / 1000) * 60
+          // Quand la lecture courante est une boucle, on POSE directement la phase du
+          // sampler (frame fractionnaire) : zéro dérive, y compris pendant une transition
+          // où le temps local du plan entrant est figé à 0 (le maillage attend aussi).
+          const sm = filmRuntime.lastSample
+          if (sm && sm.animationId != null && activeBodyPlayback instanceof LoopPlayback) {
+            // animFrame peut être non borné (idle au point de repos) : on boucle sur la
+            // période visuelle de la lecture (seekFrame borne, ne boucle pas).
+            const wrap = (pb: LoopPlayback) => { const L = pb.effectiveLength; pb.seekFrame(L > 0 ? ((sm.animFrame % L) + L) % L : 0) }
+            wrap(activeBodyPlayback)
+            if (activeZonePlaybacks) for (const zp of activeZonePlaybacks) { if (zp.playback instanceof LoopPlayback) wrap(zp.playback) }
+            seeked = true
+          }
+        }
+        if (!seeked) {
+          if (currentAdvanceEaseIn && crossfadeProgress < 1) {
+            const ramp = smoothstep(Math.min(crossfadeProgress, 1))
+            currentAdvance(advDelta * ramp)
+          } else {
+            currentAdvance(advDelta)
+          }
         }
         if (prevAdvance && crossfadeProgress < 1) {
-          prevAdvance(delta)
+          prevAdvance(advDelta)
         }
 
         // Auto-revert from a zone-based oneshot once its body playback hits the last frame.
@@ -2577,7 +2653,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       filmRecording?.abort()
       filmRecording = null
       if (shouldRecord) disableRecordingBus()
-      resumeMouthAudioContext()
+      void resumeMouthAudioContext()
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('resize', handleResize)
       resizeObs?.disconnect()

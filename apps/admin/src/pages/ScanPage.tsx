@@ -677,7 +677,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
 
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button
-              onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); playUi('whoosh'); setStage('animation') }}
+              onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => m.unlockSharedAudioContext()).catch(() => {}); playUi('whoosh'); setStage('animation') }}
               disabled={lamaStatus === 'generating-mask' || lamaStatus === 'warmup' || lamaStatus === 'inpainting' || deferredLoaded === false}
             >
               {deferredLoaded === false
@@ -730,7 +730,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
                 onClick={() => {
                   if (launching) return
                   setLaunching(true)
-                  void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {})
+                  void import('../utils/mouthAudioAnalyser').then(m => m.unlockSharedAudioContext()).catch(() => {})
                   playUi('whoosh')
                   setStage('animation')
                 }}

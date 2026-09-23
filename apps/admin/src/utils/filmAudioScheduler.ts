@@ -178,11 +178,16 @@ export class FilmAudioScheduler {
     })).then(() => undefined)
   }
 
-  /** À appeler dans un GESTE utilisateur (iOS) avant/pendant le lancement. */
-  async unlock(): Promise<void> {
-    if (this.ctx.state === 'suspended') {
-      try { await this.ctx.resume() } catch { /* */ }
-    }
+  /** À appeler dans un GESTE utilisateur (iOS) avant/pendant le lancement.
+   *  Résout quand le contexte tourne (ou après le délai : horloge de secours). */
+  async unlock(timeoutMs = 1500): Promise<boolean> {
+    const { unlockSharedAudioContext } = await import('./mouthAudioAnalyser')
+    return unlockSharedAudioContext(timeoutMs)
+  }
+
+  /** Vrai si l'horloge du contexte tourne réellement. */
+  get clockRunning(): boolean {
+    return this.ctx.state === 'running'
   }
 
   get isStarted(): boolean {
@@ -216,13 +221,21 @@ export class FilmAudioScheduler {
       // offset du BUFFER : rognage du début du clip (temps fichier) + position de
       // reprise dans le clip (le playbackRate accélère le temps buffer).
       let offsetBufSec = c.offsetMs / 1000 + offsetTimelineSec * c.rate
-      if (c.loop && buf.duration > 0) offsetBufSec = offsetBufSec % buf.duration
+      // Clip BOUCLÉ rogné par la poignée gauche : la boucle doit tourner sur
+      // [offsetMs → fin] — sans loopStart, le 2ᵉ tour rejouait la partie coupée.
+      const loopStart = c.loop ? Math.min(c.offsetMs / 1000, Math.max(0, buf.duration - 0.01)) : 0
+      const loopLen = Math.max(0.01, buf.duration - loopStart)
+      if (c.loop && buf.duration > 0) offsetBufSec = loopStart + (((offsetBufSec - loopStart) % loopLen) + loopLen) % loopLen
       else if (offsetBufSec >= buf.duration) return // déjà terminé à fromMs
 
       const source = this.ctx.createBufferSource()
       source.buffer = buf
       source.playbackRate.value = c.rate
       source.loop = c.loop
+      if (c.loop && loopStart > 0) {
+        source.loopStart = loopStart
+        source.loopEnd = buf.duration
+      }
       const gain = this.ctx.createGain()
       let analyser: AnalyserNode | null = null
       if (c.isSpoken) {

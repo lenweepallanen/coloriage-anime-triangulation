@@ -178,19 +178,23 @@ export function computeFootstepSchedule(
 
   const out: FootstepOneShot[] = []
   let stepCounter = 0
-  const emit = (base: number, startMs: number, durationMs: number, animId: string, speedMul: number) => {
-    if (durationMs <= 0) return
+  /** Pose les contacts d'un cycle démarré à `originMs` (phase de l'animation),
+   *  limités à la fenêtre [winStartMs, winEndMs) — même phasage que le sampler. */
+  const emit = (base: number, originMs: number, winStartMs: number, winEndMs: number, animId: string, speedMul: number) => {
+    if (winEndMs <= winStartMs) return
     const { events, total, soundKeys, volume, offsetMs, maxMs } = entryOf(animId)
     if (events.length === 0 || soundKeys.length === 0 || total === 0) return
     const mul = Math.max(0.01, speedMul)
     const msPerFrame = 1000 / (FILM_FPS * mul)
     const cycleMs = total * msPerFrame
-    for (let k = 0; k * cycleMs < durationMs; k++) {
+    const spanMs = winEndMs - originMs
+    for (let k = 0; k * cycleMs < spanMs; k++) {
       for (const e of events) {
-        const t = (e + k * total) * msPerFrame
-        if (t >= durationMs) break
+        const t = originMs + (e + k * total) * msPerFrame
+        if (t >= winEndMs) break
+        if (t < winStartMs) continue
         out.push({
-          timeMs: Math.max(0, base + startMs + t + offsetMs),
+          timeMs: Math.max(0, base + t + offsetMs),
           soundId: soundKeys[stepCounter++ % soundKeys.length],
           volume: (volume ?? 1) * filmGain,
           maxMs,
@@ -202,15 +206,38 @@ export function computeFootstepSchedule(
   film.plans.forEach((plan, idx) => {
     const base = planStartMs[idx]
     if (base == null || Number.isNaN(base)) return
+    // Intervalles couverts par un AnimClip : le sampler y joue l'anim du clip,
+    // PAS celle du trajet → les sons de cycle du trajet y sont exclus (sinon
+    // les deux calendriers se superposaient : chaque son joué deux fois).
+    const animSpans = plan.timeline.anim
+      .filter(a => a.durationMs > 0)
+      .map(a => [a.startMs, a.startMs + a.durationMs] as const)
+      .sort((a, b) => a[0] - b[0])
     for (const c of plan.timeline.motion) {
       if (c.kind === 'appear' || c.durationMs <= 0) continue
       const animId = c.animationId ?? film.moveAnimationId
-      if (animId != null) emit(base, c.startMs, c.durationMs, animId, c.animSpeedMul ?? 1)
+      if (animId == null) continue
+      const mul = c.animSpeedMul ?? 1
+      let cursor = c.startMs
+      const end = c.startMs + c.durationMs
+      for (const [as, ae] of animSpans) {
+        if (ae <= cursor) continue
+        if (as >= end) break
+        if (as > cursor) emit(base, c.startMs, cursor, Math.min(as, end), animId, mul)
+        cursor = Math.max(cursor, ae)
+        if (cursor >= end) break
+      }
+      if (cursor < end) emit(base, c.startMs, cursor, end, animId, mul)
     }
     for (const a of plan.timeline.anim) {
-      emit(base, a.startMs, a.durationMs, a.animationId, a.speedMul ?? 1)
+      emit(base, a.startMs, a.startMs, a.startMs + a.durationMs, a.animationId, a.speedMul ?? 1)
     }
   })
+  // Dédoublonnage : deux contacts à < 60 ms l'un de l'autre = même impact.
+  out.sort((a, b) => a.timeMs - b.timeMs)
+  for (let i = out.length - 1; i > 0; i--) {
+    if (out[i].timeMs - out[i - 1].timeMs < 60) out.splice(i, 1)
+  }
   out.sort((a, b) => a.timeMs - b.timeMs)
   return out
 }
