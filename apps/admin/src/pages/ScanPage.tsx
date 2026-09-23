@@ -125,6 +125,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   }, [])
 
   function handleBack() {
+    setLaunching(false)
     if (bookId) navigate(`/livre/${bookId}`)
     else navigate(-1)
   }
@@ -233,6 +234,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   )
   useEffect(() => () => { if (capturedUrl) URL.revokeObjectURL(capturedUrl) }, [capturedUrl])
   const [detectedMarkers, setDetectedMarkers] = useState<MarkerDetection | null>(null)
+  // Verrou du bouton « Go » : un 2ᵉ tap pendant la transition preview→film
+  // pouvait tomber sur le HUD du film (retour) qui apparaît sous le doigt.
+  const [launching, setLaunching] = useState(false)
   const [lamaCanvas, setLamaCanvas] = useState<HTMLCanvasElement | null>(null)
   const [lamaStatus, setLamaStatus] = useState<LamaStatus>('idle')
   const [lamaError, setLamaError] = useState<string | null>(null)
@@ -361,7 +365,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
               scanCanvas.width, scanCanvas.height,
               processor.contentAlignment ?? undefined,
             )
-        setLamaMaskUrl(maskCanvas.toDataURL())
+        // MÉMOIRE (play) : data-URL PNG 2048² retenue en state pendant tout le film,
+        // uniquement pour le stage debug ADMIN.
+        if (mode !== 'play') setLamaMaskUrl(maskCanvas.toDataURL())
 
         setLamaStatus('warmup')
 
@@ -370,7 +376,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
           onPhase: (phase) => setLamaStatus(phase),
         })
         setLamaCanvas(result)
-        setLamaResultUrl(result.toDataURL())
+        if (mode !== 'play') setLamaResultUrl(result.toDataURL())
         setLamaStatus('done')
       } catch (err) {
         console.warn('[LaMa] Inpainting failed, will use Laplacian fallback:', err)
@@ -378,7 +384,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
         setLamaStatus('error')
       }
 
-      // Generate limb extension debug images
+      // Generate limb extension debug images (ADMIN only : un canvas pleine taille
+      // + une data-URL PAR patte, jamais affichés en play).
+      if (mode === 'play') return
       // Search ALL walk animations for hiddenFaceLimbZones, then fallback to projectTriangulation (CoTracker3/V3)
       const debugImgs: { label: string; isolatedUrl: string }[] = []
       for (const wa of project.animations) {
@@ -426,7 +434,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       }
       if (debugImgs.length > 0) setLimbExtDebugImages(debugImgs)
     })()
-  }, [processor.rectifiedCanvas, processor.contentAlignment, project.animations])
+  }, [processor.rectifiedCanvas, processor.contentAlignment, project.animations, mode])
 
   const onCameraCapture = useCallback(
     (blob: Blob, markers: MarkerDetection | null) => {
@@ -455,6 +463,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   )
 
   function handleRetake() {
+    setLaunching(false)
     processor.reset()
     setCapturedBlob(null)
     setDetectedMarkers(null)
@@ -718,10 +727,16 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
             <div className="scan-validate-actions">
               <button
                 className="btn-primary btn-lg"
-                onClick={() => { void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {}); playUi('whoosh'); setStage('animation') }}
-                disabled={deferredLoaded === false}
+                onClick={() => {
+                  if (launching) return
+                  setLaunching(true)
+                  void import('../utils/mouthAudioAnalyser').then(m => { m.getSharedAudioContext(); return m.resumeMouthAudioContext() }).catch(() => {})
+                  playUi('whoosh')
+                  setStage('animation')
+                }}
+                disabled={deferredLoaded === false || launching}
               >
-                {deferredLoaded === false ? playT('validate.loading') : mode === 'play' ? playT('validate.see') : 'Oui'}
+                {deferredLoaded === false || launching ? playT('validate.loading') : mode === 'play' ? playT('validate.see') : 'Oui'}
               </button>
               <button className="btn-secondary btn-lg" onClick={handleRetake}>
                 {mode === 'play' ? playT('validate.retry') : 'Non, je reprends'}

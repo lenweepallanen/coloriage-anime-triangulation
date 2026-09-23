@@ -3625,6 +3625,9 @@ body.play-app .net-progress-bar--indeterminate {
 }
 
 /* Pilule « connexion lente » (au-dessus de la barre, sous la safe-area). */
+/* Pendant un scan (caméra → film), la page a sa propre progression : la
+   pastille « connexion lente » globale n'a rien à y faire. */
+body.play-app[data-scan-stage] .net-slow-pill { display: none; }
 body.play-app .net-slow-pill {
   position: fixed;
   top: calc(14px + env(safe-area-inset-top));

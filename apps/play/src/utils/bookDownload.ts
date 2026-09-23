@@ -6,6 +6,7 @@ import {
   getProjectThumbnail,
 } from '@shared/db/projectsStore'
 import type { Book } from '@shared/types/project'
+import { runAsBackgroundDownloads } from '@shared/utils/downloadProgress'
 
 /**
  * Téléchargement d'un livre = pré-chargement de tous les assets de ses
@@ -104,15 +105,17 @@ export async function downloadBook(
   // Séquentiel : limite la mémoire (les blobs chargés sont relâchés entre
   // deux coloriages) et donne une progression lisible.
   for (const p of projects) {
+    // Un scan est en cours (étape caméra/preview/film) : on laisse toute la
+    // bande passante et la mémoire au scan, le pré-chargement reprend après.
+    await waitWhileScanning()
     try {
       // Vignette du menu livre (petite, best-effort)
-      if (p.hasThumbnail) await getProjectThumbnailBlob(p.id)
-      else await getProjectThumbnail(p.id)
+      await runAsBackgroundDownloads(() => p.hasThumbnail ? getProjectThumbnailBlob(p.id) : getProjectThumbnail(p.id))
     } catch { /* non bloquant */ }
 
-    const essential = await loadProjectForPlayEssential(p.id)
+    const essential = await runAsBackgroundDownloads(() => loadProjectForPlayEssential(p.id))
     if (essential) {
-      await loadProjectForPlayDeferred(essential).catch(() => { /* non bloquant */ })
+      await runAsBackgroundDownloads(() => loadProjectForPlayDeferred(essential)).catch(() => { /* non bloquant */ })
     }
     done++
     onProgress(done, total)
@@ -121,4 +124,15 @@ export async function downloadBook(
   try {
     localStorage.setItem(keyFor(book.id), String(Date.now()))
   } catch { /* stockage indisponible : le cache blobs reste rempli quand même */ }
+}
+
+/** Attend (poll 500 ms) tant qu'une page de scan est affichée (`body[data-scan-stage]`). */
+function waitWhileScanning(): Promise<void> {
+  return new Promise(resolve => {
+    const check = () => {
+      if (typeof document === 'undefined' || document.body.dataset.scanStage == null) resolve()
+      else window.setTimeout(check, 500)
+    }
+    check()
+  })
 }

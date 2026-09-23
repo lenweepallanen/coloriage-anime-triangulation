@@ -85,6 +85,13 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
   const [playing, setPlaying] = useState(true)
+  // Boutons HUD (retour / menu) inactifs 700 ms après le montage : le tap « Go » de
+  // l'écran précédent atterrit exactement là et faisait sortir du film avant son 1er rendu.
+  const [hudArmed, setHudArmed] = useState(false)
+  useEffect(() => {
+    const t = window.setTimeout(() => setHudArmed(true), 700)
+    return () => window.clearTimeout(t)
+  }, [])
   // Pause/reprise pilotée de l'extérieur (overlay orientation du mode natif)
   useEffect(() => {
     if (forcePaused === undefined) return
@@ -424,11 +431,18 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       height: containerRef.current.clientHeight,
       backgroundColor: 0x000000,
       backgroundAlpha: transparentBg ? 0 : 1,
-      resolution: window.devicePixelRatio || 1,
+      // Plafond 2× : à DPR 3 (iPhone) le canvas d'un film 16:9 ferait ~2000×1100 px —
+      // coût GPU, extract() et enregistrement ×2,25 sans gain visible.
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
     })
     appRef.current = app
     containerRef.current.appendChild(app.view as HTMLCanvasElement)
+    // Perte de contexte WebGL (pression mémoire iOS) : PIXI tente la restauration si
+    // l'événement est preventDefault()é ; on trace pour le diagnostic.
+    const glCanvas = app.view as HTMLCanvasElement
+    glCanvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); console.error('[ScenePlayer] webglcontextlost') })
+    glCanvas.addEventListener('webglcontextrestored', () => { console.warn('[ScenePlayer] webglcontextrestored') })
 
     const viewW = app.screen.width
     const viewH = app.screen.height
@@ -1293,6 +1307,8 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
        *  plan pendant qu'il est révélé (option A : plan entrant vivant, pas figé). */
       swapTMs: number
       playableIdxByPlan: Map<number, number>
+      /** Début (performance.now) de la retenue d'ouverture/transition, plafonnée à 4 s. */
+      holdSince: number
     } | null = null
     if (timelineMode && filmT) {
       // charW_bg(scale)/bgH est CONSTANT entre plans (= refW·baseCharScale/viewH) →
@@ -1313,8 +1329,11 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       filmSchedulerRef.current = scheduler
       scheduler.setMuted(filmMutedRef.current)
       const firstActive = filmT.plans.findIndex((_, i) => !Number.isNaN(sampler.planStartMs[i]))
-      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan }
-      scheduler.ready.then(() => { if (filmRuntime) filmRuntime.audioReady = true })
+      filmRuntime = { sampler, scheduler, tMs: 0, started: false, ended: false, audioReady: false, decorHold: false, decorWait: true, lastAnimKey: null, outroLaunched: false, launchedTransitionTo: -1, currentPlanIndex: Math.max(0, firstActive), lastPosedPlanIndex: -1, swappedPlanIndex: -1, swapTMs: 0, playableIdxByPlan, holdSince: 0 }
+      // Décodage audio plafonné à 3 s : un blob qui traîne ne doit jamais laisser l'écran
+      // couvert indéfiniment — le film démarre, les sons pas encore décodés sont absents.
+      const readyTimeout = new Promise<void>(resolve => window.setTimeout(resolve, 3000))
+      Promise.race([scheduler.ready, readyTimeout]).then(() => { if (filmRuntime) filmRuntime.audioReady = true })
       // OUVERTURE du film : l'overlay couvre l'écran DÈS le montage (avant même
       // le décodage audio) puis découvre le 1er plan — retenu tant que le décor
       // initial n'est pas prêt (holdForDecor), comme une transition de plan.
@@ -2119,8 +2138,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           // Retenue : décor swappé pas prêt, OU film pas encore démarré (décodage
           // audio) — l'ouverture reste couvrante et se découvre en phase avec
           // l'horloge du film, pas avec le temps réel du montage.
-          const holdForDecor = filmRuntime != null
+          let holdForDecor = filmRuntime != null
             && (!filmRuntime.started || (filmRuntime.decorWait && !currentLayers.ready()))
+          if (holdForDecor && filmRuntime) {
+            // Plafond : un décor/son qui ne vient jamais ne doit pas laisser l'écran
+            // couvert — au-delà de 4 s on découvre quoi qu'il arrive.
+            if (!filmRuntime.holdSince) filmRuntime.holdSince = performance.now()
+            else if (performance.now() - filmRuntime.holdSince > 4000) { holdForDecor = false; filmRuntime.decorWait = false }
+          } else if (filmRuntime) filmRuntime.holdSince = 0
           if (!holdForDecor && planTransitionRunner.update(deltaSeconds * 1000)) planTransitionRunner = null
         }
         if (filmRuntime) {
@@ -3016,14 +3041,14 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       const progTop = cardSize.h ? `calc(50% + ${cardSize.h / 2}px - 10px)` : undefined
       return (
         <div className={`animation-player scene-player scene-player--framed scene-player--landscape scene-player--fullscreen scene-player--filmapp${forcedRotate ? ' scene-player--rotated' : ''}`} ref={playerRef}>
-          <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSideLeft }} onClick={() => (onExit ?? onClose)()} aria-label={playT('film.back')}>
+          <button className="filmapp-round filmapp-back" style={{ top: hudTop, left: hudSideLeft, pointerEvents: hudArmed ? undefined : 'none' }} onClick={() => { if (hudArmed) (onExit ?? onClose)() }} aria-label={playT('film.back')}>
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M19 12H5" />
               <path d="m11 6-6 6 6 6" />
             </svg>
           </button>
           {onSettings && (
-            <button className="filmapp-round filmapp-menu" style={{ top: hudTop, right: hudSideRight }} onClick={onSettings} aria-label="Menu">
+            <button className="filmapp-round filmapp-menu" style={{ top: hudTop, right: hudSideRight, pointerEvents: hudArmed ? undefined : 'none' }} onClick={() => { if (hudArmed) onSettings() }} aria-label="Menu">
               <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
                 <path d="M4 7h16M4 12h16M4 17h16" />
               </svg>

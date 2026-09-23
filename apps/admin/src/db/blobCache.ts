@@ -1,6 +1,6 @@
 import { ref, getMetadata, getDownloadURL } from 'firebase/storage'
 import { storage } from './firebase'
-import { beginDownload, progressDownload, endDownload } from '../utils/downloadProgress'
+import { beginDownload, setDownloadTotal, progressDownload, endDownload } from '../utils/downloadProgress'
 
 /**
  * Cache local des blobs Cloud Storage (IndexedDB).
@@ -111,17 +111,22 @@ export async function cachedDownloadBlob(path: string): Promise<Blob | null> {
     return cached.blob
   }
 
+  // Le suivi démarre AVANT la résolution d'URL et la requête : un blocage avant les
+  // en-têtes (DNS, TLS, serveur lent) compte comme « aucun octet reçu ».
+  const id = beginDownload(0)
   try {
     const url = await getDownloadURL(storageRef)
     const response = await fetch(url)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const blob = await readBlobWithProgress(response)
+    const blob = await readBlobWithProgress(response, id)
     stats.misses++
     void idbPut({ path, generation, blob, cachedAt: Date.now() })
     return blob
   } catch (err) {
     console.warn(`[blobCache] Download failed for ${path}:`, err)
     return cached?.blob ?? null
+  } finally {
+    endDownload(id)
   }
 }
 
@@ -130,27 +135,20 @@ export async function cachedDownloadBlob(path: string): Promise<Blob | null> {
  * GLOBAL (barre + message « connexion lente » côté play). Repli sur
  * `response.blob()` si le streaming n'est pas disponible (vieux navigateurs).
  */
-async function readBlobWithProgress(response: Response): Promise<Blob> {
+async function readBlobWithProgress(response: Response, id: number): Promise<Blob> {
   const totalBytes = Number(response.headers.get('content-length')) || 0
   const type = response.headers.get('content-type') || ''
+  setDownloadTotal(id, totalBytes)
   const body = response.body
-  if (!body || typeof body.getReader !== 'function') {
-    const id = beginDownload(totalBytes)
-    try { return await response.blob() } finally { endDownload(id) }
+  if (!body || typeof body.getReader !== 'function') return response.blob()
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) { chunks.push(value); progressDownload(id, value.length) }
   }
-  const id = beginDownload(totalBytes)
-  try {
-    const reader = body.getReader()
-    const chunks: Uint8Array[] = []
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value) { chunks.push(value); progressDownload(id, value.length) }
-    }
-    return new Blob(chunks as BlobPart[], type ? { type } : undefined)
-  } finally {
-    endDownload(id)
-  }
+  return new Blob(chunks as BlobPart[], type ? { type } : undefined)
 }
 
 /** À appeler après un upload/suppression pour invalider l'entrée locale. */
