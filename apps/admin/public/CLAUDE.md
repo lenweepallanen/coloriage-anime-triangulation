@@ -13,13 +13,13 @@ Application web qui transforme un coloriage papier en animation interactive. L'u
 1. **Import** : L'admin importe une image de coloriage (PNG/JPEG), optionnellement une vidéo de fond et un son d'ambiance
 2. **Pipeline 10 étapes** : Il configure le tracking vidéo et la triangulation sur l'animation principale ("rest")
 3. **Multi-animations** : Il peut ajouter des animations oneshot (déclenchées à la demande) et des animations physics (procédurales par code JS)
-4. **PDF** : Il génère un PDF imprimable avec l'image + marqueurs L aux 4 coins (pour la détection au scan)
+4. **PDF** : Il génère un PDF imprimable avec l'image + 4 viseurs (motif QR) dans les coins de l'image (pour la détection au scan)
 
 ### Côté Utilisateur final (scan + animation)
 
 1. **Impression** : L'utilisateur imprime le PDF du coloriage
 2. **Coloriage** : Il colorie le dessin avec ses crayons/feutres
-3. **Scan caméra** : Il ouvre la page scan sur son téléphone, la caméra détecte les 4 marqueurs L
+3. **Scan caméra** : Il ouvre la page scan sur son téléphone, la caméra détecte les 4 viseurs
 4. **Ajustement coins** : Repositionnement manuel des coins si nécessaire
 5. **Correction perspective** : Homographie OpenCV → image rectifiée (2048×2048 → crop marges → resize)
 6. **Animation** : Le maillage triangulé s'anime en temps réel avec PIXI.js, texturé avec les couleurs du coloriage scanné
@@ -84,7 +84,7 @@ Project {
   ambientSoundBlob: Blob | null      // Son d'ambiance (optionnel, boucle continue)
   ambientSoundEnabled: boolean
   animations: Animation[]            // 1 rest + 0..N oneshots + 0..N physics
-  markers: MarkerCorners | null      // 4 coins marqueurs L pour le scan
+  markers: MarkerCorners | null      // (legacy, inutilisé)
 }
 ```
 
@@ -413,7 +413,7 @@ position_finale = position_courante + (position_overlay_frame_i - position_overl
 
 ### Pipeline scan
 
-1. **Caméra** : détection temps réel des marqueurs L aux 4 coins
+1. **Caméra** : détection temps réel des 4 viseurs (coins de l'image)
 2. **Ajustement** : l'utilisateur repositionne manuellement les coins si nécessaire
 3. **Perspective** : homographie OpenCV dans un Web Worker → image 2048×2048 → crop marges 64px → resize aux dimensions originales
 4. **Debug** : visualisation des 4 étapes (photo brute, 2048 avec marges, croppée, overlay mesh)

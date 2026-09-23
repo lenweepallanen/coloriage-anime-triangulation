@@ -1,72 +1,23 @@
 import { useState, useCallback } from 'react'
 import { animationHasFrames, isLoopAnimation, type Project, type MeshData } from '../../types/project'
-import type { Point2D } from '../../types/project'
-import { processCapturedImage } from '../../utils/perspectiveCorrection'
+import { processCapturedImage, type MarkerDetection } from '../../utils/perspectiveCorrection'
 import { createScan } from '../../db/scansStore'
 import type { ContentAlignment } from '../../utils/textureExtractor'
-import { A4_W, A4_H, MARGIN, MARKER_SIZE, MARKER_THICK, MARKER_MARGIN } from '../../utils/pdfLayout'
-
-// Constantes du contrat scan/PDF (voir pdfGenerator + opencv-worker)
-const SCAN_TOTAL = 2048
-const SCAN_MARKER_FRAME = 1920        // L-centroïdes mappés à (64,64)↔(1984,1984)
-const SCAN_MARKER_OFFSET = (SCAN_TOTAL - SCAN_MARKER_FRAME) / 2  // = 64
-
-// Centroïde géométrique d'un L composé de 2 rectangles SIZE×THICK (overlap THICK×THICK)
-// → offset depuis l'angle externe du L, sur un axe. L est symétrique selon y=x
-// donc Cx = Cy. Décomposition : (bras horizontal moins overlap) + (bras vertical
-// complet). Pour Cx :
-//   armOnly = rect [(THICK..SIZE) × (0..THICK)], area = (SIZE-THICK)*THICK, x-centroid = (THICK+SIZE)/2
-//   fullArm = rect [(0..THICK) × (0..SIZE)],     area = THICK*SIZE,         x-centroid = THICK/2
-// Avec SIZE=15, THICK=4 : Cx = (44 × 9.5 + 60 × 2) / 104 ≈ 5.173 mm.
-function computeLCentroidOffsetMm(): number {
-  const armOnly = (MARKER_SIZE - MARKER_THICK) * MARKER_THICK
-  const fullArm = MARKER_THICK * MARKER_SIZE
-  const total = armOnly + fullArm
-  return (
-    armOnly * (MARKER_THICK + MARKER_SIZE) / 2 +
-    fullArm * MARKER_THICK / 2
-  ) / total
-}
+import { SCAN_IMAGE_OFFSET, SCAN_IMAGE_FRAME } from '../../utils/pdfLayout'
 
 /**
- * Calcule analytiquement la zone du dessin dans le scan 2048×2048, à partir
- * du layout PDF connu :
- *   - L-markers détectés par leur centroïde, mappés à (64,64)↔(1984,1984)
- *   - Centroïde du L = ~5.17 mm de l'angle externe (cf. pdfGenerator)
- *   - L-marker outer corner = (imgX - MARKER_MARGIN, imgY - MARKER_MARGIN)
- *   → Le centroïde tombe à `L_INSET = (5.17 - MARKER_MARGIN) mm` à l'intérieur
- *     du coin de l'image. Donc l'image s'étend au-delà du marker frame de
- *     `L_INSET` mm sur chaque côté.
- *
- * Renvoie un `ContentAlignment` qui mappe l'image entière (en coords pixels
- * naturels) à la zone du dessin sur le scan. Déterministe, pas de détection.
+ * Alignement image ↔ scan : par CONTRAT (pdfLayout), le scan redressé place l'image
+ * entière sur le cadre (64,64)↔(1984,1984) — l'homographie est calculée sur les coins
+ * des viseurs, dont la position dans l'image est connue en mm. Déterministe, pas de
+ * détection, quel que soit le format de l'image.
  */
 function computePdfContentAlignment(imageWidth: number, imageHeight: number): ContentAlignment {
-  const aspect = imageWidth / imageHeight
-  const contentW = A4_W - MARGIN * 2
-  const contentH = A4_H - MARGIN * 2
-  let imgW_mm: number, imgH_mm: number
-  if (aspect > contentW / contentH) {
-    imgW_mm = contentW
-    imgH_mm = contentW / aspect
-  } else {
-    imgH_mm = contentH
-    imgW_mm = contentH * aspect
-  }
-
-  const L_INSET_MM = computeLCentroidOffsetMm() - MARKER_MARGIN  // ≈ 3.17 mm
-  // Le L-centroïde frame (1920 px) couvre `(imgW_mm - 2·L_INSET)` mm de l'image.
-  // L'image entière en pixels scan : 1920 × imgW_mm / (imgW_mm - 2·L_INSET)
-  const drawW = SCAN_MARKER_FRAME * imgW_mm / (imgW_mm - 2 * L_INSET_MM)
-  const drawH = SCAN_MARKER_FRAME * imgH_mm / (imgH_mm - 2 * L_INSET_MM)
-  const cx = SCAN_MARKER_OFFSET + SCAN_MARKER_FRAME / 2
-  const cy = SCAN_MARKER_OFFSET + SCAN_MARKER_FRAME / 2
   return {
     drawBBox: {
-      minX: cx - drawW / 2,
-      minY: cy - drawH / 2,
-      maxX: cx + drawW / 2,
-      maxY: cy + drawH / 2,
+      minX: SCAN_IMAGE_OFFSET,
+      minY: SCAN_IMAGE_OFFSET,
+      maxX: SCAN_IMAGE_OFFSET + SCAN_IMAGE_FRAME,
+      maxY: SCAN_IMAGE_OFFSET + SCAN_IMAGE_FRAME,
     },
     meshBBox: { minX: 0, minY: 0, maxX: imageWidth, maxY: imageHeight },
   }
@@ -117,14 +68,14 @@ export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'pl
   const [contentAlignment, setContentAlignment] = useState<ContentAlignment | null>(null)
 
   const handleCapture = useCallback(
-    async (blob: Blob, corners: Point2D[] | null) => {
+    async (blob: Blob, markers: MarkerDetection | null) => {
       // VIE PRIVÉE (play) : on n'accepte QUE des scans avec les 4 repères
       // détectés. Sans repères, le pipeline basculait en recadrage centré →
       // n'importe quelle photo (mur, visage) devenait un scan. En play on refuse
       // (message d'aide) ; l'admin garde le fallback recadrage. L'import d'image
       // en play passe désormais par une détection de repères (CameraView) et
       // fournit donc de vrais coins → il satisfait ce contrôle.
-      if (isPlay && (!corners || corners.length !== 4)) {
+      if (isPlay && (!markers || markers.centers.length !== 4)) {
         setError("On ne reconnaît pas de coloriage. Vise bien les 4 repères aux coins de la page.")
         return
       }
@@ -136,8 +87,11 @@ export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'pl
         // 1. Photo brute capturée
         const capturedUrl = URL.createObjectURL(blob)
 
-        // Process via worker: detection + perspective correction -> 2048x2048
-        const result = await processCapturedImage(blob, corners)
+        // Cibles du redressement = contrat PDF pour CETTE image (taille native → mm).
+        const imgDims = project.originalImageBlob ? await getImageDimensions(project.originalImageBlob) : null
+
+        // Process via worker: homographie sur les coins des viseurs -> 2048x2048
+        const result = await processCapturedImage(blob, markers, imgDims)
 
         // 2. Image 2048x2048 brute (avec marges)
         const raw2048Canvas = document.createElement('canvas')
@@ -169,11 +123,7 @@ export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'pl
         // Alignement déterministe basé sur le layout PDF connu (pas de détection).
         // Mappe l'image entière (coords pixels naturels) à la zone du dessin
         // calculée géométriquement à partir des centroïdes L et MARKER_MARGIN.
-        let alignment: ContentAlignment | null = null
-        if (project.originalImageBlob) {
-          const imgDims = await getImageDimensions(project.originalImageBlob)
-          alignment = computePdfContentAlignment(imgDims.width, imgDims.height)
-        }
+        const alignment: ContentAlignment | null = imgDims ? computePdfContentAlignment(imgDims.width, imgDims.height) : null
         setContentAlignment(alignment)
 
         // 3. Image redressée croppée + 4. overlay maillage — debug ADMIN uniquement.

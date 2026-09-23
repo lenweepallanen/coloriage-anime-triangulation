@@ -12,7 +12,7 @@ Machine d'états dans `ScanPage.tsx` : caméra → ajustement coins → traiteme
 
 | Fichier | Rôle |
 |---------|------|
-| `CameraView.tsx` | Flux caméra temps réel + détection marqueurs L + analyse qualité |
+| `CameraView.tsx` | Flux caméra temps réel + détection des 4 viseurs + analyse qualité |
 | `CornerAdjustment.tsx` | Ajustement manuel des 4 coins détectés (SVG draggable) |
 | `ScanProcessor.tsx` | Hook de traitement : correction perspective + debug pipeline + sauvegarde scan |
 | `AnimationPlayer.tsx` | Rendu PIXI.js du maillage texturé animé (sans physique tactile) |
@@ -55,44 +55,40 @@ Frame caméra (200ms interval)
 - Support torche/flash mobile
 - Fallback import image si caméra indisponible
 
-## Détection marqueurs L (Worker OpenCV)
+## Détection des viseurs (Worker OpenCV)
 
-### Stratégies de seuillage (fallback chain)
+Repères = 4 **viseurs** (motif de QR code : carré noir 7×7 modules, anneau blanc, carré
+noir 3×3), 12 mm, posés DANS l'image à 2 mm de chaque coin sur un carré blanc de 16 mm
+(contrat `utils/pdfLayout.ts`). `detectFinders(imageData)` dans `opencv-worker.js` :
 
-1. **Seuils fixes** : [50, 70, 90, 110, 130, 150] — `THRESH_BINARY_INV`
-2. **Otsu automatique** — seuil adaptatif
-3. **Gaussien adaptatif** — bloc 51×51, constante 10
+1. Gris ; si l'image fait < 1000 px, sur-échantillonnage ×2 (modules ≈ 5 px à 640 px).
+2. Binarisations successives (adaptatif gaussien 41/7, adaptatif moyenne 25/5, Otsu, seuils fixes 70/110/150), arrêt dès 4 candidats.
+3. Candidat = contour externe (`RETR_TREE`) à 4 sommets convexes, contenant un trou, ET
+   (structure emboîtée noir→blanc→noir à centres confondus avec rapports d'aires 49:25:9
+   **ou** profil de gris 1:1:3:1:1 sur les deux axes, tolérance 50 % comme ZXing),
+   ET anneau autour de la bbox nettement plus clair que l'intérieur (zone blanche).
+4. Si > 4 candidats : les 4 de tailles cohérentes formant le plus grand quadrilatère convexe.
+5. Sortie : `centers[4]` (TL TR BR BL) + `tagCorners[4][4]` (coins du carré extérieur,
+   affinés par `cornerSubPix` si dispo) → message `detect-result { markers, found }`.
 
-### Validation contour L
-
-| Critère | Valeur |
-|---------|--------|
-| Surface | 0.0002% – 3% de l'image |
-| Solidité | 25% – 50% |
-| Ratio aspect | < 2.5 |
-| Vertices (approx) | 5 – 8 |
-| Noirceur moyenne | < 80 |
-
-### Validation quadrilatère
-
-- **Convexité** : tous les produits vectoriels de même signe
-- **Surface** : ≥ 8% de l'image
-- **Ratio aspect** : ≤ 3
-- **Dispersion** : aucun coin < 15% de la distance max au centroïde
-- **Intérieur lumineux** : ≥ 50% des 9 points tests > 150
+Aucun filtre de forme « à seuils » : une lettre, un QR code ou un trait ne satisfont pas
+la structure emboîtée / le rapport 1:1:3:1:1 → pas de faux positif par nature. Sur banc
+synthétique (page T-Rex, titre noir + encadré QR) : 0 faux quad, 80/80 à 640 px.
 
 ## Correction perspective (perspectiveCorrection.ts + Worker)
 
 ```
-Coins détectés (centroïdes des L)
-  → getPerspectiveTransform(src, dst)
-  → dst = carré 2048×2048 avec marges 64px
-  → warpPerspective → image rectifiée
-  → Crop des marges 64px (zone utile = 1920×1920)
-  → Rescale aux dimensions originales de l'image du projet
+processCapturedImage(blob, markers, imageSize)
+  → targets = scanTargetsForImage(imageSize)   // cibles px scan des 16 coins + 4 centres (contrat pdfLayout)
+  → worker 'process' { imageData, markers, targets }
+      markers.tagCorners (16 pts) → homographie DLT moindres carrés   (strategy 'predetected-16')
+      markers.centers seuls (ajustement manuel) → 4 ↔ 4               (strategy 'manual-4')
+      pas de markers → detectFinders dans le worker                   (strategy 'detected-16')
+  → warpPerspective 2048×2048 : l'image entière occupe (64,64)↔(1984,1984)
 ```
 
-Fallback si aucun coin : crop carré centré + scale à 2048×2048.
+`contentAlignment` est donc constant : `drawBBox = (64,64)↔(1984,1984)`, `meshBBox` = image
+native. Fallback si aucun repère (admin seulement) : crop carré centré à 2048×2048.
 
 ## Debug pipeline (ScanProcessor.tsx)
 

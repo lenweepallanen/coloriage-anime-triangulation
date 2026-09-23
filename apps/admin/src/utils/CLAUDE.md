@@ -10,7 +10,6 @@ Fonctions pures et modules de traitement utilisés par les composants.
 | `barycentricUtils.ts` | Coordonnées barycentriques (calcul, recherche triangle, interpolation) |
 | `geometry.ts` | Fonctions géométriques (point-in-polygon, distanceSq, centroïde) |
 | `keyframePropagation.ts` | Interpolation linéaire entre keyframes |
-| `markerGenerator.ts` | Dessin des marqueurs L aux coins |
 | `opticalFlowComputer.ts` | Orchestration du pré-calcul optical flow + tracking par segment |
 | `trackingConstraints.ts` | Contraintes de voisinage + snap-to-contour + spring curviligne pour stabiliser le tracking |
 | `contourAnchorTracker.ts` | Raffinement hybride LK + template matching + snap contour pour anchors contour (utilisé par opticalFlowComputer.ts) |
@@ -73,11 +72,9 @@ Utilisé par :
 - `triangleCentroid(a, b, c)` — moyenne des 3 sommets
 - `distanceSq(a, b)` — distance euclidienne au carré
 
-## markerGenerator.ts
+## pdfLayout.ts — contrat PDF ↔ scan
 
-Dessine des marqueurs en L :
-- Taille et épaisseur configurables (défaut 40px / 10px)
-- Orientation vers l'intérieur selon le coin (TL→↘, TR→↙, BR→↖, BL→↗)
+Source unique de vérité : A4 + marges, viseur `FINDER_MM = 12` mm posé DANS l'image à `FINDER_QUIET_MM = 2` mm du coin sur un carré blanc de 16 mm, cadre scan `SCAN_IMAGE_FRAME = 1920` px décalé de 64 (l'image entière → (64,64)↔(1984,1984)). Helpers : `computeImagePlacementMm`, `finderOriginsMm/CornersMm/CentersMm` (mm, repère image), `scanTargetsForImage(w, h)` → cibles px des 16 coins + 4 centres, passées au worker pour l'homographie.
 
 ## opticalFlowComputer.ts
 
@@ -489,15 +486,9 @@ class ContourSpatialIndex {
 - `nearestWithIndex()` idem mais retourne aussi l'index original dans le contour — utilisé par ContourTrackingStep pour retrouver la position curviligne
 - Utilisé par `applySnapToContour`, `recoverLostPoints`, et `ContourTrackingStep` à chaque frame
 
-## pdfLayout.ts
-
-Constantes de layout A4 partagées entre la génération PDF et la correction de perspective :
-- Dimensions A4 en mm et marges
-- Utilisé par `pdfGenerator.ts` et `ScanProcessor.tsx`
-
 ## pdfGenerator.ts
 
-Génère un PDF avec jsPDF contenant l'image du coloriage, l'overlay du maillage triangulé et les marqueurs L aux 4 coins pour la détection au scan.
+Génère un PDF avec jsPDF : image du coloriage placée selon `computeImagePlacementMm`, puis dans chacun de ses 4 coins un carré blanc (16 mm, efface le dessin) + un viseur (motif QR 7×7 modules, 12 mm) à 2 mm du coin. Constantes et géométrie dans `pdfLayout.ts` (contrat partagé avec le scan).
 
 ## bodyZoneUtils.ts
 

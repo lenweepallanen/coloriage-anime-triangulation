@@ -60,455 +60,210 @@ function loadCV() {
   });
 }
 
-// Valider que 4 coins forment un quadrilatère convexe raisonnable
-function validateQuadrilateral(corners, w, h) {
-  const [tl, tr, br, bl] = corners;
+// ============================================================================
+// REPÈRES « VISEUR » (motif de QR code) — voir apps/admin/src/utils/pdfLayout.ts
+// Carré noir 7×7 modules / anneau blanc / carré noir 3×3, posé sur un carré blanc
+// dans chaque coin de l'image. Détection par STRUCTURE (contours emboîtés à centres
+// confondus, rapports d'aires 49:25:9) OU par le profil 1:1:3:1:1 sur le gris
+// (méthode ZXing), + zone blanche autour. Une lettre, un QR code ou un trait de
+// dessin ne remplissent jamais ces conditions → pas de faux positif par nature.
+// ============================================================================
 
-  // 1. Vérifier la convexité (produits vectoriels de même signe)
-  const pts = [tl, tr, br, bl];
-  let allPos = true, allNeg = true;
-  for (let i = 0; i < 4; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % 4];
-    const c = pts[(i + 2) % 4];
-    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
-    if (cross > 0) allNeg = false;
-    if (cross < 0) allPos = false;
-  }
-  if (!allPos && !allNeg) {
-    console.log('Worker: quad rejeté - pas convexe');
-    return false;
-  }
-
-  // 2. Aire du quadrilatère (Shoelace) > 8% de l'image
-  const quadArea = 0.5 * Math.abs(
-    (tl.x * tr.y - tr.x * tl.y) +
-    (tr.x * br.y - br.x * tr.y) +
-    (br.x * bl.y - bl.x * br.y) +
-    (bl.x * tl.y - tl.x * bl.y)
-  );
-  const imgArea = w * h;
-  if (quadArea < imgArea * 0.08) {
-    console.log('Worker: quad rejeté - trop petit (' + Math.round(quadArea / imgArea * 100) + '% de l\'image)');
-    return false;
-  }
-
-  // 3. Ratio d'aspect du quad (template carré, donc < 3 même en perspective)
-  const topW = Math.sqrt((tr.x - tl.x) ** 2 + (tr.y - tl.y) ** 2);
-  const botW = Math.sqrt((br.x - bl.x) ** 2 + (br.y - bl.y) ** 2);
-  const leftH = Math.sqrt((bl.x - tl.x) ** 2 + (bl.y - tl.y) ** 2);
-  const rightH = Math.sqrt((br.x - tr.x) ** 2 + (br.y - tr.y) ** 2);
-  const avgW = (topW + botW) / 2;
-  const avgH = (leftH + rightH) / 2;
-  const aspect = Math.max(avgW, avgH) / Math.max(Math.min(avgW, avgH), 1);
-  if (aspect > 3) {
-    console.log('Worker: quad rejeté - trop allongé (aspect=' + aspect.toFixed(1) + ')');
-    return false;
-  }
-
-  // 3b. Perspective (raccourci fronto-parallèle) : si un côté est ~2× l'opposé,
-  // la page est trop inclinée → rejet (filet léger ; le niveau à bulle guide déjà).
-  const wRatio = Math.max(topW, botW) / Math.max(Math.min(topW, botW), 1);
-  const hRatio = Math.max(leftH, rightH) / Math.max(Math.min(leftH, rightH), 1);
-  if (wRatio > 1.9 || hRatio > 1.9) {
-    console.log('Worker: quad rejeté - perspective trop forte (wR=' + wRatio.toFixed(2) + ', hR=' + hRatio.toFixed(2) + ')');
-    return false;
-  }
-
-  // 4. Les 4 coins doivent être dispersés (pas regroupés dans un coin de l'image)
-  const centerX = (tl.x + tr.x + br.x + bl.x) / 4;
-  const centerY = (tl.y + tr.y + br.y + bl.y) / 4;
-  const maxDistFromCenter = Math.max(
-    ...pts.map(p => Math.sqrt((p.x - centerX) ** 2 + (p.y - centerY) ** 2))
-  );
-  const minDistFromCenter = Math.min(
-    ...pts.map(p => Math.sqrt((p.x - centerX) ** 2 + (p.y - centerY) ** 2))
-  );
-  if (minDistFromCenter < maxDistFromCenter * 0.15) {
-    console.log('Worker: quad rejeté - coins trop regroupés');
-    return false;
-  }
-
-  console.log('Worker: quad géométrie OK (area=' + Math.round(quadArea / imgArea * 100) + '%, aspect=' + aspect.toFixed(1) + ')');
-  return true;
+function contourCentroid(c) {
+  const m = cv.moments(c);
+  return m.m00 ? [m.m10 / m.m00, m.m01 / m.m00] : [0, 0];
 }
 
-// Vérifier que l'intérieur du quadrilatère est blanc (= papier)
-function validateBrightInterior(gray, corners) {
-  const [tl, tr, br, bl] = corners;
-
-  const checkPoints = [
-    { x: (tl.x + tr.x + br.x + bl.x) / 4, y: (tl.y + tr.y + br.y + bl.y) / 4 },
-    { x: (tl.x + tr.x) / 2, y: (tl.y + tr.y) / 2 },
-    { x: (tr.x + br.x) / 2, y: (tr.y + br.y) / 2 },
-    { x: (br.x + bl.x) / 2, y: (br.y + bl.y) / 2 },
-    { x: (bl.x + tl.x) / 2, y: (bl.y + tl.y) / 2 },
-    { x: (tl.x * 3 + br.x) / 4, y: (tl.y * 3 + br.y) / 4 },
-    { x: (tl.x + br.x * 3) / 4, y: (tl.y + br.y * 3) / 4 },
-    { x: (tr.x * 3 + bl.x) / 4, y: (tr.y * 3 + bl.y) / 4 },
-    { x: (tr.x + bl.x * 3) / 4, y: (tr.y + bl.y * 3) / 4 },
-  ];
-
-  // Seuil ABAISSÉ (150→120) + ratio ASSOUPLI (0.5→0.34) pour tolérer une ombre
-  // ou un reflet en travers de la page (cas courant sur une table) — sinon une
-  // page pourtant bien cadrée est refusée « intérieur sombre ».
-  let brightCount = 0;
-  const brightThresh = 120;
-  for (const p of checkPoints) {
-    const px = Math.max(0, Math.min(gray.cols - 1, Math.round(p.x)));
-    const py = Math.max(0, Math.min(gray.rows - 1, Math.round(p.y)));
-    const val = gray.ucharAt(py, px);
-    if (val > brightThresh) brightCount++;
-  }
-
-  const ratio = brightCount / checkPoints.length;
-  if (ratio < 0.34) {
-    console.log('Worker: quad rejeté - intérieur sombre (' + brightCount + '/' + checkPoints.length + ' points clairs)');
-    return false;
-  }
-
-  console.log('Worker: quad intérieur blanc OK (' + brightCount + '/' + checkPoints.length + ')');
-  return true;
+// Rapport 1:1:3:1:1 sur un profil de gris (5 runs centraux), tolérance 50 % (ZXing).
+function finderRatioOk(p) {
+  if (p.length < 9) return false;
+  let mn = 255, mx = 0;
+  for (const v of p) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  const thr = (mn + mx) / 2;
+  const runs = []; let cur = p[0] < thr, n = 0;
+  for (const v of p) { const b = v < thr; if (b === cur) n++; else { runs.push([cur, n]); cur = b; n = 1; } }
+  runs.push([cur, n]);
+  const mid = p.length >> 1; let acc = 0, ci = 0;
+  for (let i = 0; i < runs.length; i++) { if (acc + runs[i][1] > mid) { ci = i; break; } acc += runs[i][1]; }
+  if (ci < 2 || ci + 2 >= runs.length || !runs[ci][0]) return false;
+  const r = [runs[ci - 2][1], runs[ci - 1][1], runs[ci][1], runs[ci + 1][1], runs[ci + 2][1]];
+  const unit = (r[0] + r[1] + r[2] + r[3] + r[4]) / 7;
+  if (unit < 1) return false;
+  const tol = unit * 0.5 + 0.5, e = [1, 1, 3, 1, 1];
+  return r.every((v, i) => Math.abs(v - e[i] * unit) <= tol * (e[i] > 1 ? e[i] : 1));
 }
 
-// Valider que le contour a une forme en L (5-8 sommets approximés)
-function validateLShape(contour) {
-  const peri = cv.arcLength(contour, true);
-  const approx = new cv.Mat();
-  cv.approxPolyDP(contour, approx, 0.04 * peri, true);
-  const nVertices = approx.rows;
-  approx.delete();
-  return nVertices >= 5 && nVertices <= 8;
-}
-
-// Valider que le marqueur est sombre (encre noire, pas un doigt/ombre)
-function validateMarkerIsDark(grayMat, contour) {
-  let mask = null;
-  let tempContours = null;
-  try {
-    mask = new cv.Mat.zeros(grayMat.rows, grayMat.cols, cv.CV_8UC1);
-    tempContours = new cv.MatVector();
-    tempContours.push_back(contour);
-    cv.drawContours(mask, tempContours, 0, new cv.Scalar(255), cv.FILLED);
-    const mean = cv.mean(grayMat, mask);
-    return mean[0] < 80;
-  } finally {
-    if (mask) mask.delete();
-    if (tempContours) tempContours.delete();
+function finderProfileTest(gray, cx, cy, bw, bh) {
+  const W = gray.cols, H = gray.rows, d = gray.data;
+  let ok = 0;
+  for (let axis = 0; axis < 2; axis++) {
+    const L = Math.floor((axis === 0 ? bw : bh) * 0.8); const p = [];
+    for (let t = -L; t <= L; t++) {
+      const x = Math.min(W - 1, Math.max(0, axis === 0 ? Math.round(cx) + t : Math.round(cx)));
+      const y = Math.min(H - 1, Math.max(0, axis === 0 ? Math.round(cy) : Math.round(cy) + t));
+      p.push(d[y * W + x]);
+    }
+    if (finderRatioOk(p)) ok++;
   }
+  return ok === 2;
 }
 
-// Chercher les coins en L dans une image binaire + vérifier sur l'image grise
-function findCornersInBinary(binary, gray, w, h) {
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
+// Structure emboîtée : contour externe → trou (blanc) → carré central ; rapports d'aires
+// 49/9 = 5.44 et 25/9 = 2.78 ; centres confondus.
+function finderNestedOk(contours, hier, i, a) {
+  const h = (k) => { const p = hier.intPtr(0, k); return { next: p[0], child: p[2] }; };
+  const kids = []; for (let j = h(i).child; j >= 0; j = h(j).next) kids.push(j);
+  if (!kids.length) return false;
+  const hole = kids.reduce((b, k) => cv.contourArea(contours.get(k)) > cv.contourArea(contours.get(b)) ? k : b, kids[0]);
+  const g = []; for (let j = h(hole).child; j >= 0; j = h(j).next) g.push(j);
+  if (!g.length) return false;
+  const inner = g.reduce((b, k) => cv.contourArea(contours.get(k)) > cv.contourArea(contours.get(b)) ? k : b, g[0]);
+  const ah = cv.contourArea(contours.get(hole)), ai = cv.contourArea(contours.get(inner));
+  if (ai <= 0) return false;
+  const r1 = a / ai, r2 = ah / ai;
+  if (r1 < 3.4 || r1 > 8.5 || r2 < 1.8 || r2 > 4.2) return false;
+  const c0 = contourCentroid(contours.get(i)), c1 = contourCentroid(contours.get(inner));
+  return Math.hypot(c0[0] - c1[0], c0[1] - c1[1]) <= 0.12 * Math.sqrt(a);
+}
 
-  // Fermeture morphologique pour combler les petits trous
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-  const cleaned = new cv.Mat();
-  cv.morphologyEx(binary, cleaned, cv.MORPH_CLOSE, kernel);
-
-  cv.findContours(cleaned, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-  const imgArea = w * h;
-  const minArea = imgArea * 0.0002;
-  const maxArea = imgArea * 0.03;
-
-  const candidates = [];
-  const debugContours = [];
-
+// Candidats viseurs dans une image binaire (encre = 255).
+function findFindersInBinary(bin, gray) {
+  const contours = new cv.MatVector(), hier = new cv.Mat();
+  cv.findContours(bin, contours, hier, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
+  const W = gray.cols, H = gray.rows, imgArea = W * H, d = gray.data, out = [];
   for (let i = 0; i < contours.size(); i++) {
-    const contour = contours.get(i);
-    const area = cv.contourArea(contour);
-
-    if (area > imgArea * 0.00005) {
-      const rect = cv.boundingRect(contour);
-      const moments = cv.moments(contour);
-      const cx = moments.m00 !== 0 ? moments.m10 / moments.m00 : 0;
-      const cy = moments.m00 !== 0 ? moments.m01 / moments.m00 : 0;
-      const rectArea = rect.width * rect.height;
-      const solidity = rectArea > 0 ? area / rectArea : 0;
-      const aspectRatio = Math.min(rect.width, rect.height) > 0
-        ? Math.max(rect.width, rect.height) / Math.min(rect.width, rect.height)
-        : 99;
-
-      const info = {
-        a: Math.round(area),
-        cx: Math.round(cx),
-        cy: Math.round(cy),
-        sol: Math.round(solidity * 100) / 100,
-        ar: Math.round(aspectRatio * 10) / 10,
-        bw: rect.width,
-        bh: rect.height,
-        ok: false
-      };
-
-      if (area >= minArea && area <= maxArea &&
-          aspectRatio < 2.5 &&
-          solidity >= 0.25 && solidity <= 0.50 &&
-          validateLShape(contour) &&
-          validateMarkerIsDark(gray, contour)) {
-        candidates.push({ x: cx, y: cy });
-        info.ok = true;
-      }
-
-      debugContours.push(info);
+    const c = contours.get(i); const a = cv.contourArea(c);
+    if (a < imgArea * 0.0002 || a > imgArea * 0.05) continue;
+    if (hier.intPtr(0, i)[2] < 0) continue;                // pas de trou → pas un viseur
+    const approx = new cv.Mat();
+    cv.approxPolyDP(c, approx, 0.06 * cv.arcLength(c, true), true);
+    if (!(approx.rows === 4 && cv.isContourConvex(approx))) { approx.delete(); continue; }
+    const r = cv.boundingRect(c); const cc = contourCentroid(c); const cx = cc[0], cy = cc[1];
+    if (!(finderNestedOk(contours, hier, i, a) || finderProfileTest(gray, cx, cy, r.width, r.height))) { approx.delete(); continue; }
+    // zone blanche : l'anneau autour de la bbox (×1.4) est nettement plus clair que l'intérieur
+    const ex = Math.round(r.width * 0.2), ey = Math.round(r.height * 0.2);
+    const X0 = Math.max(0, r.x - ex), Y0 = Math.max(0, r.y - ey), X1 = Math.min(W, r.x + r.width + ex), Y1 = Math.min(H, r.y + r.height + ey);
+    let sIn = 0, nIn = 0, sR = 0, nR = 0;
+    for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) {
+      const v = d[y * W + x];
+      if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) { sIn += v; nIn++; } else { sR += v; nR++; }
     }
-    contour.delete();
+    if (nR < 10 || sR / nR < sIn / nIn + 40) { approx.delete(); continue; }
+    const pts = []; for (let k = 0; k < 4; k++) pts.push([approx.data32S[k * 2], approx.data32S[k * 2 + 1]]);
+    out.push({ center: [cx, cy], corners: pts, area: a });
+    approx.delete();
   }
-
-  kernel.delete();
-  cleaned.delete();
-  contours.delete();
-  hierarchy.delete();
-
-  debugContours.sort((a, b) => b.a - a.a);
-
-  const debug = {
-    nContours: debugContours.length,
-    nCandidates: candidates.length,
-    areaRange: [Math.round(minArea), Math.round(maxArea)],
-    top: debugContours.slice(0, 12)
-  };
-
-  if (candidates.length < 4) {
-    return { corners: null, debug };
-  }
-
-  // Si plus de 4 candidats, prendre les 4 plus proches des coins de l'image
-  let selected;
-  if (candidates.length === 4) {
-    selected = candidates;
-  } else {
-    const targets = [
-      { x: 0, y: 0 },
-      { x: w, y: 0 },
-      { x: w, y: h },
-      { x: 0, y: h }
-    ];
-    selected = [];
-    const used = new Set();
-    for (const t of targets) {
-      let bestIdx = -1, bestDist = Infinity;
-      for (let i = 0; i < candidates.length; i++) {
-        if (used.has(i)) continue;
-        const dx = candidates[i].x - t.x;
-        const dy = candidates[i].y - t.y;
-        const dist = dx * dx + dy * dy;
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIdx = i;
-        }
-      }
-      if (bestIdx >= 0) {
-        selected.push(candidates[bestIdx]);
-        used.add(bestIdx);
-      }
-    }
-  }
-
-  if (selected.length !== 4) {
-    return { corners: null, debug };
-  }
-
-  // Ordonnancement TL/TR/BR/BL ROBUSTE : trier par Y (les 2 plus hauts = rangée
-  // du haut), puis chaque rangée par X. Bien plus stable que la diagonale (x+y),
-  // qui désignait le mauvais coin sur une page ~carrée à peine tournée → image
-  // sortie tournée/miroir.
-  const byY = selected.slice().sort((a, b) => a.y - b.y);
-  const top = byY.slice(0, 2).sort((a, b) => a.x - b.x);     // [TL, TR]
-  const bottom = byY.slice(2, 4).sort((a, b) => a.x - b.x);  // [BL, BR]
-  const tl = top[0], tr = top[1];
-  const bl = bottom[0], br = bottom[1];
-
-  const sorted = [tl, tr, br, bl];
-
-  if (!validateQuadrilateral(sorted, w, h)) {
-    debug.rejected = 'quadrilateral_invalid';
-    return { corners: null, debug };
-  }
-
-  if (gray && !validateBrightInterior(gray, sorted)) {
-    debug.rejected = 'interior_not_bright';
-    return { corners: null, debug };
-  }
-
-  return { corners: sorted, debug };
+  contours.delete(); hier.delete();
+  return out;
 }
 
-// Détecter les 4 coins en L avec plusieurs stratégies de seuillage
-function detectCorners(imgData) {
-  const w = imgData.width;
-  const h = imgData.height;
-
-  const src = new cv.Mat(h, w, cv.CV_8UC4);
-  src.data.set(new Uint8Array(imgData.data));
-
-  const gray = new cv.Mat();
-  const blurred = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-  src.delete();
-
-  const allDebug = {};
-
-  // Stratégie 1: Seuils fixes du plus sélectif au plus permissif
-  for (const t of [50, 70, 90]) {
-    const name = 'fixed-' + t;
-    const binary = new cv.Mat();
-    cv.threshold(blurred, binary, t, 255, cv.THRESH_BINARY_INV);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    allDebug[name] = { threshold: t, ...result.debug };
-    if (result.corners) {
-      console.log('Worker: coins trouvés avec seuil fixe ' + t);
-      gray.delete(); blurred.delete();
-      return { corners: result.corners, debug: allDebug, strategy: name };
-    }
-  }
-
-  // Stratégie 2: Otsu (seuil automatique)
-  {
-    const binary = new cv.Mat();
-    const thresh = cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    allDebug.otsu = { threshold: Math.round(thresh), ...result.debug };
-    if (result.corners) {
-      console.log('Worker: coins trouvés avec Otsu (thresh=' + Math.round(thresh) + ')');
-      gray.delete(); blurred.delete();
-      return { corners: result.corners, debug: allDebug, strategy: 'otsu' };
-    }
-  }
-
-  // Stratégie 3: Seuil adaptatif gaussien (gère les ombres/éclairage inégal)
-  {
-    const binary = new cv.Mat();
-    cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    allDebug.adaptive = { threshold: 'adaptive', ...result.debug };
-    if (result.corners) {
-      console.log('Worker: coins trouvés avec adaptatif');
-      gray.delete(); blurred.delete();
-      return { corners: result.corners, debug: allDebug, strategy: 'adaptive' };
-    }
-  }
-
-  // Stratégie 4: Seuils fixes plus permissifs (en dernier recours)
-  for (const t of [110, 130, 150]) {
-    const name = 'fixed-' + t;
-    const binary = new cv.Mat();
-    cv.threshold(blurred, binary, t, 255, cv.THRESH_BINARY_INV);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    allDebug[name] = { threshold: t, ...result.debug };
-    if (result.corners) {
-      console.log('Worker: coins trouvés avec seuil fixe ' + t);
-      gray.delete(); blurred.delete();
-      return { corners: result.corners, debug: allDebug, strategy: name };
-    }
-  }
-
-  gray.delete();
-  blurred.delete();
-  console.log('Worker: aucun coin trouvé avec aucune stratégie');
-  return { corners: null, debug: allDebug };
+// Ordre TL, TR, BR, BL (2 plus hauts = rangée du haut, puis tri X).
+function orderQuad(pts) {
+  const byY = pts.slice().sort((a, b) => a[1] - b[1]);
+  const top = byY.slice(0, 2).sort((a, b) => a[0] - b[0]), bot = byY.slice(2).sort((a, b) => a[0] - b[0]);
+  return [top[0], top[1], bot[1], bot[0]];
 }
 
-// Corriger la perspective
-function correctPerspective(imgData, corners) {
+/**
+ * Détecte les 4 viseurs. Renvoie { centers: [{x,y}×4], tagCorners: [[{x,y}×4]×4] }
+ * (ordre TL TR BR BL, coins de chaque viseur TL TR BR BL) ou { centers: null, found: n }.
+ * Les petites images (< 1000 px) sont sur-échantillonnées ×2 avant seuillage
+ * (les modules font ~5 px à 640 px : la topologie des anneaux fins en dépend).
+ */
+function detectFinders(imgData) {
   const src = new cv.Mat(imgData.height, imgData.width, cv.CV_8UC4);
   src.data.set(new Uint8Array(imgData.data));
+  const gray0 = new cv.Mat();
+  cv.cvtColor(src, gray0, cv.COLOR_RGBA2GRAY);
+  src.delete();
+  let gray = gray0, up = 1;
+  if (Math.max(gray0.cols, gray0.rows) < 1000) {
+    up = 2; gray = new cv.Mat(); cv.resize(gray0, gray, new cv.Size(0, 0), 2, 2, cv.INTER_CUBIC);
+  }
+  const blur = new cv.Mat(); cv.GaussianBlur(gray, blur, new cv.Size(3, 3), 0);
+  const bins = [];
+  { const b = new cv.Mat(); cv.adaptiveThreshold(gray, b, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 41, 7); bins.push(b); }
+  { const b = new cv.Mat(); cv.adaptiveThreshold(gray, b, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, 25, 5); bins.push(b); }
+  { const b = new cv.Mat(); cv.threshold(blur, b, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU); bins.push(b); }
+  for (const t of [70, 110, 150]) { const b = new cv.Mat(); cv.threshold(blur, b, t, 255, cv.THRESH_BINARY_INV); bins.push(b); }
+  let best = [];
+  for (const b of bins) {
+    for (const cand of findFindersInBinary(b, gray)) {
+      if (best.every(o => Math.hypot(cand.center[0] - o.center[0], cand.center[1] - o.center[1]) > 0.5 * Math.sqrt(cand.area))) best.push(cand);
+    }
+    if (best.length >= 4) break;
+  }
+  bins.forEach(b => b.delete()); blur.delete();
 
-  const w = 2048, h = 2048;
-  const dst = new cv.Mat();
-
-  // Les coins en L font 100x100px avec des bras de 20px
-  // Leur centroïde est à ~32px de chaque bord du template
-  const margin = 64;
-
-  const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    corners[0].x, corners[0].y,
-    corners[1].x, corners[1].y,
-    corners[2].x, corners[2].y,
-    corners[3].x, corners[3].y,
-  ]);
-  const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    margin, margin,
-    w - margin, margin,
-    w - margin, h - margin,
-    margin, h - margin,
-  ]);
-
-  const M = cv.getPerspectiveTransform(srcPts, dstPts);
-  cv.warpPerspective(src, dst, M, new cv.Size(w, h), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
-
-  const result = new Uint8ClampedArray(dst.data);
-
-  src.delete(); dst.delete(); srcPts.delete(); dstPts.delete(); M.delete();
-  return { data: result, width: w, height: h };
+  let result = null;
+  if (best.length >= 4) {
+    if (best.length > 4) {
+      // 4 viseurs de tailles cohérentes formant le plus grand quadrilatère convexe
+      let bc = null, bs = -1; const n = best.length;
+      for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) for (let c = b + 1; c < n; c++) for (let d = c + 1; d < n; d++) {
+        const comb = [a, b, c, d]; const areas = comb.map(i => best[i].area);
+        if (Math.max(...areas) / Math.min(...areas) > 2.2) continue;
+        const q = orderQuad(comb.map(i => best[i].center));
+        const m = cv.matFromArray(4, 1, cv.CV_32FC2, q.flat()); const conv = cv.isContourConvex(m); const ar = cv.contourArea(m); m.delete();
+        if (conv && ar > bs) { bs = ar; bc = comb; }
+      }
+      best = bc ? bc.map(i => best[i]) : [];
+    }
+    if (best.length === 4) {
+      const q = orderQuad(best.map(b => b.center));
+      const ordered = q.map(p => best.reduce((bb, b) => Math.hypot(b.center[0] - p[0], b.center[1] - p[1]) < Math.hypot(bb.center[0] - p[0], bb.center[1] - p[1]) ? b : bb, best[0]));
+      const tagCorners = ordered.map(b => {
+        let corners = orderQuad(b.corners);
+        if (typeof cv.cornerSubPix === 'function') {
+          const m = cv.matFromArray(4, 1, cv.CV_32FC2, corners.flat());
+          try {
+            cv.cornerSubPix(gray, m, new cv.Size(3, 3), new cv.Size(-1, -1), new cv.TermCriteria(cv.TermCriteria_EPS + cv.TermCriteria_MAX_ITER, 30, 0.01));
+            corners = [0, 1, 2, 3].map(k => [m.data32F[k * 2], m.data32F[k * 2 + 1]]);
+          } catch (e) { /* garde les coins approxPolyDP */ }
+          m.delete();
+        }
+        return corners.map(p => ({ x: p[0] / up, y: p[1] / up }));
+      });
+      result = { centers: ordered.map(b => ({ x: b.center[0] / up, y: b.center[1] / up })), tagCorners, found: 4 };
+    }
+  }
+  if (up !== 1) gray.delete();
+  gray0.delete();
+  return result || { centers: null, tagCorners: null, found: best.length };
 }
 
-// Détection rapide pour le preview temps réel
-function detectCornersLightweight(imgData) {
-  const w = imgData.width, h = imgData.height;
+// Homographie par moindres carrés (DLT, N ≥ 4 correspondances) : dst ~ H·src.
+function solveHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < src.length; i++) {
+    const x = src[i].x, y = src[i].y, u = dst[i].x, v = dst[i].y;
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const M = Array.from({ length: 8 }, () => new Array(9).fill(0));
+  for (let r = 0; r < A.length; r++) for (let i = 0; i < 8; i++) { for (let j = 0; j < 8; j++) M[i][j] += A[r][i] * A[r][j]; M[i][8] += A[r][i] * b[r]; }
+  for (let i = 0; i < 8; i++) {
+    let p = i; for (let r = i + 1; r < 8; r++) if (Math.abs(M[r][i]) > Math.abs(M[p][i])) p = r;
+    const tmp = M[i]; M[i] = M[p]; M[p] = tmp;
+    const d = M[i][i]; if (Math.abs(d) < 1e-12) throw new Error('homographie dégénérée');
+    for (let j = i; j < 9; j++) M[i][j] /= d;
+    for (let r = 0; r < 8; r++) if (r !== i) { const f = M[r][i]; for (let j = i; j < 9; j++) M[r][j] -= f * M[i][j]; }
+  }
+  const h = M.map(r => r[8]); h.push(1);
+  return h;
+}
 
-  const src = new cv.Mat(h, w, cv.CV_8UC4);
+// Redresse l'image : srcPoints (px capture) → dstPoints (px scan 2048×2048).
+function warpToScan(imgData, srcPoints, dstPoints) {
+  const src = new cv.Mat(imgData.height, imgData.width, cv.CV_8UC4);
   src.data.set(new Uint8Array(imgData.data));
-
-  const gray = new cv.Mat();
-  const blurred = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-  src.delete();
-
-  for (const t of [50, 70, 90]) {
-    const binary = new cv.Mat();
-    cv.threshold(blurred, binary, t, 255, cv.THRESH_BINARY_INV);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    if (result.corners) {
-      gray.delete(); blurred.delete();
-      return { corners: result.corners };
-    }
-  }
-
-  {
-    const binary = new cv.Mat();
-    cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    if (result.corners) {
-      gray.delete(); blurred.delete();
-      return { corners: result.corners };
-    }
-  }
-
-  {
-    const binary = new cv.Mat();
-    cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    if (result.corners) {
-      gray.delete(); blurred.delete();
-      return { corners: result.corners };
-    }
-  }
-
-  for (const t of [110, 130, 150]) {
-    const binary = new cv.Mat();
-    cv.threshold(blurred, binary, t, 255, cv.THRESH_BINARY_INV);
-    const result = findCornersInBinary(binary, gray, w, h);
-    binary.delete();
-    if (result.corners) {
-      gray.delete(); blurred.delete();
-      return { corners: result.corners };
-    }
-  }
-
-  gray.delete(); blurred.delete();
-  return { corners: null };
+  const w = 2048, h = 2048;
+  const dst = new cv.Mat();
+  const H = cv.matFromArray(3, 3, cv.CV_64F, solveHomography(srcPoints, dstPoints));
+  cv.warpPerspective(src, dst, H, new cv.Size(w, h), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
+  const result = new Uint8ClampedArray(dst.data);
+  src.delete(); dst.delete(); H.delete();
+  return { data: result, width: w, height: h };
 }
 
 // --- Optical flow tracking ---
@@ -2221,70 +1976,50 @@ self.onmessage = async function(e) {
 
   if (type === 'detect') {
     try {
-      const result = detectCornersLightweight(imageData);
+      const result = detectFinders(imageData);
       self.postMessage({
         type: 'detect-result',
-        corners: result.corners
-          ? result.corners.map(c => ({ x: Math.round(c.x), y: Math.round(c.y) }))
-          : null
+        markers: result.centers ? { centers: result.centers, tagCorners: result.tagCorners } : null,
+        found: result.found
       });
     } catch (err) {
       console.error('Worker detect error:', err);
-      self.postMessage({ type: 'detect-result', corners: null, error: err.message });
+      self.postMessage({ type: 'detect-result', markers: null, found: 0, error: err.message });
     }
     return;
   }
 
   if (type === 'process') {
+    // e.data.markers : { centers[4], tagCorners[4][4] | null } (px capture) ou null → détection ici.
+    // e.data.targets : { centers[4], tagCorners[4][4] } (px scan) calculés par le client
+    // à partir du contrat pdfLayout (le worker ne connaît pas la taille de l'image).
     try {
-      const predetectedCorners = e.data.predetectedCorners || null;
-      let corners = null;
-      let strategy = null;
-      let debug = {};
-
-      if (predetectedCorners && predetectedCorners.length === 4) {
-        const sorted4 = [...predetectedCorners].sort((a, b) => (a.x + a.y) - (b.x + b.y));
-        const tl = sorted4[0];
-        const br = sorted4[3];
-        const rem = [sorted4[1], sorted4[2]];
-        const tr = rem[0].x > rem[1].x ? rem[0] : rem[1];
-        const bl = rem[0].x > rem[1].x ? rem[1] : rem[0];
-        const candidate = [tl, tr, br, bl];
-
-        if (validateQuadrilateral(candidate, imageData.width, imageData.height)) {
-          corners = candidate;
-          strategy = 'predetected';
-          debug = { source: 'predetected_from_preview', corners: candidate };
-        } else {
-          console.warn('Worker: corners pre-detectes invalides, fallback detection complete');
-          const detection = detectCorners(imageData);
-          corners = detection.corners;
-          strategy = detection.strategy;
-          debug = detection.debug;
-        }
-      } else {
-        const detection = detectCorners(imageData);
-        corners = detection.corners;
-        strategy = detection.strategy;
-        debug = detection.debug;
+      let markers = e.data.markers || null;
+      let strategy = markers ? (markers.tagCorners ? 'predetected-16' : 'manual-4') : null;
+      if (!markers) {
+        const det = detectFinders(imageData);
+        if (det.centers) { markers = { centers: det.centers, tagCorners: det.tagCorners }; strategy = 'detected-16'; }
       }
-
-      if (corners) {
-        const result = correctPerspective(imageData, corners);
+      const targets = e.data.targets;
+      if (markers && targets) {
+        let srcPts, dstPts;
+        if (markers.tagCorners) { srcPts = markers.tagCorners.flat(); dstPts = targets.tagCorners.flat(); }
+        else { srcPts = markers.centers; dstPts = targets.centers; }
+        const result = warpToScan(imageData, srcPts, dstPts);
         self.postMessage({
           type: 'result',
           imageData: result,
           corrected: true,
           strategy: strategy,
-          detectedCorners: corners.map(c => ({ x: Math.round(c.x), y: Math.round(c.y) })),
-          debug: debug
+          detectedCorners: markers.centers.map(c => ({ x: Math.round(c.x), y: Math.round(c.y) })),
+          debug: { strategy }
         });
       } else {
         self.postMessage({
           type: 'result',
           imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
           corrected: false,
-          debug: debug
+          debug: { reason: markers ? 'no-targets' : 'no-markers' }
         });
       }
     } catch (err) {

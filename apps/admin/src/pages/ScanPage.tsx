@@ -7,6 +7,7 @@ import { hasFilmVideo } from '../db/filmVideosStore'
 import { useProject } from '../hooks/useProject'
 import CameraView from '../components/scan/CameraView'
 import CornerAdjustment from '../components/scan/CornerAdjustment'
+import type { MarkerDetection } from '../utils/perspectiveCorrection'
 import { useScanProcessor } from '../components/scan/ScanProcessor'
 import { playUi } from '../utils/uiSound'
 // PIXI (plusieurs centaines de Ko) n'est tiré QUE par ces deux players. On les charge
@@ -231,7 +232,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
     [capturedBlob],
   )
   useEffect(() => () => { if (capturedUrl) URL.revokeObjectURL(capturedUrl) }, [capturedUrl])
-  const [detectedCorners, setDetectedCorners] = useState<Point2D[] | null>(null)
+  const [detectedMarkers, setDetectedMarkers] = useState<MarkerDetection | null>(null)
   const [lamaCanvas, setLamaCanvas] = useState<HTMLCanvasElement | null>(null)
   const [lamaStatus, setLamaStatus] = useState<LamaStatus>('idle')
   const [lamaError, setLamaError] = useState<string | null>(null)
@@ -428,14 +429,14 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   }, [processor.rectifiedCanvas, processor.contentAlignment, project.animations])
 
   const onCameraCapture = useCallback(
-    (blob: Blob, corners: Point2D[] | null) => {
+    (blob: Blob, markers: MarkerDetection | null) => {
       setCapturedBlob(blob)
-      setDetectedCorners(corners)
+      setDetectedMarkers(markers)
       if (mode === 'play') {
         // Play : pas d'ajustement manuel des coins — on lance tout le calcul
         // (correction perspective + LaMa) en arrière-plan dès la prise de photo.
         setStage('processing')
-        void processor.handleCapture(blob, corners)
+        void processor.handleCapture(blob, markers)
       } else {
         setStage('adjust')
       }
@@ -447,7 +448,8 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
     async (adjustedCorners: Point2D[]) => {
       if (!capturedBlob) return
       setStage('processing')
-      await processor.handleCapture(capturedBlob, adjustedCorners)
+      // Coins ajustés à la main = 4 centres seulement (pas de coins de viseurs).
+      await processor.handleCapture(capturedBlob, { centers: adjustedCorners, tagCorners: null })
     },
     [capturedBlob, processor]
   )
@@ -455,7 +457,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   function handleRetake() {
     processor.reset()
     setCapturedBlob(null)
-    setDetectedCorners(null)
+    setDetectedMarkers(null)
     setLamaCanvas(null)
     setLamaStatus('idle')
     setLamaError(null)
@@ -510,7 +512,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       {stage === 'adjust' && capturedBlob && (
         <CornerAdjustment
           imageBlob={capturedBlob}
-          initialCorners={detectedCorners}
+          initialCorners={detectedMarkers?.centers ?? null}
           onConfirm={onCornersConfirmed}
           onRetake={handleRetake}
         />

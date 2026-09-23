@@ -4,6 +4,15 @@
  */
 
 import type { Point2D } from '../types/project'
+import { scanTargetsForImage } from './pdfLayout'
+
+/** Repères détectés (px de l'image analysée) : centres des 4 viseurs (TL TR BR BL) et,
+ *  si disponibles, les 4 coins de chaque viseur (16 points → homographie précise).
+ *  `tagCorners: null` = coins ajustés à la main (4 centres seulement). */
+export interface MarkerDetection {
+  centers: Point2D[]
+  tagCorners: Point2D[][] | null
+}
 
 export interface ProcessResult {
   imageData: ImageData
@@ -17,14 +26,14 @@ export interface ProcessResult {
 let worker: Worker | null = null
 let workerReady = false
 let loadingPromise: Promise<void> | null = null
-let detectCallback: ((corners: Point2D[] | null) => void) | null = null
+let detectCallback: ((markers: MarkerDetection | null, found: number) => void) | null = null
 let processCallback: ((msg: { ok: true; data: any } | { ok: false; error: string }) => void) | null = null
 
 function workerMessageHandler(e: MessageEvent) {
   const { type } = e.data
 
   if (type === 'detect-result') {
-    if (detectCallback) detectCallback(e.data.corners)
+    if (detectCallback) detectCallback(e.data.markers ?? null, e.data.found ?? 0)
     return
   }
 
@@ -393,7 +402,7 @@ export async function detectContourViaWorker(
 
 // --- Détection temps réel (pour le preview caméra) ---
 
-export function setDetectCallback(cb: ((corners: Point2D[] | null) => void) | null): void {
+export function setDetectCallback(cb: ((markers: MarkerDetection | null, found: number) => void) | null): void {
   detectCallback = cb
 }
 
@@ -413,14 +422,19 @@ export function detectFrame(imageData: ImageData): boolean {
 // --- Traitement complet de l'image capturée ---
 
 /**
- * Traite l'image capturée : détecte les coins et applique la correction perspective.
+ * Traite l'image capturée : redresse la page sur le cadre scan 2048×2048 à partir des
+ * viseurs (16 coins si détectés, sinon 4 centres ajustés à la main ; sinon détection
+ * dans le worker).
  * @param blob - Image capturée
- * @param predetectedCorners - Coins pré-détectés (optionnel)
+ * @param markers - Repères pré-détectés (px du blob) ou null
+ * @param imageSize - Dimensions natives de l'image du projet (→ cibles du contrat PDF).
+ *                    null = impossible de calculer les cibles → image non corrigée.
  * @returns Image 2048x2048 corrigée
  */
 export async function processCapturedImage(
   blob: Blob,
-  predetectedCorners?: Point2D[] | null
+  markers: MarkerDetection | null,
+  imageSize: { width: number; height: number } | null
 ): Promise<ProcessResult> {
   if (!workerReady) await loadOpenCVWorker()
 
@@ -487,9 +501,8 @@ export async function processCapturedImage(
       }
     }
 
-    if (predetectedCorners && predetectedCorners.length === 4) {
-      message.predetectedCorners = predetectedCorners
-    }
+    if (markers && markers.centers.length === 4) message.markers = markers
+    if (imageSize) message.targets = scanTargetsForImage(imageSize.width, imageSize.height)
 
     worker!.postMessage(message)
   })

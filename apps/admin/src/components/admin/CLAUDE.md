@@ -42,7 +42,6 @@ Quand la géométrie change sur la rest animation (steps 3, 5, 6, 8, 10 topology
 | `WalkHiddenFaceStep.tsx` | Walk 4 | Face cachée : sélection 2 vertices body (A/B), bridge points manuels, Delaunay dans polygone fermé, fusion dans body mesh. Texture auto-générée par diffusion Laplacienne au scan. |
 | `WalkParamsStep.tsx` | Walk 5 | Paramètres cinématiques (longueur pas, levée pied, balancement corps/tête, phases) |
 | `WalkComputeStep.tsx` | Walk 6 | Calcul animation par LBS séparé (zones + body) + legacy unifié, preview wireframe/gradient |
-| `MarkerStep.tsx` | support | Placement des 4 marqueurs L pour le scan |
 | `PdfStep.tsx` | support | Génération et téléchargement du PDF coloriage |
 
 ## AnimationManager (`AnimationManager.tsx`)
@@ -345,11 +344,8 @@ Calcul de l'animation par zone : auto-weights (distance inverse) + LBS. Produit 
 
 ## Composants support
 
-### MarkerStep.tsx
-Place les 4 marqueurs L aux coins de l'image pour la détection au scan. Auto-placement avec 20px de marge. Sauvegarde → `project.markers`.
-
 ### PdfStep.tsx
-Génère et télécharge le PDF coloriage avec image + overlay maillage + marqueurs L. Utilise `generateTemplatePDF()`. Preview dans iframe avant téléchargement.
+Génère et télécharge le PDF coloriage avec image + viseurs dans les coins (contrat `pdfLayout`). Utilise `generateTemplatePDF()`. Preview dans iframe avant téléchargement.
 
 ## Pipeline Members-Bones V2 (15 étapes)
 

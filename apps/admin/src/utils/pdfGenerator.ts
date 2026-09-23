@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf'
 import type { ProjectStepView } from '../types/project'
-import { A4_W, A4_H, MARGIN, MARKER_SIZE, MARKER_THICK, MARKER_MARGIN } from './pdfLayout'
+import { FINDER_MM, FINDER_QUIET_MM, FINDER_KNOCKOUT_MM, computeImagePlacementMm, finderOriginsMm } from './pdfLayout'
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -11,32 +11,18 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   })
 }
 
-function drawPdfLMarker(
-  doc: jsPDF,
-  x: number,
-  y: number,
-  corner: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
-) {
+/**
+ * Viseur (motif QR) : carré noir 7×7 modules, anneau blanc 1 module, carré noir 3×3.
+ * (x, y) = coin haut-gauche du carré extérieur, en mm.
+ */
+function drawPdfFinder(doc: jsPDF, x: number, y: number) {
+  const m = FINDER_MM / 7
   doc.setFillColor(0, 0, 0)
-
-  switch (corner) {
-    case 'topLeft':
-      doc.rect(x, y, MARKER_SIZE, MARKER_THICK, 'F')
-      doc.rect(x, y, MARKER_THICK, MARKER_SIZE, 'F')
-      break
-    case 'topRight':
-      doc.rect(x - MARKER_SIZE, y, MARKER_SIZE, MARKER_THICK, 'F')
-      doc.rect(x - MARKER_THICK, y, MARKER_THICK, MARKER_SIZE, 'F')
-      break
-    case 'bottomLeft':
-      doc.rect(x, y - MARKER_THICK, MARKER_SIZE, MARKER_THICK, 'F')
-      doc.rect(x, y - MARKER_SIZE, MARKER_THICK, MARKER_SIZE, 'F')
-      break
-    case 'bottomRight':
-      doc.rect(x - MARKER_SIZE, y - MARKER_THICK, MARKER_SIZE, MARKER_THICK, 'F')
-      doc.rect(x - MARKER_THICK, y - MARKER_SIZE, MARKER_THICK, MARKER_SIZE, 'F')
-      break
-  }
+  doc.rect(x, y, FINDER_MM, FINDER_MM, 'F')
+  doc.setFillColor(255, 255, 255)
+  doc.rect(x + m, y + m, 5 * m, 5 * m, 'F')
+  doc.setFillColor(0, 0, 0)
+  doc.rect(x + 2 * m, y + 2 * m, 3 * m, 3 * m, 'F')
 }
 
 export async function generateTemplatePDF(project: ProjectStepView): Promise<Blob> {
@@ -51,33 +37,21 @@ export async function generateTemplatePDF(project: ProjectStepView): Promise<Blo
 
   // Get image dimensions to compute aspect ratio
   const imgDims = await getImageDimensions(project.originalImageBlob)
-  const imgAspect = imgDims.width / imgDims.height
 
-  // Compute image placement within margins (leaving room for markers)
-  const contentW = A4_W - MARGIN * 2
-  const contentH = A4_H - MARGIN * 2
+  // Placement de l'image sur la page (contrat partagé avec le scan)
+  const { x: imgX, y: imgY, w: imgW, h: imgH } = computeImagePlacementMm(imgDims.width, imgDims.height)
 
-  let imgW: number, imgH: number
-  if (imgAspect > contentW / contentH) {
-    imgW = contentW
-    imgH = contentW / imgAspect
-  } else {
-    imgH = contentH
-    imgW = contentH * imgAspect
-  }
-
-  const imgX = (A4_W - imgW) / 2
-  const imgY = (A4_H - imgH) / 2
-
-  // Add image
   const format = project.originalImageBlob.type.includes('png') ? 'PNG' : 'JPEG'
   doc.addImage(imgDataUrl, format, imgX, imgY, imgW, imgH)
 
-  // Draw L markers at the corners of the image area
-  drawPdfLMarker(doc, imgX - MARKER_MARGIN, imgY - MARKER_MARGIN, 'topLeft')
-  drawPdfLMarker(doc, imgX + imgW + MARKER_MARGIN, imgY - MARKER_MARGIN, 'topRight')
-  drawPdfLMarker(doc, imgX - MARKER_MARGIN, imgY + imgH + MARKER_MARGIN, 'bottomLeft')
-  drawPdfLMarker(doc, imgX + imgW + MARKER_MARGIN, imgY + imgH + MARKER_MARGIN, 'bottomRight')
+  // Viseurs DANS les 4 coins de l'image : carré blanc (efface le dessin) + viseur.
+  for (const o of finderOriginsMm(imgW, imgH)) {
+    const kx = imgX + o.x - FINDER_QUIET_MM
+    const ky = imgY + o.y - FINDER_QUIET_MM
+    doc.setFillColor(255, 255, 255)
+    doc.rect(kx, ky, FINDER_KNOCKOUT_MM, FINDER_KNOCKOUT_MM, 'F')
+    drawPdfFinder(doc, imgX + o.x, imgY + o.y)
+  }
 
   return doc.output('blob')
 }

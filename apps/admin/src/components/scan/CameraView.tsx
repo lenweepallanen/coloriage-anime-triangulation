@@ -2,7 +2,7 @@ import { useRef, useState, useEffect, useCallback } from 'react'
 import { playT } from '../../utils/playI18n'
 import { playUi } from '../../utils/uiSound'
 import Mascot from '../mascot/Mascot'
-import { loadOpenCVWorker, detectFrame, setDetectCallback } from '../../utils/perspectiveCorrection'
+import { loadOpenCVWorker, detectFrame, setDetectCallback, type MarkerDetection } from '../../utils/perspectiveCorrection'
 import type { Point2D } from '../../types/project'
 
 // Seuils qualité image
@@ -73,7 +73,7 @@ interface Props {
   autoStart?: boolean
   /** Notifie le parent quand la caméra passe active/inactive (sous-titre contextuel). */
   onActiveChange?: (active: boolean) => void
-  onCapture: (blob: Blob, corners: Point2D[] | null) => void
+  onCapture: (blob: Blob, markers: MarkerDetection | null) => void
   /** Titre affiché dans la colonne droite en mode paysage (masqué en portrait, où
    *  le titre vient de la pastille .scan-page > h2). */
   title?: string
@@ -81,6 +81,12 @@ interface Props {
    *  (bouton grisé sinon) et bloque l'import sans repères. Empêche de scanner une
    *  photo quelconque (mur, visage). Défaut false (admin : fallback recadrage OK). */
   requireMarkers?: boolean
+}
+
+/** Remet à l'échelle une détection (centres + coins de viseurs) par un facteur k. */
+function scaleMarkers(m: MarkerDetection, k: number): MarkerDetection {
+  const sc = (p: Point2D): Point2D => ({ x: p.x * k, y: p.y * k })
+  return { centers: m.centers.map(sc), tagCorners: m.tagCorners ? m.tagCorners.map(tag => tag.map(sc)) : null }
 }
 
 export default function CameraView({ onCapture, title, onActiveChange, autoStart, requireMarkers = false }: Props) {
@@ -109,7 +115,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const detectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const downscaleCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const downscaleDimsRef = useRef({ w: 0, h: 0 })
-  const lastDetectedCornersRef = useRef<Point2D[] | null>(null)
+  const lastDetectedRef = useRef<MarkerDetection | null>(null)
   const qualityRef = useRef<{ issues: QualityIssue[] }>({ issues: [] })
 
   const MATCH_THRESHOLD = 0.30
@@ -341,13 +347,13 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     return () => window.removeEventListener('devicemotion', onMotion)
   }, [isCameraActive])
 
-  // Détection des 4 repères L sur une image statique (worker OpenCV), one-shot.
+  // Détection des 4 viseurs sur une image statique (worker OpenCV), one-shot.
   // Utilisé pour valider un import en play. Résout `null` si non détectés / timeout.
   const detectMarkersOnImageData = useCallback((imageData: ImageData) => {
-    return new Promise<Point2D[] | null>((resolve) => {
+    return new Promise<MarkerDetection | null>((resolve) => {
       let settled = false
       let timer: ReturnType<typeof setTimeout>
-      const finish = (result: Point2D[] | null) => {
+      const finish = (result: MarkerDetection | null) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
@@ -355,7 +361,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         resolve(result)
       }
       timer = setTimeout(() => finish(null), 5000)
-      setDetectCallback((corners) => finish(corners && corners.length === 4 ? corners : null))
+      setDetectCallback((markers) => finish(markers && markers.centers.length === 4 ? markers : null))
       if (!detectFrame(imageData)) finish(null)
     })
   }, [])
@@ -385,7 +391,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             return
           }
 
-          // PLAY (vie privée) : on n'accepte l'import QUE si les 4 repères L sont
+          // PLAY (vie privée) : on n'accepte l'import QUE si les 4 viseurs sont
           // détectés (une vraie page coloriée PicoPop). Une photo quelconque
           // (mur, visage) n'a pas de repères → rejet. C'est aussi le flux du
           // réviseur (importer l'image de test fournie).
@@ -412,12 +418,9 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             setError(playT('camera.needMarkers'))
             return
           }
-          const corners = detected.map((p) => ({
-            x: Math.round(p.x / scale),
-            y: Math.round(p.y / scale),
-          }))
+          const markers = scaleMarkers(detected, 1 / scale)
           full.toBlob((blob) => {
-            if (blob) onCapture(blob, corners)
+            if (blob) onCapture(blob, markers)
             else setError('Erreur lors de l\'import. Veuillez reessayer.')
           }, 'image/jpeg', 0.95)
         } catch {
@@ -430,7 +433,9 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     img.src = URL.createObjectURL(file)
   }, [onCapture, requireMarkers, isCameraActive, stopCamera, detectMarkersOnImageData])
 
-  const drawCornerGuide = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, cornerIndex: number, matched: boolean, armLen: number) => {
+  // Guide = silhouette d'un viseur (carré arrondi + point central), centrée là où le
+  // viseur imprimé doit se placer.
+  const drawCornerGuide = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, _cornerIndex: number, matched: boolean, size: number) => {
     ctx.strokeStyle = matched ? '#00FF00' : 'rgba(255, 255, 255, 0.6)'
     ctx.lineWidth = matched ? 5 : 3
     ctx.lineCap = 'round'
@@ -441,39 +446,17 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       ctx.shadowBlur = 12
     }
 
+    const half = size / 2
     ctx.beginPath()
-    switch (cornerIndex) {
-      case 0: // TL
-        ctx.moveTo(x + armLen, y)
-        ctx.lineTo(x, y)
-        ctx.lineTo(x, y + armLen)
-        break
-      case 1: // TR
-        ctx.moveTo(x - armLen, y)
-        ctx.lineTo(x, y)
-        ctx.lineTo(x, y + armLen)
-        break
-      case 2: // BR
-        ctx.moveTo(x - armLen, y)
-        ctx.lineTo(x, y)
-        ctx.lineTo(x, y - armLen)
-        break
-      case 3: // BL
-        ctx.moveTo(x + armLen, y)
-        ctx.lineTo(x, y)
-        ctx.lineTo(x, y - armLen)
-        break
-    }
+    ctx.roundRect(x - half, y - half, size, size, size * 0.15)
     ctx.stroke()
     ctx.shadowBlur = 0
     ctx.shadowColor = 'transparent'
 
-    if (matched) {
-      ctx.beginPath()
-      ctx.arc(x, y, 5, 0, Math.PI * 2)
-      ctx.fillStyle = '#00FF00'
-      ctx.fill()
-    }
+    ctx.beginPath()
+    ctx.arc(x, y, matched ? 6 : 4, 0, Math.PI * 2)
+    ctx.fillStyle = matched ? '#00FF00' : 'rgba(255, 255, 255, 0.6)'
+    ctx.fill()
   }, [])
 
   const drawOverlay = useCallback(() => {
@@ -492,10 +475,10 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
 
     const guides = getGuidePositions(side)
     const matched = matchedGuidesRef.current
-    const armLen = side * 0.07
+    const guideSize = side * 0.075
 
     guides.forEach((pos, i) => {
-      drawCornerGuide(ctx, pos.x, pos.y, i, matched[i], armLen)
+      drawCornerGuide(ctx, pos.x, pos.y, i, matched[i], guideSize)
     })
   }, [getGuidePositions, drawCornerGuide])
 
@@ -528,16 +511,12 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size)
 
-    // Coins temps réel (640 px), remis à l'échelle capture — utilisés en FALLBACK.
-    let scaledCorners: Point2D[] | null = null
-    const corners = lastDetectedCornersRef.current
+    // Repères temps réel (640 px), remis à l'échelle capture — utilisés en FALLBACK.
+    let scaledMarkers: MarkerDetection | null = null
+    const live = lastDetectedRef.current
     const { w: downW } = downscaleDimsRef.current
-    if (corners && corners.length === 4 && downW > 0) {
-      const scaleFactor = size / downW
-      scaledCorners = corners.map(c => ({
-        x: Math.round(c.x * scaleFactor),
-        y: Math.round(c.y * scaleFactor),
-      }))
+    if (live && live.centers.length === 4 && downW > 0) {
+      scaledMarkers = scaleMarkers(live, size / downW)
     }
 
     // PLAY : RE-DÉTECTION des repères en HAUTE RÉSOLUTION sur la photo capturée
@@ -553,34 +532,30 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         const dctx = dc.getContext('2d')!
         dctx.drawImage(canvas, 0, 0, dw, dw)
         const precise = await detectMarkersOnImageData(dctx.getImageData(0, 0, dw, dw))
-        if (precise && precise.length === 4) {
-          const preciseScaled = precise.map(p => ({
-            x: Math.round(p.x / detScale),
-            y: Math.round(p.y / detScale),
-          }))
+        if (precise && precise.centers.length === 4) {
+          const preciseScaled = scaleMarkers(precise, 1 / detScale)
           // Garde-fou : n'accepter la re-détection HD que si elle CONCORDE avec la
-          // détection live (chaque coin, même ordre TL/TR/BR/BL, proche) — sinon
-          // c'est un quad faux/tourné → on garde les coins temps réel.
+          // détection live (chaque coin, même ordre TL/TR/BR/BL, proche).
           const tol = size * 0.12
-          const consistent = !scaledCorners || preciseScaled.every((p, i) => {
-            const q = scaledCorners![i]
+          const consistent = !scaledMarkers || preciseScaled.centers.every((p, i) => {
+            const q = scaledMarkers!.centers[i]
             return Math.hypot(p.x - q.x, p.y - q.y) <= tol
           })
-          if (consistent) scaledCorners = preciseScaled
+          if (consistent) scaledMarkers = preciseScaled
         }
       } catch { /* garde le fallback temps réel */ }
     }
 
     // VIE PRIVÉE (play) : pas de capture sans les 4 repères (garde-fou en plus du
     // bouton grisé, au cas où la stabilité serait perdue juste avant le déclic).
-    if (requireMarkers && (!scaledCorners || scaledCorners.length !== 4)) {
+    if (requireMarkers && (!scaledMarkers || scaledMarkers.centers.length !== 4)) {
       setError(playT('camera.needMarkers'))
       return
     }
 
     canvas.toBlob((blob) => {
       if (blob) {
-        onCapture(blob, scaledCorners)
+        onCapture(blob, scaledMarkers)
         stopCamera()
       } else {
         setError('Erreur lors de la capture. Veuillez reessayer.')
@@ -595,8 +570,9 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       downscaleCanvasRef.current = document.createElement('canvas')
     }
 
-    setDetectCallback((corners) => {
+    setDetectCallback((markers) => {
       if (opencvLoading) setOpencvLoading(false)
+      const corners = markers?.centers ?? null
 
       const { w: downW, h: downH } = downscaleDimsRef.current
       if (downW === 0 || downH === 0) return
@@ -610,7 +586,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       const newMatched = [false, false, false, false]
 
       if (corners && corners.length === 4) {
-        lastDetectedCornersRef.current = corners
+        lastDetectedRef.current = markers
 
         const usedCorners = new Set<number>()
         const guideOrder = [0, 1, 2, 3]

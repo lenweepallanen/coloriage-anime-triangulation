@@ -411,7 +411,7 @@ Section dédiée dans `AdminLayout` (onglet "Triangulation"), indépendante du p
 
 **Layout animation** : plein écran fixe en `flex-direction: row` — canvas PIXI à gauche (`flex: 1`), sidebar paramètres à droite (220px).
 
-1. **Caméra** — Détection temps réel des marqueurs L + analyse qualité
+1. **Caméra** — Détection temps réel des 4 viseurs (motif QR dans les coins de l'image) + analyse qualité
 2. **Ajustement coins** — Repositionnement manuel des 4 coins
 3. **Correction perspective** — Homographie OpenCV → image 2048×2048 → crop marges 64px → resize aux dimensions originales
 4. **Debug** — Visualisation 4 étapes du pipeline (photo brute, 2048 avec marges, croppée, overlay mesh)
@@ -446,7 +446,6 @@ src/
 │   ├── barycentricUtils.ts     Coordonnées barycentriques (calcul, recherche triangle, interpolation)
 │   ├── geometry.ts             Point-in-polygon, distanceSq, centroïde
 │   ├── keyframePropagation.ts  Interpolation linéaire entre keyframes
-│   ├── markerGenerator.ts      Dessin marqueurs L
 │   ├── opticalFlowComputer.ts  Pipeline extraction frames + tracking + segment re-tracking
 │   ├── trackingConstraints.ts  Contraintes voisinage + snap-to-contour + spring curviligne
 │   ├── contourAnchorTracker.ts Raffinement hybride LK + template matching + snap contour (utilisé par opticalFlowComputer)
@@ -457,7 +456,7 @@ src/
 │   ├── contourSpatialIndex.ts  Index spatial bucket 2D pour snap-to-contour
 │   ├── perspectiveCorrection.ts Bridge Worker OpenCV (RPC)
 │   ├── pdfGenerator.ts         Génération PDF
-│   ├── pdfLayout.ts            Constantes layout A4
+│   ├── pdfLayout.ts            CONTRAT PDF↔scan : A4, viseurs 12 mm dans les coins de l'image, cibles du scan 2048
 │   ├── textureExtractor.ts     Calcul UVs pour PIXI
 │   ├── bodyZoneUtils.ts        Détection zones corporelles (triangle→zone, hit test, touch detection)
 │   ├── boneSolver.ts           Déformation squelettique (bones, auto-weights, LBS, forward kinematics)
@@ -514,7 +513,7 @@ Project {
   ambientSoundEnabled: boolean       // Toggle activer/désactiver le son
   animations: Animation[]            // Exactement 1 rest + 0..N oneshots + 0..N physics + 0..N bones
   bodyZones: BodyZone[]              // Zones corporelles (triangles groupés par label)
-  markers: MarkerCorners | null      // 4 coins marqueurs L
+  markers: MarkerCorners | null      // (legacy, inutilisé) — les viseurs sont posés par le PDF (contrat pdfLayout)
   projectTriangulation: ProjectTriangulation | null  // Triangulation projet (SAM 2 + maillage par zone)
 }
 
