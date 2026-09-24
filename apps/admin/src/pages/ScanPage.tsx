@@ -482,10 +482,20 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   // à tort l'impression que tout est déjà prêt.
   const preparing = mode === 'play' && stage === 'preview' && deferredLoaded === false
 
+  // Écran de validation ARMÉ 700 ms après son apparition : un tap parti pour le
+  // déclencheur photo qui atterrit sur « Recommencer » (ou « ← Retour ») au moment
+  // du changement d'écran ramenait à la caméra sans qu'on comprenne pourquoi.
+  const [previewArmed, setPreviewArmed] = useState(false)
+  useEffect(() => {
+    if (stage !== 'preview' || preparing) { setPreviewArmed(false); return }
+    const timer = window.setTimeout(() => setPreviewArmed(true), 700)
+    return () => window.clearTimeout(timer)
+  }, [stage, preparing])
+
   return (
     <div className="scan-page">
       {mode === 'play' && stage !== 'animation' && (
-        <button className="scan-back-bar" onClick={() => window.history.back()}>
+        <button className="scan-back-bar" style={stage === 'preview' && !previewArmed ? { pointerEvents: 'none' } : undefined} onClick={() => { if (stage === 'preview' && !previewArmed) return; window.history.back() }}>
           ← {playT('scan.back')}
         </button>
       )}
@@ -738,7 +748,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
               >
                 {deferredLoaded === false || launching ? playT('validate.loading') : mode === 'play' ? playT('validate.see') : 'Oui'}
               </button>
-              <button className="btn-secondary btn-lg" onClick={handleRetake}>
+              <button className="btn-secondary btn-lg" style={previewArmed ? undefined : { pointerEvents: 'none' }} onClick={() => { if (previewArmed) handleRetake() }}>
                 {mode === 'play' ? playT('validate.retry') : 'Non, je reprends'}
               </button>
             </div>

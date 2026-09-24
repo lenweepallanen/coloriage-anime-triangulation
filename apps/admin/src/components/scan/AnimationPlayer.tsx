@@ -166,7 +166,7 @@ function getAnimationData(project: Project) {
   return { restAnim, readyOneshots }
 }
 
-export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, previewFrame0, previewAnimated }: Props) {
+export default function AnimationPlayer({ project, scanCanvas: scanCanvasProp, lamaCanvas: lamaCanvasProp, contentAlignment: contentAlignmentProp, onClose, previewFrame0, previewAnimated }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -257,6 +257,35 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
     if (!containerRef.current || !restAnim?.mesh) return
 
     const mesh = restAnim.mesh
+    // MÉMOIRE (play) : le scan arrive en 2048² et sert de source à plusieurs copies
+    // pleine taille (face cachée, extensions de pattes) + autant de textures GPU —
+    // à l'écran de VALIDATION, c'est le moment où l'app cumule le plus de mémoire
+    // (scan + LaMa + assets différés). L'aperçu est petit : 1024 px suffisent
+    // (1280 pour le lecteur plein écran). Le contentAlignment est mis à l'échelle.
+    const { canvas: scanCanvas, alignment: contentAlignment, lama: lamaCanvas } = (() => {
+      const isPlayApp = document.body.classList.contains('play-app')
+      const MAX = previewFrame0 ? 1024 : 1280
+      const src = scanCanvasProp
+      if (!isPlayApp || src.width <= MAX) return { canvas: src, alignment: contentAlignmentProp, lama: lamaCanvasProp }
+      const k = MAX / src.width
+      const down = (c: HTMLCanvasElement): HTMLCanvasElement => {
+        const out = document.createElement('canvas')
+        out.width = Math.round(c.width * k)
+        out.height = Math.round(c.height * k)
+        const ctx = out.getContext('2d')!
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+        ctx.drawImage(c, 0, 0, out.width, out.height)
+        return out
+      }
+      const scaleBox = (b: { minX: number; minY: number; maxX: number; maxY: number }) =>
+        ({ minX: b.minX * k, minY: b.minY * k, maxX: b.maxX * k, maxY: b.maxY * k })
+      return {
+        canvas: down(src),
+        alignment: contentAlignmentProp ? { drawBBox: scaleBox(contentAlignmentProp.drawBBox), meshBBox: contentAlignmentProp.meshBBox } : contentAlignmentProp,
+        lama: lamaCanvasProp ? down(lamaCanvasProp) : lamaCanvasProp,
+      }
+    })()
     const allPoints = [...mesh.contourAnchors, ...mesh.contourSubdivisionPoints, ...mesh.anchorPoints, ...mesh.internalPoints]
     const hasFlow = mesh.videoFramesMesh && mesh.videoFramesMesh.length > 0
     const hasBgVideo = !!project.backgroundVideoBlob
@@ -270,7 +299,8 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       height: containerRef.current.clientHeight,
       backgroundColor: hasBgVideo ? 0x000000 : 0xFFFFFF,
       backgroundAlpha: transparentBg ? 0 : 1,
-      resolution: window.devicePixelRatio || 1,
+      // Plafond 2× (DPR 3 sur iPhone = 2,25× plus de pixels sans gain visible)
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
     })
     appRef.current = app
@@ -876,7 +906,7 @@ export default function AnimationPlayer({ project, scanCanvas, lamaCanvas, conte
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
-  }, [project, scanCanvas, contentAlignment]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project, scanCanvasProp, contentAlignmentProp]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleExitFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
