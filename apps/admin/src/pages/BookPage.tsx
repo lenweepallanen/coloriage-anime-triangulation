@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getBook, updateBook, deleteBook } from '../db/booksStore'
+import { getBook, getAllBooks, updateBook, deleteBook, duplicateProjectIntoBook } from '../db/booksStore'
 import { getProjectsByBook, getProjectCardThumbnail, setProjectBook, duplicateProject } from '../db/projectsStore'
 import { buildBookPlayUrl, buildBookPlayUrlLocal, setBookPublished } from '../db/publishProject'
 import { downloadQrPng } from '../utils/qrGenerator'
@@ -11,7 +12,17 @@ export default function BookPage() {
   const navigate = useNavigate()
   const [book, setBook] = useState<Book | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
+  const [books, setBooks] = useState<Book[]>([])
   const [loading, setLoading] = useState(true)
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<number | null>(null)
+
+  /** Message de confirmation éphémère sous le titre de la liste (envoi / copie). */
+  function flash(message: string) {
+    setNotice(message)
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 4000)
+  }
   const [name, setName] = useState('')
   const [amazonUrl, setAmazonUrl] = useState('')
   const [bonusUrl, setBonusUrl] = useState('')
@@ -29,7 +40,7 @@ export default function BookPage() {
     if (!bookId) return
     setLoading(true)
     try {
-      const [b, ps] = await Promise.all([getBook(bookId), getProjectsByBook(bookId)])
+      const [b, ps, all] = await Promise.all([getBook(bookId), getProjectsByBook(bookId), getAllBooks()])
       if (!b) {
         alert('Livre introuvable')
         navigate('/')
@@ -40,6 +51,7 @@ export default function BookPage() {
       setAmazonUrl(b.amazonUrl || 'amazon.com')
       setBonusUrl(b.bonusUrl || 'amazon.com')
       setProjects(ps)
+      setBooks(all.sort((x, y) => x.name.localeCompare(y.name, 'fr')))
       if (b.coverImageBlob) setCoverUrl(URL.createObjectURL(b.coverImageBlob))
       if (b.bonusImageBlob) setBonusImgUrl(URL.createObjectURL(b.bonusImageBlob))
     } catch (err) {
@@ -231,6 +243,37 @@ export default function BookPage() {
     }
   }
 
+  /** Envoie le coloriage dans un autre livre : retiré d'ici, ajouté à la fin du livre cible. */
+  async function handleMoveToBook(projectId: string, targetBookId: string) {
+    if (!book || targetBookId === book.id) return
+    const target = books.find(b => b.id === targetBookId)
+    const proj = projects.find(p => p.id === projectId)
+    try {
+      await setProjectBook(projectId, targetBookId)
+      setProjects(prev => prev.filter(p => p.id !== projectId))
+      flash(`« ${proj?.name ?? 'Coloriage'} » envoyé dans « ${target?.name ?? 'livre'} ».`)
+    } catch (err) {
+      alert('Erreur envoi : ' + (err instanceof Error ? err.message : err))
+    }
+  }
+
+  /** Duplique le coloriage et envoie la copie dans le livre choisi (ou hors livre). L'original reste ici. */
+  async function handleDuplicateToBook(sourceId: string, targetBookId: string | null) {
+    if (!book || duplicatingId) return
+    if (targetBookId === book.id) { await handleDuplicateProject(sourceId); return }
+    setDuplicatingId(sourceId)
+    const target = books.find(b => b.id === targetBookId)
+    const proj = projects.find(p => p.id === sourceId)
+    try {
+      await duplicateProjectIntoBook(sourceId, targetBookId)
+      flash(`Copie de « ${proj?.name ?? 'coloriage'} » envoyée ${target ? `dans « ${target.name} »` : 'hors livre'}.`)
+    } catch (err) {
+      alert('Erreur duplication : ' + (err instanceof Error ? err.message : err))
+    } finally {
+      setDuplicatingId(null)
+    }
+  }
+
   if (loading || !book) return <div className="loading">Chargement...</div>
 
   const url = buildBookPlayUrl(book.id)
@@ -389,6 +432,11 @@ export default function BookPage() {
 
       <section className="project-list">
         <h2>Coloriages dans ce livre ({projects.length})</h2>
+        {notice && (
+          <p role="status" style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: '#e8f5e9', color: '#1b5e20', fontSize: 13 }}>
+            ✓ {notice}
+          </p>
+        )}
         {projects.length === 0 ? (
           <p className="empty-state">Aucun coloriage dans ce livre. Depuis la page d'accueil, utilisez le menu "⋯" d'un coloriage pour le déplacer ici.</p>
         ) : (
@@ -397,8 +445,12 @@ export default function BookPage() {
               <BookProjectCard
                 key={p.id}
                 project={p}
+                books={books}
+                currentBookId={book.id}
                 onRemove={() => handleRemoveProject(p.id)}
                 onDuplicate={() => handleDuplicateProject(p.id)}
+                onMoveToBook={targetId => handleMoveToBook(p.id, targetId)}
+                onDuplicateToBook={targetId => handleDuplicateToBook(p.id, targetId)}
                 duplicating={duplicatingId === p.id}
                 duplicateDisabled={duplicatingId != null}
                 isDragging={draggedId === p.id}
@@ -418,10 +470,17 @@ export default function BookPage() {
   )
 }
 
-function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicateDisabled, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
+function BookProjectCard({ project, books, currentBookId, onRemove, onDuplicate, onMoveToBook, onDuplicateToBook, duplicating, duplicateDisabled, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
   project: Project
+  /** Tous les livres (pour envoyer / dupliquer vers un autre livre). */
+  books: Book[]
+  currentBookId: string
   onRemove: () => void
   onDuplicate: () => void
+  /** Envoie le coloriage dans un autre livre (il quitte celui-ci). */
+  onMoveToBook: (targetBookId: string) => void
+  /** Duplique et envoie la copie dans le livre choisi (null = hors livre). */
+  onDuplicateToBook: (targetBookId: string | null) => void
   /** true pendant que CE coloriage est en cours de duplication. */
   duplicating: boolean
   /** true si une duplication est en cours quelque part (désactive le bouton). */
@@ -434,6 +493,8 @@ function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicat
 }) {
   const navigate = useNavigate()
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const otherBooks = books.filter(b => b.id !== currentBookId)
 
   useEffect(() => {
     let revoke: string | null = null
@@ -446,6 +507,15 @@ function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicat
     })
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
   }, [project.id, project.hasThumbnail])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setMenuOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [menuOpen])
+
+  const menuItemStyle = { display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px' } as const
 
   return (
     <div
@@ -490,6 +560,74 @@ function BookProjectCard({ project, onRemove, onDuplicate, duplicating, duplicat
         <button className="btn-icon btn-sm" onClick={e => { e.stopPropagation(); onRemove() }} title="Retirer du livre">
           ⨯
         </button>
+        <button
+          className="btn-icon btn-sm"
+          onClick={e => { e.stopPropagation(); setMenuOpen(true) }}
+          disabled={duplicateDisabled}
+          title="Envoyer vers un autre livre / dupliquer vers un livre"
+        >
+          ⋯
+        </button>
+        {menuOpen && createPortal(
+          <div
+            onClick={e => { e.stopPropagation(); setMenuOpen(false) }}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 9999,
+            }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: '#1c1f26', color: '#e6e6e6',
+                border: '1px solid #2d3340', borderRadius: 12,
+                padding: 20, minWidth: 320, maxWidth: 'min(92vw, 440px)', maxHeight: '80vh', overflowY: 'auto',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</strong>
+                <button className="btn-icon btn-sm" onClick={() => setMenuOpen(false)} style={{ flexShrink: 0 }}>✕</button>
+              </div>
+
+              <div style={{ fontSize: 12, color: '#9aa3b2', margin: '12px 0 4px' }}>Envoyer vers un autre livre… (il quitte ce livre)</div>
+              {otherBooks.length === 0 && (
+                <div style={{ fontSize: 12, color: '#6b7280', padding: '4px 8px' }}>Aucun autre livre. Créez-en un depuis l'accueil.</div>
+              )}
+              {otherBooks.map(b => (
+                <button
+                  key={`move-${b.id}`}
+                  className="btn-ghost"
+                  style={menuItemStyle}
+                  onClick={() => { setMenuOpen(false); onMoveToBook(b.id) }}
+                >
+                  📚 {b.name}
+                </button>
+              ))}
+
+              <div style={{ fontSize: 12, color: '#9aa3b2', margin: '16px 0 4px' }}>Dupliquer et envoyer la copie vers… (l'original reste ici)</div>
+              {books.map(b => (
+                <button
+                  key={`dup-${b.id}`}
+                  className="btn-ghost"
+                  style={menuItemStyle}
+                  onClick={() => { setMenuOpen(false); onDuplicateToBook(b.id) }}
+                >
+                  📚 {b.name}{b.id === currentBookId ? ' (ce livre)' : ''}
+                </button>
+              ))}
+              <button
+                className="btn-ghost"
+                style={menuItemStyle}
+                onClick={() => { setMenuOpen(false); onDuplicateToBook(null) }}
+              >
+                (hors livre)
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
       </div>
     </div>
   )
