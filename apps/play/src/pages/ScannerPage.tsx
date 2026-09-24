@@ -165,7 +165,9 @@ export default function ScannerPage() {
     img.src = url
   }, [handleDecoded, flashMessage, t])
 
-  // Caméra + boucle de décodage (jsQR sur frame réduite, ~7 fois/s)
+  // Caméra + boucle de décodage (jsQR sur frame réduite, ~7 fois/s).
+  // 640 px (et non 480) : un QR de 27 mm imprimé se lit alors même quand la
+  // caméra cadre toute la page A4 (≈ 80 px sur 640), sans devoir s'approcher.
   useEffect(() => {
     let cancelled = false
     const canvas = document.createElement('canvas')
@@ -181,7 +183,7 @@ export default function ScannerPage() {
         now - lastDecodeRef.current > 150
       ) {
         lastDecodeRef.current = now
-        const scale = 480 / Math.max(video.videoWidth, video.videoHeight)
+        const scale = 640 / Math.max(video.videoWidth, video.videoHeight)
         const w = Math.round(video.videoWidth * scale)
         const h = Math.round(video.videoHeight * scale)
         canvas.width = w
