@@ -18,6 +18,7 @@
 		A1C0FF01B2D4E5F6A7B8C901 /* AppViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0FF00B2D4E5F6A7B8C900 /* AppViewController.swift */; };
 		A1C0FF03B2D4E5F6A7B8C903 /* VideoConcatPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0FF02B2D4E5F6A7B8C902 /* VideoConcatPlugin.swift */; };
 		A1C0FF11B2D4E5F6A7B8C911 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1C0FF10B2D4E5F6A7B8C910 /* PrivacyInfo.xcprivacy */; };
+		A1C0FF23B2D4E5F6A7B8C923 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1C0FF22B2D4E5F6A7B8C922 /* InfoPlist.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,8 @@
 		A1C0FF00B2D4E5F6A7B8C900 /* AppViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewController.swift; sourceTree = "<group>"; };
 		A1C0FF02B2D4E5F6A7B8C902 /* VideoConcatPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoConcatPlugin.swift; sourceTree = "<group>"; };
 		A1C0FF10B2D4E5F6A7B8C910 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A1C0FF20B2D4E5F6A7B8C920 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1C0FF21B2D4E5F6A7B8C921 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,6 +79,7 @@
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
 				504EC3131FED79650016851F /* Info.plist */,
+				A1C0FF22B2D4E5F6A7B8C922 /* InfoPlist.strings */,
 				A1C0FF10B2D4E5F6A7B8C910 /* PrivacyInfo.xcprivacy */,
 				2FAD9762203C412B000D30F8 /* config.xml */,
 				50B271D01FEDC1A000F3C39B /* public */,
@@ -128,6 +132,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				fr,
 				Base,
 			);
 			mainGroup = 504EC2FB1FED79650016851F;
@@ -155,6 +160,7 @@
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
 				A1C0FF11B2D4E5F6A7B8C911 /* PrivacyInfo.xcprivacy in Resources */,
+				A1C0FF23B2D4E5F6A7B8C923 /* InfoPlist.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -188,6 +194,15 @@
 				504EC3111FED79650016851F /* Base */,
 			);
 			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		A1C0FF22B2D4E5F6A7B8C922 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A1C0FF20B2D4E5F6A7B8C920 /* en */,
+				A1C0FF21B2D4E5F6A7B8C921 /* fr */,
+			);
+			name = InfoPlist.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -308,7 +323,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = NJML2BL9YA;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -316,7 +331,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.1;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = app.picopop.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -331,7 +346,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = NJML2BL9YA;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -339,7 +354,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.picopop.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

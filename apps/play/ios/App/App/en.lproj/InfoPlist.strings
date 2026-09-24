@@ -1,0 +1,4 @@
+/* Permission descriptions — English */
+"NSCameraUsageDescription" = "The camera is used to scan your coloring page and bring it to life as an animation.";
+"NSMotionUsageDescription" = "The gyroscope creates a depth (parallax) effect during the animation.";
+"NSPhotoLibraryUsageDescription" = "To import a coloring page photo to animate, if you’d rather add it from your photos than use the camera.";

@@ -1,0 +1,4 @@
+/* Descriptions des permissions — Français */
+"NSCameraUsageDescription" = "La caméra sert à scanner ton coloriage pour lui donner vie en animation.";
+"NSMotionUsageDescription" = "Le gyroscope crée un effet de profondeur (parallaxe) pendant l’animation.";
+"NSPhotoLibraryUsageDescription" = "Pour importer une photo de coloriage à animer, si tu préfères l’ajouter depuis tes photos plutôt que la caméra.";
