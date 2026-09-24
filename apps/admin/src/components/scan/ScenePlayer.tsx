@@ -80,7 +80,7 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAlignment, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd, onShareFilm }: Props) {
+export default function ScenePlayer({ project, scanCanvas: scanCanvasProp, lamaCanvas: lamaCanvasProp, contentAlignment: contentAlignmentProp, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd, onShareFilm }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -416,6 +416,34 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     if (cardSize.w === 0) return
 
     const mesh = restAnim.mesh as MeshData
+    // MÉMOIRE (play) : le scan arrive en 2048² et sert de source à 3 à 8 copies
+    // pleine taille (face cachée, tête, mâchoire, une par patte) + autant de
+    // textures GPU. Sur un canvas de film ≤ ~1300 px de large, 1280 px suffisent.
+    // Le contentAlignment (bbox du dessin en pixels scan) est mis à l'échelle.
+    const { canvas: scanCanvas, alignment: contentAlignment, lama: lamaCanvas } = (() => {
+      const isPlayApp = document.body.classList.contains('play-app')
+      const MAX = 1280
+      const src = scanCanvasProp
+      if (!isPlayApp || src.width <= MAX) return { canvas: src, alignment: contentAlignmentProp, lama: lamaCanvasProp }
+      const k = MAX / src.width
+      const down = (c: HTMLCanvasElement): HTMLCanvasElement => {
+        const out = document.createElement('canvas')
+        out.width = Math.round(c.width * k)
+        out.height = Math.round(c.height * k)
+        const ctx = out.getContext('2d')!
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+        ctx.drawImage(c, 0, 0, out.width, out.height)
+        return out
+      }
+      const scaleBox = (b: { minX: number; minY: number; maxX: number; maxY: number }) =>
+        ({ minX: b.minX * k, minY: b.minY * k, maxX: b.maxX * k, maxY: b.maxY * k })
+      return {
+        canvas: down(src),
+        alignment: contentAlignmentProp ? { drawBBox: scaleBox(contentAlignmentProp.drawBBox), meshBBox: contentAlignmentProp.meshBBox } : contentAlignmentProp,
+        lama: lamaCanvasProp ? down(lamaCanvasProp) : lamaCanvasProp,
+      }
+    })()
     const allPoints = [
       ...mesh.contourAnchors, ...mesh.contourSubdivisionPoints,
       ...mesh.anchorPoints, ...mesh.internalPoints,
@@ -941,6 +969,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     // les positions body courantes (walk/MB) ou les positions du mesh legacy.
     let mouthOverlay: MouthOverlay | null = null
     let mouthOverlayBodyFrame0: Point2D[] | null = null
+    const jawTexture: PIXI.Texture | null = jawTexCanvas ? PIXI.Texture.from(jawTexCanvas) : null
     const mouthAttachZoneId = project.projectMouth?.attachZoneId ?? 'body'
     if (project.projectMouth) {
       const mouthAttach = getMouthAttachMesh(project, mouthAttachZoneId)
@@ -951,7 +980,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
           characterContainer,
           mouthAttach.points,
           mouthAttach.triangles,
-          jawTexCanvas ? PIXI.Texture.from(jawTexCanvas) : texture,
+          jawTexture ?? texture,
           scanCanvas.width,
           scanCanvas.height,
           contentAlignment ?? undefined,
@@ -989,6 +1018,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       ...mbTriangAnims.map(a => ({ anim: a, sep: buildPseudoSeparation(project.projectTriangulation!) })),
     ]
 
+    const releasableHfl: { texture: PIXI.Texture; canvas: HTMLCanvasElement }[] = []
     for (const { anim: wa, sep } of allZoneAnims) {
 
       // Generate per-limb extension textures via texture mirroring (synchronous)
@@ -1015,7 +1045,9 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
             hflCanvas, hfl, zonePts, zoneTris, scanCanvas.width, scanCanvas.height,
             contentAlignment ?? undefined, allExtByLimb.get(hfl.limbZoneId),
           )
-          hflTextures[hfl.id ?? hfl.limbZoneId] = PIXI.Texture.from(hflCanvas)
+          const hflTex = PIXI.Texture.from(hflCanvas)
+          hflTextures[hfl.id ?? hfl.limbZoneId] = hflTex
+          releasableHfl.push({ texture: hflTex, canvas: hflCanvas })
         }
       }
 
@@ -1042,6 +1074,28 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
     }
     // Track which walk zone mesh is currently active
     let activeWalkZoneAnimId: string | null = null
+
+    // MÉMOIRE : les canvas dérivés (face cachée, tête, mâchoire, pattes) ont servi à
+    // créer des textures ; on force l'upload GPU maintenant puis on vide leur stockage
+    // CPU (1280² ≈ 6,5 Mo chacun, ×N). Le scanCanvas d'origine (prop) reste intact.
+    if (app.renderer instanceof PIXI.Renderer) {
+      const gl = app.renderer
+      const uploaded = new Set<PIXI.BaseTexture>()
+      const upload = (tex: PIXI.Texture | null | undefined) => {
+        if (!tex || uploaded.has(tex.baseTexture)) return
+        try { gl.texture.bind(tex.baseTexture); uploaded.add(tex.baseTexture) } catch { /* */ }
+      }
+      upload(hfTexture); upload(texture); upload(jawTexture)
+      for (const r of releasableHfl) upload(r.texture)
+      try { gl.texture.reset() } catch { /* */ }
+      // Les textures ne peuvent plus être ré-uploadées depuis leurs canvas vidés : on
+      // désactive le ramasse-miettes de textures de PIXI (il déchargerait une texture
+      // inutilisée ~60 s puis la recréerait vide).
+      gl.textureGC.mode = PIXI.GC_MODES.MANUAL
+      for (const cvs of [hfCanvasForOutline, bodyTexCanvas, jawTexCanvas, ...releasableHfl.map(r => r.canvas)]) {
+        if (cvs && cvs !== scanCanvas && cvs !== lamaCanvas && cvs !== scanCanvasProp && cvs !== lamaCanvasProp) { cvs.width = 0; cvs.height = 0 }
+      }
+    }
 
     // --- Capture vidéo du film (1ʳᵉ lecture après un scan uniquement) ---
     // Le bus audio d'enregistrement doit être actif AVANT la création des sons
@@ -2669,7 +2723,7 @@ export default function ScenePlayer({ project, scanCanvas, lamaCanvas, contentAl
       app.destroy(true, { children: true, texture: true })
       appRef.current = null
     }
-  }, [project, scanCanvas, contentAlignment, scene, restAnim, imgRefReady, cardReady, filmRunId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project, scanCanvasProp, contentAlignmentProp, scene, restAnim, imgRefReady, cardReady, filmRunId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const playSceneAction = useCallback(async (action: SceneAction | undefined, btnId: string) => {
     if (!action || action.steps.length === 0) return
