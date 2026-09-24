@@ -238,7 +238,7 @@ function CollectionCard({ book }: { book: Book }) {
         <button
           className="collection-add-btn"
           aria-label={book.name}
-          onClick={() => navigate('/scanner?mode=livre')}
+          onClick={() => navigate('/scanner')}
         >
           +
         </button>

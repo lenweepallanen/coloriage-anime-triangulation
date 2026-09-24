@@ -630,20 +630,108 @@ body.play-app .book-dl-pill {
 }
 
 /* Carte « + » : ajouter un livre (scan du QR) */
-body.play-app .add-card {
-  border: 4px dashed #c9bdf2;
-  background: rgba(255, 255, 255, 0.75);
+/* Accueil sans livre : « Bienvenue ! Scanne ton premier coloriage » */
+body.play-app .welcome-block {
+  text-align: center;
+  padding: 4px 16px 0;
+}
+body.play-app .welcome-sub {
+  margin: -6px 0 0;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(1.05rem, 3.8vw, 1.25rem);
+  line-height: 1.4;
+  color: var(--ink);
+}
+/* Flèche sticker (portal) posée juste au-dessus du bouton SCAN de la barre ;
+   oscillation verticale douce pour attirer l'œil. */
+body.play-app .welcome-arrow {
+  position: fixed;
+  left: 50%;
+  bottom: calc(126px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 49;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 10px rgba(90, 80, 140, 0.28));
+  animation: welcome-arrow-bounce 1.1s ease-in-out infinite;
+}
+@keyframes welcome-arrow-bounce {
+  0%, 100% { transform: translate(-50%, 0); }
+  50% { transform: translate(-50%, 14px); }
+}
+/* Livre en cours de téléchargement : non ouvrable, anneau de progression en % */
+body.play-app .book-card--downloading {
+  cursor: default;
+}
+body.play-app .book-card--downloading:active {
+  transform: none;
+}
+body.play-app .book-card--downloading .book-card-cover,
+body.play-app .book-card--downloading .book-card-fallback {
+  filter: saturate(0.6) brightness(1.06);
+}
+body.play-app .book-progress {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  z-index: 5;
+}
+/* Sans couverture : le nom du livre n'a pas à se mêler à l'anneau */
+body.play-app .book-card--downloading .book-card-fallback-name {
+  visibility: hidden;
+}
+body.play-app .book-progress-disc {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: var(--sticker-shadow);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 16px rgba(90, 80, 140, 0.12);
 }
-body.play-app .add-card-plus {
+body.play-app .book-progress-ring {
+  position: absolute;
+  inset: 0;
+}
+body.play-app .book-progress-ring circle:last-child {
+  transition: stroke-dasharray 0.4s ease;
+}
+body.play-app .book-progress-pct {
+  position: relative;
   font-family: 'Fredoka', sans-serif;
   font-weight: 700;
-  font-size: 4rem;
-  line-height: 1;
-  color: #8b7cf0;
+  font-size: 1rem;
+  color: var(--ink);
+}
+body.play-app .book-progress-label {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--accent-violet);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+/* Téléchargement terminé : la carte « s'allume » une fois */
+body.play-app .book-card--ready {
+  animation: book-ready-pop 0.5s ease-out;
+  box-shadow: 0 0 0 5px #57c8a3, 0 8px 20px rgba(90, 80, 140, 0.2);
+}
+@keyframes book-ready-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.07); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.play-app .welcome-arrow { animation: none; }
+  body.play-app .book-card--ready { animation: none; }
 }
 
 /* ---------------------------------------------------------------------
@@ -664,64 +752,6 @@ body.play-app .scanner-page .section-title {
   margin-top: 2px;
 }
 /* Écran « Que veux-tu faire ? » : 2 grandes cards empilées, centrées */
-body.play-app .scanner-choices {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 22px;
-  margin-top: 18px;
-  flex: 1;
-  padding-bottom: 24px;
-}
-body.play-app .scanner-choice {
-  width: min(78vw, 340px);
-  aspect-ratio: 7 / 5;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 18px 16px;
-  cursor: pointer;
-  text-align: center;
-  transition: transform 0.12s ease;
-}
-body.play-app .scanner-choice:active {
-  transform: scale(0.97);
-}
-body.play-app .scanner-choice-icon {
-  flex: 0 0 auto;
-  width: 66px;
-  height: 66px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #ffffff;
-}
-body.play-app .scanner-choice-icon--book { background: #ffcf3f; }
-body.play-app .scanner-choice-icon--coloring { background: #8b7cf0; }
-body.play-app .scanner-choice-texts {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-body.play-app .scanner-choice-texts strong {
-  font-family: 'Fredoka', sans-serif;
-  font-weight: 700;
-  font-size: clamp(1.15rem, 4.4vw, 1.35rem);
-  line-height: 1.2;
-  color: #2e2a5e;
-}
-body.play-app .scanner-choice-texts small {
-  font-family: 'Andika', sans-serif;
-  font-size: clamp(0.88rem, 3.2vw, 0.98rem);
-  color: var(--ink-soft);
-  line-height: 1.3;
-}
-
 body.play-app .scanner-camera-card {
   position: relative;
   overflow: hidden;
@@ -858,31 +888,6 @@ body.play-app .scanner-confirm-loading {
 }
 
 /* Badge « Ajout en cours… » sur la carte d'un livre (téléchargement fond) */
-body.play-app .book-adding-pill {
-  position: absolute;
-  left: 50%;
-  bottom: 10px;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(255, 255, 255, 0.95);
-  color: var(--accent-violet);
-  font-family: 'Fredoka', sans-serif;
-  font-weight: 600;
-  font-size: 0.82rem;
-  padding: 6px 12px;
-  border-radius: 999px;
-  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.25);
-  white-space: nowrap;
-  max-width: 92%;
-  z-index: 5;
-}
-body.play-app .book-adding-pill .boot-spinner {
-  width: 16px;
-  height: 16px;
-  border-width: 2.5px;
-}
 
 /* ---------------------------------------------------------------------
    Pages placeholder (Scanner, Galerie, Tuto, À propos)

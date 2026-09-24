@@ -1,32 +1,30 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import jsQR from 'jsqr'
-import { getBook, getBookCover } from '@shared/db/booksStore'
-import type { Book } from '@shared/types/project'
-import { isBookDownloaded, startBackgroundBookDownload } from '../utils/bookDownload'
+import { getBook } from '@shared/db/booksStore'
+import { loadProjectForPlayEssential } from '@shared/db/projectsStore'
+import { getBookDownloadProgress, isBookAdded, isBookDownloaded, startBackgroundBookDownload } from '../utils/bookDownload'
 import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 import Mascot from '@shared/components/mascot/Mascot'
 
 /**
- * Onglet SCANNER : lecture des QR codes imprimés dans les livres papier.
+ * Onglet SCAN : la caméra s'ouvre directement et reconnaît toute seule le QR
+ * code visé — aucune étape manuelle, aucune confirmation.
  *
- * - Écran de choix : « Ajouter un livre » / « Scanner un coloriage »
- *   (le mode adapte les consignes ; la carte + de MES LIVRES arrive
- *   directement en mode livre via /scanner?mode=livre).
- * - QR coloriage (…/p/{id}) → pipeline scan.
- * - QR livre (…/livre/{id}) → ajout dans MES LIVRES (pré-chargement des
- *   assets) ; si déjà ajouté → « Livre déjà ajouté ! » puis ouverture.
- * - Tolérant : un QR valide de l'autre type que le mode choisi est quand
- *   même traité (on ne bloque jamais un enfant).
+ * - QR livre (…/livre/{id}) : le livre s'ajoute et son téléchargement démarre
+ *   en arrière-plan ; retour au menu où la carte affiche la progression.
+ *   Livre déjà ajouté → ouverture du livre.
+ * - QR coloriage (…/p/{id}) : si le livre qui contient ce coloriage n'est pas
+ *   encore ajouté, il s'ajoute automatiquement (téléchargement en arrière-plan),
+ *   puis le coloriage s'ouvre directement sur la caméra de scan.
+ * - QR inconnu : message bref, la caméra continue.
  */
 
-type Mode = 'choice' | 'book' | 'coloring'
 type Status =
   | { kind: 'scanning' }
   | { kind: 'camera-error' }
   | { kind: 'message'; text: string }
-  | { kind: 'confirm'; book: Book; coverUrl: string | null; launching?: boolean }
   | { kind: 'success'; text: string }
 
 function parseQr(data: string): { type: 'project' | 'book'; id: string } | null {
@@ -37,13 +35,18 @@ function parseQr(data: string): { type: 'project' | 'book'; id: string } | null 
   return null
 }
 
+/** Ajoute le livre s'il n'est ni ajouté ni en cours d'ajout. Renvoie true si un ajout a démarré. */
+async function ensureBookAdded(bookId: string): Promise<'added' | 'present' | 'unavailable'> {
+  const book = await getBook(bookId)
+  if (!book || book.published !== true) return 'unavailable'
+  if (getBookDownloadProgress(book.id) || isBookAdded(book)) return 'present'
+  startBackgroundBookDownload(book)
+  return 'added'
+}
+
 export default function ScannerPage() {
   const navigate = useNavigate()
   const { t } = useI18n()
-  const [searchParams] = useSearchParams()
-  const [mode, setMode] = useState<Mode>(() =>
-    searchParams.get('mode') === 'livre' ? 'book' : 'choice',
-  )
   const [status, setStatus] = useState<Status>({ kind: 'scanning' })
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -67,51 +70,52 @@ export default function ScannerPage() {
     }, 2000)
   }, [])
 
+  /** Succès bref (ding + message), puis navigation. */
+  const succeedThen = useCallback((text: string, go: () => void, delayMs = 1200) => {
+    playUi('scanDing')
+    setStatus({ kind: 'success', text })
+    setTimeout(() => { stopCamera(); go() }, delayMs)
+  }, [stopCamera])
+
   const handleBookQr = useCallback(async (id: string) => {
     try {
-      const book = await getBook(id)
-      if (!book || book.published !== true) {
-        flashMessage(t('scanner.book.notfound'))
+      const result = await ensureBookAdded(id)
+      if (result === 'unavailable') { flashMessage(t('scanner.book.notfound')); return }
+      if (result === 'present') {
+        // Déjà ajouté : on ouvre le livre (s'il se télécharge encore, le menu montre la progression).
+        // Encore en téléchargement (ou interrompu) → retour au menu, où l'anneau de progression est visible.
+        const book = await getBook(id)
+        const openable = book != null && isBookDownloaded(book) && getBookDownloadProgress(id) == null
+        succeedThen(t('scanner.book.already'), () => navigate(openable ? `/livre/${id}` : '/'))
         return
       }
-      playUi('scanDing')
-      if (isBookDownloaded(book)) {
-        setStatus({ kind: 'success', text: t('scanner.book.already') })
-        setTimeout(() => {
-          stopCamera()
-          navigate(`/livre/${id}`)
-        }, 1400)
-        return
-      }
-      // Aperçu du livre (couverture + titre) avant l'ajout
-      const cover = await getBookCover(id).catch(() => null)
-      const coverUrl = cover ? URL.createObjectURL(cover) : null
-      setStatus({ kind: 'confirm', book, coverUrl })
+      playUi('success')
+      succeedThen(t('scanner.book.added'), () => navigate('/'), 1400)
     } catch (err) {
       console.error('[scanner] lecture livre échouée', err)
       flashMessage(t('home.error1'))
     }
-  }, [flashMessage, navigate, stopCamera, t])
+  }, [flashMessage, navigate, succeedThen, t])
 
-  const confirmAdd = useCallback((book: Book, coverUrl: string | null) => {
-    // Le popup passe en mode « Ajout du livre en cours… », le pré-chargement
-    // part en arrière-plan, puis retour au menu (badge de progression sur la
-    // carte du livre — il est ouvrable immédiatement).
-    setStatus({ kind: 'confirm', book, coverUrl, launching: true })
-    playUi('success')
-    startBackgroundBookDownload(book)
-    setTimeout(() => {
-      if (coverUrl) URL.revokeObjectURL(coverUrl)
+  const handleProjectQr = useCallback(async (id: string) => {
+    try {
+      // Lecture Firestore seule (pas d'assets) : suffit pour connaître le livre du coloriage.
+      const project = await loadProjectForPlayEssential(id)
+      if (!project || project.published !== true) { flashMessage(t('scanner.project.notfound')); return }
+      if (project.bookId) {
+        // Le livre s'ajoute tout seul ; non bloquant si indisponible.
+        await ensureBookAdded(project.bookId).catch(() => 'unavailable')
+      }
+      playUi('scanDing')
       stopCamera()
-      navigate('/')
-    }, 1400)
-  }, [navigate, stopCamera])
-
-  const cancelConfirm = useCallback((coverUrl: string | null) => {
-    if (coverUrl) URL.revokeObjectURL(coverUrl)
-    setStatus({ kind: 'scanning' })
-    handlingRef.current = false
-  }, [])
+      // autocam=1 : la caméra du pipeline scan démarre directement (elle était
+      // déjà ouverte pour lire le QR — pas de ré-écran « Prêt à scanner ? »).
+      navigate(`/p/${id}?autocam=1`)
+    } catch (err) {
+      console.error('[scanner] lecture coloriage échouée', err)
+      flashMessage(t('home.error1'))
+    }
+  }, [flashMessage, navigate, stopCamera, t])
 
   const handleDecoded = useCallback((data: string) => {
     if (handlingRef.current) return
@@ -122,16 +126,9 @@ export default function ScannerPage() {
       flashMessage(t('scanner.unknown'))
       return
     }
-    if (parsed.type === 'project') {
-      playUi('scanDing')
-      stopCamera()
-      // autocam=1 : la caméra du pipeline scan démarre directement (elle
-      // était déjà ouverte pour lire le QR — pas de ré-écran « Prêt à scanner ? »)
-      navigate(`/p/${parsed.id}?autocam=1`)
-      return
-    }
-    void handleBookQr(parsed.id)
-  }, [flashMessage, handleBookQr, navigate, stopCamera, t])
+    if (parsed.type === 'project') void handleProjectQr(parsed.id)
+    else void handleBookQr(parsed.id)
+  }, [flashMessage, handleBookQr, handleProjectQr, t])
 
   // Décodage d'un QR depuis une IMAGE choisie (Photos) — utile sans caméra
   // (simulateur, caméra HS) ou pour un QR reçu en capture d'écran.
@@ -170,7 +167,6 @@ export default function ScannerPage() {
 
   // Caméra + boucle de décodage (jsQR sur frame réduite, ~7 fois/s)
   useEffect(() => {
-    if (mode === 'choice') return
     let cancelled = false
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
@@ -227,64 +223,13 @@ export default function ScannerPage() {
       cancelled = true
       stopCamera()
     }
-  }, [mode, handleDecoded, stopCamera])
-
-  if (mode === 'choice') {
-    return (
-      <div className="scanner-page">
-        <div className="page-mascot-row"><Mascot size={84} gaze="pointer" /></div>
-        <h1 className="section-title">{t('scanner.choice.title')}</h1>
-        <div className="scanner-choices">
-          <button className="scanner-choice soft-card" onClick={() => setMode('book')}>
-            <span className="scanner-choice-icon scanner-choice-icon--book" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 6.5C10.5 5 8.5 4.5 5.5 4.5c-.8 0-1.5.7-1.5 1.5v11c0 .8.7 1.5 1.5 1.5 3 0 5 .5 6.5 2 1.5-1.5 3.5-2 6.5-2 .8 0 1.5-.7 1.5-1.5V6c0-.8-.7-1.5-1.5-1.5-3 0-5 .5-6.5 2Z" />
-                <path d="M12 6.5v14" />
-              </svg>
-            </span>
-            <span className="scanner-choice-texts">
-              <strong>{t('scanner.choice.book')}</strong>
-              <small>{t('scanner.choice.book.sub')}</small>
-            </span>
-          </button>
-          <button className="scanner-choice soft-card" onClick={() => setMode('coloring')}>
-            <span className="scanner-choice-icon scanner-choice-icon--coloring" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8" />
-                <path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8" />
-                <path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16" />
-                <path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
-                <path d="M4 12h16" />
-              </svg>
-            </span>
-            <span className="scanner-choice-texts">
-              <strong>{t('scanner.choice.coloring')}</strong>
-              <small>{t('scanner.choice.coloring.sub')}</small>
-            </span>
-          </button>
-        </div>
-      </div>
-    )
-  }
+  }, [handleDecoded, stopCamera])
 
   return (
     <div className="scanner-page">
-      <button
-        className="scan-back-bar"
-        onClick={() => {
-          stopCamera()
-          setStatus({ kind: 'scanning' })
-          handlingRef.current = false
-          setMode('choice')
-        }}
-      >
-        ← {t('scanner.back')}
-      </button>
       <div className="scan-header">
         <h1 className="scan-header-title">{t('scanner.camera.title')}</h1>
-        <p className="scan-header-sub">
-          {t(mode === 'book' ? 'scanner.camera.book' : 'scanner.camera.coloring')}
-        </p>
+        <p className="scan-header-sub">{t('scanner.camera.any')}</p>
       </div>
 
       <input
@@ -322,41 +267,9 @@ export default function ScannerPage() {
             </svg>
             {t('scanner.importQr')}
           </button>
-          {status.kind === 'confirm' && (
-            <div className="scanner-confirm-backdrop" role="dialog" aria-modal="true">
-              <div className="scanner-confirm soft-card">
-                {status.coverUrl ? (
-                  <img className="scanner-confirm-cover" src={status.coverUrl} alt={status.book.name} />
-                ) : (
-                  <span className="scanner-confirm-fallback" aria-hidden="true">📖</span>
-                )}
-                <strong className="scanner-confirm-title">{status.book.name}</strong>
-                {status.launching ? (
-                  <div className="scanner-confirm-loading">
-                    <span className="boot-spinner boot-spinner--small" />
-                    <span>{t('scanner.book.adding')}</span>
-                  </div>
-                ) : (
-                  <>
-                    <p className="scanner-confirm-q">{t('scanner.book.confirmQ')}</p>
-                    <div className="scanner-confirm-actions">
-                      <button className="soft-btn" onClick={() => confirmAdd(status.book, status.coverUrl)}>
-                        {t('common.yes')}
-                      </button>
-                      <button className="soft-btn soft-btn--ghost" onClick={() => cancelConfirm(status.coverUrl)}>
-                        {t('common.no')}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-          {status.kind !== 'scanning' && status.kind !== 'confirm' && (
-            <div className={`scanner-status ${status.kind === 'success' ? 'scanner-status--success' : ''}`}>
-              {status.kind === 'message' || status.kind === 'success' ? (
-                <span>{status.text}</span>
-              ) : null}
+          {status.kind !== 'scanning' && (
+            <div className={`scanner-status ${status.kind === 'success' ? 'scanner-status--success' : ''}`} role="status">
+              <span>{status.text}</span>
             </div>
           )}
         </>
