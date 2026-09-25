@@ -14,6 +14,9 @@ au kit v4 → les fichiers voix/bruitages déjà en Storage sont simplement ré-
 Le héros (image 1254×1254 ajustée à la hauteur du décor × scale) fait ≈ 450 px de large à scale 0,85–0,9 :
 ses positions sont choisies pour ne JAMAIS chevaucher l'adversaire (marge ≥ 50 px).
 
+RÈGLE vitesses (retour Nicolas) : Walk = 120 images = 5 s à ×1 ≈ 70 px/s sans glissement → speed = px/s ÷ 70 ;
+sur place face à un adversaire qui court : ×3. Charge/Jump ×2 = geste vif (2,4 s).
+
 Usage : python3 build_kit_v5.py [project=<id>] [out=kit-v5-<projet>.json]
 """
 import json, os, sys, uuid
@@ -141,9 +144,9 @@ plans = {}
 P = 'P1'
 rive_g = wp(P, 'rive-g', 330, 575, 0.9, 'right')     # bord droit du héros ≈ 555 < rive 560
 rive_d = wp(P, 'rive-d', 900, 575, 0.9, 'right')     # bord gauche du héros ≈ 675 (rive droite ≈ 700)
-t_in = travel(P, 'entree', 0, 3200, W(rive_g), easing='easeOut', animation='Walk', speed=1.2, frm=OFF_L)
+t_in = travel(P, 'entree', 0, 3200, W(rive_g), easing='easeOut', animation='Walk', speed=2.6, frm=OFF_L)   # 580 px/3,2 s = 181 px/s
 t_jump = travel(P, 'saut', 4600, 2400, W(rive_d), easing='linear', animation='Jump', speed=2.0)
-t_out = travel(P, 'sortie', 7400, 2600, OFF_R, easing='easeIn', animation='Walk', speed=1.5)
+t_out = travel(P, 'sortie', 7400, 2600, OFF_R, easing='easeIn', animation='Walk', speed=3.5)   # 630 px/2,6 s = 242 px/s
 plans['P1'] = {
     'id': uid('plan.P1'), 'name': 'Presentation', 'backdropFile': 'videos-v2/P1-web.mp4', 'cameraX': 640,
     'transitionToNext': {'kind': 'crossfade', 'durationMs': 400}, 'durationMs': 10000,
@@ -165,7 +168,7 @@ plans['P1'] = {
 # ---------------------------------------------------------------- PLAN 2 — Giant horns · 12,5 s
 # Lisière (décor quasi fixe). Héros : traverse tout le cadre de gauche à droite en marchant, 3 répliques.
 P = 'P2'
-t_walk = travel(P, 'traversee', 0, 12500, OFF_R, easing='linear', animation='Walk', speed=1.1, frm=OFF_L)
+t_walk = travel(P, 'traversee', 0, 12500, OFF_R, easing='linear', animation='Walk', speed=2.0, frm=OFF_L)   # 1780 px/12,5 s = 142 px/s
 plans['P2'] = {
     'id': uid('plan.P2'), 'name': 'Giant horns', 'backdropFile': 'videos-v2/P2-web.mp4', 'cameraX': 640,
     'transitionToNext': {'kind': 'crossfade', 'durationMs': 400}, 'durationMs': 12500,
@@ -186,7 +189,7 @@ plans['P2'] = {
 P3_RAPTOR_CRY, P3_RAPTOR_FLINCH, P3_RAPTOR_FLEE = 2000, 8000, 10000
 P = 'P3'
 poste = wp(P, 'poste', 320, GROUND, 0.85, 'right')
-t_in = travel(P, 'entree', 0, 2000, W(poste), easing='easeOut', animation='Walk', speed=1.3, frm=OFF_L)
+t_in = travel(P, 'entree', 0, 2000, W(poste), easing='easeOut', animation='Walk', speed=4.0, frm=OFF_L)   # 570 px/2,0 s = 285 px/s
 menace = anim(P, 'menace', 3800, 2400, 'Charge', 2.0, 'once-hold')
 roar = anim(P, 'rugit', 6200, 2000, 'Stuck', 1.0, 'once-hold')
 plans['P3'] = {
@@ -277,7 +280,7 @@ plans['P6'] = {
     'transitionToNext': {'kind': 'crossfade', 'durationMs': 300}, 'durationMs': 12000,
     'waypoints': [course],
     'motion': [appear(P, W(course))],
-    'anim': [anim(P, 'course', 0, 12000, 'Walk', 2.5)],
+    'anim': [anim(P, 'course', 0, 12000, 'Walk', 3.0)],   # course : ×3 (T-Rex qui sprinte dans la vidéo)
     'camera': [rumble(P, 'course', 0, 12000, 2, 3)],
     'soundTracks': [
         {'clips': [voice(P, 'v3b', 1500, V3b), voice(P, 'v3c', 7000, V3c)]},
