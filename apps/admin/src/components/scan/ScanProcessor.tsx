@@ -4,6 +4,7 @@ import { processCapturedImage, type MarkerDetection } from '../../utils/perspect
 import { createScan } from '../../db/scansStore'
 import type { ContentAlignment } from '../../utils/textureExtractor'
 import { SCAN_IMAGE_OFFSET, SCAN_IMAGE_FRAME } from '../../utils/pdfLayout'
+import { playT } from '../../utils/playI18n'
 
 /**
  * Alignement image ↔ scan : par CONTRAT (pdfLayout), le scan redressé place l'image
@@ -89,6 +90,15 @@ export function useScanProcessor(project: Project, opts?: { mode?: 'admin' | 'pl
 
         // Cibles du redressement = contrat PDF pour CETTE image (taille native → mm).
         const imgDims = project.originalImageBlob ? await getImageDimensions(project.originalImageBlob) : null
+        // PLAY : sans les dimensions de l'image originale, le worker ne reçoit pas
+        // de cibles → PAS d'homographie (crop centré) et alignement nul → texture
+        // zoomée/décalée. L'image est chargée en phase 1 ; si elle manque encore
+        // (téléchargement échoué), on refuse plutôt que de produire un faux scan.
+        if (isPlay && !imgDims) {
+          URL.revokeObjectURL(capturedUrl)
+          setError(playT('camera.notReady'))
+          return
+        }
 
         // Process via worker: homographie sur les coins des viseurs -> 2048x2048
         const result = await processCapturedImage(blob, markers, imgDims)

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import jsQR from 'jsqr'
 import { getBook } from '@shared/db/booksStore'
 import { loadProjectForPlayEssential } from '@shared/db/projectsStore'
@@ -7,6 +7,7 @@ import { getBookDownloadProgress, isBookAdded, isBookDownloaded, startBackground
 import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 import Mascot from '@shared/components/mascot/Mascot'
+import { logAppError } from '../utils/appErrors'
 
 /**
  * Onglet SCAN : la caméra s'ouvre directement et reconnaît toute seule le QR
@@ -19,6 +20,16 @@ import Mascot from '@shared/components/mascot/Mascot'
  *   encore ajouté, il s'ajoute automatiquement (téléchargement en arrière-plan),
  *   puis le coloriage s'ouvre directement sur la caméra de scan.
  * - QR inconnu : message bref, la caméra continue.
+ *
+ * ROBUSTESSE CAMÉRA (iOS) : la piste vidéo peut revenir muette/suspendue après
+ * un passage en arrière-plan, ou ne jamais délivrer d'image si une autre session
+ * de capture était encore active (fin de film). La caméra est donc RELANCÉE :
+ *  - au retour au premier plan (visibilitychange + App.appStateChange Capacitor) ;
+ *  - quand la piste se termine ou passe muette (`ended` / `mute`) ;
+ *  - par un chien de garde : 1,5 s sans image → nouvelle acquisition (3 essais,
+ *    puis carte d'erreur avec bouton « Réessayer »).
+ * L'onglet SCANNER, quand on est déjà sur cette page, pousse `state.reset` pour
+ * forcer la même relance (sinon rien ne se passait : même route, pas de remontage).
  */
 
 type Status =
@@ -26,6 +37,9 @@ type Status =
   | { kind: 'camera-error' }
   | { kind: 'message'; text: string }
   | { kind: 'success'; text: string }
+
+const WATCHDOG_MS = 1500
+const MAX_RESTARTS = 3
 
 function parseQr(data: string): { type: 'project' | 'book'; id: string } | null {
   const project = data.match(/\/p\/([A-Za-z0-9_-]+)/)
@@ -46,15 +60,18 @@ async function ensureBookAdded(bookId: string): Promise<'added' | 'present' | 'u
 
 export default function ScannerPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { t } = useI18n()
   const [status, setStatus] = useState<Status>({ kind: 'scanning' })
+  // Jeton de relance : onglet SCANNER re-tapé (state.reset) ou bouton « Réessayer ».
+  const resetToken = (location.state as { reset?: number } | null)?.reset ?? 0
+  const [retryToken, setRetryToken] = useState(0)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef(0)
   const handlingRef = useRef(false)
   const lastDecodeRef = useRef(0)
-  const qrFileRef = useRef<HTMLInputElement | null>(null)
 
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
@@ -130,46 +147,14 @@ export default function ScannerPage() {
     else void handleBookQr(parsed.id)
   }, [flashMessage, handleBookQr, handleProjectQr, t])
 
-  // Décodage d'un QR depuis une IMAGE choisie (Photos) — utile sans caméra
-  // (simulateur, caméra HS) ou pour un QR reçu en capture d'écran.
-  const handleImportQr = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => {
-      try {
-        const maxSide = 1200
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
-        const w = Math.max(1, Math.round(img.width * scale))
-        const h = Math.max(1, Math.round(img.height * scale))
-        const canvas = document.createElement('canvas')
-        canvas.width = w
-        canvas.height = h
-        const ctx = canvas.getContext('2d', { willReadFrequently: true })
-        if (!ctx) { URL.revokeObjectURL(url); return }
-        ctx.drawImage(img, 0, 0, w, h)
-        const data = ctx.getImageData(0, 0, w, h)
-        const code = jsQR(data.data, w, h)
-        URL.revokeObjectURL(url)
-        handlingRef.current = false
-        if (code?.data) handleDecoded(code.data)
-        else { playUi('error'); flashMessage(t('scanner.unknown')) }
-      } catch {
-        URL.revokeObjectURL(url)
-        flashMessage(t('scanner.unknown'))
-      }
-    }
-    img.onerror = () => { URL.revokeObjectURL(url); flashMessage(t('scanner.unknown')) }
-    img.src = url
-  }, [handleDecoded, flashMessage, t])
-
   // Caméra + boucle de décodage (jsQR sur frame réduite, ~7 fois/s).
   // 640 px (et non 480) : un QR de 27 mm imprimé se lit alors même quand la
   // caméra cadre toute la page A4 (≈ 80 px sur 640), sans devoir s'approcher.
   useEffect(() => {
     let cancelled = false
+    let restarts = 0
+    let watchdog = 0
+    let acquiring = false
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
@@ -196,7 +181,20 @@ export default function ScannerPage() {
       rafRef.current = requestAnimationFrame(tick)
     }
 
-    ;(async () => {
+    /** La piste délivre-t-elle des images ? (iOS : piste muette/suspendue = écran noir sans erreur) */
+    const isAlive = () => {
+      const video = videoRef.current
+      const track = streamRef.current?.getVideoTracks()[0]
+      return !!video && !!track && track.readyState === 'live' && !track.muted && video.videoWidth > 0
+    }
+
+    const acquire = async (reason: string) => {
+      if (cancelled || acquiring) return
+      acquiring = true
+      window.clearTimeout(watchdog)
+      cancelAnimationFrame(rafRef.current)
+      streamRef.current?.getTracks().forEach(tr => tr.stop())
+      streamRef.current = null
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment' },
@@ -207,25 +205,65 @@ export default function ScannerPage() {
           return
         }
         streamRef.current = stream
+        const track = stream.getVideoTracks()[0]
+        track?.addEventListener('ended', () => { void restart('piste terminée') })
+        track?.addEventListener('mute', () => { window.setTimeout(() => { if (!isAlive()) void restart('piste muette') }, 600) })
         const video = videoRef.current
         if (video) {
           video.srcObject = stream
-          await video.play()
+          await video.play().catch(() => { /* autoplay best-effort */ })
         }
-        setStatus({ kind: 'scanning' })
+        setStatus(s => (s.kind === 'camera-error' || s.kind === 'scanning' ? { kind: 'scanning' } : s))
         handlingRef.current = false
         rafRef.current = requestAnimationFrame(tick)
+        // Chien de garde : pas d'image après WATCHDOG_MS → on relance.
+        watchdog = window.setTimeout(() => { if (!isAlive()) void restart(`aucune image après ${WATCHDOG_MS} ms`) }, WATCHDOG_MS)
+        if (reason !== 'montage') console.log('[scanner] caméra relancée :', reason)
       } catch (err) {
         console.warn('[scanner] caméra indisponible', err)
+        logAppError('error', err, `getUserMedia scanner (${reason})`)
         if (!cancelled) setStatus({ kind: 'camera-error' })
+      } finally {
+        acquiring = false
       }
-    })()
+    }
+
+    const restart = async (reason: string) => {
+      if (cancelled) return
+      if (restarts >= MAX_RESTARTS) {
+        logAppError('error', new Error('caméra sans image'), `scanner : ${reason}, ${restarts} relances`)
+        stopCamera()
+        setStatus({ kind: 'camera-error' })
+        return
+      }
+      restarts++
+      await acquire(reason)
+    }
+
+    // Retour au premier plan : iOS peut avoir suspendu la capture et mis la
+    // <video> en pause → on relance systématiquement (piste fraîche).
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || cancelled) return
+      restarts = 0
+      void acquire('retour au premier plan')
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    let removeAppListener: (() => void) | null = null
+    void import('@capacitor/app')
+      .then(({ App }) => App.addListener('appStateChange', ({ isActive }) => { if (isActive) onVisible() }))
+      .then(handle => { if (cancelled) void handle.remove(); else removeAppListener = () => { void handle.remove() } })
+      .catch(() => { /* web : pas de plugin */ })
+
+    void acquire('montage')
 
     return () => {
       cancelled = true
+      window.clearTimeout(watchdog)
+      document.removeEventListener('visibilitychange', onVisible)
+      removeAppListener?.()
       stopCamera()
     }
-  }, [handleDecoded, stopCamera])
+  }, [handleDecoded, stopCamera, resetToken, retryToken])
 
   return (
     <div className="scanner-page">
@@ -234,25 +272,12 @@ export default function ScannerPage() {
         <p className="scan-header-sub">{t('scanner.camera.any')}</p>
       </div>
 
-      <input
-        ref={qrFileRef}
-        type="file"
-        accept="image/*"
-        onChange={handleImportQr}
-        style={{ display: 'none' }}
-      />
-
       {status.kind === 'camera-error' ? (
         <div className="placeholder-card soft-card scanner-error-card">
           <Mascot size={80} mood="oops" />
           <p className="text-preline">{t('scanner.camera.error')}</p>
-          <button className="scanner-import-qr" onClick={() => qrFileRef.current?.click()}>
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-              <circle cx="9" cy="10" r="1.6" />
-              <path d="m4.5 17 4.5-4.5 3.5 3.5 3-3 4 4" />
-            </svg>
-            {t('scanner.importQr')}
+          <button className="soft-btn" onClick={() => { setStatus({ kind: 'scanning' }); setRetryToken(n => n + 1) }}>
+            {t('home.retry')}
           </button>
         </div>
       ) : (
@@ -261,14 +286,6 @@ export default function ScannerPage() {
             <video ref={videoRef} className="scanner-video" playsInline muted autoPlay />
             <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
           </div>
-          <button className="scanner-import-qr" onClick={() => qrFileRef.current?.click()}>
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-              <circle cx="9" cy="10" r="1.6" />
-              <path d="m4.5 17 4.5-4.5 3.5 3.5 3-3 4 4" />
-            </svg>
-            {t('scanner.importQr')}
-          </button>
           {status.kind !== 'scanning' && (
             <div className={`scanner-status ${status.kind === 'success' ? 'scanner-status--success' : ''}`} role="status">
               <span>{status.text}</span>

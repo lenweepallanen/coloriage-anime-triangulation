@@ -49,6 +49,12 @@ export function installGlobalErrorLogging(): void {
   installed = true
   window.addEventListener('error', (e) => { logAppError('error', e.error ?? e.message) })
   window.addEventListener('unhandledrejection', (e) => { logAppError('unhandledrejection', e.reason) })
+  // Erreurs RATTRAPÉES signalées explicitement (ex. caméra refusée dans CameraView,
+  // composant partagé qui ne peut pas importer ce module).
+  window.addEventListener('picopop:error', (e) => {
+    const d = (e as CustomEvent<{ err: unknown; where?: string }>).detail
+    logAppError('error', d?.err, d?.where)
+  })
   installRestartDetector()
 }
 

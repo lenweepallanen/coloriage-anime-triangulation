@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { loadProjectForPlayEssential, loadProjectForPlayDeferred } from '../db/projectsStore'
+import { loadProjectForPlayEssential, loadProjectForPlayDeferred, loadProjectOriginalImageForPlay } from '../db/projectsStore'
 import type { Project } from '../types/project'
 
 /**
@@ -24,6 +24,12 @@ export function useProjectForPlay(projectId: string) {
     setProject(null)
 
     loadProjectForPlayEssential(projectId)
+      // L'IMAGE ORIGINALE fait partie de la phase 1 : le scan a besoin de ses
+      // dimensions (cibles de l'homographie + alignement texture). Sans elle, une
+      // capture déclenchée avant la fin de la phase 2 produisait un scan non
+      // redressé et décalé (« premier scan bizarre »). Petit blob, en cache
+      // après le téléchargement du livre → coût négligeable.
+      .then(essential => (essential ? loadProjectOriginalImageForPlay(essential) : essential))
       .then(essential => {
         if (cancelled || !essential) {
           if (!cancelled) setLoading(false)

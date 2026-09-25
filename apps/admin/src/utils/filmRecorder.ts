@@ -97,6 +97,13 @@ export function startFilmRecording(canvas: HTMLCanvasElement, fps = 30): FilmRec
     stopPromise = new Promise<FilmRecordingResult>((resolve) => {
       const finalize = () => {
         const durationMs = performance.now() - startedAt - pausedTotalMs
+        // Libère la piste vidéo du canvas dès la fin (sinon elle reste « live »
+        // après le film → sur iOS, une capture encore active peut laisser la
+        // caméra du scan suivant en aperçu noir). La piste audio appartient au
+        // bus d'enregistrement partagé (disableRecordingBus) — on n'y touche pas.
+        for (const t of stream.getVideoTracks()) {
+          try { t.stop() } catch { /* */ }
+        }
         resolve({ blob: new Blob(chunks, { type: mimeType }), mimeType, durationMs })
       }
       if (recorder.state === 'inactive') {

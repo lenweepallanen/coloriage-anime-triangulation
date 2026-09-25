@@ -73,6 +73,14 @@ interface Props {
   /** Partage de la vidéo enregistrée (bouton « Partager la vidéo » de l'écran
    *  Fin). Fourni par l'app play uniquement — absent = bouton masqué. */
   onShareFilm?: () => void | Promise<void>
+  /** true pendant la préparation du partage : bouton « Partager » grisé avec
+   *  libellé « Préparation… » et mascotte de la carte masquée (une seule
+   *  mascotte à l'écran : celle de l'overlay). */
+  sharePreparing?: boolean
+  /** Overlay « Partage en cours de création » (composant play) rendu DANS le
+   *  portail de la carte Fin — seul endroit où il passe au-dessus de la carte
+   *  (le portail est à z-index 1400 sur body, hors du conteneur de page). */
+  shareOverlay?: React.ReactNode
 }
 
 function smoothstep(t: number): number {
@@ -80,7 +88,7 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c)
 }
 
-export default function ScenePlayer({ project, scanCanvas: scanCanvasProp, lamaCanvas: lamaCanvasProp, contentAlignment: contentAlignmentProp, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd, onShareFilm }: Props) {
+export default function ScenePlayer({ project, scanCanvas: scanCanvasProp, lamaCanvas: lamaCanvasProp, contentAlignment: contentAlignmentProp, onClose, modal, onSettings, onExit, forcePaused, recordFilm, onFilmRecorded, confirmReplaceOnEnd, onShareFilm, sharePreparing, shareOverlay }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
@@ -2990,7 +2998,7 @@ export default function ScenePlayer({ project, scanCanvas: scanCanvasProp, lamaC
   const filmEndContent = filmEnabled && filmEnded && (
     <div className={`scene-player-film-end${portrait ? ' scene-player-film-end--portal' : ''}`}>
       <div className="scene-player-film-end-card">
-        <Mascot className="scene-player-film-end-star" size={110} mood="happy" halo />
+        <Mascot className={`scene-player-film-end-star${sharePreparing ? ' scene-player-film-end-star--hidden' : ''}`} size={110} mood="happy" halo />
         <div className="scene-player-film-end-title">{playT('film.bravo')}</div>
         <div className="scene-player-film-end-note">{playT('film.subtitle')}</div>
         {confirmReplaceOnEnd && pendingRecording && !recordingSaved && !recordingDiscarded && (
@@ -3027,14 +3035,14 @@ export default function ScenePlayer({ project, scanCanvas: scanCanvasProp, lamaC
             {playT('film.replay')}
           </button>
           {onShareFilm && (
-            <button className="film-end-btn film-end-btn--share" onClick={() => { void onShareFilm() }}>
+            <button className="film-end-btn film-end-btn--share" disabled={!!sharePreparing} onClick={() => { void onShareFilm() }}>
               <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="6" cy="12" r="2.6" />
                 <circle cx="17.5" cy="5.5" r="2.6" />
                 <circle cx="17.5" cy="18.5" r="2.6" />
                 <path d="m8.3 10.8 6.9-4M8.3 13.2l6.9 4" />
               </svg>
-              {playT('film.share')}
+              {playT(sharePreparing ? 'film.sharePrep' : 'film.share')}
             </button>
           )}
           <button className="film-end-btn film-end-btn--back" onClick={() => (onExit ?? onClose)()}>
@@ -3046,6 +3054,7 @@ export default function ScenePlayer({ project, scanCanvas: scanCanvasProp, lamaC
           </button>
         </div>
       </div>
+      {sharePreparing && shareOverlay}
     </div>
   )
   // En play, la carte Fin est rendue en PORTAIL hors du player (qui peut être

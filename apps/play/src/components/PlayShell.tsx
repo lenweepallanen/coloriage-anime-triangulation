@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useI18n, type Lang } from '../i18n'
 import NetworkOverlay from './NetworkOverlay'
 import { playUi, unlockUiSound, setHapticHook, isUiSoundEnabled, setUiSoundEnabled, type UiSoundName } from '@shared/utils/uiSound'
@@ -135,8 +135,18 @@ function TopMenu() {
 
 function TabBar() {
   const { t } = useI18n()
+  const location = useLocation()
+  const navigate = useNavigate()
   const bubbleClass = (extra: string) => ({ isActive }: { isActive: boolean }) =>
     ['shell-tab', extra, isActive ? 'shell-tab--active' : ''].filter(Boolean).join(' ')
+  // Déjà sur /scanner : un NavLink vers la même route ne fait rien → on pousse un
+  // jeton `reset` pour que la page relance la caméra (aperçu noir après un
+  // retour d'arrière-plan, par exemple).
+  const onScanTab = (e: ReactMouseEvent) => {
+    if (location.pathname !== '/scanner') return
+    e.preventDefault()
+    navigate('/scanner', { replace: true, state: { reset: Date.now() } })
+  }
 
   return (
     <nav className="shell-tabbar">
@@ -153,7 +163,7 @@ function TabBar() {
             </svg>
           </span>
         </NavLink>
-        <NavLink to="/scanner" className={bubbleClass('shell-tab--scan')} aria-label={t('tabs.scanner')}>
+        <NavLink to="/scanner" className={bubbleClass('shell-tab--scan')} aria-label={t('tabs.scanner')} onClick={onScanTab}>
           <span className="tab-scan-circle">
             <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8" />
@@ -166,8 +176,10 @@ function TabBar() {
         </NavLink>
         <NavLink to="/galerie" className={bubbleClass('')} aria-label={t('tabs.gallery')}>
           <span className="tab-bubble tab-bubble--gallery">
+            {/* Triangle « play » (même tracé que les cartes de la galerie) : la
+                galerie, ce sont les films à revoir. */}
             <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="none">
-              <path d="M12 3.2 14.5 8.6 20.4 9.3 16 13.3 17.2 19.1 12 16.2 6.8 19.1 8 13.3 3.6 9.3 9.5 8.6Z" />
+              <path d="M8 5.5c0-1.1 1.2-1.8 2.1-1.2l9.4 6.5c.8.6.8 1.8 0 2.4l-9.4 6.5c-.9.6-2.1-.1-2.1-1.2V5.5z" />
             </svg>
           </span>
         </NavLink>

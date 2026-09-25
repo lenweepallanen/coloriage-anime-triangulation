@@ -772,24 +772,6 @@ body.play-app .scanner-video {
   display: block;
 }
 /* Bouton discret « Importer un QR » (sans caméra, ou QR reçu en image) */
-body.play-app .scanner-import-qr {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 14px auto 0;
-  padding: 0.6em 1.3em;
-  border: none;
-  border-radius: 999px;
-  background: #ffffff;
-  color: var(--accent-violet);
-  font-family: 'Fredoka', sans-serif;
-  font-weight: 600;
-  font-size: 0.98rem;
-  box-shadow: var(--sticker-shadow);
-  cursor: pointer;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-}
-body.play-app .scanner-import-qr:active { transform: scale(0.96); box-shadow: var(--sticker-shadow-lg); }
 body.play-app .scanner-status {
   display: flex;
   align-items: center;
@@ -3509,6 +3491,20 @@ body.play-app .page-mascot-row--book {
    ------------------------------------------------------------------- */
 body.play-app .share-loading-backdrop {
   z-index: 1300;
+}
+/* Dans le portail de la carte Fin (z-index 1400 sur body) : l'overlay est un
+   frère de la carte → au-dessus d'elle grâce à son propre z-index. Hors portail
+   (galerie, replay), il reste plein écran comme avant. */
+body.play-app .scene-player-film-end--portal .share-loading-backdrop {
+  z-index: 10;
+}
+/* Une seule mascotte à l'écran pendant la préparation : celle de l'overlay. */
+body.play-app .scene-player-film-end-star--hidden {
+  visibility: hidden;
+}
+body.play-app .film-end-btn:disabled {
+  opacity: 0.55;
+  pointer-events: none;
 }
 body.play-app .share-loading-card {
   gap: 14px;

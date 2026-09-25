@@ -42,9 +42,13 @@ interface ScanPageProps {
   /** Play : partage la vidéo enregistrée (bouton « Partager la vidéo » de
    *  l'écran Fin du ScenePlayer). */
   onShareFilm?: () => void | Promise<void>
+  /** Play : partage en cours de préparation (bouton grisé + overlay dans la carte Fin). */
+  sharePreparing?: boolean
+  /** Play : overlay « Partage en cours de création » rendu dans la carte Fin. */
+  shareOverlay?: React.ReactNode
 }
 
-export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded, onShareFilm }: ScanPageProps = {}) {
+export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded, onShareFilm, sharePreparing, shareOverlay }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
   const fallback = useProject(projectProp === undefined ? projectId : null)
   const project = projectProp !== undefined ? projectProp : fallback.project
@@ -84,10 +88,10 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
     )
   }
 
-  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} onShareFilm={onShareFilm} />
+  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} onShareFilm={onShareFilm} sharePreparing={sharePreparing} shareOverlay={shareOverlay} />
 }
 
-function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void; onShareFilm?: () => void | Promise<void> }) {
+function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm, sharePreparing, shareOverlay }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void; onShareFilm?: () => void | Promise<void>; sharePreparing?: boolean; shareOverlay?: React.ReactNode }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
@@ -183,10 +187,17 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
   // Orientation PHYSIQUE du téléphone (gravité) : quand l'écran est verrouillé
   // paysage mais que l'enfant tient le téléphone à la verticale, on affiche
   // l'overlay « tourne ton téléphone » et on met la scène en pause.
+  // L'overlay n'apparaît QU'UNE FOIS, au lancement : dès que le téléphone a été
+  // tenu en paysage pendant le film, on ne le redit plus (sinon le moindre
+  // mouvement coupait la vidéo). Ensuite, si l'enfant retourne le téléphone,
+  // le film continue, écran verrouillé en paysage. Réarmé à chaque entrée dans
+  // l'étape animation (nouveau scan / « Revoir » ne remonte pas l'étape).
   const [heldPortrait, setHeldPortrait] = useState(false)
+  const [rotateHintDone, setRotateHintDone] = useState(false)
   useEffect(() => {
     if (!isNativeApp || mode !== 'play' || !lockedStage || isTablet) {
       setHeldPortrait(false)
+      setRotateHintDone(false)
       return
     }
     let attached = false
@@ -199,7 +210,12 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       // Zone morte (téléphone à plat) : on ne change pas d'état
       if (ax < 3 && ay < 3) return
       // Hystérésis pour éviter le clignotement autour de la diagonale
-      setHeldPortrait(prev => (prev ? ay > ax * 0.8 : ay > ax * 1.25))
+      setHeldPortrait(prev => {
+        const next = prev ? ay > ax * 0.8 : ay > ax * 1.25
+        // Paysage confirmé (au moins une mesure) → le rappel a fait son travail.
+        if (!next) setRotateHintDone(true)
+        return next
+      })
     }
     const attach = () => {
       if (attached || cancelled) return
@@ -224,7 +240,7 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
       if (attached) window.removeEventListener('devicemotion', onMotion)
     }
   }, [isNativeApp, mode, lockedStage, isTablet])
-  const showRotateOverlay = heldPortrait && isNativeApp && mode === 'play' && lockedStage && !isTablet
+  const showRotateOverlay = heldPortrait && !rotateHintDone && isNativeApp && mode === 'play' && lockedStage && !isTablet
 
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null)
   // URL de la photo capturée (visuel « scan en cours » du mode play)
@@ -800,6 +816,8 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm }
                 onFilmRecorded={onFilmRecorded}
                 confirmReplaceOnEnd={filmReplaceOnEnd}
                 onShareFilm={onShareFilm}
+                sharePreparing={sharePreparing}
+                shareOverlay={shareOverlay}
               />
             : !filmPlayerReady
               ? <div className="loading">{playT('validate.loading')}</div>

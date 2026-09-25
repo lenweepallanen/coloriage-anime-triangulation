@@ -95,6 +95,15 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const captureCanvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
+  // Miroir du stream pour le nettoyage au DÉMONTAGE (sans dépendre du state) :
+  // sans lui, quitter l'écran caméra autrement que par « Annuler »/capture
+  // (bouton Retour, onglet, erreur) laissait la caméra allumée → 2ᵉ session
+  // caméra concurrente sur iOS = aperçu noir au scan suivant.
+  const streamRef = useRef<MediaStream | null>(null)
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach(t => { try { t.stop() } catch { /* */ } })
+    streamRef.current = null
+  }, [])
   const [isCameraActive, setIsCameraActive] = useState(false)
   useEffect(() => { onActiveChange?.(isCameraActive) }, [isCameraActive, onActiveChange])
   const [error, setError] = useState<string | null>(null)
@@ -114,7 +123,8 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
   const stableFramesRef = useRef(0)
   const detectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const downscaleCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const downscaleDimsRef = useRef({ w: 0, h: 0 })
+  // w/h : taille du canvas de détection ; src : côté du crop vidéo au moment de la détection.
+  const downscaleDimsRef = useRef({ w: 0, h: 0, src: 0 })
   const lastDetectedRef = useRef<MarkerDetection | null>(null)
   const qualityRef = useRef<{ issues: QualityIssue[] }>({ issues: [] })
 
@@ -244,6 +254,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
         videoRef.current.muted = true
         videoRef.current.playsInline = true
         videoRef.current.play().catch(() => { /* autoplay best-effort */ })
+        streamRef.current = mediaStream
         setStream(mediaStream)
         setIsCameraActive(true)
         setError(null)
@@ -264,6 +275,8 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       }
     } catch (err) {
       console.error('Erreur acces camera:', err)
+      // Journal d'erreurs de l'app play (appErrors écoute cet événement).
+      try { window.dispatchEvent(new CustomEvent('picopop:error', { detail: { err, where: 'getUserMedia CameraView' } })) } catch { /* */ }
       setError(playT('camera.error'))
     }
   }
@@ -281,6 +294,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     if (stream) {
       stream.getTracks().forEach(track => track.stop())
     }
+    streamRef.current = null
     setStream(null)
     setIsCameraActive(false)
     setMatchedCount(0)
@@ -514,10 +528,14 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
     // Repères temps réel (640 px), remis à l'échelle capture — utilisés en FALLBACK.
     let scaledMarkers: MarkerDetection | null = null
     const live = lastDetectedRef.current
-    const { w: downW } = downscaleDimsRef.current
+    const { w: downW, src: downSrc } = downscaleDimsRef.current
     if (live && live.centers.length === 4 && downW > 0) {
       scaledMarkers = scaleMarkers(live, size / downW)
     }
+    // La résolution de la piste a-t-elle changé depuis la dernière détection
+    // temps réel (iOS monte en résolution après les premières frames) ? Dans ce
+    // cas les repères « live » sont périmés : la re-détection HD fait foi.
+    const resolutionChanged = downSrc > 0 && Math.abs(downSrc - size) > 2
 
     // PLAY : RE-DÉTECTION des repères en HAUTE RÉSOLUTION sur la photo capturée
     // (les coins temps réel 640 px sont trop grossiers → homographie imprécise →
@@ -541,7 +559,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
             const q = scaledMarkers!.centers[i]
             return Math.hypot(p.x - q.x, p.y - q.y) <= tol
           })
-          if (consistent) scaledMarkers = preciseScaled
+          if (consistent || resolutionChanged) scaledMarkers = preciseScaled
         }
       } catch { /* garde le fallback temps réel */ }
     }
@@ -662,7 +680,7 @@ export default function CameraView({ onCapture, title, onActiveChange, autoStart
       const c = downscaleCanvasRef.current!
       c.width = side
       c.height = side
-      downscaleDimsRef.current = { w: side, h: side }
+      downscaleDimsRef.current = { w: side, h: side, src: size }
 
       const ctx = c.getContext('2d')!
       ctx.drawImage(video, sx, sy, size, size, 0, 0, side, side)

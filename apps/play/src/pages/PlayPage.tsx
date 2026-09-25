@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useProjectForPlay } from '@shared/hooks/useProjectForPlay'
 import { filmIsPlayable, filmTIsPlayable } from '@shared/types/project'
 import ScanPage from '@shared/pages/ScanPage'
-import { getFilmVideo, hasFilmVideo, saveFilmVideo } from '@shared/db/filmVideosStore'
+import { getFilmVideo, hasFilmVideo, saveFilmVideo, type FilmVideoRecord } from '@shared/db/filmVideosStore'
 import type { FilmRecordingResult } from '@shared/utils/filmRecorder'
 import { generateVideoPoster } from '@shared/utils/videoPoster'
 import ScannedProjectPage from './ScannedProjectPage'
@@ -33,8 +33,12 @@ export default function PlayPage() {
   // (1 vidéo par coloriage, écrasement) + vignette extraite à 1/3 de la durée.
   // Rien n'est écrit dans les Photos de l'iPhone — la galerie est celle de l'app.
   const lastSaveRef = useRef<Promise<unknown> | null>(null)
+  // Dernière vidéo capturée, en mémoire : le partage de fin de film part de là,
+  // sans attendre la vignette (jusqu'à 10 s) ni la relecture IndexedDB.
+  const lastRecordingRef = useRef<FilmRecordingResult | null>(null)
   const handleFilmRecorded = useCallback(async (r: FilmRecordingResult) => {
     if (!projectId) return
+    lastRecordingRef.current = r
     const save = (async () => {
       // Vignette capturée DIRECTEMENT depuis le rendu PIXI pendant la lecture
       // (fiable iPhone/iPad) → prioritaire. Sinon, repli par extraction d'une frame
@@ -52,16 +56,30 @@ export default function PlayPage() {
     if (!projectId || sharing) return
     setSharing(true)
     try {
-      // La sauvegarde (poster inclus) peut encore être en cours juste après la fin
-      // du film : on l'attend avant de lire l'enregistrement.
-      await lastSaveRef.current?.catch(() => {})
-      const rec = await getFilmVideo(projectId)
+      // Juste après la carte Fin, le recorder peut encore finaliser la vidéo
+      // (quelques centaines de ms) : on lui laisse jusqu'à 2 s avant de se
+      // rabattre sur la vidéo déjà enregistrée.
+      for (let i = 0; i < 20 && !lastRecordingRef.current && lastSaveRef.current == null; i++) {
+        await new Promise(r => setTimeout(r, 100))
+      }
+      const r = lastRecordingRef.current
+      const rec: FilmVideoRecord | null = r
+        ? {
+            projectId,
+            createdAt: Date.now(),
+            mimeType: r.mimeType,
+            durationMs: r.durationMs,
+            blob: r.blob,
+            posterMs: r.posterMs ?? project?.filmT?.posterMs ?? null,
+            projectName: project?.name,
+          }
+        : await getFilmVideo(projectId)
       const ok = rec ? await shareFilmVideo(rec) : false
       if (!ok) setShareError(true)
     } finally {
       setSharing(false)
     }
-  }, [projectId, sharing])
+  }, [projectId, sharing, project?.filmT?.posterMs, project?.name])
 
   if (loading) return <LoadingScreen />
 
@@ -86,8 +104,11 @@ export default function PlayPage() {
         mode="play"
         onFilmRecorded={handleFilmRecorded}
         onShareFilm={handleShareFilm}
+        // L'overlay est rendu DANS la carte Fin (portail z-index 1400) : rendu
+        // ici, il restait invisible derrière la carte (« l'app ne répond plus »).
+        sharePreparing={sharing}
+        shareOverlay={<SharePreparingOverlay />}
       />
-      {sharing && <SharePreparingOverlay />}
       {shareError && (
         <div className="scanner-confirm-backdrop" onClick={() => setShareError(false)}>
           <div className="scanner-confirm soft-card" onClick={e => e.stopPropagation()}>

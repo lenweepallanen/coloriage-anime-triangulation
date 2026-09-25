@@ -4219,6 +4219,14 @@ export async function loadProjectForPlayEssential(id: string): Promise<Project |
   }
 }
 
+/** Hydrate l'image originale seule (phase 1 côté play : nécessaire au scan).
+ *  Échec silencieux (→ null) : la phase 2 retentera. */
+export async function loadProjectOriginalImageForPlay(project: Project): Promise<Project> {
+  if (project.originalImageBlob) return project
+  const originalImageBlob = await downloadBlob(`projects/${project.id}/originalImage`).catch(() => null)
+  return { ...project, originalImageBlob }
+}
+
 /** Complète un Project chargé par essential avec tous les blobs Storage :
  *  image, vidéo de fond, audio, JSON videoFramesMesh/walk*Frames par animation,
  *  per-animation audio, calques de scène, speak sounds, scene sounds.
