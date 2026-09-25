@@ -292,13 +292,20 @@ ORDER = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6']
 INTRO = 1000
 # Poster : plan 5 à 3,2 s (le T-Rex rugit face au héros)
 poster = INTRO + sum(plans[p]['durationMs'] + plans[p]['transitionToNext']['durationMs'] for p in ORDER[:4]) + 3200
+# Retour Nicolas (25/09) : AUCUN clip de bruit de pas posé à la main — les pas viennent des sons attachés à
+# l'animation Walk (footstepsEnabled). On retire tous les clips « 05-sfx-pas » (boucles, piétinements, chocs).
+PAS_ID = SID['05-sfx-pas']
+for _pl in plans.values():
+    _pl['soundTracks'] = [tr for tr in ({'clips': [c for c in tr['clips'] if c['soundId'] != PAS_ID]} for tr in _pl['soundTracks']) if tr['clips']]
+SOUNDS.pop('05-sfx-pas')
+
 film = {
     'version': 4,
     'plans': [plans[p] for p in ORDER],
     'character': {'scale': 1, 'facing': 'right', 'originU': 0.5, 'originV': 0.82},
     'sounds': [{'id': SID[n], 'name': n, 'file': f} for n, f in SOUNDS.items()],
     'music': {'id': uid('sound:' + MUSIC[0]), 'name': MUSIC[0], 'volume': MUSIC[2], 'loop': True, 'file': MUSIC[1]},
-    'footstepsEnabled': False,
+    'footstepsEnabled': True,   # pas = sons de l'animation Walk (réglés par Nicolas)
     'moveAnimationId': ANIM['Walk'],
     'moveSpeedPxPerSec': 260,
     'idleSpeedMul': 0.7,
