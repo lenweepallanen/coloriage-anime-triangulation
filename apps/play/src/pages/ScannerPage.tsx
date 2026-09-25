@@ -16,9 +16,10 @@ import { logAppError } from '../utils/appErrors'
  * - QR livre (…/livre/{id}) : le livre s'ajoute et son téléchargement démarre
  *   en arrière-plan ; retour au menu où la carte affiche la progression.
  *   Livre déjà ajouté → ouverture du livre.
- * - QR coloriage (…/p/{id}) : si le livre qui contient ce coloriage n'est pas
- *   encore ajouté, il s'ajoute automatiquement (téléchargement en arrière-plan),
- *   puis le coloriage s'ouvre directement sur la caméra de scan.
+ * - QR coloriage (…/p/{id}) : le livre qui le contient s'ajoute automatiquement.
+ *   Tant qu'il n'est pas téléchargé à 100 % → retour au menu (anneau de
+ *   progression, attente lisible, puis tout s'ouvre depuis le cache) ; livre
+ *   déjà complet → le coloriage s'ouvre directement sur la caméra.
  * - QR inconnu : message bref, la caméra continue.
  *
  * ROBUSTESSE CAMÉRA (iOS) : la piste vidéo peut revenir muette/suspendue après
@@ -121,7 +122,18 @@ export default function ScannerPage() {
       if (!project || project.published !== true) { flashMessage(t('scanner.project.notfound')); return }
       if (project.bookId) {
         // Le livre s'ajoute tout seul ; non bloquant si indisponible.
-        await ensureBookAdded(project.bookId).catch(() => 'unavailable')
+        const result = await ensureBookAdded(project.bookId).catch(() => 'unavailable' as const)
+        // Livre pas encore téléchargé (vient d'être ajouté, ou encore en cours) :
+        // RETOUR AU MENU, où l'anneau de progression rend l'attente lisible. Le
+        // coloriage s'ouvrira ensuite depuis le cache, sans lenteur pendant le
+        // scan. Livre déjà complet → caméra directe (raccourci).
+        const book = result === 'unavailable' ? null : await getBook(project.bookId).catch(() => undefined)
+        const ready = book != null && isBookDownloaded(book) && getBookDownloadProgress(project.bookId) == null
+        if (result !== 'unavailable' && !ready) {
+          playUi('success')
+          succeedThen(t('scanner.book.added'), () => navigate('/'), 1400)
+          return
+        }
       }
       playUi('scanDing')
       stopCamera()
@@ -132,7 +144,7 @@ export default function ScannerPage() {
       console.error('[scanner] lecture coloriage échouée', err)
       flashMessage(t('home.error1'))
     }
-  }, [flashMessage, navigate, stopCamera, t])
+  }, [flashMessage, navigate, stopCamera, succeedThen, t])
 
   const handleDecoded = useCallback((data: string) => {
     if (handlingRef.current) return
