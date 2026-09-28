@@ -1308,6 +1308,10 @@ export interface FilmT {
    *  multiplie le volume réglé sur chaque animation. 1 = inchangé, jusqu'à 3
    *  pour les faire ressortir du mixage. Absent = 1. */
   footstepsVolume?: number;
+  /** Volume GÉNÉRAL du film (tous les sons : clips, musique, sons d'animation),
+   *  appliqué sur le master du scheduler. 1 = inchangé, jusqu'à 3 (+300 %) pour
+   *  relever un film trop faible. Absent = 1. */
+  masterVolume?: number;
   /** OUVERTURE du film (couleur → 1er plan) : même modèle que les transitions de
    *  plans (fondu couleur / volet / iris + durée + couleur). Absent → legacy
    *  introFadeMs, sinon démarrage direct (cut). */

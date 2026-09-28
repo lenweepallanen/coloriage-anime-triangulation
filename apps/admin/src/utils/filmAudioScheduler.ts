@@ -78,6 +78,8 @@ export class FilmAudioScheduler {
   constructor(film: FilmT, planStartMs: number[], totalMs: number, oneShots?: { timeMs: number; soundId: string; volume?: number; maxMs?: number }[], extraSounds?: Map<string, Blob>, opts?: { globalOffsetMs?: number }) {
     this.ctx = getSharedAudioContext()
     this.master = this.ctx.createGain()
+    // Volume général du film (0–3) : un GainNode accepte > 1 (jusqu'à +300 %).
+    try { this.master.gain.value = Math.max(0, film.masterVolume ?? 1) } catch { /* */ }
     // master → speakerGain → destination (le mute agit sur speakerGain).
     this.speakerGain = this.ctx.createGain()
     this.master.connect(this.speakerGain)

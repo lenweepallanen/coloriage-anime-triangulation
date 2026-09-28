@@ -439,6 +439,8 @@ interface FilmTDoc {
   footstepsEnabled?: boolean
   /** Gain film des sons calés sur les animations (défaut 1). */
   footstepsVolume?: number
+  /** Volume général du film, tous sons (défaut 1, max 3). */
+  masterVolume?: number
   /** @deprecated ancien modèle (sons liés dans le film) — lu avec tolérance, plus jamais écrit. */
   footstepSounds?: { animationId: string; soundIds: string[]; zoneIds?: string[]; volume?: number; offsetMs?: number }[]
   /** Ouverture/fermeture du film (même modèle que transitionToNext). */
@@ -1688,6 +1690,7 @@ function filmTToDoc(film: import('../types/project').FilmT): FilmTDoc {
       && { globalSoundTracks: film.globalSoundTracks.map(track => ({ clips: track.map(cleanSound) })) }),
     ...(film.footstepsEnabled != null && { footstepsEnabled: film.footstepsEnabled }),
     ...(film.footstepsVolume != null && film.footstepsVolume !== 1 && { footstepsVolume: film.footstepsVolume }),
+    ...(film.masterVolume != null && film.masterVolume !== 1 && { masterVolume: film.masterVolume }),
     ...(film.moveAnimationId != null && { moveAnimationId: film.moveAnimationId }),
     ...(film.intro != null && { intro: film.intro }),
     ...(film.outro != null && { outro: film.outro }),
@@ -1780,6 +1783,7 @@ function docToFilmT(filmDoc: FilmTDoc, getBlob: (id: string) => Blob | null): im
     }),
     ...(filmDoc.footstepsEnabled != null && { footstepsEnabled: filmDoc.footstepsEnabled }),
     ...(filmDoc.footstepsVolume != null && { footstepsVolume: filmDoc.footstepsVolume }),
+    ...(filmDoc.masterVolume != null && { masterVolume: filmDoc.masterVolume }),
     ...(filmDoc.moveAnimationId != null && { moveAnimationId: filmDoc.moveAnimationId }),
     ...(filmDoc.intro != null && { intro: filmDoc.intro }),
     ...(filmDoc.outro != null && { outro: filmDoc.outro }),

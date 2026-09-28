@@ -1773,12 +1773,13 @@ export default function FilmEditorT({ project, onSave }: {
         {film.music ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{film.music.name}</span>
+            <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{Math.round((film.music.volume ?? 1) * 100)} %</span>
             <input
-              type="range" min={0} max={1} step={0.05}
+              type="range" min={0} max={3} step={0.05}
               value={film.music.volume ?? 1}
               onChange={(e) => film.music && updateFilm({ music: { ...film.music, volume: parseFloat(e.target.value) } })}
-              style={{ width: 90 }}
-              title={`Volume : ${Math.round((film.music.volume ?? 1) * 100)}%`}
+              style={{ width: 120, accentColor: 'var(--color-primary)' }}
+              title={`Volume : ${Math.round((film.music.volume ?? 1) * 100)} % (0 → 300 %)`}
             />
             <button
               className="btn-icon btn-sm btn-danger"
@@ -1808,6 +1809,21 @@ export default function FilmEditorT({ project, onSave }: {
       </div>
 
       {/* Bruits de pas — réglés au niveau de l'ANIMATION de marche, le film ne porte qu'un toggle */}
+      <div className="scene-editor-section-card">
+        <h4 className="scene-editor-section-title">Volume général du film</h4>
+        <label
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, whiteSpace: 'nowrap' }}
+          title="Multiplie TOUS les sons du film (clips, musique, sons d'animation). 100 % = inchangé, jusqu'à 300 % pour relever un film trop faible"
+        >
+          Volume : {Math.round((film.masterVolume ?? 1) * 100)} %
+          <input
+            type="range" min={0} max={3} step={0.05}
+            style={{ width: 160, accentColor: 'var(--color-primary)' }}
+            value={film.masterVolume ?? 1}
+            onChange={(e) => { const v = parseFloat(e.target.value); updateFilm({ masterVolume: Number.isFinite(v) && v !== 1 ? v : undefined }) }}
+          />
+        </label>
+      </div>
       <div className="scene-editor-section-card">
         <h4 className="scene-editor-section-title">Bruits de pas</h4>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
