@@ -384,13 +384,18 @@ export default function ClipInspector({
       {header(`Clip son — ${soundName}`)}
       {numField('Durée (s)', clip.durationMs / 1000, v => patch({ durationMs: Math.max(100, Math.round(v * 1000)) }), { min: 0.1, title: 'Tronque ou étend (loop) le son' })}
       {numField('Début dans le son (s)', (clip.offsetMs ?? 0) / 1000, v => patch({ offsetMs: v > 0 ? Math.round(v * 1000) : undefined }), { min: 0, step: 0.1, title: 'Point de départ de la lecture dans le fichier. Rogner le bord GAUCHE du clip sur la timeline l’augmente (le début du son est coupé). 0 = début du fichier' })}
-      <Field label={`Volume : ${Math.round((clip.volume ?? 1) * 100)}%`}>
+      <Field label="Volume (%)" title="0 → 300 % : au-delà de 100 % le son est amplifié (utile pour un fichier trop faible)">
         <input
-          type="range" min={0} max={3} step={0.05}
-          style={{ width: 160, accentColor: 'var(--color-primary)' }}
-          value={clip.volume ?? 1}
-          onChange={(e) => patch({ volume: parseFloat(e.target.value) })}
-          title="0 → 300 % : au-delà de 100 % le son est amplifié (utile pour un fichier trop faible)"
+          type="range" min={0} max={300} step={5}
+          style={{ width: 130, accentColor: 'var(--color-primary)' }}
+          value={Math.round((clip.volume ?? 1) * 100)}
+          onChange={(e) => patch({ volume: parseInt(e.target.value, 10) / 100 })}
+        />
+        <input
+          type="number" min={0} max={300} step={5}
+          style={{ ...INPUT, width: 64 }}
+          value={Math.round((clip.volume ?? 1) * 100)}
+          onChange={(e) => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v)) patch({ volume: Math.max(0, Math.min(300, v)) / 100 }) }}
         />
       </Field>
       {numField('Vitesse ×', clip.rate ?? 1, v => patch({ rate: v > 0 && v !== 1 ? v : undefined }), { min: 0.1, title: 'Vitesse de lecture (modifie la hauteur)' })}

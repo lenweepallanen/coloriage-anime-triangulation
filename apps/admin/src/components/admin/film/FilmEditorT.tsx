@@ -1773,14 +1773,21 @@ export default function FilmEditorT({ project, onSave }: {
         {film.music ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{film.music.name}</span>
-            <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{Math.round((film.music.volume ?? 1) * 100)} %</span>
             <input
-              type="range" min={0} max={3} step={0.05}
-              value={film.music.volume ?? 1}
-              onChange={(e) => film.music && updateFilm({ music: { ...film.music, volume: parseFloat(e.target.value) } })}
-              style={{ width: 120, accentColor: 'var(--color-primary)' }}
-              title={`Volume : ${Math.round((film.music.volume ?? 1) * 100)} % (0 → 300 %)`}
+              type="range" min={0} max={300} step={5}
+              value={Math.round((film.music.volume ?? 1) * 100)}
+              onChange={(e) => film.music && updateFilm({ music: { ...film.music, volume: parseInt(e.target.value, 10) / 100 } })}
+              style={{ width: 110, accentColor: 'var(--color-primary)' }}
+              title="Volume de la musique (0 → 300 %)"
             />
+            <input
+              type="number" min={0} max={300} step={5}
+              value={Math.round((film.music.volume ?? 1) * 100)}
+              onChange={(e) => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v) && film.music) updateFilm({ music: { ...film.music, volume: Math.max(0, Math.min(300, v)) / 100 } }) }}
+              style={{ width: 58, fontSize: 12 }}
+              title="Volume en % (0 → 300)"
+            />
+            <span style={{ fontSize: 12 }}>%</span>
             <button
               className="btn-icon btn-sm btn-danger"
               onClick={() => {
@@ -1815,13 +1822,20 @@ export default function FilmEditorT({ project, onSave }: {
           style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, whiteSpace: 'nowrap' }}
           title="Multiplie TOUS les sons du film (clips, musique, sons d'animation). 100 % = inchangé, jusqu'à 300 % pour relever un film trop faible"
         >
-          Volume : {Math.round((film.masterVolume ?? 1) * 100)} %
+          Volume
           <input
-            type="range" min={0} max={3} step={0.05}
+            type="range" min={0} max={300} step={5}
             style={{ width: 160, accentColor: 'var(--color-primary)' }}
-            value={film.masterVolume ?? 1}
-            onChange={(e) => { const v = parseFloat(e.target.value); updateFilm({ masterVolume: Number.isFinite(v) && v !== 1 ? v : undefined }) }}
+            value={Math.round((film.masterVolume ?? 1) * 100)}
+            onChange={(e) => { const v = parseInt(e.target.value, 10) / 100; updateFilm({ masterVolume: v !== 1 ? v : undefined }) }}
           />
+          <input
+            type="number" min={0} max={300} step={5}
+            style={{ width: 58, fontSize: 12 }}
+            value={Math.round((film.masterVolume ?? 1) * 100)}
+            onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isFinite(n)) return; const v = Math.max(0, Math.min(300, n)) / 100; updateFilm({ masterVolume: v !== 1 ? v : undefined }) }}
+          />
+          %
         </label>
       </div>
       <div className="scene-editor-section-card">
@@ -1839,14 +1853,22 @@ export default function FilmEditorT({ project, onSave }: {
             style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, whiteSpace: 'nowrap' }}
             title="Gain du film sur ces sons : multiplie le volume réglé sur chaque animation. 100 % = inchangé, au-delà pour les faire ressortir du mixage (musique, voix)"
           >
-            Volume : {Math.round((film.footstepsVolume ?? 1) * 100)} %
+            Volume
             <input
-              type="range" min={0} max={3} step={0.05}
+              type="range" min={0} max={300} step={5}
               style={{ width: 160, accentColor: 'var(--color-primary)' }}
-              value={film.footstepsVolume ?? 1}
+              value={Math.round((film.footstepsVolume ?? 1) * 100)}
               disabled={film.footstepsEnabled === false}
-              onChange={(e) => { const v = parseFloat(e.target.value); updateFilm({ footstepsVolume: Number.isFinite(v) && v !== 1 ? v : undefined }) }}
+              onChange={(e) => { const v = parseInt(e.target.value, 10) / 100; updateFilm({ footstepsVolume: v !== 1 ? v : undefined }) }}
             />
+            <input
+              type="number" min={0} max={300} step={5}
+              style={{ width: 58, fontSize: 12 }}
+              value={Math.round((film.footstepsVolume ?? 1) * 100)}
+              disabled={film.footstepsEnabled === false}
+              onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isFinite(n)) return; const v = Math.max(0, Math.min(300, n)) / 100; updateFilm({ footstepsVolume: v !== 1 ? v : undefined }) }}
+            />
+            %
           </label>
         </div>
         {!project.animations.some(a => a.mesh?.footstepValidated) && (
