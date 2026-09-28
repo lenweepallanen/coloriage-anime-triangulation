@@ -29,14 +29,14 @@ ANIM = {   # projet faa6845e — 121 images (≈ 4,75 s/passe à ×1) sauf Actio
     'Discours3': 'c626e9df-1a3f-4c44-b912-8e6692937dcc',
 }
 # Voix à fournir : (nom bibliothèque, fichier local). Absentes → clips non posés (voir VOICE_SLOTS).
-# Transcription Whisper horodatée (voices/voices-timing.json, 28/09) :
-#   Audio Intro 5,8 s : « Hey, I'm Brachiosaurus, one of the tallest dinosaurs to ever walk the earth! » 0,00–5,60
-#   Audio 1 12,2 s : « My neck was super long. » 0,00–3,00 · « It could grow longer than a school bus. » 4,20–7,80
-#                    · « Reaching tall trees was easy for me. » 9,10–12,20
-#   Audio 2 11,1 s : « I was taller than a two-story house. » 0,00–3,12 · « My head could reach high into the sky.
-#                    I was a true giant. » 5,20–11,04
-#   Audio 3 8,7 s  : « I spent my days eating plants and leaves. » 0,00–3,44 · « I needed lots of food for my giant body. » 4,88–8,48
-#   (pas de « Munch munch munch » enregistré)
+# NOUVELLE VOIX (28/09 soir, fichiers « brachiosaurus intro/1/2/3 ») — transcription mot à mot (voices/voices-words.json) :
+#   Audio Intro 4,8 s : « Hey, I'm Brachiosaurus, one of the tallest dinosaurs to ever walk the earth. » 0,00–4,72
+#   Audio 1 7,4 s : « My neck was super long. » 0,00–1,90 · « It could grow longer than a school bus. » 2,52–4,26
+#                   · « Reaching tall trees was easy for me. » 5,32–7,24 → un seul clip (pauses naturelles)
+#   Audio 2 8,0 s : « I was taller than a two-story house. » 0,00–2,24 · « My head could reach high into the sky.
+#                   I was a true giant. » 3,04–7,82
+#   Audio 3 6,1 s : « I spent my days eating plants and leaves. I needed lots of food for my giant body. » 0,00–5,98
+#   (pas de « Munch munch munch » enregistré). Ancienne voix archivée dans voices/v1-ancienne-voix/.
 VOICES = {
     '01-voice-intro': 'voices/Audio Intro.mp3',
     '02-voice-1': 'voices/Audio 1.mp3',
@@ -110,7 +110,7 @@ plans['P1'] = {
     'waypoints': [centre], 'motion': [t_in],
     'anim': [anim(P, 'idle', 3500, 6500, 'Idle', 0.8)],
     'camera': [rumble(P, 'pas', 0, 3500, 1, 3, A(t_in['id']))],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v0', 3800, '01-voice-intro', 5800)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v0', 3800, '01-voice-intro', 4900)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 2 — Long neck, cimes · 12 s
@@ -120,11 +120,11 @@ P = 'P2'
 haut = wp(P, 'tete', 640, 1000, 1.5, 'right')
 plans['P2'] = {
     'id': uid('plan.P2'), 'name': 'Long neck', 'backdropFile': 'videos/P2-web.mp4', 'cameraX': 640,
-    'transitionToNext': {'kind': 'crossfade', 'durationMs': 500}, 'durationMs': 13000,
+    'transitionToNext': {'kind': 'crossfade', 'durationMs': 500}, 'durationMs': 10500,
     'waypoints': [haut], 'motion': [appear(P, W(haut))],
-    'anim': [anim(P, 'cou', 0, 6000, 'LongNeck', 1.0, 'once-hold'), anim(P, 'idle', 6000, 7000, 'Idle', 0.8)],
+    'anim': [anim(P, 'cou', 0, 6000, 'LongNeck', 1.0, 'once-hold'), anim(P, 'idle', 6000, 4500, 'Idle', 0.8)],
     'camera': [],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v1a', 800, '02-voice-1', 3200), voice(P, 'v1b', 4500, '02-voice-1', 3800, offset=4200), voice(P, 'v1c', 9000, '02-voice-1', 3300, offset=9100)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v1a', 800, '02-voice-1', 7400)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 3 — Two-story house · 10 s
@@ -138,7 +138,7 @@ plans['P3'] = {
     'waypoints': [droite], 'motion': [appear(P, W(droite))],
     'anim': [anim(P, 'idle1', 0, 1500, 'Idle', 0.8), anim(P, 'body', 1500, 4800, 'BodyCheck', 1.0, 'once-hold'), anim(P, 'idle2', 6300, 3700, 'Idle', 0.8)],
     'camera': [zoom(P, 'maison', 2000, 5000, {'x': 380, 'y': 200, 'w': 800, 'h': 450}, 800, 1200)],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v2', 1800, '03-voice-2', 3300)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v2', 1800, '03-voice-2', 2500)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 4 — True giant · 12 s
@@ -152,7 +152,7 @@ plans['P4'] = {
     'waypoints': [geant], 'motion': [appear(P, W(geant))],
     'anim': [anim(P, 'idle1', 0, 1000, 'Idle', 0.8), anim(P, 'cou', 1000, 4800, 'LongNeck', 1.0, 'once-hold'), anim(P, 'idle2', 5800, 6200, 'Idle', 0.8)],
     'camera': [],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v3', 1200, '03-voice-2', 6000, offset=5200)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v3', 1200, '03-voice-2', 5100, offset=3000)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 5 — Munch munch · 14 s
@@ -164,9 +164,9 @@ plans['P5'] = {
     'id': uid('plan.P5'), 'name': 'Munch munch', 'backdropFile': 'videos/P5-web.mp4', 'cameraX': 640,
     'transitionToNext': {'kind': 'crossfade', 'durationMs': 500}, 'durationMs': 14000,
     'waypoints': [repas], 'motion': [appear(P, W(repas))],
-    'anim': [anim(P, 'parle', 0, 9000, 'Discours3', 1.0), anim(P, 'munch', 9000, 5000, 'Action', 1.2, 'loop')],
+    'anim': [anim(P, 'parle', 0, 7500, 'Discours3', 1.0), anim(P, 'munch', 7500, 4500, 'Action', 1.2, 'loop')],
     'camera': [],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v4a', 800, '04-voice-3', 3600), voice(P, 'v4b', 4900, '04-voice-3', 3800, offset=4880)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v4a', 800, '04-voice-3', 6200)] if c]}],
 }
 
 for pl in plans.values():
