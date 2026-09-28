@@ -29,12 +29,19 @@ ANIM = {   # projet faa6845e — 121 images (≈ 4,75 s/passe à ×1) sauf Actio
     'Discours3': 'c626e9df-1a3f-4c44-b912-8e6692937dcc',
 }
 # Voix à fournir : (nom bibliothèque, fichier local). Absentes → clips non posés (voir VOICE_SLOTS).
+# Transcription Whisper horodatée (voices/voices-timing.json, 28/09) :
+#   Audio Intro 5,8 s : « Hey, I'm Brachiosaurus, one of the tallest dinosaurs to ever walk the earth! » 0,00–5,60
+#   Audio 1 12,2 s : « My neck was super long. » 0,00–3,00 · « It could grow longer than a school bus. » 4,20–7,80
+#                    · « Reaching tall trees was easy for me. » 9,10–12,20
+#   Audio 2 11,1 s : « I was taller than a two-story house. » 0,00–3,12 · « My head could reach high into the sky.
+#                    I was a true giant. » 5,20–11,04
+#   Audio 3 8,7 s  : « I spent my days eating plants and leaves. » 0,00–3,44 · « I needed lots of food for my giant body. » 4,88–8,48
+#   (pas de « Munch munch munch » enregistré)
 VOICES = {
-    '01-voice-intro': 'voices/Audio Intro.mp3',   # Hey! I'm Brachiosaurus, one of the tallest dinosaurs to ever walk the Earth!
-    '02-voice-1': 'voices/Audio 1.mp3',           # My neck was super long! / Reaching tall trees was easy for me!
-    '03-voice-2': 'voices/Audio 2.mp3',           # I was taller than a two-story house!
-    '04-voice-3': 'voices/Audio 3.mp3',           # My head could reach high into the sky. / I was a true giant!
-    '05-voice-4': 'voices/Audio 4.mp3',           # I spent my days eating plants and leaves. / I needed LOTS of food… / Munch munch munch!
+    '01-voice-intro': 'voices/Audio Intro.mp3',
+    '02-voice-1': 'voices/Audio 1.mp3',
+    '03-voice-2': 'voices/Audio 2.mp3',
+    '04-voice-3': 'voices/Audio 3.mp3',
 }
 SOUNDS = {n: f for n, f in VOICES.items() if os.path.exists(os.path.join(HERE, f))}
 MUSIC = ('30-music-ambiance-terrestre-v2', '../triceratops/sounds/30-music-ambiance-terrestre-v2.wav', 0.7)
@@ -103,7 +110,7 @@ plans['P1'] = {
     'waypoints': [centre], 'motion': [t_in],
     'anim': [anim(P, 'idle', 3500, 6500, 'Idle', 0.8)],
     'camera': [rumble(P, 'pas', 0, 3500, 1, 3, A(t_in['id']))],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v0', 3800, '01-voice-intro', 5000)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v0', 3800, '01-voice-intro', 5800)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 2 — Long neck, cimes · 12 s
@@ -113,11 +120,11 @@ P = 'P2'
 haut = wp(P, 'tete', 640, 1000, 1.5, 'right')
 plans['P2'] = {
     'id': uid('plan.P2'), 'name': 'Long neck', 'backdropFile': 'videos/P2-web.mp4', 'cameraX': 640,
-    'transitionToNext': {'kind': 'crossfade', 'durationMs': 500}, 'durationMs': 12000,
+    'transitionToNext': {'kind': 'crossfade', 'durationMs': 500}, 'durationMs': 13000,
     'waypoints': [haut], 'motion': [appear(P, W(haut))],
-    'anim': [anim(P, 'cou', 0, 6000, 'LongNeck', 1.0, 'once-hold'), anim(P, 'idle', 6000, 6000, 'Idle', 0.8)],
+    'anim': [anim(P, 'cou', 0, 6000, 'LongNeck', 1.0, 'once-hold'), anim(P, 'idle', 6000, 7000, 'Idle', 0.8)],
     'camera': [],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v1a', 800, '02-voice-1', 3000), voice(P, 'v1b', 5200, '02-voice-1', 3500, offset=3500)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v1a', 800, '02-voice-1', 3200), voice(P, 'v1b', 4500, '02-voice-1', 3800, offset=4200), voice(P, 'v1c', 9000, '02-voice-1', 3300, offset=9100)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 3 — Two-story house · 10 s
@@ -131,7 +138,7 @@ plans['P3'] = {
     'waypoints': [droite], 'motion': [appear(P, W(droite))],
     'anim': [anim(P, 'idle1', 0, 1500, 'Idle', 0.8), anim(P, 'body', 1500, 4800, 'BodyCheck', 1.0, 'once-hold'), anim(P, 'idle2', 6300, 3700, 'Idle', 0.8)],
     'camera': [zoom(P, 'maison', 2000, 5000, {'x': 380, 'y': 200, 'w': 800, 'h': 450}, 800, 1200)],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v2', 1800, '03-voice-2', 3200)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v2', 1800, '03-voice-2', 3300)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 4 — True giant · 12 s
@@ -145,7 +152,7 @@ plans['P4'] = {
     'waypoints': [geant], 'motion': [appear(P, W(geant))],
     'anim': [anim(P, 'idle1', 0, 1000, 'Idle', 0.8), anim(P, 'cou', 1000, 4800, 'LongNeck', 1.0, 'once-hold'), anim(P, 'idle2', 5800, 6200, 'Idle', 0.8)],
     'camera': [],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v3a', 1200, '04-voice-3', 3000), voice(P, 'v3b', 5500, '04-voice-3', 2500, offset=3300)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v3', 1200, '03-voice-2', 6000, offset=5200)] if c]}],
 }
 
 # ---------------------------------------------------------------- PLAN 5 — Munch munch · 14 s
@@ -157,9 +164,9 @@ plans['P5'] = {
     'id': uid('plan.P5'), 'name': 'Munch munch', 'backdropFile': 'videos/P5-web.mp4', 'cameraX': 640,
     'transitionToNext': {'kind': 'crossfade', 'durationMs': 500}, 'durationMs': 14000,
     'waypoints': [repas], 'motion': [appear(P, W(repas))],
-    'anim': [anim(P, 'parle', 0, 8500, 'Discours3', 1.0), anim(P, 'munch', 8500, 5500, 'Action', 1.2, 'loop')],
+    'anim': [anim(P, 'parle', 0, 9000, 'Discours3', 1.0), anim(P, 'munch', 9000, 5000, 'Action', 1.2, 'loop')],
     'camera': [],
-    'soundTracks': [{'clips': [c for c in [voice(P, 'v4a', 800, '05-voice-4', 3000), voice(P, 'v4b', 4300, '05-voice-4', 3500, offset=3200), voice(P, 'v4c', 9000, '05-voice-4', 2500, offset=7000)] if c]}],
+    'soundTracks': [{'clips': [c for c in [voice(P, 'v4a', 800, '04-voice-3', 3600), voice(P, 'v4b', 4900, '04-voice-3', 3800, offset=4880)] if c]}],
 }
 
 for pl in plans.values():
@@ -171,7 +178,7 @@ poster = INTRO + plans['P1']['durationMs'] + 500 + plans['P2']['durationMs'] + 5
 film = {
     'version': 4,
     'plans': [plans[p] for p in ORDER],
-    'character': {'scale': 1, 'facing': 'right', 'originU': 0.5, 'originV': 0.82},
+    'character': {'scale': 1, 'facing': 'left', 'originU': 0.5, 'originV': 0.82},   # le Brachiosaure est DESSINÉ vers la gauche
     'sounds': [{'id': SID[n], 'name': n, 'file': f} for n, f in SOUNDS.items()],
     'music': {'id': uid('sound:' + MUSIC[0]), 'name': MUSIC[0], 'volume': MUSIC[2], 'loop': True, 'file': MUSIC[1]},
     'footstepsEnabled': True,
