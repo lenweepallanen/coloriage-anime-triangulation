@@ -50,10 +50,12 @@ PLANS = {
         "haut : un dinosaure géant dépassera largement les arbres."),
     'P5_prairie_coucher_soleil': (
         "la même prairie préhistorique paisible qu'au début mais au COUCHER DU SOLEIL : ciel orange, rose et "
-        "violet, soleil bas sur les collines, longues ombres douces. Herbe, fougères et fleurs au sol dans le quart "
-        "inférieur, de grands arbres aux feuilles rondes et des buissons feuillus à gauche et à droite du cadre. Une "
-        "famille de brachiosaures (deux adultes et un petit, long cou, petite tête) à GAUCHE qui mangent "
-        "tranquillement les feuilles des arbres. Le centre et la droite de l'image restent vides pour le héros."),
+        "violet, soleil bas sur les collines. Herbe, fougères et fleurs au sol dans le quart inférieur, de grands "
+        "arbres aux feuilles rondes. Une famille de brachiosaures GRANDS et PROCHES, à mi-distance, pas au loin : un "
+        "adulte à GAUCHE et un adulte à DROITE, chacun aussi haut que la moitié de l'image, le cou dressé vers le "
+        "feuillage d'un grand arbre qu'ils mangent tranquillement, et un petit brachiosaure près de l'adulte de "
+        "gauche. Le CENTRE de l'image, du sol au ciel, reste vide entre les deux adultes pour le héros (de la même "
+        "taille qu'eux)."),
 }
 
 
