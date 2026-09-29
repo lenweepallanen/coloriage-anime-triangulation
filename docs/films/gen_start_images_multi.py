@@ -61,9 +61,12 @@ FILMS = {
     # ------------------------------------------------------------------ SPINOSAURE — forêt dense, humide, Jurassic Park
     'spinosaurus': {
         'hero': "spinosaure",
-        'mood': (" Ambiance FORÊT DENSE et HUMIDE façon Jurassic Park : très grands arbres, lianes, fougères géantes, "
-                 "mousse, brume au sol, verts profonds, lumière tamisée qui perce entre les feuilles, un peu inquiétante. "
-                 "Vue de côté, format paysage 16:9, sol dans le quart inférieur, pas de texte."),
+        'mood': (" Ambiance forêt humide et un peu inquiétante façon Jurassic Park, mais dessinée COMME UN ENFANT : "
+                 "le dessin doit rester aussi SIMPLE que l'image de référence — peu d'éléments, quelques grands arbres aux "
+                 "formes rondes et simples, quelques fougères, gros traits noirs, coloriage au crayon avec des hachures "
+                 "bien visibles, verts profonds et un peu de brume dessinée en simples traînées blanches. PAS de détails "
+                 "fins, PAS de textures fouillées, PAS de lianes partout, PAS de dizaines de plantes : de grandes zones "
+                 "simples. Vue de côté, format paysage 16:9, sol dans le quart inférieur, pas de texte."),
         'plans': {
             'P1_foret_protoceratops': (
                 "un chemin de terre humide dans la forêt dense, brume au sol, grands troncs et fougères. Dans la moitié "
@@ -79,15 +82,16 @@ FILMS = {
                 "nénuphars et des roseaux, brume, grands arbres autour. Au-dessus de la mare, une dizaine de petits oiseaux "
                 "blancs et gris qui tournoient dans un rayon de lumière. Le centre et la gauche restent vides."),
             'P4_ruisseau_poisson': (
-                "un ruisseau clair qui traverse la forêt dense dans la moitié DROITE de l'image, avec des rochers moussus, "
-                "de l'écume, des fougères sur les berges, brume, grands arbres. Dans l'eau, près de la berge, un gros "
-                "poisson argenté bien visible sous la surface. La berge GAUCHE et le centre restent vides pour un grand "
-                "dinosaure qui se penche vers l'eau."),
+                "un ruisseau clair qui traverse la forêt dans la moitié DROITE de l'image, avec des rochers moussus, de "
+                "l'écume, des fougères sur les berges, brume, grands arbres simples. Sous la surface de l'eau, près de la "
+                "berge gauche, une SILHOUETTE de gros poisson entièrement IMMERGÉE, à peine visible à travers l'eau bleue "
+                "(dessinée en bleu plus foncé, sans aucune partie hors de l'eau, sans éclaboussure). La berge GAUCHE et le "
+                "centre restent vides pour un grand dinosaure qui se penche vers l'eau."),
             'P5_foret_bus': (
-                "une autre partie de la forêt, un peu plus claire : grands arbres, fougères, une piste de terre qui "
-                "traverse l'image, brume légère. Dans le tiers DROIT, un bus scolaire JAUNE américain, vu de côté, garé sur "
-                "la piste (même bus que sur l'image de référence). Toute la moitié gauche et le centre restent vides, pour "
-                "comparer la taille d'un dinosaure à celle du bus."),
+                "une autre partie de la forêt, un peu plus claire : grands arbres simples, fougères, une large piste de "
+                "terre qui traverse toute l'image de gauche à droite, brume légère. AUCUN véhicule, aucun animal : la piste "
+                "est complètement vide (un bus arrivera plus tard par la droite). Toute la moitié gauche et le centre restent "
+                "vides pour un très grand dinosaure."),
             'P6_face_trex': (
                 "une clairière sombre de la forêt dense au crépuscule : ciel violet et orange entre les grands arbres, "
                 "brume, fougères, un tronc couché. Sur le BORD GAUCHE, un grand T-Rex vert à rayures orange (le même que "
@@ -155,7 +159,7 @@ def multipart(fields, files):
 
 
 film = FILMS[FILM]
-COMMON = film['mood'] + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
+COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM == 'spinosaurus' else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
 
 
 def gen(name, scene):
