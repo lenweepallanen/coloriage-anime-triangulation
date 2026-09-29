@@ -93,8 +93,8 @@ export interface FootstepOneShot {
   timeMs: number
   soundId: string
   volume?: number
-  /** Durée max jouée du fichier (ms). Pas : 450 (un pas = un impact) ; sons de
-   *  cycle d'un idle (battement d'ailes, whoosh) : 1500. Absent = 450. */
+  /** Durée max jouée du fichier (ms). Absent = le son ENTIER (2026-09-29 : un son
+   *  de pas importé est joué tel quel ; on le coupe en amont, pas dans le moteur). */
   maxMs?: number
 }
 
@@ -140,8 +140,8 @@ export function computeFootstepSchedule(
     soundKeys: string[]
     volume?: number
     offsetMs: number
-    /** Marche : impact court (450 ms) ; idle en boucle (ailes…) : son plus long (1,5 s). */
-    maxMs: number
+    /** Absent = son entier (les fichiers de pas sont déjà coupés à la bonne longueur). */
+    maxMs?: number
   }
   const framesCache = new Map<string, AnimFootsteps>()
   const entryOf = (animId: string): AnimFootsteps => {
@@ -165,7 +165,6 @@ export function computeFootstepSchedule(
         soundKeys,
         ...(anim?.mesh?.footstepVolume != null && { volume: anim.mesh.footstepVolume }),
         offsetMs: anim?.mesh?.footstepOffsetMs ?? 0,
-        maxMs: (anim?.type === 'marche' || anim?.type === 'walk') ? 450 : 1500,
       }
       framesCache.set(animId, entry)
       if (import.meta.env.DEV && soundKeys.length > 0) {

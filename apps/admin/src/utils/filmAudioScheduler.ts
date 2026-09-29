@@ -295,10 +295,9 @@ export class FilmAudioScheduler {
       source.connect(gain)
       gain.connect(this.master)
       const when = now + (os.timeMs - this.baseMs) / 1000
-      // Un pas = UN impact : si le fichier est long (enregistrement de marche
-      // complet), on ne joue que son attaque (450 ms par défaut, fondu 60 ms).
-      // Les sons de cycle d'un idle (battement d'ailes) passent maxMs = 1500.
-      const playSec = Math.min(buf.duration, (os.maxMs ?? 450) / 1000)
+      // Le son est joué EN ENTIER (un pas importé est coupé à la bonne longueur en
+      // amont). `maxMs` reste disponible pour plafonner explicitement (fondu 60 ms).
+      const playSec = os.maxMs != null ? Math.min(buf.duration, os.maxMs / 1000) : buf.duration
       gain.gain.setValueAtTime(vol, when)
       if (buf.duration > playSec) {
         gain.gain.setValueAtTime(vol, when + playSec - 0.06)

@@ -92,8 +92,8 @@ export default function MarcheFootstepsStep({ project, animation, onSave }: Prop
     const gain = ctx.createGain()
     source.connect(gain)
     gain.connect(ctx.destination)
-    // Un pas = UN impact : attaque max 450 ms, fondu 60 ms (comme le scheduler film).
-    const playSec = Math.min(buf.duration, 0.45)
+    // Son joué en entier (comme le scheduler film) : à couper en amont si trop long.
+    const playSec = buf.duration
     const now = ctx.currentTime
     gain.gain.setValueAtTime(volumeRef.current, now)
     if (buf.duration > playSec) {
