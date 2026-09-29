@@ -102,9 +102,11 @@ FILMS = {
     # ------------------------------------------------------------------ VÉLOCIRAPTOR — forêt verte classique
     'velociraptor': {
         'hero': "vélociraptor",
-        'mood': (" Ambiance FORÊT VERTE CLASSIQUE et ensoleillée : arbres feuillus aux feuilles rondes, herbe verte, "
-                 "fleurs, ciel bleu, soleil, lumière gaie. Vue de côté, format paysage 16:9, sol dans le quart inférieur, "
-                 "pas de texte."),
+        'mood': (" Ambiance forêt verte classique et ensoleillée, mais dessinée COMME UN ENFANT : le dessin doit rester "
+                 "aussi SIMPLE que l'image de référence — peu d'éléments, quelques arbres aux feuilles rondes et simples, de "
+                 "l'herbe, quelques fleurs, gros traits noirs, coloriage au crayon avec des hachures bien visibles, couleurs "
+                 "vives. PAS de détails fins, PAS de textures fouillées, PAS de dizaines de plantes : de grandes zones "
+                 "simples. Vue de côté, format paysage 16:9, sol dans le quart inférieur, pas de texte."),
         'plans': {
             'P1_chemin_foret': (
                 "un chemin de terre qui traverse toute l'image dans une forêt verte ensoleillée, des arbres feuillus de "
@@ -159,7 +161,7 @@ def multipart(fields, files):
 
 
 film = FILMS[FILM]
-COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM == 'spinosaurus' else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
+COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM in ('spinosaurus', 'velociraptor') else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
 
 
 def gen(name, scene):
