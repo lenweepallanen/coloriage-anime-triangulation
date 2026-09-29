@@ -102,40 +102,46 @@ FILMS = {
     # ------------------------------------------------------------------ VÉLOCIRAPTOR — forêt verte classique
     'velociraptor': {
         'hero': "vélociraptor",
-        'mood': (" Ambiance forêt verte classique et ensoleillée, mais dessinée COMME UN ENFANT : le dessin doit rester "
-                 "aussi SIMPLE que l'image de référence — peu d'éléments, quelques arbres aux feuilles rondes et simples, de "
-                 "l'herbe, quelques fleurs, gros traits noirs, coloriage au crayon avec des hachures bien visibles, couleurs "
-                 "vives. PAS de détails fins, PAS de textures fouillées, PAS de dizaines de plantes : de grandes zones "
-                 "simples. Vue de côté, format paysage 16:9, sol dans le quart inférieur, pas de texte."),
+        'mood': (" Dessiné COMME UN ENFANT, aussi SIMPLE que l'image de référence : peu d'éléments, arbres aux formes rondes "
+                 "et simples, gros traits noirs, coloriage au crayon avec des hachures bien visibles. PAS de détails fins, PAS "
+                 "de textures fouillées, de grandes zones simples. Chaque image a SA PROPRE météo et SA PROPRE palette de "
+                 "couleurs (décrites ci-dessous), pas de ciel bleu uniforme. Vue de côté, format paysage 16:9, sol dans le "
+                 "quart inférieur, pas de texte."),
         'plans': {
-            'P1_chemin_foret': (
-                "un chemin de terre qui traverse toute l'image dans une forêt verte ensoleillée, des arbres feuillus de "
-                "chaque côté, de l'herbe, des fleurs, des rochers, ciel bleu avec soleil et nuages. Le chemin et tout le "
-                "centre restent vides pour un petit dinosaure qui court très vite de gauche à droite."),
-            'P2_clairiere_dinde': (
-                "une clairière ensoleillée dans la forêt verte : herbe, fleurs, arbres autour, ciel bleu. Dans le tiers "
-                "DROIT, une grosse dinde sauvage (plumes brunes, caroncule rouge, ailes ouvertes) qui court vers la "
-                "DROITE, affolée, le bec ouvert. La moitié gauche et le centre restent vides pour un petit dinosaure qui "
-                "la poursuit."),
-            'P3_oree_trex': (
-                "l'orée de la forêt verte : les derniers grands arbres à gauche, une prairie qui s'ouvre à droite, ciel "
-                "bleu. Sur le BORD DROIT, un grand T-Rex vert à rayures orange (le même que sur l'image de référence), vu "
-                "de côté, tourné vers la GAUCHE, gueule grande ouverte qui rugit, féroce. Le centre-gauche reste vide."),
-            'P4_course_foret': (
-                "la forêt verte vue de côté pour un travelling de course : une rangée continue d'arbres feuillus et de "
-                "buissons au fond sur TOUTE la largeur, de l'herbe et un chemin de terre en bas sur toute la largeur, le "
-                "décor continue hors cadre à gauche et à droite (même hauteur de sol et d'arbres aux deux bords), ciel bleu "
-                "au-dessus. Aucun animal : le milieu reste vide pour des dinosaures qui traversent en courant."),
-            'P5_calme_second_raptor': (
-                "un coin calme et ensoleillé de la forêt verte : une souche, des fleurs, de l'herbe douce, arbres autour, "
-                "ciel bleu. Dans le tiers DROIT, un vélociraptor (petit dinosaure carnivore brun et beige, longue queue, "
-                "griffes) assis tranquillement, tourné vers la GAUCHE, l'air curieux. La moitié gauche et le centre restent "
-                "vides."),
-            'P6_mouton': (
-                "une prairie verte à la lisière de la forêt, herbe, fleurs, quelques arbres, ciel bleu. Dans le tiers "
-                "DROIT, un petit mouton blanc et rond (laine bouclée, pattes noires), tourné vers la GAUCHE, les yeux "
-                "écarquillés, effrayé. La moitié gauche et le centre restent vides pour un petit dinosaure qui le fixe "
-                "avant de le poursuivre."),
+            'P1_chemin_aube': (
+                "un chemin de terre qui traverse toute l'image dans une forêt à l'AUBE : ciel rose et orange pâle, brume "
+                "blanche entre les troncs, herbe bleutée encore dans l'ombre, soleil qui pointe à peine à l'horizon à droite, "
+                "arbres feuillus sombres de chaque côté. Le chemin et tout le centre restent vides pour un petit dinosaure "
+                "qui court très vite de gauche à droite."),
+            'P2_clairiere_automne_dinde': (
+                "une clairière en AUTOMNE : arbres aux feuilles orange, rouges et jaunes, feuilles mortes qui volent, herbe "
+                "jaunie, ciel gris-bleu couvert, lumière dorée. Dans le tiers DROIT, une grosse dinde sauvage (plumes brunes, "
+                "caroncule rouge, ailes ouvertes) qui court vers la DROITE, affolée, le bec ouvert. La moitié gauche et le "
+                "centre restent vides pour un petit dinosaure qui la poursuit."),
+            'P3_oree_orage_trex': (
+                "l'orée d'une forêt sous un ORAGE : ciel gris foncé et violet chargé de gros nuages, un éclair jaune au fond, "
+                "pluie fine en traits obliques, herbe vert sombre, les derniers grands arbres à gauche, une prairie sombre à "
+                "droite. Sur le BORD DROIT, un grand T-Rex vert à rayures orange (le même que sur l'image de référence), vu de "
+                "côté, tourné vers la GAUCHE, gueule grande ouverte qui rugit, féroce. Le centre-gauche reste vide."),
+            'P4_course_crepuscule': (
+                "une forêt au CRÉPUSCULE vue de côté pour un travelling de course : ciel orange, rose et violet, arbres en "
+                "silhouettes vert très foncé presque noires, une rangée continue d'arbres au fond sur TOUTE la largeur, herbe "
+                "sombre et un chemin de terre brun-rouge en bas sur toute la largeur, le décor continue hors cadre à gauche "
+                "et à droite (même hauteur de sol et d'arbres aux deux bords). Aucun animal : le milieu reste vide pour des "
+                "dinosaures qui traversent en courant."),
+            'P5_nuit_second_raptor': (
+                "un coin de forêt la NUIT : ciel bleu nuit avec une grande lune ronde et des étoiles, herbe bleu-vert, "
+                "arbres sombres, quelques lucioles jaunes, une souche, une lumière douce et bleutée. IMPORTANT, il DOIT y "
+                "avoir un animal : dans le tiers DROIT, assis sur l'herbe à côté de la souche, un vélociraptor (petit "
+                "dinosaure carnivore brun et beige, longue queue, griffes, gros yeux) bien visible, tourné vers la GAUCHE, "
+                "l'air curieux, la tête penchée. Ce n'est PAS le héros, c'est son copain : dessine-le. La moitié gauche et "
+                "le centre restent vides."),
+            'P6_matin_pluie_mouton': (
+                "une prairie à la lisière d'une forêt sous une PLUIE de matin : ciel gris clair avec des nuages gris, "
+                "gouttes de pluie en petits traits bleus, flaques d'eau qui brillent sur l'herbe vert vif, un arc-en-ciel "
+                "pâle au fond, arbres verts. Dans le tiers DROIT, un petit mouton blanc et rond (laine bouclée, pattes "
+                "noires), tourné vers la GAUCHE, les yeux écarquillés, effrayé. La moitié gauche et le centre restent vides "
+                "pour un petit dinosaure qui le fixe avant de le poursuivre."),
         },
     },
 }
@@ -162,11 +168,12 @@ def multipart(fields, files):
 
 film = FILMS[FILM]
 COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM in ('spinosaurus', 'velociraptor') else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
+NO_HERO_EXCEPTION = {'P5_nuit_second_raptor': " Exception pour cette image : le vélociraptor assis à droite (le copain) DOIT être dessiné ; seul le héros, à gauche, est absent."}
 
 
 def gen(name, scene):
     files = [('image[]', (os.path.basename(REF), open(REF, 'rb').read(), 'image/png'))]
-    prompt = PREFIX + scene + COMMON
+    prompt = PREFIX + scene + COMMON + NO_HERO_EXCEPTION.get(name, '')
     fields = {'model': MODEL, 'prompt': prompt, 'size': '1792x1008', 'quality': 'high', 'output_format': 'png', 'n': '1'}
     body, ctype = multipart(fields, files)
     status, raw = http('https://api.openai.com/v1/images/edits', {'Authorization': 'Bearer ' + keys['OPENAI_API_KEY'], 'Content-Type': ctype}, body)
