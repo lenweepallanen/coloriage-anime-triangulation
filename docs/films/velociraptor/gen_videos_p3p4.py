@@ -20,8 +20,10 @@ STYLE = ("Keep exactly the look of the starting image for the whole clip: childr
 
 PLANS = {
     'P3': ('P3_oree_orage_trex', 12,
-        "The center-left of the frame stays empty for the entire clip (a small character will stand there, then flee to the "
-        "left); do not add any other animal. Rain keeps falling the whole time, grass shakes in the wind. From 0 s to 2 s the "
+        "STRICT RULE: the ONLY living creature in the whole clip is the T-Rex on the right. The left half and the center of "
+        "the frame contain NOTHING but grass and rain from the first frame to the last frame: no small dinosaur, no bird, no "
+        "animal, no shadow, no silhouette ever appears there (a character will be added later by another program). Rain "
+        "keeps falling the whole time, grass shakes in the wind. From 0 s to 2 s the "
         "green T-Rex at the right edge takes one heavy step forward facing left, staying in the right third of the frame. At "
         "3 s a lightning flash lights up the sky and the T-Rex ROARS, jaws wide open, head thrown forward. From 4 s to 6 s it "
         "stomps in place and roars again. From 7 s to 12 s it keeps roaring and snapping its jaws, always in the right third "
@@ -77,7 +79,15 @@ def run(name):
     rid = r.get('request_id') or r.get('id')
     d = wait(rid, name)
     dest = os.path.join(OUT, name + '.mp4')
-    with urllib.request.urlopen(d['video']['url'], timeout=300) as resp: open(dest, 'wb').write(resp.read())
+    json.dump({'request_id': rid, 'url': d['video']['url']}, open(os.path.join(OUT, name + '.pending.json'), 'w'))
+    for attempt in range(5):   # le téléchargement depuis vidgen.x.ai s'interrompt parfois (IncompleteRead)
+        try:
+            with urllib.request.urlopen(d['video']['url'], timeout=600) as resp: data = resp.read()
+            open(dest, 'wb').write(data); break
+        except Exception as e:
+            if attempt == 4: raise
+            time.sleep(5)
+    os.remove(os.path.join(OUT, name + '.pending.json'))
     json.dump({'request_id': rid, 'model': MODEL, 'duration': duration, 'resolution': RES, 'image': image, 'prompt': prompt, 'response': d}, open(os.path.join(OUT, name + '.json'), 'w'), indent=1)
     cost = (d.get('usage') or {}).get('cost_in_usd_ticks')
     return f"{name}: OK {os.path.getsize(dest) // 1024} Ko, {d['video'].get('duration')} s, coût ≈ {cost / 1e10:.2f} $" if cost else f"{name}: OK {os.path.getsize(dest) // 1024} Ko"
