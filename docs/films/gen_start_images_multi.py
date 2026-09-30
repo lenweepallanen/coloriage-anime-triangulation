@@ -7,7 +7,7 @@ prompt « Dans le même style (dessin d'enfant, crayon de couleur) dessine moi �
 Une AMBIANCE par dinosaure : Ankylosaure = terre / grandes plaines ocre ; Spinosaure = forêt dense humide,
 brumeuse, façon Jurassic Park ; Vélociraptor = forêt verte classique et ensoleillée.
 
-Usage : python3 gen_start_images_multi.py <reference.png> <film> [plans=P1,P3]   (film = ankylosaurus | spinosaurus | velociraptor)
+Usage : python3 gen_start_images_multi.py <reference.png> <film> [plans=P1,P3]   (film = ankylosaurus | spinosaurus | velociraptor | dilophosaurus | stegosaurus)
 Sortie : docs/films/<film>/gpt-<film>/P*.png + .prompt.txt. Clé : OPENAI_API_KEY dans ~/.picopop-keys.env.
 """
 import base64, json, os, sys, uuid, urllib.request, urllib.error, concurrent.futures as cf
@@ -150,6 +150,80 @@ FILMS = {
                 "pour un petit dinosaure qui le fixe avant de le poursuivre."),
         },
     },
+    # ------------------------------------------------------------------ DILOPHOSAURE — forêt sombre, marécageuse
+    'dilophosaurus': {
+        'hero': "dilophosaure",
+        'mood': (" Ambiance FORÊT SOMBRE et MARÉCAGEUSE, un peu mystérieuse, mais dessinée COMME UN ENFANT, aussi SIMPLE "
+                 "que l'image de référence : peu d'éléments, grands arbres aux formes rondes, eau sombre, roseaux, brume en "
+                 "traînées blanches, gros traits noirs, coloriage au crayon avec hachures visibles, verts profonds et bleus "
+                 "sombres. PAS de détails fins, PAS de textures fouillées. Vue de côté, format paysage 16:9, sol dans le quart "
+                 "inférieur, pas de texte."),
+        'plans': {
+            'P1_marais_arrivee': (
+                "une forêt marécageuse : un chemin de terre sombre au premier plan qui traverse toute l'image, une mare d'eau "
+                "verte avec des roseaux et des nénuphars à droite, de grands arbres sombres au fond avec de la mousse qui "
+                "pend, brume au sol, quelques lucioles vertes, un rayon de lune pâle. Aucun animal. Tout le centre reste vide "
+                "pour un dinosaure qui arrive en marchant."),
+            'P2_marais_cretes': (
+                "un autre coin de la même forêt marécageuse, plus resserré : grands troncs sombres de chaque côté, fougères, "
+                "une souche, un peu d'eau au fond à gauche, brume, lumière verte tamisée qui tombe au centre. Aucun animal. "
+                "Tout le centre reste vide, du sol jusqu'en haut, pour un gros plan sur un dinosaure."),
+            'P3_combat_raptor': (
+                "une clairière sombre de la forêt marécageuse. Dans la moitié DROITE, un COMBAT entre deux dinosaures dessinés "
+                "de façon sobre : un dilophosaure (dinosaure bipède vert-bleu avec deux crêtes rouges sur la tête, et une "
+                "grande collerette colorée déployée autour du cou comme au cinéma, gueule ouverte qui crache) face à un "
+                "vélociraptor brun (plus petit, griffes, gueule ouverte), les deux dressés l'un contre l'autre. Toute la "
+                "moitié GAUCHE reste vide pour le héros qui regarde de loin."),
+            'P4_marais_zoom': (
+                "le même coin resserré de la forêt marécageuse que l'image précédente : grands troncs sombres, fougères, "
+                "brume, lumière verte tamisée au centre, mais vu d'un peu plus près. Aucun animal. Tout le centre reste vide "
+                "pour un gros plan sur un dinosaure."),
+            'P5_matin_oeuf': (
+                "la forêt au MATIN, plus claire et douce : des rayons de soleil jaunes qui filtrent entre les grands arbres, "
+                "brume lumineuse, mousse, fougères. Au CENTRE-DROIT, au sol, un grand œuf de dinosaure blanc tacheté, à moitié "
+                "éclos : la coquille est fendue et une petite tête de bébé dinosaure herbivore (long cou, yeux doux, dessiné "
+                "sobrement) en sort. La moitié gauche reste vide pour le héros."),
+        },
+    },
+    # ------------------------------------------------------------------ STÉGOSAURE — grands espaces, saisons
+    'stegosaurus': {
+        'hero': "stégosaure",
+        'mood': (" Dessiné COMME UN ENFANT, aussi SIMPLE que l'image de référence : peu d'éléments, formes rondes, gros traits "
+                 "noirs, coloriage au crayon avec hachures visibles. PAS de détails fins. Grands espaces ouverts. Vue de côté, "
+                 "format paysage 16:9, sol dans le quart inférieur, pas de texte."),
+        'plans': {
+            'P1_plaine_herbivores': (
+                "une grande plaine d'herbe verte avec des collines douces au fond, ciel bleu, quelques arbres ronds. À GAUCHE "
+                "et au FOND, petits et lointains, trois dinosaures herbivores sobres (un diplodocus, un tricératops, un "
+                "ankylosaure) qui broutent tranquillement. Tout le centre et la droite restent vides pour le héros."),
+            'P2_rocaille_trex': (
+                "un sol ROCAILLEUX de canyon ocre et gris : gros rochers, cailloux, terre sèche, quelques buissons secs, "
+                "falaises rouges au fond, ciel orangé. Sur le BORD DROIT, un grand T-Rex vert à rayures orange (le même que "
+                "sur l'image de référence), vu de côté, tourné vers la GAUCHE, gueule ouverte qui rugit, en train d'arriver "
+                "(une partie du corps encore hors cadre). Toute la moitié GAUCHE reste vide pour le héros."),
+            'P3_migration_ete': (
+                "une scène de MIGRATION en ÉTÉ vue de côté pour un travelling : une plaine d'herbe verte et de terre qui "
+                "continue hors cadre à gauche et à droite (même hauteur de sol aux deux bords), des collines vertes et un "
+                "ciel bleu au fond. Une file de dinosaures herbivores sobres (diplodocus, tricératops, petits bipèdes) qui "
+                "marchent tous vers la DROITE, au FOND et sur les côtés, petits. Laisse un GRAND TROU au centre du premier "
+                "plan pour le héros qui marche avec eux."),
+            'P4_migration_automne': (
+                "la SUITE de la scène de la deuxième image : la MÊME file de dinosaures herbivores en migration vers la "
+                "DROITE, le même cadrage de côté, le décor continue hors cadre à gauche et à droite, mais en AUTOMNE : herbe "
+                "jaune et rousse, arbres orange et rouges, feuilles mortes qui volent, ciel gris-doré. Grand trou au centre du "
+                "premier plan pour le héros."),
+            'P5_migration_hiver': (
+                "la SUITE de la scène de la deuxième image : la MÊME file de dinosaures herbivores en migration vers la "
+                "DROITE, le même cadrage de côté, le décor continue hors cadre à gauche et à droite, mais en HIVER : sol "
+                "couvert de neige blanche, arbres nus ou sapins enneigés, flocons qui tombent, ciel gris-bleu pâle, buée "
+                "devant les museaux. Grand trou au centre du premier plan pour le héros."),
+            'P6_printemps_buisson': (
+                "le PRINTEMPS : une prairie verdoyante pleine de fleurs colorées, une grande plaine au fond avec des "
+                "montagnes bleues aux sommets blancs et un ciel bleu clair. Au CENTRE-DROIT, un gros buisson bas et rond bien "
+                "vert avec des feuilles tendres, à hauteur de tête d'un dinosaure qui broute. Aucun animal. La moitié gauche "
+                "et le centre restent vides pour le héros qui mange le buisson."),
+        },
+    },
 }
 
 
@@ -173,8 +247,11 @@ def multipart(fields, files):
 
 
 film = FILMS[FILM]
-COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM in ('spinosaurus', 'velociraptor') else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
-EXTRA_REFS = {'P4_course_orage': ['velociraptor/gpt-velociraptor/P3_oree_orage_trex.png']}   # même T-Rex, même orage que P3
+COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM in ('spinosaurus', 'velociraptor', 'dilophosaurus', 'stegosaurus') else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
+EXTRA_REFS = {'P4_course_orage': ['velociraptor/gpt-velociraptor/P3_oree_orage_trex.png'],
+              'P4_marais_zoom': ['dilophosaurus/gpt-dilophosaurus/P2_marais_cretes.png'],
+              'P4_migration_automne': ['stegosaurus/gpt-stegosaurus/P3_migration_ete.png'],
+              'P5_migration_hiver': ['stegosaurus/gpt-stegosaurus/P3_migration_ete.png']}   # même T-Rex, même orage que P3
 NO_HERO_EXCEPTION = {'P5_nuit_second_raptor': " Exception pour cette image : le vélociraptor assis à droite (le copain) DOIT être dessiné ; seul le héros, à gauche, est absent."}
 
 
