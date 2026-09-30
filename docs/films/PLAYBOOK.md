@@ -11,6 +11,42 @@ Ce document remplace les règles éparses des scripts précédents. Il sert de c
 
 ---
 
+## 0. Règle n° 1 — tout doit être montable dans l'éditeur FILM (Nicolas, 24/09/2026)
+
+Un script n'a le droit de décrire que ce qui existe dans l'éditeur. Chaque plan = **une vidéo de
+décor** (lue depuis 0 s, bouclée en fondu, dont les événements sont écrits à la seconde dans le
+prompt), **un overlay optionnel** (PNG transparent ou vidéo chroma devant le perso) et **une suite
+de clips** pour le héros, la caméra et le son. Rien d'autre : pas de nouvelle animation, pas de
+contact physique héros ↔ décor, pas de déformation du dessin, pas d'objet tenu, pas d'événement
+du décor déclenché par le héros (la vidéo ne sait pas que le héros existe : on écrit l'événement à
+la seconde voulue et on cale le héros dessus). Le héros est toujours dessiné PAR-DESSUS la vidéo
+(et sous l'overlay) : un « contact » (cornes dans un tronc, bec sur un poisson) n'est jamais qu'une
+superposition + un événement daté du décor + un son. On l'écrit comme tel, on ne promet rien de plus.
+
+La palette (c'est la seule) :
+
+| Piste | Action | Paramètres |
+|---|---|---|
+| Waypoint | position du héros | x, y (coords décor), échelle, regard gauche/droite (= miroir du dessin à l'idle) |
+| Mouvement (1 piste, sans chevauchement) | `appear` | téléportation sur un waypoint ou un point libre |
+| | `travel` | de (waypoint / hors-champ G-D / point libre) → à …, durée, 0–2 points de contrôle Bézier, easing linear / easeIn / easeOut / easeInOut, animation de déplacement (Walk…) + vitesse |
+| | `exit` | sortie hors-champ gauche/droite, durée |
+| Animation (1 piste) | clip | une animation CALCULÉE du projet, vitesse ×, `loop` (rejoue) ou `once-hold` (1 passe puis figé) ; un clip plus court qu'une passe coupe l'animation à sa durée |
+| Caméra (superposable, ancrable ⚓) | `zoom` | rect cible (coords décor), zoomIn / hold / zoomOut ms, easing |
+| | `pan` | rect → rectTo (glissement, même échelle) |
+| | `rumble` | tremblement continu : amplitude px, Hz, axe |
+| | `shake` | secousse d'impact décroissante : amplitude, Hz, rotation, decay linear/expo |
+| | `bob` | oscillation verticale sinusoïdale : amplitude, Hz, phase |
+| Son (N pistes) | clip | fichier de la bibliothèque, début dans le fichier (offset), durée, volume, rate, boucle, « parlé » (pilote la bouche), fade in/out, ancrage ⚓ à un clip mouvement/animation (start/end + offset) |
+| Film | musique globale bouclée · pistes sons globales en temps absolu · intro/outro (iris, fondu couleur) · transition après chaque plan : cut / fondu couleur / crossfade / volet (direction, couleur) / iris |
+
+Test sur chaque phrase du script : « quelle piste, quel clip, quels paramètres ? ». Si la réponse
+n'est pas dans le tableau, la phrase sort du script. Le script se rédige directement comme la liste
+des actions à saisir (waypoints → mouvement → animation → caméra → sons → transition), avec pour
+seul « extérieur » la vidéo de décor et ses événements datés (modèle : `docs/films/triceratops/script.md` v4).
+
+---
+
 ## 1. Ce que les trois films nous apprennent
 
 ### 1.1 Les chiffres
@@ -296,6 +332,87 @@ Un import par son, nommé `NN-role-description.ext` (`01-voice-intro.mp3`, `10-s
 
 ---
 
+## 7 bis. Ce que les montages finalisés de Nicolas ont corrigé (29–30/09/2026, 4 films)
+
+Comparaison champ par champ des kits importés (Triceratops, Brachiosaure, Ankylosaure,
+Spinosaure) avec les films finalisés à la main. Ces règles PRIMENT sur les sections 4 et 6
+quand elles se contredisent. Mot d'ordre de Nicolas : **moins mécanique, plus artistique**.
+
+### 7b.1 Le héros a un poids et un caractère
+
+| Dinosaure | Marche (`animSpeedMul` sur un trajet) | Entrée en scène | Idle quand il parle |
+|---|---|---|---|
+| Lourd (brachiosaure, ankylosaure, stégosaure) | **×1 – 1,2**, jamais plus ; 5–6,5 s pour arriver, on l'entend avant de le voir | départ **proche du bord** (point `free` à −100…+300 px), pas hors-champ lointain | ×0,8 |
+| Moyen (triceratops, spinosaure, T-Rex) | ×1,5 – 2 en marche, ×3 en charge/course | 3–5 s | ×0,8 |
+| Agile (vélociraptor, petits bipèdes) | ×3 – 4, entrées et sorties en 1–2 s | hors-champ, fusée | ×1 – 1,3 |
+
+La vitesse est un choix de personnage, pas une formule : la formule px/s ÷ 70 sert à vérifier
+qu'un trajet ne glisse pas, pas à décider si le dino court.
+
+### 7b.2 L'animation du héros se cale sur la VIDÉO, image par image
+
+- Avant d'écrire un clip d'action, lire la planche-contact ET les 4–6 images autour de
+  l'instant visé (extraction `ffmpeg select=eq(n,…)`), et noter la seconde exacte de l'événement
+  du décor (le raptor sursaute, le poisson sort de l'eau, le T-Rex recule).
+- Cause → effet dans CE sens : rugissement du héros **1,5–2 s avant** le recul/la fuite de
+  l'adversaire ; coup de gueule **0,3 s avant** le sommet du saut du poisson ; coup de queue
+  **1,2 s avant** la poussière au sol (l'impact de l'animation tombe sur l'impact vidéo).
+- Le héros **réagit à la réaction** : quand l'adversaire recule ou fuit, le héros **avance**
+  (petit `travel` de 150–300 px vers lui, Walk ×2, 1–1,5 s) ou charge. Jamais immobile pendant
+  qu'on le fuit.
+- Sur un travelling (poursuite, migration), le héros ne court pas strictement sur place : un
+  `travel` lent de 100–200 px sur toute la durée du plan le fait « gagner du terrain ».
+- **L'action d'abord, la voix ensuite** : le geste qui illustre la phrase (le cou qui monte,
+  la queue qui frappe) démarre 1–3 s avant la phrase, avec son propre son (effort, whoosh).
+  Une voix ne démarre jamais à 0,8 s d'un plan où il se passe quelque chose.
+- Plans de confrontation (T-Rex, raptor, ptérodactyles) : **zéro ou une réplique courte**. Les
+  faits documentaires vont dans le plan calme d'avant ou d'après (Ankylosaure : tout l'Audio 1
+  au plan « cascade », plan « coup de queue » muet).
+
+### 7b.3 Échelle et sol
+
+- Héros seul dans le cadre : **échelle 1,1 – 1,25** (pas 0,9). Avec un gros adversaire dans le
+  même cadre : 0,75 – 0,85. Tête qui dépasse des cimes : 1,5 avec y hors cadre.
+- `y` = **ligne de sol réelle du décor** (lire l'image : là où les pattes des animaux du décor
+  touchent le sol), typiquement **y 575–760** sur 720 px de haut selon le décor (mesuré sur les 4 films), jamais une constante.
+  Un héros qui broute dans les arbres monte à y ≈ 540.
+- Zoom sur le héros **pendant chaque phrase documentaire** (rect ≈ 700×400 centré sur la tête,
+  in 800 / out 1 200), shake **1–2,4 s** sur un rugissement ou un impact (pas 0,7 s), rumble
+  amplitude **3–6** sur les pas d'un lourd.
+
+### 7b.4 Fin de plan
+
+Le plan se termine **1,5–2 s après la dernière action ou la dernière phrase**. Pas de vidéo vide
+de 3–5 s « parce que Grok a fait 15 s ». Inversement, un gag ajouté (réveil du tricératops,
+saut de rivière) allonge le plan de ce qu'il faut.
+
+### 7b.5 Son : une identité par dinosaure
+
+- **Plus de musique unique bouclée sur tout le film.** Deux couches globales : une **ambiance
+  du milieu** sur toute la durée (forêt, prairie, plaine venteuse, 0,4–0,55) et une **musique
+  qui entre sur le dernier tiers ou le climax** (0,45–0,7, fade-in 2–4 s), éventuellement un
+  ident dramatique court (10–25 s) sur la confrontation. Chaque dinosaure a SA musique et SON
+  ambiance : pas deux films avec le même morceau.
+- **Une ambiance par plan** (cascade, rivière, troupeau qui broute, oiseaux, ronflement,
+  mastication, moteur de bus au ralenti) à 0,25–0,75, souvent 2 pistes superposées.
+- **Un son dédié par événement vidéo** (cri de raptor, klaxon, splash, envol d'oiseaux, cris de
+  ptérodactyles) et **un rugissement propre au héros** (jamais un rugissement T-Rex ralenti).
+  Les gros moments sont **doublés** : le même son sur deux pistes décalées de 1–2 s, ou deux
+  sons complémentaires (rugissement + souffle).
+- Voix à **1,2–1,5** dans un mixage avec ambiances ; bruits de pas ×0,6–1.
+- Quand Nicolas pose les sons lui-même : le kit prévoit quand même les **emplacements**
+  (clips nommés « AMBIANCE plan n », « ÉVÉNEMENT : envol des oiseaux », « RUGISSEMENT héros »)
+  aux bons instants, sans fichier — il n'a plus qu'à glisser le son.
+
+### 7b.6 Ce qui est resté tel quel (donc à garder)
+
+Structure et ordre des plans, transitions crossfade 400–500, intro/outro iris, offsets mot à
+mot des voix, choix des animations (Discours pour parler, Action pour rugir), ancrages ⚓ des
+shakes sur les animations, pas sur l'animation Walk, sens du dessin (`facing`) respecté par
+les trajets.
+
+---
+
 ## 8. Pipeline « kit de film » (ce que l'agent livre, dans l'ordre)
 
 Dossier `docs/films/<dino>/` :
@@ -384,6 +501,7 @@ Décor : P<n>_<sujet>.mp4 (D+1 s) — événements : 4,0 s bus entre par la gauc
 
 ### 10.2 Checklist de relecture (avant de dire « prêt »)
 
+- [ ] Chaque phrase du script correspond à une action de la palette §0 (piste, clip, paramètres) ; rien qui suppose un contact réel ou une réaction du décor au héros.
 - [ ] 5–6 plans, 58–66 s, une seule scène muette, chute finale + 1 s + iris 1000.
 - [ ] Aucun `once-hold` sur une boucle ; aucune passe figée > 0,3 s.
 - [ ] Cause (vidéo) → 0,4 s → réaction (héros) → 1,5 s → phrase.
