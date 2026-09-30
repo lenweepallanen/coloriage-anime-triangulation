@@ -114,28 +114,34 @@ FILMS = {
                 "arbres feuillus sombres de chaque côté. Le chemin et tout le centre restent vides pour un petit dinosaure "
                 "qui court très vite de gauche à droite."),
             'P2_clairiere_automne_dinde': (
-                "une clairière en AUTOMNE : arbres aux feuilles orange, rouges et jaunes, feuilles mortes qui volent, herbe "
-                "jaunie, ciel gris-bleu couvert, lumière dorée. Dans le tiers DROIT, une grosse dinde sauvage (plumes brunes, "
-                "caroncule rouge, ailes ouvertes) qui court vers la DROITE, affolée, le bec ouvert. La moitié gauche et le "
-                "centre restent vides pour un petit dinosaure qui la poursuit."),
+                "une clairière en AUTOMNE : arbres aux feuilles orange, rouges et jaunes, quelques feuilles mortes au sol, "
+                "herbe jaunie, ciel gris-bleu couvert, lumière dorée. Dans le tiers DROIT, une dinde sauvage PETITE (pas plus "
+                "haute qu'un cinquième de l'image), dessinée de façon RÉALISTE et sobre comme dans un livre d'animaux pour "
+                "enfants : plumes brunes, petite tête rouge, queue baissée, DEBOUT et immobile, tournée vers la DROITE, en "
+                "train de picorer. Pas d'expression comique, pas de bras écartés, pas de gouttes de sueur. La moitié gauche "
+                "et le centre restent vides pour un petit dinosaure qui arrive."),
             'P3_oree_orage_trex': (
                 "l'orée d'une forêt sous un ORAGE : ciel gris foncé et violet chargé de gros nuages, un éclair jaune au fond, "
-                "pluie fine en traits obliques, herbe vert sombre, les derniers grands arbres à gauche, une prairie sombre à "
-                "droite. Sur le BORD DROIT, un grand T-Rex vert à rayures orange (le même que sur l'image de référence), vu de "
-                "côté, tourné vers la GAUCHE, gueule grande ouverte qui rugit, féroce. Le centre-gauche reste vide."),
-            'P4_course_crepuscule': (
-                "une forêt au CRÉPUSCULE vue de côté pour un travelling de course : ciel orange, rose et violet, arbres en "
-                "silhouettes vert très foncé presque noires, une rangée continue d'arbres au fond sur TOUTE la largeur, herbe "
-                "sombre et un chemin de terre brun-rouge en bas sur toute la largeur, le décor continue hors cadre à gauche "
-                "et à droite (même hauteur de sol et d'arbres aux deux bords). Aucun animal : le milieu reste vide pour des "
-                "dinosaures qui traversent en courant."),
+                "pluie fine en traits obliques, herbe vert sombre. Les arbres sont au FOND et à DROITE seulement : le BORD "
+                "GAUCHE de l'image est une prairie sombre complètement DÉGAGÉE, sans aucun arbre ni buisson ni rocher (un "
+                "personnage doit pouvoir sortir par la gauche). Sur le BORD DROIT, un grand T-Rex vert à rayures orange (le "
+                "même que sur l'image de référence), vu de côté, tourné vers la GAUCHE, gueule grande ouverte qui rugit, "
+                "féroce. Le centre-gauche reste vide."),
+            'P4_course_orage': (
+                "la SUITE de la scène de la deuxième image (le même orage, la même heure, la même lumière violette et la même "
+                "pluie en traits obliques) mais vue de côté pour une course : une rangée continue d'arbres sombres au fond sur "
+                "TOUTE la largeur, herbe vert sombre et un chemin de terre en bas sur toute la largeur, le décor continue "
+                "hors cadre à gauche et à droite (même hauteur de sol et d'arbres aux deux bords). Sur le BORD DROIT, le MÊME "
+                "T-Rex vert à rayures orange que sur la deuxième image, vu de côté, tourné vers la GAUCHE, en train d'entrer "
+                "dans l'image en courant (la moitié de son corps encore hors cadre à droite). Tout le reste du chemin est vide."),
             'P5_nuit_second_raptor': (
                 "un coin de forêt la NUIT : ciel bleu nuit avec une grande lune ronde et des étoiles, herbe bleu-vert, "
                 "arbres sombres, quelques lucioles jaunes, une souche, une lumière douce et bleutée. IMPORTANT, il DOIT y "
-                "avoir un animal : dans le tiers DROIT, assis sur l'herbe à côté de la souche, un vélociraptor (petit "
-                "dinosaure carnivore brun et beige, longue queue, griffes, gros yeux) bien visible, tourné vers la GAUCHE, "
-                "l'air curieux, la tête penchée. Ce n'est PAS le héros, c'est son copain : dessine-le. La moitié gauche et "
-                "le centre restent vides."),
+                "avoir un animal : dans le tiers DROIT, assis sur l'herbe à côté de la souche, un vélociraptor dessiné de façon "
+                "RÉALISTE et sobre comme dans un livre d'animaux pour enfants (petit dinosaure carnivore brun et beige, museau "
+                "allongé, longue queue, griffes, petits yeux — PAS de gros yeux ronds, pas de sourire, pas d'expression comique), "
+                "bien visible, tourné vers la GAUCHE, la tête légèrement penchée, attentif. Ce n'est PAS le héros, c'est son "
+                "copain : dessine-le. La moitié gauche et le centre restent vides."),
             'P6_matin_pluie_mouton': (
                 "une prairie à la lisière d'une forêt sous une PLUIE de matin : ciel gris clair avec des nuages gris, "
                 "gouttes de pluie en petits traits bleus, flaques d'eau qui brillent sur l'herbe vert vif, un arc-en-ciel "
@@ -168,11 +174,13 @@ def multipart(fields, files):
 
 film = FILMS[FILM]
 COMMON = film['mood'] + (" Rappel : style enfant, simple, sans surcharge." if FILM in ('spinosaurus', 'velociraptor') else '') + f" Ne dessine AUCUN {film['hero']} : le héros sera ajouté par-dessus plus tard, laisse-lui la place indiquée."
+EXTRA_REFS = {'P4_course_orage': ['velociraptor/gpt-velociraptor/P3_oree_orage_trex.png']}   # même T-Rex, même orage que P3
 NO_HERO_EXCEPTION = {'P5_nuit_second_raptor': " Exception pour cette image : le vélociraptor assis à droite (le copain) DOIT être dessiné ; seul le héros, à gauche, est absent."}
 
 
 def gen(name, scene):
-    files = [('image[]', (os.path.basename(REF), open(REF, 'rb').read(), 'image/png'))]
+    refs = [REF] + [os.path.join(HERE, r) for r in EXTRA_REFS.get(name, []) if os.path.exists(os.path.join(HERE, r))]
+    files = [('image[]', (os.path.basename(r), open(r, 'rb').read(), 'image/png')) for r in refs]
     prompt = PREFIX + scene + COMMON + NO_HERO_EXCEPTION.get(name, '')
     fields = {'model': MODEL, 'prompt': prompt, 'size': '1792x1008', 'quality': 'high', 'output_format': 'png', 'n': '1'}
     body, ctype = multipart(fields, files)
