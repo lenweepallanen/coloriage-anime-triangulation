@@ -53,7 +53,7 @@ export default function StudioPage() {
   const [data, setData] = useState<StudioData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [projects, setProjects] = useState<{ id: string; name: string; bookName: string; thumb: string | null }[]>([])
+  const [projects, setProjects] = useState<{ id: string; name: string; bookName: string; thumb: string | null }[] | null>(null)
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true); setError(null)
@@ -82,12 +82,16 @@ export default function StudioPage() {
         const [projs, books] = await Promise.all([getAllProjects(), getAllBooks()])
         const bookName = new Map(books.map(b => [b.id, b.name]))
         const published = projs.filter(p => p.published).sort((a, b) => a.name.localeCompare(b.name))
-        const rows = await Promise.all(published.map(async p => {
+        const rows = published.map(p => ({ id: p.id, name: p.name, bookName: (p.bookId && bookName.get(p.bookId)) || '', thumb: null as string | null }))
+        if (cancelled) return
+        setProjects(rows)
+        // vignettes en second temps, sans bloquer l'affichage des noms
+        for (const p of published) {
           const blob = await getProjectCardThumbnail(p).catch(() => null)
-          return { id: p.id, name: p.name, bookName: (p.bookId && bookName.get(p.bookId)) || '', thumb: blob ? URL.createObjectURL(blob) : null }
-        }))
-        if (!cancelled) setProjects(rows)
-      } catch { /* section secondaire : on l'ignore en cas d'échec */ }
+          if (cancelled) return
+          if (blob) setProjects(prev => prev && prev.map(r => (r.id === p.id ? { ...r, thumb: URL.createObjectURL(blob) } : r)))
+        }
+      } catch { if (!cancelled) setProjects([]) }
     })()
     return () => { cancelled = true }
   }, [])
@@ -243,7 +247,7 @@ export default function StudioPage() {
                 <i style={{ height: `${(s.clicks / chartMax) * 100}%`, background: 'var(--color-type-bone)' }} />
                 <i style={{ height: `${(s.downloads / chartMax) * 100}%`, background: 'var(--color-warning)' }} />
               </div>
-              <span className={`day${series.length > 14 && idx % 2 ? ' hide' : ''}`}>{dayLabel(s.day)}</span>
+              <span className={`day${series.length > 14 && idx % 2 ? ' hide2' : ''}${idx % 5 ? ' hide5' : ''}`}>{dayLabel(s.day)}</span>
             </div>
           ))}
         </div>
@@ -253,13 +257,14 @@ export default function StudioPage() {
       <div className="studio-card">
         <h2>Par coloriage <span className="soon">dès l’app 1.1</span></h2>
         <div className="studio-projects">
-          {projects.map(p => (
+          {(projects ?? []).map(p => (
             <div key={p.id} className="proj">
               <div className="th">{p.thumb && <img src={p.thumb} alt="" />}</div>
               <div><b>{p.name}</b><span>{p.bookName ? `${p.bookName} · ` : ''}installs — · scans — · partages —</span></div>
             </div>
           ))}
-          {projects.length === 0 && <div className="studio-empty">Aucun coloriage publié</div>}
+          {projects === null && <div className="studio-empty">Chargement des coloriages…</div>}
+          {projects && projects.length === 0 && <div className="studio-empty">Aucun coloriage publié</div>}
         </div>
         <p className="studio-note">Appareils ayant installé chaque livre, scans et partages par coloriage. Alimenté par l’app à partir de la version 1.1 (événements anonymes, identifiant d’installation aléatoire).</p>
       </div>

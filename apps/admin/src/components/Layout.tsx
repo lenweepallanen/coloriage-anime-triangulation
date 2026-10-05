@@ -19,7 +19,7 @@ export default function Layout() {
       <header className="app-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Link to="/" className="app-title">Coloriage Animé</Link>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Link to="/studio" className="btn-secondary btn-sm" style={{ textDecoration: 'none' }}>📊 Studio</Link>
+          <Link to="/studio" className="btn-secondary btn-sm" style={{ textDecoration: 'none', color: 'inherit' }}>📊 Studio</Link>
         <div ref={menuRef} style={{ position: 'relative' }}>
           <button className="btn-secondary btn-sm" onClick={() => setToolsOpen(v => !v)}>
             Outils ▾

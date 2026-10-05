@@ -3911,7 +3911,7 @@ code {
 .studio-chart .bars { display: flex; align-items: flex-end; gap: 2px; height: 100%; justify-content: center; }
 .studio-chart .bars i { display: block; width: 30%; max-width: 14px; min-height: 0; border-radius: 3px 3px 0 0; }
 .studio-chart .day { position: absolute; bottom: -20px; left: 0; right: 0; text-align: center; font-size: 10px; color: var(--color-muted); white-space: nowrap; }
-.studio-chart .day.hide { visibility: hidden; }
+.studio-chart .day.hide2 { visibility: hidden; }
 .studio-projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .studio-projects .proj { display: flex; gap: 10px; align-items: center; background: var(--color-surface-0); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 10px; min-width: 0; }
 .studio-projects .th { width: 44px; height: 44px; border-radius: 6px; background: var(--color-surface-3); flex: none; overflow: hidden; }
@@ -3919,4 +3919,4 @@ code {
 .studio-projects b { display: block; font-size: 13px; }
 .studio-projects span { color: var(--color-muted); font-size: 11px; }
 @media (max-width: 900px) { .studio-grid2 { grid-template-columns: 1fr; } }
-@media (max-width: 640px) { .studio-funnel .step { grid-template-columns: 110px 1fr 60px; } .studio-kpi .val { font-size: 28px; } .studio-chart .day.hide { visibility: hidden; } }
+@media (max-width: 640px) { .studio-funnel .step { grid-template-columns: 110px 1fr 60px; } .studio-kpi .val { font-size: 28px; } .studio-chart .day.hide5 { visibility: hidden; } .studio-chart .day.hide2 { visibility: visible; } .studio-chart .day.hide2.hide5 { visibility: hidden; } }
