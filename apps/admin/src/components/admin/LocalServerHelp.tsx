@@ -4,7 +4,7 @@ interface Props {
   service: 'sam2'
 }
 
-const PROJECT_PATH = '/Users/nicolasrocher/Documents/claude code projects/coloriage-anime-triangulation-custom'
+const PROJECT_PATH = '/Users/nicolasrocher/Documents/claude code projects/PicoPop'
 
 const SERVICE_INFO = {
   sam2: {

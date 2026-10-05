@@ -67,5 +67,18 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
     }
+
+    // Comptage ANONYME des passages vers les stores depuis picopop.app (fonction /go du site) :
+    // création publique, contenu strictement borné (origine, plateforme, pays, langue, date), lecture admin.
+    match /siteClicks/{id} {
+      allow read: if isAdmin();
+      allow create: if request.resource.data.keys().hasOnly(['src', 'platform', 'country', 'lang', 'ts', 'day'])
+        && request.resource.data.src is string && request.resource.data.src.size() <= 32
+        && request.resource.data.platform in ['ios', 'android', 'desktop', 'pdf']
+        && request.resource.data.country is string && request.resource.data.country.size() == 2
+        && request.resource.data.lang is string && request.resource.data.lang.size() == 2
+        && request.resource.data.ts is int && request.resource.data.day is string && request.resource.data.day.size() == 10;
+      allow update, delete: if isAdmin();
+    }
   }
 }

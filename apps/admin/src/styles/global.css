@@ -3865,3 +3865,58 @@ code {
   }
 }
 
+
+/* ---------------------------------------------------------------------------
+   PicoPop Studio (tableau de bord funnel)
+   --------------------------------------------------------------------------- */
+.studio { max-width: 1280px; margin: 0 auto; }
+.studio-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px; }
+.studio-head h1 { font-size: 22px; margin: 0; flex: 1 1 auto; }
+.studio-seg { display: inline-flex; background: var(--color-surface-2); border: 1px solid var(--color-border-hover); border-radius: var(--radius-full); padding: 3px; }
+.studio-seg button { background: transparent; border: 0; color: var(--color-text-secondary); padding: 6px 14px; border-radius: var(--radius-full); font: inherit; cursor: pointer; }
+.studio-seg button.on { background: var(--color-primary); color: #fff; }
+.studio-upd { color: var(--color-muted); font-size: 12px; }
+.studio-error { background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; padding: 10px 14px; border-radius: var(--radius); margin-bottom: 16px; }
+.studio-warn { background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.35); color: #fcd34d; padding: 8px 14px; border-radius: var(--radius); margin-bottom: 16px; font-size: 12px; }
+.studio-card { background: var(--color-surface-1); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 16px 18px; box-shadow: var(--shadow-card); }
+.studio-card h2 { font-size: 14px; margin: 0 0 12px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.studio-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.studio-kpi .lbl { color: var(--color-text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.studio-kpi .val { font-size: 34px; font-weight: 700; margin: 6px 0 2px; letter-spacing: -0.5px; }
+.studio-kpi .sub { color: var(--color-muted); font-size: 12px; }
+.studio-kpi .delta { font-size: 12px; color: var(--color-success); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.studio-kpi.dim .val { color: var(--color-muted); }
+.soon { font-size: 11px; color: var(--color-warning); background: rgba(245, 158, 11, 0.12); padding: 2px 8px; border-radius: var(--radius-full); text-transform: none; letter-spacing: 0; font-weight: 500; }
+.studio-grid2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; margin-bottom: 20px; }
+.studio-funnel { display: flex; flex-direction: column; gap: 8px; }
+.studio-funnel .step { display: grid; grid-template-columns: 170px 1fr 70px; gap: 12px; align-items: center; font-size: 13px; }
+.studio-funnel .step .lbl small { display: block; color: var(--color-muted); font-size: 11px; }
+.studio-funnel .step .bar { height: 26px; background: var(--color-surface-2); border-radius: 6px; overflow: hidden; position: relative; }
+.studio-funnel .step .bar i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 6px; transition: width 0.4s ease; }
+.studio-funnel .step .n { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.studio-funnel .step .n small { display: block; color: var(--color-muted); font-weight: 400; font-size: 11px; }
+.studio-funnel .step.app .n { color: var(--color-muted); }
+.studio-note { color: var(--color-muted); font-size: 12px; margin: 10px 0 0; }
+.studio-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.studio-table th { color: var(--color-muted); font-weight: 600; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--color-border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+.studio-table td { padding: 8px; border-bottom: 1px solid var(--color-border); font-variant-numeric: tabular-nums; }
+.studio-table td.r, .studio-table th.r { text-align: right; }
+.studio-table tr:last-child td { border-bottom: 0; }
+.studio-pill { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full); font-size: 11px; background: var(--color-surface-2); color: var(--color-text-secondary); }
+.studio-empty { color: var(--color-muted); font-style: italic; text-align: center; padding: 12px; }
+.studio-legend { display: flex; gap: 16px; font-size: 12px; color: var(--color-text-secondary); margin-bottom: 8px; }
+.studio-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.studio-chart { display: grid; gap: 4px; height: 200px; align-items: end; border-bottom: 1px solid var(--color-border); padding-bottom: 22px; position: relative; }
+.studio-chart .col { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; position: relative; }
+.studio-chart .bars { display: flex; align-items: flex-end; gap: 2px; height: 100%; justify-content: center; }
+.studio-chart .bars i { display: block; width: 30%; max-width: 14px; min-height: 0; border-radius: 3px 3px 0 0; }
+.studio-chart .day { position: absolute; bottom: -20px; left: 0; right: 0; text-align: center; font-size: 10px; color: var(--color-muted); white-space: nowrap; }
+.studio-chart .day.hide { visibility: hidden; }
+.studio-projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.studio-projects .proj { display: flex; gap: 10px; align-items: center; background: var(--color-surface-0); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 10px; min-width: 0; }
+.studio-projects .th { width: 44px; height: 44px; border-radius: 6px; background: var(--color-surface-3); flex: none; overflow: hidden; }
+.studio-projects .th img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.studio-projects b { display: block; font-size: 13px; }
+.studio-projects span { color: var(--color-muted); font-size: 11px; }
+@media (max-width: 900px) { .studio-grid2 { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .studio-funnel .step { grid-template-columns: 110px 1fr 60px; } .studio-kpi .val { font-size: 28px; } .studio-chart .day.hide { visibility: hidden; } }
