@@ -70,6 +70,24 @@ service cloud.firestore {
 
     // Comptage ANONYME des passages vers les stores depuis picopop.app (fonction /go du site) :
     // création publique, contenu strictement borné (origine, plateforme, pays, langue, date), lecture admin.
+    // Événements ANONYMES de l'app play (identifiant d'installation aléatoire, type, livre/coloriage,
+    // plateforme, version, langue, jour) : création publique au contenu strictement borné, lecture admin.
+    match /appEvents/{id} {
+      allow read: if isAdmin();
+      allow create: if request.resource.data.keys().hasOnly(['installId', 'type', 'bookId', 'projectId', 'platform', 'appVersion', 'lang', 'day', 'ts'])
+        && request.resource.data.keys().hasAll(['installId', 'type', 'platform', 'appVersion', 'lang', 'day', 'ts'])
+        && request.resource.data.installId is string && request.resource.data.installId.size() >= 8 && request.resource.data.installId.size() <= 64
+        && request.resource.data.type in ['install', 'book_added', 'scan', 'share']
+        && (!('bookId' in request.resource.data) || (request.resource.data.bookId is string && request.resource.data.bookId.size() <= 64))
+        && (!('projectId' in request.resource.data) || (request.resource.data.projectId is string && request.resource.data.projectId.size() <= 64))
+        && request.resource.data.platform in ['ios', 'android', 'web']
+        && request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 16
+        && request.resource.data.lang is string && request.resource.data.lang.size() <= 5
+        && request.resource.data.day is string && request.resource.data.day.size() == 10
+        && request.resource.data.ts is number;
+      allow update, delete: if false;
+    }
+
     match /siteClicks/{id} {
       allow read: if isAdmin();
       allow create: if request.resource.data.keys().hasOnly(['src', 'platform', 'country', 'lang', 'ts', 'day'])

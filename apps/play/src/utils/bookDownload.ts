@@ -7,6 +7,7 @@ import {
 } from '@shared/db/projectsStore'
 import type { Book } from '@shared/types/project'
 import { runAsBackgroundDownloads } from '@shared/utils/downloadProgress'
+import { trackAppEvent } from './appEvents'
 
 /**
  * Téléchargement d'un livre = pré-chargement de tous les assets de ses
@@ -81,6 +82,7 @@ export function startBackgroundBookDownload(book: Book): void {
   try {
     localStorage.setItem(addedKeyFor(book.id), String(Date.now()))
   } catch { /* stockage indisponible */ }
+  trackAppEvent('book_added', { bookId: book.id }) // une fois par livre et par appareil
   inFlight[book.id] = { done: 0, total: 0 }
   notifyDownloadListeners()
   downloadBook(book, (done, total) => {

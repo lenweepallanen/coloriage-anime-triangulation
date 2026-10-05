@@ -8,6 +8,7 @@ import type { FilmRecordingResult } from '@shared/utils/filmRecorder'
 import { generateVideoPoster } from '@shared/utils/videoPoster'
 import ScannedProjectPage from './ScannedProjectPage'
 import { shareFilmVideo } from '../utils/shareFilmVideo'
+import { trackAppEvent } from '../utils/appEvents'
 import SharePreparingOverlay from '../components/SharePreparingOverlay'
 import LoadingScreen from '../components/LoadingScreen'
 import Mascot from '@shared/components/mascot/Mascot'
@@ -104,6 +105,7 @@ export default function PlayPage() {
         mode="play"
         onFilmRecorded={handleFilmRecorded}
         onShareFilm={handleShareFilm}
+        onAnimationStart={() => trackAppEvent('scan', { projectId })}
         // L'overlay est rendu DANS la carte Fin (portail z-index 1400) : rendu
         // ici, il restait invisible derrière la carte (« l'app ne répond plus »).
         sharePreparing={sharing}

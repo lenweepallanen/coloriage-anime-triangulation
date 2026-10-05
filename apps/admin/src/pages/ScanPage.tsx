@@ -46,9 +46,11 @@ interface ScanPageProps {
   sharePreparing?: boolean
   /** Play : overlay « Partage en cours de création » rendu dans la carte Fin. */
   shareOverlay?: React.ReactNode
+  /** Play : appelé quand le scan est validé et que l'animation démarre (compteur anonyme de scans). */
+  onAnimationStart?: () => void
 }
 
-export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded, onShareFilm, sharePreparing, shareOverlay }: ScanPageProps = {}) {
+export default function ScanPage({ project: projectProp, loading: loadingProp, deferredLoaded, mode = 'admin', onFilmRecorded, onShareFilm, sharePreparing, shareOverlay, onAnimationStart }: ScanPageProps = {}) {
   const { projectId } = useParams<{ projectId: string }>()
   const fallback = useProject(projectProp === undefined ? projectId : null)
   const project = projectProp !== undefined ? projectProp : fallback.project
@@ -145,6 +147,11 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm, 
     if (mode !== 'play') return
     document.body.dataset.scanStage = stage
     return () => { delete document.body.dataset.scanStage }
+  }, [mode, stage])
+  const onAnimationStartRef = useRef(onAnimationStart)
+  onAnimationStartRef.current = onAnimationStart
+  useEffect(() => {
+    if (mode === 'play' && stage === 'animation') onAnimationStartRef.current?.()
   }, [mode, stage])
   // --- App native (mode play) : SEULE l'ANIMATION (le film) est figée en paysage ---
   // Le lock passe par le polyfill screen.orientation.lock (→ plugin Capacitor

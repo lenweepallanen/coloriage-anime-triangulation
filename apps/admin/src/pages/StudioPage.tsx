@@ -26,7 +26,13 @@ interface StudioData {
     google: { total: number; byDay: Record<string, number> } | null
   }
   clicks: { total: number; pdfOpens: number; byDay: Record<string, number>; bySrc: Record<string, { ios: number; android: number; desktop: number }>; byPlatform: Record<string, number> } | null
-  app: null
+  app: {
+    events: number; installs: number; byPlatform: Record<string, number>
+    bookInstalls: number; scanners: number; sharers: number; scans: number; shares: number
+    byDay: Record<string, { installs: number; scans: number; shares: number }>
+    byBook: Record<string, number>
+    byProject: Record<string, { scans: number; scanners: number; shares: number; sharers: number }>
+  } | null
   errors: Record<string, string>
 }
 
@@ -53,7 +59,7 @@ export default function StudioPage() {
   const [data, setData] = useState<StudioData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [projects, setProjects] = useState<{ id: string; name: string; bookName: string; thumb: string | null }[] | null>(null)
+  const [projects, setProjects] = useState<{ id: string; name: string; bookId: string; bookName: string; thumb: string | null }[] | null>(null)
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true); setError(null)
@@ -83,7 +89,7 @@ export default function StudioPage() {
         const bookName = new Map(books.filter(b => b.published).map(b => [b.id, b.name]))
         // coloriages publiés appartenant à un livre publié (les livres de test restent hors du Studio)
         const published = projs.filter(p => p.published && p.bookId && bookName.has(p.bookId)).sort((a, b) => (bookName.get(a.bookId!)! + a.name).localeCompare(bookName.get(b.bookId!)! + b.name))
-        const rows = published.map(p => ({ id: p.id, name: p.name, bookName: (p.bookId && bookName.get(p.bookId)) || '', thumb: null as string | null }))
+        const rows = published.map(p => ({ id: p.id, name: p.name, bookId: p.bookId!, bookName: (p.bookId && bookName.get(p.bookId)) || '', thumb: null as string | null }))
         if (cancelled) return
         setProjects(rows)
         // vignettes en second temps, sans bloquer l'affichage des noms
@@ -102,7 +108,7 @@ export default function StudioPage() {
     if (!data) return []
     const nDays = period === 7 ? 7 : period === 30 ? 30 : 30
     const to = data.period.to
-    const out: { day: string; leads: number; clicks: number; downloads: number }[] = []
+    const out: { day: string; leads: number; clicks: number; downloads: number; scans: number }[] = []
     for (let i = nDays - 1; i >= 0; i--) {
       const day = addDays(to, -i)
       out.push({
@@ -110,11 +116,13 @@ export default function StudioPage() {
         leads: data.leads?.byDay[day] ?? 0,
         clicks: data.clicks?.byDay[day] ?? 0,
         downloads: (data.downloads.apple?.byDay[day] ?? 0) + (data.downloads.google?.byDay[day] ?? 0),
+        scans: data.app?.byDay[day]?.scans ?? 0,
       })
     }
     return out
   }, [data, period])
 
+  const app = data?.app ?? null
   const apple = data?.downloads.apple ?? null
   const google = data?.downloads.google ?? null
   const downloadsTotal = apple || google ? (apple?.total ?? 0) + (google?.total ?? 0) : null
@@ -129,15 +137,16 @@ export default function StudioPage() {
     { label: 'Clic dans un mail', sub: 'mails 1, 2 et 3', n: emailClicks, color: 'var(--color-primary)' },
     { label: 'Clic vers un store', sub: 'page merci, mails, site', n: data.clicks?.total ?? 0, color: 'var(--color-primary)' },
     { label: 'Téléchargement', sub: 'Apple + Google', n: downloadsTotal, color: 'var(--color-type-bone)' },
-    { label: 'Livre gratuit installé', sub: 'app 1.1', n: null, color: '' },
-    { label: 'Premier scan', sub: 'app 1.1', n: null, color: '' },
-    { label: 'Partage d’un film', sub: 'app 1.1', n: null, color: '' },
+    { label: 'App ouverte', sub: 'appareils, app ≥ 1.1', n: app ? app.installs : null, color: 'var(--color-type-physics)' },
+    { label: 'Livre ajouté', sub: 'appareils', n: app ? app.bookInstalls : null, color: 'var(--color-type-physics)' },
+    { label: 'Coloriage scanné', sub: 'appareils', n: app ? app.scanners : null, color: 'var(--color-type-physics)' },
+    { label: 'Film partagé', sub: 'appareils', n: app ? app.sharers : null, color: 'var(--color-type-physics)' },
   ] : []
   const funnelMax = Math.max(1, ...funnel.map(f => f.n ?? 0))
 
   const periodLabel = period === 7 ? '7 derniers jours' : period === 30 ? '30 derniers jours' : 'depuis le lancement'
   const clickRows = data?.clicks ? Object.entries(data.clicks.bySrc).sort((a, b) => (b[1].ios + b[1].android + b[1].desktop) - (a[1].ios + a[1].android + a[1].desktop)) : []
-  const chartMax = Math.max(1, ...series.map(s => Math.max(s.leads, s.clicks, s.downloads)))
+  const chartMax = Math.max(1, ...series.map(s => Math.max(s.leads, s.clicks, s.downloads, s.scans)))
 
   return (
     <div className="studio">
@@ -182,10 +191,10 @@ export default function StudioPage() {
             {apple && Object.keys(apple.byCountry).length > 0 && ` · ${Object.entries(apple.byCountry).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([c, n]) => `${c} ${n}`).join(', ')}`}
           </div>
         </div>
-        <div className="studio-card studio-kpi dim">
-          <div className="lbl">Scans de coloriages <span className="soon">dès l’app 1.1</span></div>
-          <div className="val">—</div>
-          <div className="sub">événements anonymes de l’app (livres installés, scans, partages)</div>
+        <div className={`studio-card studio-kpi${app && app.events > 0 ? '' : ' dim'}`}>
+          <div className="lbl">Scans de coloriages {!(app && app.events > 0) && <span className="soon">dès l’app 1.1</span>}</div>
+          <div className="val">{fmt(app ? app.scans : null)}</div>
+          <div className="sub">{app && app.events > 0 ? `${fmt(app.scanners)} appareils · ${fmt(app.shares)} partages · ${fmt(app.installs)} appareils (iOS ${fmt(app.byPlatform.ios ?? 0)}, Android ${fmt(app.byPlatform.android ?? 0)})` : 'événements anonymes de l’app (livres ajoutés, scans, partages)'}</div>
         </div>
       </div>
 
@@ -201,7 +210,7 @@ export default function StudioPage() {
               </div>
             ))}
           </div>
-          <p className="studio-note">Les 3 dernières marches se rempliront avec les événements anonymes de l’app (aucune donnée personnelle, voir politique de confidentialité).</p>
+          <p className="studio-note">Les 4 dernières marches viennent des événements anonymes de l’app (version 1.1 et plus, identifiant d’installation aléatoire — aucune donnée personnelle) : elles ne couvrent que les appareils à jour.</p>
         </div>
 
         <div className="studio-card">
@@ -239,14 +248,16 @@ export default function StudioPage() {
           <span><i style={{ background: 'var(--color-primary)' }} />Leads</span>
           <span><i style={{ background: 'var(--color-type-bone)' }} />Clics store</span>
           <span><i style={{ background: 'var(--color-warning)' }} />Téléchargements</span>
+          <span><i style={{ background: 'var(--color-type-physics)' }} />Scans</span>
         </div>
         <div className="studio-chart" style={{ gridTemplateColumns: `repeat(${series.length}, minmax(0, 1fr))` }}>
           {series.map((s, idx) => (
-            <div key={s.day} className="col" title={`${dayLabel(s.day)} : ${s.leads} leads, ${s.clicks} clics, ${s.downloads} téléchargements`}>
+            <div key={s.day} className="col" title={`${dayLabel(s.day)} : ${s.leads} leads, ${s.clicks} clics, ${s.downloads} téléchargements, ${s.scans} scans`}>
               <div className="bars">
                 <i style={{ height: `${(s.leads / chartMax) * 100}%`, background: 'var(--color-primary)' }} />
                 <i style={{ height: `${(s.clicks / chartMax) * 100}%`, background: 'var(--color-type-bone)' }} />
                 <i style={{ height: `${(s.downloads / chartMax) * 100}%`, background: 'var(--color-warning)' }} />
+                <i style={{ height: `${(s.scans / chartMax) * 100}%`, background: 'var(--color-type-physics)' }} />
               </div>
               <span className={`day${series.length > 14 && idx % 2 ? ' hide2' : ''}${idx % 5 ? ' hide5' : ''}`}>{dayLabel(s.day)}</span>
             </div>
@@ -256,18 +267,18 @@ export default function StudioPage() {
       </div>
 
       <div className="studio-card">
-        <h2>Par coloriage <span className="soon">dès l’app 1.1</span></h2>
+        <h2>Par coloriage {!(app && app.events > 0) && <span className="soon">dès l’app 1.1</span>}</h2>
         <div className="studio-projects">
           {(projects ?? []).map(p => (
             <div key={p.id} className="proj">
               <div className="th">{p.thumb && <img src={p.thumb} alt="" />}</div>
-              <div><b>{p.name}</b><span>{p.bookName ? `${p.bookName} · ` : ''}installs — · scans — · partages —</span></div>
+              <div><b>{p.name}</b><span>{p.bookName ? `${p.bookName} · ` : ''}livre {fmt(app ? (app.byBook[p.bookId] ?? 0) : null)} · scans {fmt(app ? (app.byProject[p.id]?.scans ?? 0) : null)} · partages {fmt(app ? (app.byProject[p.id]?.shares ?? 0) : null)}</span></div>
             </div>
           ))}
           {projects === null && <div className="studio-empty">Chargement des coloriages…</div>}
           {projects && projects.length === 0 && <div className="studio-empty">Aucun coloriage publié</div>}
         </div>
-        <p className="studio-note">Appareils ayant installé chaque livre, scans et partages par coloriage. Alimenté par l’app à partir de la version 1.1 (événements anonymes, identifiant d’installation aléatoire).</p>
+        <p className="studio-note">« livre » = appareils ayant ajouté le livre ; scans et partages = nombre d’événements sur le coloriage. Alimenté par l’app à partir de la version 1.1 (événements anonymes, identifiant d’installation aléatoire).</p>
       </div>
     </div>
   )

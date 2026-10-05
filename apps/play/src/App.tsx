@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { hideNativeSplash } from './native'
+import { initAppEvents } from './utils/appEvents'
 import { I18nProvider } from './i18n'
 import PlayShell from './components/PlayShell'
 import PlayHomePage from './pages/PlayHomePage'
@@ -14,7 +15,7 @@ import AProposPage from './pages/AProposPage'
 export default function App() {
   // Le splash natif reste affiché jusqu'au premier rendu React (pas d'écran
   // vide entre le splash et le boot screen).
-  useEffect(() => { hideNativeSplash() }, [])
+  useEffect(() => { hideNativeSplash(); initAppEvents() }, [])
 
   return (
     <I18nProvider>

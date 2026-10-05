@@ -10,7 +10,8 @@
  *   - Brevo        BREVO_API_KEY, BREVO_LIST_ID          → leads par jour, événements des mails 1/2/3
  *   - Apple        ASC_ISSUER_ID, ASC_SALES_KEY_ID, ASC_SALES_KEY_P8, ASC_VENDOR_NUMBER → rapports de ventes (téléchargements)
  *   - Google Play  PLAY_SA_JSON, PLAY_STATS_BUCKET, PLAY_PACKAGE → CSV d'installations du bucket de la console
- *   - Firestore    `siteClicks` (clics /go du site), lus avec le jeton de l'admin
+ *   - Firestore    `siteClicks` (clics /go du site) et `appEvents` (événements anonymes de l'app play :
+ *                  install / book_added / scan / share, voir apps/play/src/utils/appEvents.ts), lus avec le jeton de l'admin
  *
  * Cache mémoire par instance : 10 min pour l'agrégat, et définitif pour les rapports Apple/Google des jours passés.
  * Les sources indisponibles renvoient `null` + un message dans `errors` : le dashboard reste utilisable.
@@ -234,6 +235,46 @@ async function siteClicks(token, from, to) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// 6. Événements anonymes de l'app (Firestore `appEvents`, lus avec le jeton de l'admin)
+// ---------------------------------------------------------------------------------------------------------------
+async function appEvents(token, from, to) {
+  const body = { structuredQuery: { from: [{ collectionId: 'appEvents' }], where: { compositeFilter: { op: 'AND', filters: [
+    { fieldFilter: { field: { fieldPath: 'day' }, op: 'GREATER_THAN_OR_EQUAL', value: { stringValue: from } } },
+    { fieldFilter: { field: { fieldPath: 'day' }, op: 'LESS_THAN_OR_EQUAL', value: { stringValue: to } } } ] } }, limit: 50000 } }
+  const r = await fetch(`${FIRESTORE}:runQuery`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!r.ok) throw new Error(`Firestore appEvents ${r.status}`)
+  const rows = (await r.json()).map(x => x.document && x.document.fields).filter(Boolean)
+  const installs = new Set(), bookInstalls = new Set(), scanners = new Set(), sharers = new Set()
+  const byBook = {}, byProject = {}, byDay = {}, byPlatform = { ios: 0, android: 0, web: 0 }
+  let scans = 0, shares = 0
+  for (const f of rows) {
+    const id = f.installId?.stringValue || '', type = f.type?.stringValue || '', day = f.day?.stringValue || '?'
+    const bookId = f.bookId?.stringValue, projectId = f.projectId?.stringValue, platform = f.platform?.stringValue || 'web'
+    byDay[day] = byDay[day] || { installs: 0, scans: 0, shares: 0 }
+    if (type === 'install') { installs.add(id); byDay[day].installs++; byPlatform[platform] = (byPlatform[platform] || 0) + 1 }
+    else if (type === 'book_added' && bookId) {
+      bookInstalls.add(id)
+      byBook[bookId] = byBook[bookId] || new Set(); byBook[bookId].add(id)
+    } else if (type === 'scan' && projectId) {
+      scans++; scanners.add(id); byDay[day].scans++
+      byProject[projectId] = byProject[projectId] || { scans: 0, scanners: new Set(), shares: 0, sharers: new Set() }
+      byProject[projectId].scans++; byProject[projectId].scanners.add(id)
+    } else if (type === 'share' && projectId) {
+      shares++; sharers.add(id); byDay[day].shares++
+      byProject[projectId] = byProject[projectId] || { scans: 0, scanners: new Set(), shares: 0, sharers: new Set() }
+      byProject[projectId].shares++; byProject[projectId].sharers.add(id)
+    }
+  }
+  return {
+    events: rows.length,
+    installs: installs.size, byPlatform,
+    bookInstalls: bookInstalls.size, scanners: scanners.size, sharers: sharers.size, scans, shares, byDay,
+    byBook: Object.fromEntries(Object.entries(byBook).map(([k, v]) => [k, v.size])),
+    byProject: Object.fromEntries(Object.entries(byProject).map(([k, v]) => [k, { scans: v.scans, scanners: v.scanners.size, shares: v.shares, sharers: v.sharers.size }])),
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Agrégat + cache
 // ---------------------------------------------------------------------------------------------------------------
 const cache = new Map() // days → { at, data }
@@ -242,12 +283,13 @@ async function buildStats(days, token) {
   const from = days > 0 ? addDays(to, -(days - 1)) : LAUNCH_DAY
   const errors = {}
   const safe = (name, p) => p.catch(e => { errors[name] = String(e.message || e); return null })
-  const [leads, emails, apple, google, clicks] = await Promise.all([
+  const [leads, emails, apple, google, clicks, app] = await Promise.all([
     safe('brevoLeads', brevoLeads()),
     safe('brevoEmails', brevoEmails(from, to)),
     process.env.ASC_SALES_KEY_P8 ? safe('apple', appleDownloads(from, addDays(to, -1))) : Promise.resolve(null),
     process.env.PLAY_SA_JSON ? safe('google', googleInstalls(from, to)) : Promise.resolve(null),
     safe('siteClicks', siteClicks(token, from, to)),
+    safe('appEvents', appEvents(token, from, to)),
   ])
   if (leads) {
     // leads dans la période (le total reste « tout temps »)
@@ -255,7 +297,7 @@ async function buildStats(days, token) {
     for (const [d, n] of Object.entries(leads.byDay)) { if (d >= from && d <= to) inPeriod += n; if (d === to) today += n }
     leads.inPeriod = inPeriod; leads.today = today
   }
-  return { generatedAt: Date.now(), period: { from, to, days }, leads, emails, downloads: { apple, google }, clicks, app: null, errors }
+  return { generatedAt: Date.now(), period: { from, to, days }, leads, emails, downloads: { apple, google }, clicks, app, errors }
 }
 
 export default async function handler(req, res) {

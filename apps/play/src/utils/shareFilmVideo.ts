@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { FilmVideoRecord } from '@shared/db/filmVideosStore'
 import { playUi } from '@shared/utils/uiSound'
+import { trackAppEvent } from './appEvents'
 
 /** Texte promo joint à la vidéo partagée (feuille de partage native). */
 const SHARE_TEXT = 'Regarde mon coloriage prendre vie avec PicoPop ! ✨ https://picopop.app'
@@ -97,6 +98,7 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
           url: shareUri,
           dialogTitle: 'Partager ma vidéo PicoPop',
         })
+        trackAppEvent('share', { projectId: record.projectId }) // feuille fermée sans annulation
       } catch {
         // Feuille annulée par l'utilisateur : pas une erreur.
       }
@@ -114,7 +116,9 @@ export async function shareFilmVideo(record: FilmVideoRecord): Promise<boolean> 
     const file = new File([record.blob], prettyName, { type: record.mimeType })
     if (navigator.canShare?.({ files: [file] })) {
       playUi('shareReady')
-      await navigator.share({ files: [file], text: SHARE_TEXT }).catch(() => {})
+      await navigator.share({ files: [file], text: SHARE_TEXT })
+        .then(() => trackAppEvent('share', { projectId: record.projectId }))
+        .catch(() => {})
       return true
     }
   } catch { /* continue vers le fallback */ }
