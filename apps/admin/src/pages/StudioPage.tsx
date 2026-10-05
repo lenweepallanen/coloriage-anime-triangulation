@@ -80,8 +80,9 @@ export default function StudioPage() {
     ;(async () => {
       try {
         const [projs, books] = await Promise.all([getAllProjects(), getAllBooks()])
-        const bookName = new Map(books.map(b => [b.id, b.name]))
-        const published = projs.filter(p => p.published).sort((a, b) => a.name.localeCompare(b.name))
+        const bookName = new Map(books.filter(b => b.published).map(b => [b.id, b.name]))
+        // coloriages publiés appartenant à un livre publié (les livres de test restent hors du Studio)
+        const published = projs.filter(p => p.published && p.bookId && bookName.has(p.bookId)).sort((a, b) => (bookName.get(a.bookId!)! + a.name).localeCompare(bookName.get(b.bookId!)! + b.name))
         const rows = published.map(p => ({ id: p.id, name: p.name, bookName: (p.bookId && bookName.get(p.bookId)) || '', thumb: null as string | null }))
         if (cancelled) return
         setProjects(rows)
