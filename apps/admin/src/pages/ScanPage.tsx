@@ -90,10 +90,10 @@ export default function ScanPage({ project: projectProp, loading: loadingProp, d
     )
   }
 
-  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} onShareFilm={onShareFilm} sharePreparing={sharePreparing} shareOverlay={shareOverlay} />
+  return <ScanFlow project={project} deferredLoaded={deferredLoaded} mode={mode} onFilmRecorded={onFilmRecorded} onShareFilm={onShareFilm} sharePreparing={sharePreparing} shareOverlay={shareOverlay} onAnimationStart={onAnimationStart} />
 }
 
-function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm, sharePreparing, shareOverlay }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void; onShareFilm?: () => void | Promise<void>; sharePreparing?: boolean; shareOverlay?: React.ReactNode }) {
+function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm, sharePreparing, shareOverlay, onAnimationStart }: { project: Project; deferredLoaded?: boolean; mode: 'admin' | 'play'; onFilmRecorded?: (r: import('../utils/filmRecorder').FilmRecordingResult) => void; onShareFilm?: () => void | Promise<void>; sharePreparing?: boolean; shareOverlay?: React.ReactNode; onAnimationStart?: () => void }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const bookId = searchParams.get('book')
