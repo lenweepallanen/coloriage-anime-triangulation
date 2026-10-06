@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { getAllProjects, createProject, deleteProject, duplicateProject, getProjectCardThumbnail, setProjectBook } from '../db/projectsStore'
 import { createBook, getAllBooks, getBookCover, deleteBook } from '../db/booksStore'
+import PublishToggleButton from '../components/admin/PublishToggleButton'
 import { duplicateProjectIntoBook } from '../db/booksStore'
 import type { Project, Book } from '../types/project'
 
@@ -172,6 +173,7 @@ export default function HomePage() {
                 onDuplicate={() => handleDuplicate(project.id)}
                 onMoveToBook={bookId => handleMoveToBook(project.id, bookId)}
                 onDuplicateToBook={bookId => handleDuplicateToBook(project.id, bookId)}
+                onPublishedChange={published => setProjects(ps => ps.map(x => (x.id === project.id ? { ...x, published, publishedAt: published ? Date.now() : x.publishedAt } : x)))}
               />
             ))}
           </div>
@@ -253,6 +255,7 @@ function ProjectCard({
   onDuplicate: () => void
   onMoveToBook: (bookId: string | null) => void
   onDuplicateToBook: (bookId: string | null) => void
+  onPublishedChange: (published: boolean) => void
 }) {
   const navigate = useNavigate()
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
@@ -306,6 +309,7 @@ function ProjectCard({
         </div>
       </div>
       <div className="project-actions">
+        <PublishToggleButton projectId={project.id} published={project.published === true} onChange={onPublishedChange} />
         <button
           className="btn-icon"
           onClick={e => { e.stopPropagation(); setMenuOpen(true) }}

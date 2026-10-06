@@ -4,6 +4,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getBook, getAllBooks, updateBook, deleteBook, duplicateProjectIntoBook } from '../db/booksStore'
 import { getProjectsByBook, getProjectCardThumbnail, setProjectBook, duplicateProject } from '../db/projectsStore'
 import { buildBookPlayUrl, buildBookPlayUrlLocal, setBookPublished } from '../db/publishProject'
+import PublishToggleButton from '../components/admin/PublishToggleButton'
 import { downloadQrPng } from '../utils/qrGenerator'
 import type { Book, Project } from '../types/project'
 
@@ -451,6 +452,7 @@ export default function BookPage() {
                 onDuplicate={() => handleDuplicateProject(p.id)}
                 onMoveToBook={targetId => handleMoveToBook(p.id, targetId)}
                 onDuplicateToBook={targetId => handleDuplicateToBook(p.id, targetId)}
+                onPublishedChange={published => setProjects(ps => ps.map(x => (x.id === p.id ? { ...x, published, publishedAt: published ? Date.now() : x.publishedAt } : x)))}
                 duplicating={duplicatingId === p.id}
                 duplicateDisabled={duplicatingId != null}
                 isDragging={draggedId === p.id}
@@ -470,7 +472,7 @@ export default function BookPage() {
   )
 }
 
-function BookProjectCard({ project, books, currentBookId, onRemove, onDuplicate, onMoveToBook, onDuplicateToBook, duplicating, duplicateDisabled, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
+function BookProjectCard({ project, books, currentBookId, onRemove, onDuplicate, onMoveToBook, onDuplicateToBook, onPublishedChange, duplicating, duplicateDisabled, isDragging, onDragStart, onDragEnd, onDragOver, registerRef }: {
   project: Project
   /** Tous les livres (pour envoyer / dupliquer vers un autre livre). */
   books: Book[]
@@ -481,6 +483,8 @@ function BookProjectCard({ project, books, currentBookId, onRemove, onDuplicate,
   onMoveToBook: (targetBookId: string) => void
   /** Duplique et envoie la copie dans le livre choisi (null = hors livre). */
   onDuplicateToBook: (targetBookId: string | null) => void
+  /** Publication basculée depuis la carte (bouton Publier / Dépublier). */
+  onPublishedChange: (published: boolean) => void
   /** true pendant que CE coloriage est en cours de duplication. */
   duplicating: boolean
   /** true si une duplication est en cours quelque part (désactive le bouton). */
@@ -542,10 +546,10 @@ function BookProjectCard({ project, books, currentBookId, onRemove, onDuplicate,
         <h3>{project.name}</h3>
         <div className="project-meta">
           <span className="project-date">{new Date(project.createdAt).toLocaleDateString('fr-FR')}</span>
-          {project.published && <span style={{ color: 'green', fontSize: 12 }}>publié</span>}
         </div>
       </div>
       <div className="project-actions">
+        <PublishToggleButton projectId={project.id} published={project.published === true} onChange={onPublishedChange} />
         <button className="btn-secondary btn-sm" onClick={e => { e.stopPropagation(); navigate(`/admin/${project.id}`) }}>
           Editer
         </button>
