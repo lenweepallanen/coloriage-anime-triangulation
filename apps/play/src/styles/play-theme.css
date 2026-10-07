@@ -2239,9 +2239,9 @@ body.play-app .scan-validate-title { margin: 0; }
     padding: 12px 16px 8px;
     gap: 10px;
   }
-  /* Boutons côte à côte : Recommencer (blanc) | Valider (violet) */
+  /* Boutons côte à côte : Recommencer (blanc) | Valider (violet) — le DOM a Valider en premier */
   body.play-app .scan-validate .scan-validate-actions {
-    flex-direction: row;
+    flex-direction: row-reverse;
     justify-content: center;
     max-width: 420px;
   }
