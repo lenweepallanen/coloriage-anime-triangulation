@@ -750,10 +750,9 @@ function ScanFlow({ project, deferredLoaded, mode, onFilmRecorded, onShareFilm, 
             />
           </Suspense>
           <div className="scan-validate-name">{project.name}</div>
+          {/* Play : sous la carte, juste « Tu valides ? » + RECOMMENCER | VALIDER (la mascotte et
+              la phrase longue poussaient les boutons sous la barre d'onglets sur petit écran). */}
           <div className="scan-validate-bar">
-            {mode === 'play' && (
-              <div className="scan-validate-mascot"><Mascot size={64} mood="happy" gaze="pointer" /></div>
-            )}
             <h2 className="scan-validate-title">
               {mode === 'play' ? playT('validate.q') : 'Tu valides la photo ?'}
             </h2>
