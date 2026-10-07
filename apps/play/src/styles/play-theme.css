@@ -1516,7 +1516,11 @@ body.play-app .book-bonus-btn:active {
    ------------------------------------------------------------------- */
 body.play-app .scan-page {
   background: transparent;
-  padding: calc(64px + env(safe-area-inset-top)) 16px 8px;
+  /* Bas : hauteur de la barre d'onglets (fixe, 97 px) réservée, sinon sur un écran
+     court (≈ 640 px) les boutons « Valider / Recommencer » passent SOUS la barre et
+     la page, plus courte que l'écran, ne défile pas (bloqué, Android entrée de gamme). */
+  padding: calc(64px + env(safe-area-inset-top)) 16px calc(120px + env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
 }
 /* Scène plein écran : pas de padding ni de chrome */
 body.play-app[data-scan-stage='animation'] .scan-page {
