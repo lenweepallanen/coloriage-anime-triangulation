@@ -248,6 +248,7 @@ function ProjectCard({
   onDuplicate,
   onMoveToBook,
   onDuplicateToBook,
+  onPublishedChange,
 }: {
   project: Project
   books: Book[]
