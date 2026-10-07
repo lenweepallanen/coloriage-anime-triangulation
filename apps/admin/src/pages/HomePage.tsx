@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { getAllProjects, createProject, deleteProject, duplicateProject, getProjectCardThumbnail, setProjectBook } from '../db/projectsStore'
+import { getAllProjects, createProject, deleteProject, duplicateProject, getProjectCardThumbnail, setProjectBook, getProjectsByBook } from '../db/projectsStore'
+import { downloadBookQrZip } from '../utils/qrGenerator'
 import { createBook, getAllBooks, getBookCover, deleteBook } from '../db/booksStore'
 import PublishToggleButton from '../components/admin/PublishToggleButton'
 import { duplicateProjectIntoBook } from '../db/booksStore'
@@ -186,6 +187,22 @@ export default function HomePage() {
 function BookCard({ book, projectCount, onDelete }: { book: Book; projectCount: number; onDelete: () => void }) {
   const navigate = useNavigate()
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const [qrBusy, setQrBusy] = useState(false)
+
+  // Tous les QR du livre (livre + chaque coloriage, ordre du livre) en un seul zip, style noir et blanc.
+  async function handleAllQr(e: MouseEvent) {
+    e.stopPropagation()
+    if (qrBusy) return
+    setQrBusy(true)
+    try {
+      const ps = await getProjectsByBook(book.id)
+      await downloadBookQrZip(book, ps.map(p => ({ id: p.id, name: p.name })))
+    } catch (err) {
+      alert('Échec des QR : ' + (err instanceof Error ? err.message : err))
+    } finally {
+      setQrBusy(false)
+    }
+  }
 
   useEffect(() => {
     let revoke: string | null = null
@@ -228,6 +245,14 @@ function BookCard({ book, projectCount, onDelete }: { book: Book; projectCount: 
         </div>
       </div>
       <div className="project-actions">
+        <button
+          className="btn-sm btn-secondary"
+          onClick={handleAllQr}
+          disabled={qrBusy}
+          title="Télécharger en un zip le QR du livre et le QR de chaque coloriage (noir et blanc, étoile en contour)"
+        >
+          {qrBusy ? 'QR…' : 'Tous les QR'}
+        </button>
         <button
           className="btn-icon btn-sm"
           onClick={e => { e.stopPropagation(); onDelete() }}

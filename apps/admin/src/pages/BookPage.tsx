@@ -5,7 +5,7 @@ import { getBook, getAllBooks, updateBook, deleteBook, duplicateProjectIntoBook 
 import { getProjectsByBook, getProjectCardThumbnail, setProjectBook, duplicateProject } from '../db/projectsStore'
 import { buildBookPlayUrl, buildBookPlayUrlLocal, setBookPublished } from '../db/publishProject'
 import PublishToggleButton from '../components/admin/PublishToggleButton'
-import { downloadQrPng } from '../utils/qrGenerator'
+import { downloadQrPng, downloadBookQrZip } from '../utils/qrGenerator'
 import type { Book, Project } from '../types/project'
 
 export default function BookPage() {
@@ -415,6 +415,13 @@ export default function BookPage() {
                   title="Télécharger le QR code à imprimer au début du livre (ajout du livre dans l'app)"
                 >
                   QR code
+                </button>
+                <button
+                  onClick={() => downloadBookQrZip(book, projects.map(p => ({ id: p.id, name: p.name }))).catch(e => alert('Échec des QR : ' + e))}
+                  className="btn-sm btn-secondary"
+                  title="Télécharger en un zip le QR du livre et le QR de chaque coloriage (noir et blanc)"
+                >
+                  Tous les QR (zip)
                 </button>
               </div>
               <div style={{ fontSize: 12, color: '#666', margin: '12px 0 4px' }}>Aperçu local (dev) :</div>

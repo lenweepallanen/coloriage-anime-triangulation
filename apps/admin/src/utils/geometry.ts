@@ -13,6 +13,10 @@ export function pointInPolygon(point: Point2D, polygon: Point2D[]): boolean {
   return inside
 }
 
+export function distance(a: Point2D, b: Point2D): number {
+  return Math.sqrt(distanceSq(a, b))
+}
+
 export function distanceSq(a: Point2D, b: Point2D): number {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }

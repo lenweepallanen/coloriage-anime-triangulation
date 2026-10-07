@@ -43,7 +43,7 @@ function choleskyFactor(A: Float64Array, n: number): Float64Array {
   return L
 }
 
-function choleskySolve(L: Float64Array, n: number, b: Float64Array): Float64Array {
+function choleskySolve(L: Float64Array, n: number, b: Float64Array): Float64Array<ArrayBuffer> {
   const y = new Float64Array(n)
   for (let i = 0; i < n; i++) {
     let s = b[i]

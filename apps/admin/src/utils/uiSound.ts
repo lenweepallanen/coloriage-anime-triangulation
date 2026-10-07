@@ -81,7 +81,7 @@ function getNoise(ctx: AudioContext): AudioBuffer {
 }
 
 /** Note sinusoïdale courte avec enveloppe (attaque brève + décroissance expo). */
-function tone(ctx: AudioContext, at: number, f0: number, f1: number, dur: number, gain: number, tau: number): void {
+function tone(ctx: AudioContext, at: number, f0: number, f1: number, dur: number, gain: number, _tau: number): void {
   const osc = ctx.createOscillator()
   osc.type = 'sine'
   osc.frequency.setValueAtTime(f0, at)
