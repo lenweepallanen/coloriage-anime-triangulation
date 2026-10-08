@@ -21,6 +21,7 @@ import type { HiddenFaceZone, HiddenFaceLimbZone } from '../../types/project'
 import { pointInPolygon } from '../../utils/geometry'
 import { detectCurvatureExtrema } from '../../utils/curvatureScaleSpace'
 import { reorderContourFromOrigin, subdivideContour, computeArcLengths, extractPathBetweenAnchors, computeSubdivisionForFrame } from '../../utils/curvilinearContour'
+import { planAutoTriangulation } from '../../utils/autoTriangulation'
 
 type ZoneSubPhase = 'p0' | 'anchors' | 'subdivision' | 'triangulation' | 'adjust'
 
@@ -185,6 +186,8 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
   // ─── UI state ─────────────────────────────────────────────────────
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null)
   const [activeSubPhase, setActiveSubPhase] = useState<Record<string, ZoneSubPhase>>({})
+  // « Triangulation auto » : compte-rendu de la dernière proposition automatique (P0 / ancres / subdivisions / densités)
+  const [autoReport, setAutoReport] = useState<string | null>(null)
   const [activeSegment, setActiveSegment] = useState<number | null>(null) // for subdivision UI hover/select
   const [dragTarget, setDragTarget] = useState<{
     zoneId: string; type: 'anchor' | 'p0' | 'internal' | 'bodyExtra' | 'subdivision'; idx: number
@@ -1470,6 +1473,39 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
     setConnectBuffer([])
   }
 
+  // ─── Triangulation auto ────────────────────────────────────────────
+  // Propose P0, ancres (dont les extrémités des jonctions membre ↔ corps), subdivisions et densités pour TOUTES les
+  // zones à partir des contours validés en étape Zones, puis laisse l'étape calculer les maillages comme d'habitude.
+  // Opt-in : ne touche à rien tant qu'on ne clique pas ; demande confirmation si des réglages existent déjà.
+  function handleAutoTriangulation() {
+    if (!tri?.contours) { alert('Valide d\'abord l\'étape Zones : aucun contour disponible.'); return }
+    const img = imageRef.current
+    if (!img) return
+    const hasExisting = allZones.some(z => (zoneAnchors[z.id]?.length ?? 0) > 0 || zoneOrigins[z.id] != null)
+    if (hasExisting && !confirm('Des P0 / ancres / subdivisions existent déjà sur ce coloriage.\nLes ÉCRASER par la triangulation automatique ?\n(Rien n\'est enregistré avant « Valider tout » ; Cmd/Ctrl+Z annule.)')) return
+    pushHistory()
+    const plan = planAutoTriangulation(tri.contours, allZones, img.naturalWidth, img.naturalHeight)
+    const planned = Object.keys(plan.zoneAnchors)
+    const flags = Object.fromEntries(planned.map(id => [id, true]))
+    setZoneOrigins(plan.zoneOrigins)
+    setZoneOriginsValidated(flags)
+    setZoneAnchors(plan.zoneAnchors)
+    setZoneAnchorsValidated(flags)
+    setZoneAnchorCount(Object.fromEntries(planned.map(id => [id, plan.zoneAnchors[id].length])))
+    setZoneSegmentCounts(plan.zoneSegmentCounts)
+    setZoneSubdivisionValidated(flags)
+    setZonePixelAdjusted({})
+    setZoneManualSubdivisionParams({})
+    setZoneManualSubdivisionPoints({})
+    setZoneDensity(prev => ({ ...prev, ...plan.zoneDensity }))
+    setManualPoints({})
+    setManualTriangles({})
+    setAutoFrozen({})
+    setConnectBuffer([])
+    setActiveSubPhase(Object.fromEntries(planned.map(id => [id, 'triangulation' as ZoneSubPhase])))
+    setAutoReport(plan.report.join('\n'))
+  }
+
   // ─── Save ─────────────────────────────────────────────────────────
 
   const allZonesReady = allZones.every(z => zoneStage(z.id) >= 4)
@@ -1742,6 +1778,20 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
       {/* Side panel */}
       <div style={{ width: 290, flexShrink: 0, overflowY: 'auto' }}>
         <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>Maillage par zone</h3>
+
+        {/* Triangulation auto (opt-in) : P0 + ancres + subdivisions + densités pour toutes les zones, à partir des contours validés */}
+        <button
+          className="btn-secondary btn-sm"
+          style={{ width: '100%', marginBottom: 8 }}
+          onClick={handleAutoTriangulation}
+          disabled={!tri?.contours}
+          title="Propose automatiquement P0, ancres (jonctions membre/corps incluses), subdivisions (~1 point / 50 px) et densités pour toutes les zones. Tout reste modifiable ; rien n'est enregistré avant « Valider tout ». Aucune face cachée n'est générée."
+        >
+          ✨ Triangulation auto
+        </button>
+        {autoReport && (
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12, whiteSpace: 'pre-line', lineHeight: 1.4 }}>{autoReport}</div>
+        )}
 
         {/* Zone pills + sub-phase mini stepper */}
         {allZones.map(zone => {
