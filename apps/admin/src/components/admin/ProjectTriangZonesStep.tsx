@@ -433,6 +433,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       ctx.save()
       ctx.translate(t.offsetX, t.offsetY)
       ctx.scale(t.scale, t.scale)
+      // Page blanche sous l'image : un PNG à fond transparent garde ses traits noirs lisibles (fond du canvas sombre)
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, img.naturalWidth, img.naturalHeight)
       ctx.drawImage(img, 0, 0)
 
       if (bodySilhouette && bodySilhouette.length >= 3) {

@@ -358,6 +358,9 @@ function HiddenFaceEditor({ project, onSave }: Props) {
     ctx.save()
     ctx.translate(t.offsetX, t.offsetY)
     ctx.scale(t.scale, t.scale)
+    // Page blanche sous l'image (PNG transparent → traits noirs lisibles)
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, img.naturalWidth, img.naturalHeight)
     ctx.drawImage(img, 0, 0)
 
     const pr = POINT_RADIUS / t.scale
