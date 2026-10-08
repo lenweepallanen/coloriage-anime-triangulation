@@ -1,0 +1,35 @@
+// Crée une animation « CoTracker + Bones » dans l'admin et envoie sa vidéo : node anim-create.mjs <scratch> <pid> <nom> <mp4>
+import { chromium } from '/Users/nicolasrocher/.royalties-tools/node_modules/playwright-core/index.mjs'
+import { readFileSync } from 'node:fs'
+const [S, pid, name, mp4] = process.argv.slice(2)
+const custom = readFileSync(`${S}/custom-token.txt`, 'utf8').trim(); const cfg = JSON.parse(readFileSync(`${S}/fbconfig.json`, 'utf8'))
+const b = await chromium.launch({ executablePath: '/Users/nicolasrocher/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell' })
+const ctx = await b.newContext({ viewport: { width: 1600, height: 1100 } }); const p = await ctx.newPage()
+p.on('pageerror', e => console.log('PAGEERROR', e.message.slice(0, 200)))
+p.on('console', m => { if (!/firebasestorage.*404|%c/.test(m.text())) console.log('CONSOLE', m.type(), m.text().slice(0, 240)) })
+p.on('requestfailed', r => console.log('REQFAIL', r.url().slice(0, 120)))
+p.on('dialog', async d => { console.log('DIALOG', d.type(), d.message().slice(0, 80)); await d.accept(d.type() === 'prompt' ? name : undefined) })
+await p.goto('https://coloriage-anime-admin.vercel.app/login', { waitUntil: 'domcontentloaded' })
+await p.evaluate(async ({ cfg, custom }) => {
+  const { initializeApp } = await import('https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js')
+  const { getAuth, signInWithCustomToken } = await import('https://www.gstatic.com/firebasejs/12.10.0/firebase-auth.js')
+  await signInWithCustomToken(getAuth(initializeApp(cfg)), custom)
+}, { cfg, custom })
+await p.waitForTimeout(1500)
+await p.goto(`https://coloriage-anime-admin.vercel.app/admin/${pid}`, { waitUntil: 'domcontentloaded' }); await p.waitForTimeout(6000)
+await p.getByRole('button', { name: /Animations/ }).or(p.getByText('Animations', { exact: true })).first().click({ timeout: 15000 }); await p.waitForTimeout(3000)
+await p.screenshot({ path: `${S}/anim-0.png` })
+const add = p.getByRole('button', { name: /Animation par Vidéo/ }).first()
+console.log('bouton « + Animation par Vidéo » :', await add.count(), 'désactivé :', await add.isDisabled().catch(() => 'n/a'))
+await add.click(); await p.waitForTimeout(15000)
+await p.screenshot({ path: `${S}/anim-1.png` })
+console.log('TEXTE', (await p.innerText('body')).replace(/\n+/g, ' | ').slice(0, 700))
+const input = p.locator('input[type=file][accept="video/mp4,video/webm"]').first()
+console.log('champ vidéo :', await input.count())
+if (await input.count()) {
+  await input.setInputFiles(mp4)
+  await p.waitForFunction(() => /Vidéo : OK/.test(document.body.innerText), null, { timeout: 180000 })
+  await p.waitForTimeout(3000); console.log('vidéo envoyée')
+  await p.screenshot({ path: `${S}/anim-2.png` })
+}
+await b.close()
