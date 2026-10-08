@@ -14,10 +14,10 @@ import { triangulateZone, generateInternalPoints, triangulateHiddenFace, triangu
 import { pointInPolygon } from '../../apps/admin/src/utils/geometry'
 import { polygonToBezierNodes } from '../../apps/admin/src/utils/bezierUtils'
 
-type Zone = SAM2Zone & { kind: 'body' | 'near' | 'far' }
+type Zone = SAM2Zone & { kind: 'body' | 'near' | 'far' | 'head' }
 interface Input {
   w: number; h: number; zones: Zone[]; raw: Record<string, Point2D[]>
-  params: { sigma: number; bridge: number; anchors: { body: number; leg: number }; subdivSpacing: number; density: { body: number; leg: number } }
+  params: { sigma: number; bridge: number; anchors: { body: number; leg: number; head: number }; subdivSpacing: number; density: { body: number; leg: number; head: number } }
 }
 const input: Input = JSON.parse(readFileSync(process.argv[2], 'utf8'))
 const { w, h, zones, params } = input
@@ -48,6 +48,14 @@ const label: (string | null)[] = bodySm.map(p => {
   for (const z of members) { const d = distToPolySq(p, contours[z.id]); if (d <= bd) { bd = d; best = z.id } }
   return best
 })
+function simplify(pts: Point2D[], eps: number): Point2D[] {
+  if (pts.length <= 2) return pts
+  const a = pts[0], b = pts[pts.length - 1]; let idx = -1, dmax = 0
+  const L = Math.hypot(b.x - a.x, b.y - a.y) || 1
+  for (let i = 1; i < pts.length - 1; i++) { const d = Math.abs((b.x - a.x) * (a.y - pts[i].y) - (a.x - pts[i].x) * (b.y - a.y)) / L; if (d > dmax) { dmax = d; idx = i } }
+  if (dmax <= eps) return [a, b]
+  return [...simplify(pts.slice(0, idx + 1), eps).slice(0, -1), ...simplify(pts.slice(idx), eps)]
+}
 const junctions: Record<string, [Point2D, Point2D]> = {}
 {
   const n = bodySm.length; const start = label.indexOf(null)
@@ -58,7 +66,10 @@ const junctions: Record<string, [Point2D, Point2D]> = {}
     if (lab === null) { out.push(bodySm[i]); continue }
     let len = 0, sy = 0; while (len < n && label[(i + len) % n] === lab) { sy += bodySm[(i + len) % n].y; len++ }
     const a = bodySm[i], b = bodySm[(i + len - 1) % n]
-    out.push(a); if (len > 1) out.push(b)
+    // la suite est remplacée par sa simplification Douglas-Peucker (ε = bridge) : une corde si le contact est droit, une
+    // polyligne s'il tourne (ex. tête : poitrail → bas de crinière → garrot), au lieu d'une corde unique qui couperait la zone
+    const run: Point2D[] = []; for (let q = 0; q < len; q++) run.push(bodySm[(i + q) % n])
+    for (const p of simplify(run, params.bridge)) out.push(p)
     const span = Math.hypot(b.x - a.x, b.y - a.y)
     if (span >= 20 && (bestY[lab] === undefined || sy / len < bestY[lab])) { bestY[lab] = sy / len; junctions[lab] = [a, b] }
     k += len - 1
@@ -93,7 +104,8 @@ for (const z of zones) {
   const forcedRaw = z.id === 'body' ? Object.values(junctions).flat() : (junctions[z.id] ? [...junctions[z.id]] : [])
   const forced = forcedRaw.map(p => nearestOn(p, ref)).filter(p => Math.hypot(p.x - p0.x, p.y - p0.y) > 25)
   const farFromForced = (p: Point2D) => forced.every(f => Math.hypot(f.x - p.x, f.y - p.y) > 25)
-  const nExtrema = z.id === 'body' ? params.anchors.body - 1 : Math.max(3, params.anchors.leg - 1 - forced.length)
+  const targetN = z.kind === 'body' ? params.anchors.body : z.kind === 'head' ? params.anchors.head : params.anchors.leg
+  const nExtrema = z.kind === 'body' ? targetN - 1 : Math.max(3, targetN - 1 - forced.length)
   const extrema = pool.filter(c => Math.hypot(c.position.x - p0.x, c.position.y - p0.y) > 20 && farFromForced(c.position)).slice(0, nExtrema).map(c => c.position)
   const selected = [...forced, ...extrema]
   const ordered = reorderContourFromOrigin(ref, p0)
@@ -127,7 +139,7 @@ const zoneContourLength: Record<string, number> = {}
 const zoneDensity: Record<string, number> = {}
 for (const z of zones) {
   const cPts = closedContours[z.id]
-  const density = z.id === 'body' ? params.density.body : params.density.leg
+  const density = z.kind === 'body' ? params.density.body : z.kind === 'head' ? params.density.head : params.density.leg
   zoneDensity[z.id] = density
   const internal = generateInternalPoints(cPts, spacingForDensity(density))
   const tri = triangulateZone(cPts, internal, cPts)
@@ -174,6 +186,7 @@ const nearestIdx = (p: Point2D, pts: Point2D[], n: number) => { let b = 0, bd = 
 for (const z of members) {
   const legDense = contours[z.id]; const j = junctions[z.id]
   if (!j) continue
+  if (z.kind === 'head') { log(z.id, 'tête : pas de face cachée automatique (à faire à la main)'); continue }
   if ((z.zOrder ?? 0) > bodyZ) {
     // patte DEVANT le corps → le corps continue DERRIÈRE la patte (épaule/hanche) : A/B sur le contour body, arc DANS la patte
     const A = nearestIdx(j[0], bodyPts, zoneContourLength['body']), B = nearestIdx(j[1], bodyPts, zoneContourLength['body'])
@@ -202,6 +215,7 @@ const finalZonePoints: Record<string, Point2D[]> = { ...zonePoints, body: bodyPt
 const finalZoneTriangles: Record<string, [number, number, number][]> = { ...zoneTriangles, body: bodyTris }
 const zoneBeziers: Record<string, BezierNode[]> = {}
 for (const z of members) if (z.kind === 'far') zoneBeziers[z.id] = polygonToBezierNodes(contours[z.id], 24)
+for (const z of members) if (z.kind === 'head') zoneBeziers[z.id] = polygonToBezierNodes(contours[z.id], 48)
 
 const flags = (v: boolean) => Object.fromEntries(zones.map(z => [z.id, v]))
 process.stdout.write(JSON.stringify({

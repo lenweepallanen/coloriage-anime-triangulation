@@ -99,8 +99,10 @@ def label_for(group, L, suffix):
     if len(group) == 1: return ('AV' if (L['cx'] < (sx0 + sx1) / 2) == faces_left else 'AR') + suffix
     front = group[0] if faces_left else group[-1]
     return ('AV' if L is front else 'AR') + suffix
-for L in near: L['label'] = label_for(near, L, 'G'); L['zOrder'] = 2
-for L in far: L['label'] = label_for(far, L, 'D'); L['zOrder'] = 0
+# côté : du point de vue de l'animal (miroir). Tête à gauche → le flanc visible est le DROIT : pattes devant = D, arrière-plan = G.
+near_side, far_side = ('D', 'G') if faces_left else ('G', 'D')
+for L in near: L['label'] = label_for(near, L, near_side); L['zOrder'] = 2
+for L in far: L['label'] = label_for(far, L, far_side); L['zOrder'] = 0
 # dédoublonnage des libellés (ex. 3 pattes près) : suffixe numérique
 seen = {}
 for L in legs:
@@ -138,17 +140,95 @@ for i in range(1, nt):
     target['mask'][y:y + h, x:x + w] = cv2.bitwise_or(target['mask'][y:y + h, x:x + w], comp); body_minus[y:y + h, x:x + w] &= cv2.bitwise_not(comp); moved += 1
 for L in legs: L['contour'] = ext_contour(L['mask'])
 print(f'{moved} ruban(s) fin(s) rattaché(s) aux pattes', file=sys.stderr)
+
+# ───────────────────────── TÊTE : zone indépendante (tête + cou + crinière), coupée à la base du cou ─────────────────────────
+# Garrot = point le plus profond du creux de convexité le plus marqué dans la moitié haute du corps (entre crinière et dos).
+# Coupe = plus courte corde intérieure du garrot vers le côté tête (|pente| ≤ 40°) qui détache 10–50 % du corps côté tête.
+head = None
+cs, _ = cv2.findContours(body_minus, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE); cnt = max(cs, key=cv2.contourArea)
+body_area = float(cv2.contourArea(cnt)); pts = cnt[:, 0, :]
+head_dir = -1 if faces_left else 1
+ext_pt = pts[int(np.argmin(pts[:, 0])) if faces_left else int(np.argmax(pts[:, 0]))]   # museau
+def split_by_chord(*poly):
+    sp = body_minus.copy()
+    for a, b in zip(poly[:-1], poly[1:]): cv2.line(sp, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), 0, 5)
+    ns, ls, ss, _ = cv2.connectedComponentsWithStats(sp, connectivity=4)
+    if ns < 3: return None
+    yy, xx = np.where(ls > 0); k = int(np.argmin((xx - ext_pt[0]) ** 2 + (yy - ext_pt[1]) ** 2)); lab_head = ls[yy[k], xx[k]]
+    return ls, lab_head, ss[lab_head, 4] / body_area
+withers = front = None
+if flags.get('neck'):
+    x1, y1, x2, y2 = [int(v) for v in flags['neck'].split(',')]; front, withers = np.array([x1, y1]), np.array([x2, y2])
+else:
+    # Garrot = creux juste derrière le bas de la crinière (régions fermées côté tête ≥ 1 % : crinière, front… ; la plus basse = crinière).
+    center_x = (sx0 + sx1) / 2
+    head_regions = [c for c in comps if c is not body_comp and c not in hooves and c not in closed_legs and c['rel'] >= 0.01
+                    and ((c['x'] + c['w'] / 2) < center_x) == faces_left and (c['y'] + c['h'] / 2) < sy0 + 0.6 * SH]
+    if head_regions:
+        m = max(head_regions, key=lambda c: c['y'] + c['h']); yy, xx = np.where(lab[m['y']:m['y'] + m['h'], m['x']:m['x'] + m['w']] == m['id'])
+        k = int(np.argmax(yy)); mane_bottom = np.array([m['x'] + xx[k], m['y'] + yy[k]])
+        # garrot = point du contour extérieur le plus proche du bas de la crinière, côté corps (la pointe basse de la crinière
+        # rejoint la ligne du dos ; un creux de convexité plus haut ferait traverser la crinière à la coupe)
+        side = pts[(pts[:, 0] - mane_bottom[0]) * head_dir <= -10]
+        if len(side): withers = side[int(np.argmin(((side - mane_bottom) ** 2).sum(axis=1)))]
+        # départ de la corde = juste SOUS le trait inférieur de la boucle (sinon les cordes peu inclinées longent ce trait)
+        xm, yb = int(mane_bottom[0]), int(mane_bottom[1]) + 1
+        while yb < H - 1 and white[yb, xm]: yb += 1                                   # sortir de la région blanche de la boucle
+        while yb < H - 1 and yb < mane_bottom[1] + 80 and not white[yb, xm]: yb += 1   # traverser son trait
+        mane_under = np.array([xm, yb + 3])
+        if flags.get('debug-head'): print('sous la crinière', mane_under, 'blanc ?', bool(white[mane_under[1], mane_under[0]]), file=sys.stderr)
+        if flags.get('debug-head'): print('bas crinière', mane_bottom, 'garrot', withers, file=sys.stderr)
+    if withers is not None:
+        # coupe : poitrail → bas de crinière → garrot. Le 1er segment = plus courte corde du bas de la crinière vers le côté tête,
+        # |pente| ≤ 40°, qui ne traverse AUCUN trait (blanc uni du cou : interdit de couper la crinière ou la tête) ; l'ensemble
+        # doit détacher 10–55 % du corps côté museau.
+        best = None
+        # cibles = contour de la SILHOUETTE d'origine (pas les cordes synthétiques laissées par le retrait des pattes, qui
+        # seraient plus proches que le poitrail)
+        sil_cnt = max(cv2.findContours(sil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0], key=cv2.contourArea)[:, 0, :]
+        for q in sil_cnt[::3]:
+            if body_minus[min(H - 1, q[1]), min(W - 1, q[0])] == 0 and body_minus[max(0, q[1] - 2):q[1] + 3, max(0, q[0] - 2):q[0] + 3].max() == 0: continue   # sur une patte retirée
+            dx, dy = q[0] - mane_under[0], q[1] - mane_under[1]
+            if dx * head_dir < 150 or abs(dy) > abs(dx) * 0.84: continue
+            L = float(np.hypot(dx, dy))
+            if best is not None and L >= best[0]: continue
+            t0 = max(0.03, 12.0 / L); t1 = 1 - max(0.04, 24.0 / L)   # l'arrivée est SUR le contour (trait) : on la saute
+            ts = np.linspace(t0, t1, 40); xs_ = (mane_under[0] + dx * ts).astype(int); ys_ = (mane_under[1] + dy * ts).astype(int)
+            if not (white[ys_, xs_] > 0).all(): continue
+            r = split_by_chord(q, mane_under, withers)
+            if r is None or not (0.10 <= r[2] <= 0.58): continue
+            best = (L, q.copy())
+        if best: front = best[1]
+        if flags.get('debug-head'): print('poitrail', front, file=sys.stderr)
+if withers is not None and front is not None and (r := split_by_chord(front, mane_under, withers) if not flags.get('neck') else split_by_chord(front, withers)) is not None:
+    ls, lab_head, ratio = r
+    head_mask = (ls == lab_head).astype(np.uint8) * 255
+    if not flags.get('neck'):   # + régions fermées côté tête (crinière, boucles qui recouvrent l'épaule) avec leur trait
+        for c in head_regions:
+            reg = np.zeros_like(head_mask); reg[c['y']:c['y'] + c['h'], c['x']:c['x'] + c['w']] = (lab[c['y']:c['y'] + c['h'], c['x']:c['x'] + c['w']] == c['id']) * 255
+            head_mask = cv2.bitwise_or(head_mask, cv2.bitwise_and(cv2.dilate(reg, kern(9)), body_minus))
+        nh, lh, sh_, _ = cv2.connectedComponentsWithStats(head_mask, connectivity=4)
+        yy, xx = np.where(lh > 0); k = int(np.argmin((xx - ext_pt[0]) ** 2 + (yy - ext_pt[1]) ** 2)); head_mask = (lh == lh[yy[k], xx[k]]).astype(np.uint8) * 255
+    head_mask = cv2.bitwise_and(cv2.dilate(head_mask, kern(3)), body_minus)   # réabsorbe la ligne de coupe
+    body_minus = cv2.bitwise_and(body_minus, cv2.bitwise_not(head_mask))
+    head = dict(kind='head', label='TETE', zOrder=3, id='member-' + uuid.uuid4().hex[:8], mask=head_mask, contour=ext_contour(head_mask), seeds=[], inflate=0, cx=float(ext_pt[0]), hoof=None)
+    print(f"tête : coupe poitrail ({front[0]},{front[1]}) → bas crinière → garrot ({withers[0]},{withers[1]}), {int((head_mask > 0).sum()) / body_area * 100:.0f} % du corps", file=sys.stderr)
+else:
+    print('tête : coupe du cou NON trouvée (passer --neck=x1,y1,x2,y2) — la tête reste dans le corps', file=sys.stderr)
 nb, lb, sb, _ = cv2.connectedComponentsWithStats(body_minus, connectivity=4); body_minus = (lb == (1 + int(np.argmax(sb[1:, 4])))).astype(np.uint8) * 255
 body_raw = ext_contour(body_minus)
 if abs(cv2.contourArea(np.array([[p['x'], p['y']] for p in body_raw], np.int32)) - (body_minus > 0).sum()) > 0.02 * silArea:
     sys.exit('les pattes ne traversent pas le contour (trous au lieu d\'encoches) : augmenter --inflate')
+
 print('pattes :', [(L['label'], L['kind'], len(L['contour'])) for L in legs], '| tête à', 'gauche' if faces_left else 'droite', file=sys.stderr)
 
 # ───────────────────────── 2. géométrie (module TypeScript de l'admin) ─────────────────────────
-zones = [{'id': 'body', 'label': 'Body', 'color': '#22c55e', 'zOrder': 1, 'kind': 'body'}] + [{'id': L['id'], 'label': L['label'], 'color': COLORS.get(L['label'][:3], '#64748b'), 'zOrder': L['zOrder'], 'kind': L['kind']} for L in legs]
+members = legs + ([head] if head else [])
+zones = [{'id': 'body', 'label': 'Body', 'color': '#22c55e', 'zOrder': 1, 'kind': 'body'}] + [{'id': m['id'], 'label': m['label'], 'color': '#ec4899' if m['kind'] == 'head' else COLORS.get(m['label'][:3], '#64748b'), 'zOrder': m['zOrder'], 'kind': m['kind']} for m in members]
 maxDim = max(W, H)
-geom_in = {'w': W, 'h': H, 'zones': zones, 'raw': {'body': body_raw, **{L['id']: L['contour'] for L in legs}},
-           'params': {'sigma': SIGMA, 'bridge': BRIDGE, 'anchors': {'body': 12, 'leg': 9}, 'subdivSpacing': maxDim / 18, 'density': {'body': 6, 'leg': 5}}}
+# contour : un point tous les maxDim/40 px (≈ 51 px en 2048) — demande Nicolas 08/10 : au moins le double de maxDim/18
+geom_in = {'w': W, 'h': H, 'zones': zones, 'raw': {'body': body_raw, **{m['id']: m['contour'] for m in members}},
+           'params': {'sigma': SIGMA, 'bridge': BRIDGE, 'anchors': {'body': 14, 'leg': 10, 'head': 16}, 'subdivSpacing': maxDim / 40, 'density': {'body': 7, 'leg': 6, 'head': 7}}}
 json.dump(geom_in, open(f'{OUT}/geom-in.json', 'w'))
 bundle = flags.get('bundle') or os.path.join(HERE, 'auto_triang_geom.bundle.mjs')
 r = subprocess.run(['node', bundle, f'{OUT}/geom-in.json'], capture_output=True, text=True)
@@ -178,6 +258,7 @@ for hf in G['hiddenFaceLimbZones']:
 for L in legs:
     for s in L['seeds']: cv2.drawMarker(dbg, (s['x'], s['y']), (0, 0, 255), cv2.MARKER_CROSS, 30, 3)
     cv2.putText(dbg, L['label'], (int(L['cx']) - 30, min(H - 10, L['hoof']['y'] + L['hoof']['h'] + 40)), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 3)
+if head: cv2.putText(dbg, 'TETE', (int(head['cx']) + 40, int(np.where(head['mask'] > 0)[0].min()) + 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (180, 0, 120), 3)
 cv2.imwrite(f'{OUT}/controle.png', dbg)
 print('rendu de contrôle :', f'{OUT}/controle.png', file=sys.stderr)
 if DRY: sys.exit(0)
