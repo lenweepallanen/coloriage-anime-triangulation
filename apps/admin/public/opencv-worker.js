@@ -1573,6 +1573,298 @@ function extractCannyEdges(imgData, lowThreshold, highThreshold, blurSize) {
 }
 
 // Écouter les messages du thread principal
+// ─────────────────────────────────────────────────────────────────────────────
+// ZONES AUTOMATIQUES — coloriage quadrupède au trait (port de docs/triangulation/auto_triang.py, pilote LICORNE 10/2026).
+// Entrée : ImageData RGBA (fond transparent = silhouette exacte ; sinon remplissage depuis les bords). Sortie : polygones
+// BRUTS (px image) { facesLeft, body: [{x,y}], members: [{ kind: 'near'|'far'|'head', label, zOrder, polygon, seeds, inflate }] }.
+// Le lissage, le pontage du corps et la conversion en Bézier sont faits côté app (utils/autoZones.ts).
+// Utilisé UNIQUEMENT par le bouton « Zones auto » : aucun autre chemin n'appelle ce code.
+// ⚠ Les vues `mat.data` d'OpenCV.js sont invalidées dès que le tas WASM grandit : on travaille sur des COPIES JS
+//   (azRead8 / azRead32S) et on n'utilise une vue fraîche qu'immédiatement, sans appel cv entre les deux.
+// ─────────────────────────────────────────────────────────────────────────────
+function azKernel(r) { return cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(2 * r + 1, 2 * r + 1)); }
+function azRead8(m) { return new Uint8Array(m.data); }
+function azRead32S(m) { return new Int32Array(m.data32S); }
+function azMat8(h, w, arr) { var m = cv.Mat.zeros(h, w, cv.CV_8UC1); if (arr) m.data.set(arr); return m; }
+// Dilatation / érosion par transformée de distance (O(n), indépendant du rayon — un noyau elliptique de 61 px coûte ~5 s)
+function azDilateDT(src, r) {
+  var inv = new cv.Mat(); cv.bitwise_not(src, inv);
+  var dt = new cv.Mat(); cv.distanceTransform(inv, dt, cv.DIST_L2, 5); inv.delete();
+  var th = new cv.Mat(); cv.threshold(dt, th, r, 255, cv.THRESH_BINARY_INV); dt.delete();   // 255 là où dt ≤ r
+  var out = new cv.Mat(); th.convertTo(out, cv.CV_8UC1); th.delete(); return out;
+}
+function azErodeDT(src, r) {
+  var dt = new cv.Mat(); cv.distanceTransform(src, dt, cv.DIST_L2, 5);
+  var th = new cv.Mat(); cv.threshold(dt, th, r, 255, cv.THRESH_BINARY); dt.delete();        // 255 là où dt > r
+  var out = new cv.Mat(); th.convertTo(out, cv.CV_8UC1); th.delete(); return out;
+}
+function azOpenDT(src, r) { var e = azErodeDT(src, r); var o = azDilateDT(e, r); e.delete(); return o; }
+function azExtContour(mask) {
+  var cs = new cv.MatVector(), hier = new cv.Mat();
+  try {
+    cv.findContours(mask, cs, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+    var best = -1, bestA = -1;
+    for (var i = 0; i < cs.size(); i++) { var a = cv.contourArea(cs.get(i)); if (a > bestA) { bestA = a; best = i; } }
+    if (best < 0) return [];
+    var c = cs.get(best), d = c.data32S, pts = [];
+    for (var j = 0; j < c.rows; j++) pts.push({ x: d[j * 2], y: d[j * 2 + 1] });
+    return pts;
+  } finally { cs.delete(); hier.delete(); }
+}
+function autoZonesDetect(imgData) {
+  var w = imgData.width, h = imgData.height, n = w * h;
+  var rgba = imgData.data;
+  var mats = []; function M(m) { mats.push(m); return m; }
+  try {
+    // ── 1. gris aplati sur blanc + silhouette ───────────────────────────────────────────────────────
+    var gArr = new Uint8Array(n), silArr = new Uint8Array(n), transparent = 0, p, i, q;
+    for (p = 0; p < n; p++) {
+      var a = rgba[p * 4 + 3] / 255, lum = 0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2];
+      gArr[p] = Math.round(lum * a + 255 * (1 - a));
+      if (rgba[p * 4 + 3] > 128) silArr[p] = 255; else transparent++;
+    }
+    var fromAlpha = transparent > 0.01 * n;
+    if (!fromAlpha) {
+      // image aplatie sur blanc : extérieur = remplissage depuis les bords à travers le non-encre (gris ≥ 127, même seuil
+      // que le masque d'encre) ; silhouette = tout le reste (trait extérieur compris, sans frange d'anticrénelage)
+      var outside = new Uint8Array(n), stack = new Int32Array(n), sp = 0;
+      var pushQ = function (k) { if (!outside[k] && gArr[k] >= 127) { outside[k] = 1; stack[sp++] = k; } };
+      for (var xb = 0; xb < w; xb++) { pushQ(xb); pushQ((h - 1) * w + xb); }
+      for (var yb0 = 0; yb0 < h; yb0++) { pushQ(yb0 * w); pushQ(yb0 * w + w - 1); }
+      while (sp > 0) { var q0 = stack[--sp], qx = q0 % w; if (qx > 0) pushQ(q0 - 1); if (qx < w - 1) pushQ(q0 + 1); if (q0 >= w) pushQ(q0 - w); if (q0 + w < n) pushQ(q0 + w); }
+      var cntIn = 0; for (p = 0; p < n; p++) { silArr[p] = outside[p] ? 0 : 255; if (!outside[p]) cntIn++; }
+      if (cntIn < 0.02 * n || cntIn > 0.95 * n) throw new Error('silhouette introuvable (image sans transparence : le trait extérieur doit être fermé)');
+    }
+    var gray = M(azMat8(h, w, gArr)), sil = M(azMat8(h, w, silArr));
+    var k1 = M(azKernel(1)), k2 = M(azKernel(2)), k3 = M(azKernel(3));
+    cv.morphologyEx(sil, sil, cv.MORPH_CLOSE, k2);
+    var ink = M(new cv.Mat()); cv.threshold(gray, ink, 127, 255, cv.THRESH_BINARY_INV); cv.dilate(ink, ink, k1);
+    var notInk = M(new cv.Mat()); cv.bitwise_not(ink, notInk);
+    var white = M(new cv.Mat()); cv.bitwise_and(sil, notInk, white);
+    var labels = M(new cv.Mat()), stats = M(new cv.Mat()), cents = M(new cv.Mat());
+    var ncomp = cv.connectedComponentsWithStats(white, labels, stats, cents, 4, cv.CV_32S);
+    var sd = azRead8(sil), wd = azRead8(white), lab = azRead32S(labels);
+    var sx0 = w, sx1 = 0, sy0 = h, sy1 = 0, silArea = 0;
+    for (p = 0; p < n; p++) if (sd[p]) { silArea++; var px = p % w, py = (p / w) | 0; if (px < sx0) sx0 = px; if (px > sx1) sx1 = px; if (py < sy0) sy0 = py; if (py > sy1) sy1 = py; }
+    var SH = sy1 - sy0, SW = sx1 - sx0;
+    if (SH < 10 || SW < 10) throw new Error('silhouette vide');
+    var comps = [];
+    for (i = 1; i < ncomp; i++) {
+      var area = stats.intAt(i, 4); if (area < silArea * 0.001) continue;
+      var cx = stats.intAt(i, 0), cy = stats.intAt(i, 1), cw = stats.intAt(i, 2), ch = stats.intAt(i, 3);
+      comps.push({ id: i, x: cx, y: cy, w: cw, h: ch, area: area, bottom: (cy + ch - sy0) / SH, rel: area / silArea });
+    }
+    if (!comps.length) throw new Error('aucune région blanche');
+    var bodyComp = comps[0]; for (i = 1; i < comps.length; i++) if (comps[i].area > bodyComp.area) bodyComp = comps[i];
+    var hooves = comps.filter(function (c) { return c.bottom >= 0.95 && c.rel >= 0.002 && c.rel <= 0.02 && c.h < 0.12 * SH && c.w < 0.2 * SW; }).sort(function (a, b) { return a.x - b.x; });
+    var closedLegs = comps.filter(function (c) { return c !== bodyComp && hooves.indexOf(c) < 0 && c.rel >= 0.01 && c.rel <= 0.08 && c.h > 0.15 * SH && c.w < 0.25 * SW && c.bottom >= 0.85; });
+    function labelArr(id) { var arr = new Uint8Array(n); for (var k = 0; k < n; k++) if (lab[k] === id) arr[k] = 255; return arr; }
+    function labelMask(id) { return azMat8(h, w, labelArr(id)); }
+    // point le plus intérieur d'une composante (max de la transformée de distance, sur sa bbox)
+    function insidePoint(c) {
+      var arr = new Uint8Array(c.w * c.h);
+      for (var yy = 0; yy < c.h; yy++) for (var xx = 0; xx < c.w; xx++) if (lab[(c.y + yy) * w + c.x + xx] === c.id) arr[yy * c.w + xx] = 255;
+      var roi = azMat8(c.h, c.w, arr), dt = new cv.Mat(); cv.distanceTransform(roi, dt, cv.DIST_L2, 3);
+      var f = dt.data32F, bi = 0; for (var k = 1; k < f.length; k++) if (f[k] > f[bi]) bi = k;
+      roi.delete(); dt.delete();
+      return { x: c.x + (bi % c.w), y: c.y + ((bi / c.w) | 0) };
+    }
+    // ── 2. pattes : fermées (trait de jonction) ou ouvertes (arrière-plan, croissance depuis le sabot) ─────
+    var legs = [];
+    for (var hi = 0; hi < hooves.length; hi++) {
+      var hf = hooves[hi], hoofArr = labelArr(hf.id), hoofMask = M(azMat8(h, w, hoofArr));
+      var hoofDil = azDilateDT(hoofMask, 30), hdd = azRead8(hoofDil); hoofDil.delete();
+      var match = [];
+      for (i = 0; i < closedLegs.length; i++) {
+        var c = closedLegs[i]; if (!(c.w < 2.0 * hf.w && c.h > 1.3 * c.w)) continue;
+        var inter = 0;
+        for (var yy = c.y; yy < c.y + c.h && inter <= 200; yy++) for (var xx = c.x; xx < c.x + c.w; xx++) { q = yy * w + xx; if (lab[q] === c.id && hdd[q]) { inter++; if (inter > 200) break; } }
+        if (inter > 200) match.push(c);
+      }
+      if (match.length) {
+        var leg = match[0]; for (i = 1; i < match.length; i++) if (match[i].area > leg.area) leg = match[i];
+        var lArr = labelArr(leg.id); for (q = 0; q < n; q++) if (hoofArr[q]) lArr[q] = 255;
+        legs.push({ kind: 'near', hoof: hf, mask: M(azMat8(h, w, lArr)), seeds: [insidePoint(leg), insidePoint(hf)] });
+      } else {
+        // patte ouverte : croissance ligne par ligne vers le haut dans le blanc du corps ; arrêt quand une borne saute
+        // (> 30 px : fin d'un trait latéral) ou largeur > 1,7 × sabot
+        var mArr = hoofArr;
+        var hoofW = hf.w, prev0 = hf.x, prev1 = hf.x + hf.w, started = false, rows = 0, yv = hf.y - 1, yMin = hf.y - 0.7 * SH;
+        while (yv > yMin && yv > 0) {
+          var best = null, r0 = -1, rowBase = yv * w;
+          for (var xx2 = 0; xx2 <= w; xx2++) {
+            var on = xx2 < w && lab[rowBase + xx2] === bodyComp.id;
+            if (on && r0 < 0) r0 = xx2;
+            if (!on && r0 >= 0) { var r1 = xx2, ov = Math.min(r1, prev1) - Math.max(r0, prev0); if (ov > 0 && (best === null || ov > best[2])) best = [r0, r1, ov]; r0 = -1; }
+          }
+          if (best === null) { if (started) break; yv--; continue; }
+          var b0 = best[0], b1 = best[1], width = b1 - b0;
+          if (started && width > 1.7 * hoofW) break;
+          if (started && rows > 10 && (Math.abs(b0 - prev0) > 30 || Math.abs(b1 - prev1) > 30)) break;
+          started = true; for (xx2 = b0; xx2 < b1; xx2++) mArr[rowBase + xx2] = 255; prev0 = b0; prev1 = b1; yv--; rows++;
+        }
+        legs.push({ kind: 'far', hoof: hf, mask: M(azMat8(h, w, mArr)), seeds: [] });
+      }
+    }
+    // Garde-fou « quadrupède » : une patte doit être haute (≥ 12 % de la silhouette) — sinon ce sont des chaussures,
+    // des orteils… (fée, princesse, dragon) et la détection n'a pas de sens : on refuse plutôt que de poser n'importe quoi.
+    // (Rejeté : Pearl, Lily, Twinkle, Rose, Zoe, Ember du livre LICORNE ; accepté : Sparkle, Skye, Pip.)
+    var MIN_LEG_H = 0.12 * SH;
+    legs = legs.filter(function (L) {
+      var d = L.mask.data, top = h, bot = -1;
+      for (var k = 0; k < n; k++) if (d[k]) { var yk = (k / w) | 0; if (yk < top) top = yk; if (yk > bot) bot = yk; }
+      return bot - top >= MIN_LEG_H;
+    });
+    // ≥ 3 pattes hautes : un personnage debout de face (fée, princesse) n'a que 2 jambes → refusé
+    if (legs.length < 3) throw new Error('silhouette non reconnue comme un quadrupède (' + hooves.length + ' sabot(s), ' + legs.length + ' patte(s) assez haute(s)) — place les zones à la main');
+    // côté de la tête : masse haute de la silhouette à gauche ou à droite du centre
+    var topSum = 0, topCnt = 0, topEnd = sy0 + Math.round(0.15 * SH);
+    for (var yy3 = sy0; yy3 < topEnd; yy3++) for (var xx3 = 0; xx3 < w; xx3++) if (sd[yy3 * w + xx3]) { topSum += xx3; topCnt++; }
+    var centerX = (sx0 + sx1) / 2, facesLeft = topCnt ? (topSum / topCnt) < centerX : true, headDir = facesLeft ? -1 : 1;
+    for (i = 0; i < legs.length; i++) legs[i].cx = legs[i].hoof.x + legs[i].hoof.w / 2;
+    var near = legs.filter(function (L) { return L.kind === 'near'; }).sort(function (a, b) { return a.cx - b.cx; });
+    var far = legs.filter(function (L) { return L.kind === 'far'; }).sort(function (a, b) { return a.cx - b.cx; });
+    // G/D du POINT DE VUE DE L'ANIMAL (miroir) : tête à gauche → flanc visible = droit
+    var nearSide = facesLeft ? 'D' : 'G', farSide = facesLeft ? 'G' : 'D';
+    function labelFor(group, L, suffix) {
+      if (group.length === 1) return ((L.cx < centerX) === facesLeft ? 'AV' : 'AR') + suffix;
+      var front = facesLeft ? group[0] : group[group.length - 1];
+      return (L === front ? 'AV' : 'AR') + suffix;
+    }
+    for (i = 0; i < near.length; i++) { near[i].label = labelFor(near, near[i], nearSide); near[i].zOrder = 2; }
+    for (i = 0; i < far.length; i++) { far[i].label = labelFor(far, far[i], farSide); far[i].zOrder = 0; }
+    var seen = {};
+    for (i = 0; i < legs.length; i++) { seen[legs[i].label] = (seen[legs[i].label] || 0) + 1; if (seen[legs[i].label] > 1) legs[i].label += seen[legs[i].label]; }
+    // dilatation : patte fermée = franchit le trait + marge (comme l'UI) ; patte ouverte = juste le trait
+    var maxDim = Math.max(w, h), INFLATE = Math.max(12, Math.round(maxDim / 100)), INFLATE_FAR = Math.max(8, Math.round(maxDim / 128));
+    for (i = 0; i < legs.length; i++) {
+      var L = legs[i]; L.inflate = L.kind === 'near' ? INFLATE : INFLATE_FAR;
+      var dil = M(azDilateDT(L.mask, L.inflate)); cv.bitwise_and(dil, sil, dil); L.mask = dil;
+    }
+    // ── 3. corps = silhouette − pattes ; filaments et rubans fins ────────────────────────────────────
+    var union = M(cv.Mat.zeros(h, w, cv.CV_8UC1)); for (i = 0; i < legs.length; i++) cv.bitwise_or(union, legs[i].mask, union);
+    var notUnion = M(new cv.Mat()); cv.bitwise_not(union, notUnion);
+    var bm = M(new cv.Mat()); cv.bitwise_and(sil, notUnion, bm); cv.morphologyEx(bm, bm, cv.MORPH_OPEN, k3);
+    var opened = M(azOpenDT(bm, 15));
+    var notOpened = M(new cv.Mat()); cv.bitwise_not(opened, notOpened); var thin = M(new cv.Mat()); cv.bitwise_and(bm, notOpened, thin);
+    var lt = M(new cv.Mat()), st = M(new cv.Mat()), ct = M(new cv.Mat()); var nt = cv.connectedComponentsWithStats(thin, lt, st, ct, 8, cv.CV_32S);
+    var ltd = azRead32S(lt), bmArr = azRead8(bm), legArrs = legs.map(function (L) { return azRead8(L.mask); }), k4 = M(azKernel(4));
+    for (i = 1; i < nt; i++) {
+      var ta = st.intAt(i, 4), tx = st.intAt(i, 0), ty = st.intAt(i, 1), tw = st.intAt(i, 2), th = st.intAt(i, 3);
+      if (ta < 50 || Math.max(tw, th) < 80) continue;
+      var rArr = new Uint8Array(tw * th);
+      for (var yy4 = 0; yy4 < th; yy4++) for (var xx4 = 0; xx4 < tw; xx4++) if (ltd[(ty + yy4) * w + tx + xx4] === i) rArr[yy4 * tw + xx4] = 255;
+      var roi = azMat8(th, tw, rArr), dt = new cv.Mat(); cv.distanceTransform(roi, dt, cv.DIST_L2, 3);
+      var mx = 0, f = dt.data32F; for (var q2 = 0; q2 < f.length; q2++) if (f[q2] > mx) mx = f[q2]; dt.delete();
+      if (mx > 13) { roi.delete(); continue; }
+      var ring = new cv.Mat(); cv.dilate(roi, ring, k4); var rgd = azRead8(ring); ring.delete(); roi.delete();
+      var touching = [];
+      for (var li = 0; li < legs.length; li++) {
+        var lmd = legArrs[li], hit = false;
+        for (yy4 = 0; yy4 < th && !hit; yy4++) for (xx4 = 0; xx4 < tw; xx4++) if (rgd[yy4 * tw + xx4] && lmd[(ty + yy4) * w + tx + xx4]) { hit = true; break; }
+        if (hit) touching.push(li);
+      }
+      if (touching.length) {
+        var target = touching[0]; for (li = 0; li < touching.length; li++) if (legs[touching[li]].kind === 'far') { target = touching[li]; break; }
+        var tmd = legArrs[target];
+        for (yy4 = 0; yy4 < th; yy4++) for (xx4 = 0; xx4 < tw; xx4++) if (rArr[yy4 * tw + xx4]) { var q3 = (ty + yy4) * w + tx + xx4; tmd[q3] = 255; bmArr[q3] = 0; }
+      }
+    }
+    bm.data.set(bmArr);
+    for (i = 0; i < legs.length; i++) legs[i].mask.data.set(legArrs[i]);
+    function largestComponent(src) {
+      var l2 = new cv.Mat(), s2 = new cv.Mat(), c2 = new cv.Mat(); var n2 = cv.connectedComponentsWithStats(src, l2, s2, c2, 4, cv.CV_32S);
+      var bi = 1, ba = -1; for (var k = 1; k < n2; k++) { var a2 = s2.intAt(k, 4); if (a2 > ba) { ba = a2; bi = k; } }
+      var ld = l2.data32S, arr = new Uint8Array(n); for (k = 0; k < n; k++) if (ld[k] === bi) arr[k] = 255;
+      l2.delete(); s2.delete(); c2.delete(); return azMat8(src.rows, src.cols, arr);
+    }
+    bm = M(largestComponent(bm));
+    for (i = 0; i < legs.length; i++) legs[i].polygon = azExtContour(legs[i].mask);
+    // ── 4. TÊTE : tête + cou + crinière, coupée poitrail → sous la crinière → garrot ─────────────────
+    var head = null, bodyArea = cv.countNonZero(bm);
+    var bodyPts = azExtContour(bm), silPts = azExtContour(sil), bmd = azRead8(bm);
+    var extIdx = 0; for (i = 1; i < bodyPts.length; i++) if (facesLeft ? bodyPts[i].x < bodyPts[extIdx].x : bodyPts[i].x > bodyPts[extIdx].x) extIdx = i;
+    var extPt = bodyPts[extIdx];
+    // étiquette (après coupe) du pixel étiqueté le plus proche du museau (fenêtre croissante) — `ld` = vue FRAÎCHE
+    function compNear(ld, pt) {
+      for (var r = 0; r <= 60; r += 4) for (var yy = Math.max(0, pt.y - r); yy <= Math.min(h - 1, pt.y + r); yy++) for (var xx = Math.max(0, pt.x - r); xx <= Math.min(w - 1, pt.x + r); xx++) { var v = ld[yy * w + xx]; if (v > 0) return v; }
+      return 0;
+    }
+    function splitBy(poly) {
+      var spm = new cv.Mat(); bm.copyTo(spm);
+      for (var s = 0; s + 1 < poly.length; s++) cv.line(spm, new cv.Point(poly[s].x, poly[s].y), new cv.Point(poly[s + 1].x, poly[s + 1].y), new cv.Scalar(0), 5);
+      var l2 = new cv.Mat(), s2 = new cv.Mat(), c2 = new cv.Mat(); var n2 = cv.connectedComponentsWithStats(spm, l2, s2, c2, 4, cv.CV_32S); spm.delete();
+      if (n2 < 3) { l2.delete(); s2.delete(); c2.delete(); return null; }
+      var lh = compNear(l2.data32S, extPt); var ratio = lh ? s2.intAt(lh, 4) / bodyArea : 0;
+      return { labels: l2, stats: s2, cents: c2, labHead: lh, ratio: ratio };
+    }
+    function freeSplit(r) { r.labels.delete(); r.stats.delete(); r.cents.delete(); }
+    var headRegions = comps.filter(function (c) { return c !== bodyComp && hooves.indexOf(c) < 0 && closedLegs.indexOf(c) < 0 && c.rel >= 0.01 && ((c.x + c.w / 2) < centerX) === facesLeft && (c.y + c.h / 2) < sy0 + 0.6 * SH; });
+    var withers = null, front = null, maneUnder = null, maneBottom = null, headRatio = 0;
+    var azDbg = { headRegions: headRegions.length, cands: 0, splits: [] };
+    if (headRegions.length) {
+      var m = headRegions[0]; for (i = 1; i < headRegions.length; i++) if (headRegions[i].y + headRegions[i].h > m.y + m.h) m = headRegions[i];
+      var by = -1, bx = 0;
+      for (var yy5 = m.y; yy5 < m.y + m.h; yy5++) for (var xx5 = m.x; xx5 < m.x + m.w; xx5++) if (lab[yy5 * w + xx5] === m.id && yy5 > by) { by = yy5; bx = xx5; }
+      maneBottom = { x: bx, y: by };
+      var bestD = Infinity;
+      for (i = 0; i < bodyPts.length; i++) { var q4 = bodyPts[i]; if ((q4.x - bx) * headDir > -10) continue; var d4 = (q4.x - bx) * (q4.x - bx) + (q4.y - by) * (q4.y - by); if (d4 < bestD) { bestD = d4; withers = q4; } }
+      var yb = by + 1; while (yb < h - 1 && wd[yb * w + bx]) yb++; while (yb < h - 1 && yb < by + 80 && !wd[yb * w + bx]) yb++;
+      maneUnder = { x: bx, y: yb + 3 };
+      if (withers) {
+        // corde la plus courte sous-crinière → silhouette ORIGINALE côté tête, |pente| ≤ 40°, sans traverser de trait.
+        // Candidats triés par longueur ; la coupe (composantes connexes plein cadre, coûteuse) n'est tentée que jusqu'au
+        // premier dont le ratio tête/corps est plausible (10–58 %).
+        var cands = [];
+        for (i = 0; i < silPts.length; i += 3) {
+          var q5 = silPts[i];
+          var ok = false; for (var yy6 = Math.max(0, q5.y - 2); yy6 <= Math.min(h - 1, q5.y + 2) && !ok; yy6++) for (var xx6 = Math.max(0, q5.x - 2); xx6 <= Math.min(w - 1, q5.x + 2); xx6++) if (bmd[yy6 * w + xx6]) { ok = true; break; }
+          if (!ok) continue;   // point sur une patte retirée
+          var dx = q5.x - maneUnder.x, dy = q5.y - maneUnder.y;
+          if (dx * headDir < 150 || Math.abs(dy) > Math.abs(dx) * 0.84) continue;
+          var Lc = Math.hypot(dx, dy);
+          var t0 = Math.max(0.03, 12 / Lc), t1 = 1 - Math.max(0.04, 24 / Lc), clean = true;
+          for (var s6 = 0; s6 < 40 && clean; s6++) { var t = t0 + (t1 - t0) * s6 / 39; if (!wd[Math.round(maneUnder.y + dy * t) * w + Math.round(maneUnder.x + dx * t)]) clean = false; }
+          if (clean) cands.push({ p: q5, L: Lc });
+        }
+        cands.sort(function (a, b) { return a.L - b.L; });
+        azDbg.cands = cands.length;
+        for (i = 0; i < cands.length && i < 40; i++) {
+          var r6 = splitBy([cands[i].p, maneUnder, withers]); if (!r6) continue;
+          var okRatio = r6.ratio >= 0.10 && r6.ratio <= 0.58; azDbg.splits.push(Math.round(r6.ratio * 100) / 100); freeSplit(r6);
+          if (okRatio) { front = cands[i].p; break; }
+        }
+      }
+    }
+    if (withers && front) {
+      var rs = splitBy([front, maneUnder, withers]);
+      if (rs) {
+        var lsd = rs.labels.data32S, hmArr = new Uint8Array(n);
+        for (p = 0; p < n; p++) if (lsd[p] === rs.labHead) hmArr[p] = 255;
+        freeSplit(rs);
+        var hm = M(azMat8(h, w, hmArr));
+        // + régions fermées côté tête (crinière, boucles sur l'épaule) avec leur trait
+        for (i = 0; i < headRegions.length; i++) { var reg = labelMask(headRegions[i].id), regD = azDilateDT(reg, 9); reg.delete(); cv.bitwise_and(regD, bm, regD); cv.bitwise_or(hm, regD, hm); regD.delete(); }
+        var lh2 = new cv.Mat(), sh2 = new cv.Mat(), ch2 = new cv.Mat(); cv.connectedComponentsWithStats(hm, lh2, sh2, ch2, 4, cv.CV_32S);
+        var lh2d = lh2.data32S, keep = compNear(lh2d, extPt);
+        for (p = 0; p < n; p++) hmArr[p] = (lh2d[p] === keep) ? 255 : 0;
+        lh2.delete(); sh2.delete(); ch2.delete();
+        hm.data.set(hmArr);
+        cv.dilate(hm, hm, k3); cv.bitwise_and(hm, bm, hm);   // réabsorbe la ligne de coupe
+        var notHm = M(new cv.Mat()); cv.bitwise_not(hm, notHm); cv.bitwise_and(bm, notHm, bm);
+        bm = M(largestComponent(bm));
+        headRatio = cv.countNonZero(hm) / bodyArea;
+        head = { kind: 'head', label: 'TETE', zOrder: 3, polygon: azExtContour(hm), seeds: [], inflate: 0 };
+      }
+    }
+    var members = [];
+    for (i = 0; i < legs.length; i++) members.push({ kind: legs[i].kind, label: legs[i].label, zOrder: legs[i].zOrder, polygon: legs[i].polygon, seeds: legs[i].seeds, inflate: legs[i].inflate });
+    if (head) members.push(head);
+    return { facesLeft: facesLeft, body: azExtContour(bm), members: members,
+      info: { fromAlpha: fromAlpha, hooves: hooves.length, closedLegs: closedLegs.length, headRatio: headRatio, neck: head ? { front: front, under: maneUnder, withers: withers } : null, dbg: azDbg } };
+  } finally { for (var mi = 0; mi < mats.length; mi++) { try { mats[mi].delete(); } catch (e) {} } }
+}
+
 self.onmessage = async function(e) {
   const { type, imageData } = e.data;
 
@@ -1856,6 +2148,17 @@ self.onmessage = async function(e) {
         type: 'canny-all-contours-result',
         silhouette: null, regions: null, error: err.message,
       });
+    }
+    return;
+  }
+
+  if (type === 'auto-zones') {
+    try {
+      var azResult = autoZonesDetect(imageData);
+      self.postMessage({ type: 'auto-zones-result', result: azResult });
+    } catch (err) {
+      console.error('Worker auto-zones error:', err);
+      self.postMessage({ type: 'auto-zones-result', error: err.message || String(err) });
     }
     return;
   }

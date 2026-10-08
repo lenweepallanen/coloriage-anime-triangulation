@@ -264,6 +264,21 @@ export async function flowCannySegmentZones(
   }
 }
 
+/**
+ * « Zones auto » : détection automatique des zones d'un coloriage quadrupède au trait (silhouette, sabots → pattes
+ * devant / arrière-plan, tête + cou + crinière). Retourne les polygones BRUTS en px image (voir utils/autoZones.ts
+ * pour le post-traitement). Lève une erreur explicite si la détection échoue.
+ */
+export async function flowAutoZones(imageData: ImageData): Promise<import('./autoZones').AutoZonesRaw> {
+  if (!workerReady) await loadOpenCVWorker()
+  const result = await workerRpc({
+    type: 'auto-zones',
+    imageData: { data: imageData.data, width: imageData.width, height: imageData.height },
+  }, 'auto-zones-result')
+  if (result.error) throw new Error(result.error)
+  return result.result
+}
+
 export async function flowCleanup(): Promise<void> {
   if (!workerReady || !worker) return
   await workerRpc({ type: 'flow-cleanup' }, 'flow-cleanup-done')

@@ -4,7 +4,8 @@ import type { UploadHint } from '../../db/projectsStore'
 import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { decodeRLEMinusRLEs } from '../../utils/rleMask'
 import { smoothPolygonGaussian, bridgeContourAtLegs } from '../../utils/sam2Contour'
-import { flowMaskToContour, flowCannySegmentZones } from '../../utils/perspectiveCorrection'
+import { flowMaskToContour, flowCannySegmentZones, flowAutoZones } from '../../utils/perspectiveCorrection'
+import { buildAutoZones } from '../../utils/autoZones'
 import { rasterizePolygonToMaskRLE } from '../../utils/cannyZoneContours'
 import { polygonToBezierNodes, flattenClosedBezier, evaluateCubicBezier } from '../../utils/bezierUtils'
 import { fitBezierToClosedPolygon } from '../../utils/bezierFit'
@@ -132,6 +133,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
   /** Paramètres du fit Schneider en preview (slider tolérance + seuil coin). */
   const [bezierFitParams, setBezierFitParams] = useState<Record<string, { tolerance: number; cornerDeg: number }>>({})
   const [bezierEditing, setBezierEditing] = useState<Record<string, boolean>>({})
+  // « Zones auto » (opt-in) : détection automatique en cours / compte-rendu de la dernière détection
+  const [autoZonesBusy, setAutoZonesBusy] = useState(false)
+  const [autoZonesReport, setAutoZonesReport] = useState<string | null>(null)
   const draggingBezierRef = useRef<
     | { zoneId: string; index: number; kind: 'anchor' }
     | { zoneId: string; index: number; kind: 'handleIn' | 'handleOut'; symmetric: boolean }
@@ -1202,6 +1206,45 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     return { masks: newMasks, contours: smoothed, dims: { w, h } }
   }
 
+  // ---------- Zones auto ----------
+  // Détection automatique (worker OpenCV) : silhouette → sabots → pattes devant / arrière-plan → tête + cou + crinière,
+  // posées comme zones Bézier ÉDITABLES (+ contour de référence pour le re-fit) et corps Bézier ponté membre par membre.
+  // Opt-in : ne touche à rien sans clic ; confirmation si des zones existent déjà. Les contours validés ne changent
+  // qu'au prochain « Valider ».
+  async function handleAutoZones() {
+    const img = imageRef.current
+    if (!img) return
+    const hasExisting = memberZones.length > 0 || Object.keys(legSeeds).length > 0 || Object.keys(zoneBeziers).length > 0
+    if (hasExisting && !confirm('Des zones existent déjà sur ce coloriage.\nLes REMPLACER par la détection automatique ?\n(Les contours validés ne changent qu\'au prochain « Valider ».)')) return
+    setAutoZonesBusy(true)
+    try {
+      const w = img.naturalWidth, h = img.naturalHeight
+      const off = document.createElement('canvas'); off.width = w; off.height = h
+      const ctx = off.getContext('2d')!; ctx.drawImage(img, 0, 0)
+      const raw = await flowAutoZones(ctx.getImageData(0, 0, w, h))
+      const built = buildAutoZones(raw, sigma, bridgeThreshold)
+      setZones(built.zones)
+      setZoneBeziers(built.zoneBeziers)
+      setZoneCannyRefs(built.zoneCannyRefs)
+      setLegSeeds({})
+      // Boucles des membres = Bézier aplaties (le recalcul Canny est court-circuité quand le corps est en Bézier)
+      const loops: Record<string, Point2D[][]> = {}
+      for (const z of built.zones) if (z.id !== 'body' && built.zoneBeziers[z.id]) loops[z.id] = [flattenClosedBezier(built.zoneBeziers[z.id], 30)]
+      setLegLoops(loops)
+      setBezierEditing({})
+      setBezierPreviewCount({})
+      setBezierFitParams({})
+      setBodySilhouette(flattenClosedBezier(built.zoneBeziers['body'], 30))
+      setActiveZoneId('body')
+      setAutoZonesReport(built.report.join('\n'))
+    } catch (err) {
+      console.error('[Zones auto]', err)
+      alert('Zones auto : détection impossible — ' + (err instanceof Error ? err.message : String(err)) + '\nPlace les zones à la main (ou vérifie que l\'image de référence est le coloriage au trait, fond transparent de préférence).')
+    } finally {
+      setAutoZonesBusy(false)
+    }
+  }
+
   // ---------- Save ----------
   async function handleSave() {
     const finalized = finalizeCannyZones()
@@ -1419,6 +1462,15 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         </span>
 
         <button
+          className="btn-secondary"
+          onClick={handleAutoZones}
+          disabled={autoZonesBusy || !imageReady || saving}
+          title="Détecte automatiquement corps, pattes (devant / arrière-plan, nommées du point de vue de l'animal) et tête + cou + crinière, en zones Bézier éditables. Rien n'est validé tant que tu ne cliques pas « Valider »."
+        >
+          {autoZonesBusy ? 'Détection…' : '✨ Zones auto'}
+        </button>
+
+        <button
           className="btn-primary"
           onClick={handleSave}
           disabled={saving || computing || !bodySilhouette || memberZoneIds.some(id => !legLoops[id])}
@@ -1438,6 +1490,10 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
           Tout effacer
         </button>
       </div>
+
+      {autoZonesReport && (
+        <div style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 8px', whiteSpace: 'pre-line', lineHeight: 1.4 }}>{autoZonesReport}</div>
+      )}
 
       {/* Canny params */}
       <div className="triangulation-toolbar" style={{ flexWrap: 'wrap', gap: 12 }}>
