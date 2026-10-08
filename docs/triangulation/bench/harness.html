@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><title>banc zones auto</title>
+<body style="margin:0;background:#111"><canvas id="c" style="width:1024px;height:auto;display:block"></canvas>
+<script>
+const COLORS = { AVG: '#f59e0b', AVD: '#ef4444', ARD: '#3b82f6', ARG: '#a855f7', TETE: '#ec4899' }
+const name = new URLSearchParams(location.search).get('img')
+const img = new Image(); img.src = '/img/' + name
+img.onload = () => {
+  const c = document.getElementById('c'); c.width = img.naturalWidth; c.height = img.naturalHeight
+  const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0)
+  const id = ctx.getImageData(0, 0, c.width, c.height)
+  const w = new Worker('/opencv-worker.js')
+  const t0 = performance.now()
+  w.postMessage({ type: 'init' })
+  w.onmessage = e => {
+    if (e.data.type === 'ready') { window.__readyMs = Math.round(performance.now() - t0); w.postMessage({ type: 'auto-zones', imageData: { data: id.data, width: id.width, height: id.height } }); return }
+    if (e.data.type !== 'auto-zones-result') return
+    const ms = Math.round(performance.now() - t0) - (window.__readyMs || 0)
+    if (e.data.error) { window.__result = { error: e.data.error, ms }; window.__done = true; return }
+    const r = e.data.result
+    ctx.drawImage(img, 0, 0)
+    const poly = (pts, color, fill) => { if (!pts || pts.length < 3) return; ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (const p of pts) ctx.lineTo(p.x, p.y); ctx.closePath(); if (fill) { ctx.globalAlpha = 0.35; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1 } ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.stroke() }
+    poly(r.body, '#22c55e', true)
+    ctx.font = 'bold 48px sans-serif'
+    for (const m of r.members) {
+      const col = COLORS[m.label.slice(0, 4)] || COLORS[m.label.slice(0, 3)] || '#64748b'
+      poly(m.polygon, col, true)
+      const cx = m.polygon.reduce((s, p) => s + p.x, 0) / m.polygon.length, cy = m.polygon.reduce((s, p) => s + p.y, 0) / m.polygon.length
+      ctx.fillStyle = '#000'; ctx.fillText(m.label, cx - 40 + 3, cy + 3); ctx.fillStyle = col; ctx.fillText(m.label, cx - 40, cy)
+      for (const s of m.seeds || []) { ctx.beginPath(); ctx.arc(s.x, s.y, 10, 0, 7); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke() }
+    }
+    if (r.info && r.info.neck) { const nk = r.info.neck; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.setLineDash([12, 8]); ctx.beginPath(); ctx.moveTo(nk.front.x, nk.front.y); ctx.lineTo(nk.under.x, nk.under.y); ctx.lineTo(nk.withers.x, nk.withers.y); ctx.stroke(); ctx.setLineDash([]) }
+    window.__result = { ms, facesLeft: r.facesLeft, info: r.info, bodyPts: r.body.length, members: r.members.map(m => ({ kind: m.kind, label: m.label, zOrder: m.zOrder, n: m.polygon.length, seeds: m.seeds.length, inflate: m.inflate })) }
+    window.__raw = r
+    window.__done = true
+  }
+}
+</script>
