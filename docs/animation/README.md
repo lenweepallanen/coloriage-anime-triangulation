@@ -51,3 +51,8 @@ puis animation `cotracker-bones` créée et calculée **dans l'admin en prod** (
   solveur ; il faut EXACTEMENT 1 joint (le genou) pour l'IK 2 os (`tools/fix_genoux_marche.py`). Côté du pli = côté du genou au repos.
 - Temps réel par animation Marche ≈ 1-2 min : calcul < 20 s, le reste = sauvegardes de projet déclenchées par chaque bouton (12-25 s).
   Préférer les boutons « Valider » (calcul + sauvegarde en une fois) ; `tools/run-chain.sh [noms…]` (CABRE=1 pour l'oneshot).
+- Points v3 (09/10, retour Nicolas) : densifier le FLANC (12 points intérieurs) et attacher chaque hanche de patte à un point
+  DANS le flanc (≈ 60 px au-dessus de la jonction), jamais sur le bord : sinon la patte « sort » et semble désossée en mouvement.
+  `licorne/points3.py` → `tools/apply_points3.py` (Idle + Cabré à re-tracker, Marche : hanches de repos recalculées) → `tools/run-all-v3.sh`.
+- Pli des genoux en Marche : il ne vient que du raccourcissement hanche→sabot (longueurs fixes) → levé de pied haut (Trot 120, Galop 170),
+  pas plus court (150 / 260), `kneeForwardBack: true` pour le jarret. À affiner en direct avec les curseurs de l'étape Params.
