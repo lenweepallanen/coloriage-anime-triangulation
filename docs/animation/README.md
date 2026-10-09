@@ -32,3 +32,18 @@ puis animation `cotracker-bones` créée et calculée **dans l'admin en prod** (
 9. **Preview** : `… Preview "wait:6000;shots:8:400"` → 8 captures du canvas.
 
 `anim-step.mjs` : actions `click:<regex>`, `click#N:`, `expect:<regex>`, `wait:<ms>`, `shots:N:ms`, `cotracker-run`, enchaînées par `;`.
+
+## Animations Marche (Trot, Galop) et oneshot « Cabré » — 09/10/2026
+- Création Marche : `node tools/anim-create2.mjs <clés> <pid> Trot "Animation Marche"` (hérite du premier cotracker-bones validé).
+  Réglages écrits en base dans `mesh` : `marcheGaitLegIds` (les 4 pattes, JAMAIS la chaîne TETE), `walkParams`, `marcheLegPhases`.
+  Trot = diagonales en phase (AVD+ARG 0, AVG+ARD 0,5), vitesse 1,5, pas 180, levé 70, corps 10, tête 45 %, secondaire 15 %.
+  Galop = ARG 0 → ARD 0,15 → AVG 0,4 → AVD 0,55, vitesse 2, pas 320, levé 120, corps 18, tête 70 %, rebond 60 px. `direction: -1` (tête à gauche).
+- ⚠ Chaîne TETE en Marche : le solveur répartit les joints intermédiaires (≥ 2) sur la corde hanche→pied ; cou → bout de crinière
+  est trop court → tête écrasée. Remède `tools/fix_tete_marche.py` : un seul os cou base → museau (+ positions de repos image).
+- ⚠ Marche = Params → LBS → Calcul dans la MÊME session de page (joint frames en mémoire seulement) : `tools/run-chain.sh`
+  (libellé du stepper : « Params », pas « Paramètres marche »).
+- Oneshot « Cabré » : `licorne/gen_video.py … prompt_file=licorne/prompt-cabre.txt` (6 s, 145 images) ; création héritée d'Idle
+  (`anim-create2.mjs … "Animation par Vidéo" Idle` : points + squelette + params LBS copiés), vidéo sans Loop (`anim-video.mjs … noloop`).
+  CoTracker « toutes les frames » a échoué sur 145 images (Cloud Run sans réponse → « Failed to fetch ») : utiliser
+  `cotracker-run:CoTracker Optimisé` (1 image sur 2), OK en 3 min.
+- `anim-step.mjs` : actions `step:<label>` (sans rechargement), `cotracker-run[:<bouton>]`, `click#N:`, `expect:`, `shots:N:ms`, `wait:ms`.

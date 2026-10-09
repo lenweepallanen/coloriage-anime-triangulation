@@ -2,7 +2,7 @@
 import { chromium } from '/Users/nicolasrocher/.royalties-tools/node_modules/playwright-core/index.mjs'
 import { readFileSync } from 'node:fs'
 const S = process.argv[2]; const srcName = process.argv[3]
-const custom = readFileSync(`${S}/custom-token.txt`, 'utf8').trim(); const cfg = JSON.parse(readFileSync(`${S}/fbconfig.json`, 'utf8'))
+const custom = readFileSync(`${process.env.HOME}/.picopop-keys/admin-test/custom-token.txt`, 'utf8').trim(); const cfg = JSON.parse(readFileSync(`${process.env.HOME}/.picopop-keys/admin-test/fbconfig.json`, 'utf8'))
 const b = await chromium.launch({ executablePath: '/Users/nicolasrocher/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell' })
 const ctx = await b.newContext({ viewport: { width: 1600, height: 1200 } }); const p = await ctx.newPage()
 p.on('pageerror', e => console.log('PAGEERROR', e.message.slice(0, 200)))

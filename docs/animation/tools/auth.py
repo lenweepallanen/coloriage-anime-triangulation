@@ -1,7 +1,6 @@
 """Jeton admin de test : custom token (compte de service Play, uid admin) → ID token Firebase. Régénéré si > 50 min."""
 import json, os, re, time, base64, subprocess, tempfile, urllib.request
-S = os.path.expanduser('~/.picopop-keys/admin-test')   # custom-token.txt + fbconfig.json (hors dépôt)
-os.makedirs(S, exist_ok=True)
+S = os.path.expanduser('~/.picopop-keys/admin-test')
 ADMIN = '/Users/nicolasrocher/Documents/claude code projects/PicoPop/apps/admin'
 _src = open(f'{ADMIN}/src/db/firebase.ts').read()
 API_KEY = re.search(r'apiKey:\s*"([^"]+)"', _src).group(1)
@@ -16,9 +15,7 @@ def custom_token():
     p = f'{S}/custom-token.txt'
     if os.path.exists(p) and time.time() - os.path.getmtime(p) < 50 * 60: return open(p).read().strip()
     _env(); sa = json.load(open(os.path.expanduser(os.environ['PLAY_SERVICE_ACCOUNT_FILE'])))
-    uid = os.environ.get('ADMIN_UID')
-    if not uid:
-        old = open(p).read().strip().split('.')[1]; old += '=' * (-len(old) % 4); uid = json.loads(base64.urlsafe_b64decode(old))['uid']
+    old = open(p).read().strip().split('.')[1]; old += '=' * (-len(old) % 4); uid = json.loads(base64.urlsafe_b64decode(old))['uid']
     b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode(); now = int(time.time())
     hdr = b64(json.dumps({'alg': 'RS256', 'typ': 'JWT'}).encode())
     pl = b64(json.dumps({'iss': sa['client_email'], 'sub': sa['client_email'], 'aud': 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit', 'iat': now, 'exp': now + 3600, 'uid': uid}).encode())
