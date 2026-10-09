@@ -47,3 +47,7 @@ puis animation `cotracker-bones` créée et calculée **dans l'admin en prod** (
   CoTracker « toutes les frames » a échoué sur 145 images (Cloud Run sans réponse → « Failed to fetch ») : utiliser
   `cotracker-run:CoTracker Optimisé` (1 image sur 2), OK en 3 min.
 - `anim-step.mjs` : actions `step:<label>` (sans rechargement), `cotracker-run[:<bouton>]`, `click#N:`, `expect:`, `shots:N:ms`, `wait:ms`.
+- ⚠ Genoux raides en Marche : une patte avec 2 joints intermédiaires (genou + cheville) est interpolée en ligne droite par le
+  solveur ; il faut EXACTEMENT 1 joint (le genou) pour l'IK 2 os (`tools/fix_genoux_marche.py`). Côté du pli = côté du genou au repos.
+- Temps réel par animation Marche ≈ 1-2 min : calcul < 20 s, le reste = sauvegardes de projet déclenchées par chaque bouton (12-25 s).
+  Préférer les boutons « Valider » (calcul + sauvegarde en une fois) ; `tools/run-chain.sh [noms…]` (CABRE=1 pour l'oneshot).
