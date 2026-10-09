@@ -56,3 +56,8 @@ puis animation `cotracker-bones` créée et calculée **dans l'admin en prod** (
   `licorne/points3.py` → `tools/apply_points3.py` (Idle + Cabré à re-tracker, Marche : hanches de repos recalculées) → `tools/run-all-v3.sh`.
 - Pli des genoux en Marche : il ne vient que du raccourcissement hanche→sabot (longueurs fixes) → levé de pied haut (Trot 120, Galop 170),
   pas plus court (150 / 260), `kneeForwardBack: true` pour le jarret. À affiner en direct avec les curseurs de l'étape Params.
+- v4 Marche (09/10) : une patte DROITE au repos ne plie pas en IK → genou de repos décalé de 18 % de la corde hanche→sabot
+  (vers la tête pour les antérieurs, vers la queue pour les postérieurs ; angle ≈ 140°, ratio 0,94 comme les dinos) :
+  `tools/fix_marche_v4.py`. LBS alignés sur les réglages de Nicolas (weightPower 4, ARAP 5).
+- ⚠ Un onglet admin ouvert pendant mes écritures Firestore ÉCRASE tout le projet à sa prochaine sauvegarde : demander à
+  Nicolas de recharger (Cmd+R) avant d'éditer, et ne pas écrire pendant qu'il édite.
