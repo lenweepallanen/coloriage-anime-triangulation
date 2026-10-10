@@ -1,5 +1,8 @@
-import { useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect, type ReactNode } from 'react'
+import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom'
+import { Capacitor } from '@capacitor/core'
+import { useDeepLinks } from './utils/deepLinks'
+import InstallLandingPage from './pages/InstallLandingPage'
 import { hideNativeSplash } from './native'
 import { initAppEvents } from './utils/appEvents'
 import { I18nProvider } from './i18n'
@@ -12,10 +15,21 @@ import GaleriePage from './pages/GaleriePage'
 import TutoPage from './pages/TutoPage'
 import AProposPage from './pages/AProposPage'
 
+const IS_WEB = Capacitor.getPlatform() === 'web'
+
+/** Sur le WEB, un lien de QR (coloriage / livre) affiche la page d'installation de l'app ; `?web=1` = ancien lecteur (tests). */
+function WebGate({ kind, children }: { kind: 'project' | 'book'; children: ReactNode }) {
+  const [sp] = useSearchParams()
+  if (IS_WEB && sp.get('web') !== '1') return <InstallLandingPage kind={kind} />
+  return <>{children}</>
+}
+
 export default function App() {
   // Le splash natif reste affiché jusqu'au premier rendu React (pas d'écran
   // vide entre le splash et le boot screen).
   useEffect(() => { hideNativeSplash(); initAppEvents() }, [])
+  // App native : liens universels / App Links + Install Referrer (Android)
+  useDeepLinks()
 
   return (
     <I18nProvider>
@@ -27,10 +41,10 @@ export default function App() {
           <Route path="/galerie" element={<GaleriePage />} />
           <Route path="/tuto" element={<TutoPage />} />
           <Route path="/a-propos" element={<AProposPage />} />
-          <Route path="/livre/:bookId" element={<BookPage />} />
+          <Route path="/livre/:bookId" element={<WebGate kind="book"><BookPage /></WebGate>} />
           {/* Scan : même squelette (fond, menu, onglets) ; le chrome du shell
               est masqué par CSS pendant l'animation plein écran */}
-          <Route path="/p/:projectId" element={<PlayPage />} />
+          <Route path="/p/:projectId" element={<WebGate kind="project"><PlayPage /></WebGate>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

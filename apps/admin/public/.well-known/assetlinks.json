@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.picopop.mobile",
+      "sha256_cert_fingerprints": [
+        "BB:C0:52:09:3E:10:36:7F:9C:98:AE:C1:58:30:08:A8:92:58:04:7E:27:B4:A5:36:00:DB:8A:5E:4C:A3:BA:5F"
+      ]
+    }
+  }
+]

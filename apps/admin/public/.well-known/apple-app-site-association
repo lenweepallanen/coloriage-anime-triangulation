@@ -1,0 +1,8 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      { "appID": "NJML2BL9YA.app.picopop.mobile", "paths": ["/p/*", "/livre/*"] }
+    ]
+  }
+}

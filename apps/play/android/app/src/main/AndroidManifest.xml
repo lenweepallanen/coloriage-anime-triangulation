@@ -18,6 +18,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- App Links : un QR (/p/… ou /livre/…) scanné avec l'appareil photo ouvre l'app si elle est installée
+                 (vérifié via /.well-known/assetlinks.json sur chaque hôte) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="coloriage-anime-play.vercel.app" />
+                <data android:host="picopop.app" />
+                <data android:pathPrefix="/p/" />
+                <data android:pathPrefix="/livre/" />
+            </intent-filter>
         </activity>
 
         <provider

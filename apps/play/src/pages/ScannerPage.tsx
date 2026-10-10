@@ -3,7 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import jsQR from 'jsqr'
 import { getBook } from '@shared/db/booksStore'
 import { loadProjectForPlayEssential } from '@shared/db/projectsStore'
-import { getBookDownloadProgress, isBookAdded, isBookDownloaded, startBackgroundBookDownload } from '../utils/bookDownload'
+import { getBookDownloadProgress, isBookDownloaded } from '../utils/bookDownload'
+import { parseQr, ensureBookAdded } from '../utils/qrLinks'
 import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 import Mascot from '@shared/components/mascot/Mascot'
@@ -42,22 +43,7 @@ type Status =
 const WATCHDOG_MS = 1500
 const MAX_RESTARTS = 3
 
-function parseQr(data: string): { type: 'project' | 'book'; id: string } | null {
-  const project = data.match(/\/p\/([A-Za-z0-9_-]+)/)
-  if (project) return { type: 'project', id: project[1] }
-  const book = data.match(/\/livre\/([A-Za-z0-9_-]+)/)
-  if (book) return { type: 'book', id: book[1] }
-  return null
-}
-
-/** Ajoute le livre s'il n'est ni ajouté ni en cours d'ajout. Renvoie true si un ajout a démarré. */
-async function ensureBookAdded(bookId: string): Promise<'added' | 'present' | 'unavailable'> {
-  const book = await getBook(bookId)
-  if (!book || book.published !== true) return 'unavailable'
-  if (getBookDownloadProgress(book.id) || isBookAdded(book)) return 'present'
-  startBackgroundBookDownload(book)
-  return 'added'
-}
+// parseQr / ensureBookAdded : utils/qrLinks (partagés avec les liens entrants — lien universel, Install Referrer)
 
 export default function ScannerPage() {
   const navigate = useNavigate()

@@ -3694,3 +3694,141 @@ body.play-app .net-slow-text span {
   body.play-app .net-banner-dot,
   body.play-app .net-progress-bar--indeterminate { animation: none; }
 }
+
+/* ===== Page d'installation (web uniquement : QR scanné avec l'appareil photo) =====
+   Composée des tokens du thème : carte soft, vignette « polaroïd », boutons pilule par fonction. */
+body.play-app .install-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: calc(24px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
+}
+body.play-app .install-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 26px 22px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+body.play-app .install-thumb {
+  width: min(56vw, 220px);
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: #ffffff;
+  border: 6px solid #ffffff;
+  border-radius: 20px;
+  box-shadow: var(--sticker-shadow-lg);
+}
+body.play-app .install-title {
+  margin: 0;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.4rem, 5.6vw, 1.8rem);
+  letter-spacing: 0.5px;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+body.play-app .install-title::before,
+body.play-app .install-title::after {
+  content: '✦';
+  font-size: 0.7em;
+  color: #ff8fae;
+  transform: rotate(-12deg);
+}
+body.play-app .install-title::after {
+  color: #ffcf3f;
+  transform: rotate(12deg);
+}
+body.play-app .install-sub {
+  margin: -6px 0 0;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: clamp(0.95rem, 3.4vw, 1.15rem);
+  line-height: 1.4;
+  color: var(--ink);
+}
+body.play-app .install-steps {
+  margin: 0;
+  padding: 14px 16px;
+  width: 100%;
+  box-sizing: border-box;
+  list-style: none;
+  text-align: left;
+  background: #f3eefe;
+  border-radius: 16px;
+  font-family: 'Andika', sans-serif;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+body.play-app .install-steps li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+body.play-app .install-steps b {
+  flex: 0 0 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #8b7cf0;
+  color: #ffffff;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+body.play-app .install-actions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+body.play-app .install-btn {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-decoration: none;
+  text-align: center;
+}
+body.play-app .install-btn--mint {
+  background: #57c8a3;
+  box-shadow: 0 5px 14px rgba(87, 200, 163, 0.45);
+}
+body.play-app .install-btn--ghost {
+  color: #8b7cf0;
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(90, 80, 140, 0.2);
+}
+body.play-app .install-have {
+  margin: 0;
+  font-family: 'Andika', sans-serif;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+body.play-app .install-free {
+  margin: -4px 0 0;
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #7a52c7;
+}
+body.play-app[data-install-landing] .shell-tabbar,
+body.play-app[data-install-landing] .shell-menu-btn {
+  display: none;
+}
+body.play-app[data-install-landing] .shell-content {
+  padding-bottom: 0;
+}

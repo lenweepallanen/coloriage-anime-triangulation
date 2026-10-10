@@ -42,3 +42,11 @@ export const storage = getStorage(app)
 export const auth = isCapacitorNative
   ? initializeAuth(app, { persistence: indexedDBLocalPersistence })
   : getAuth(app)
+
+/** Accès REST sans SDK (pages web légères : lecture publique d'un document publié, URL d'un fichier Storage). */
+export const firebaseRest = {
+  apiKey: firebaseConfig.apiKey,
+  projectId: firebaseConfig.projectId,
+  storageBucket: firebaseConfig.storageBucket,
+  database: 'coloriages',
+}
