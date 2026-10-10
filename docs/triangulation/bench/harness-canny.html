@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8"><title>banc segmentation par graines</title>
+<body style="margin:0;background:#111"><canvas id="c" style="width:1024px;height:auto;display:block"></canvas>
+<script>
+// ?img=<png>&seeds=<json>&inflate=<px>&white=1 : rejoue segmentZonesCanny (étape Zones) avec les graines d'un projet
+const q = new URLSearchParams(location.search); const img = new Image(); img.src = '/img/' + q.get('img')
+img.onload = async () => {
+  const seedsDoc = await (await fetch('/img/' + q.get('seeds'))).json()
+  const c = document.getElementById('c'); c.width = img.naturalWidth; c.height = img.naturalHeight; const ctx = c.getContext('2d')
+  if (q.get('white') === '1') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height) }
+  ctx.drawImage(img, 0, 0); const id = ctx.getImageData(0, 0, c.width, c.height)
+  const inflate = Number(q.get('inflate') || 12)
+  const seeds = seedsDoc.zones.filter(z => z.id !== 'body').map(z => ({ id: z.id, waypoints: seedsDoc.seeds[z.id] || [] }))
+  const w = new Worker('/opencv-worker.js'); w.postMessage({ type: 'init' })
+  w.onmessage = e => {
+    if (e.data.type === 'ready') { w.postMessage({ type: 'canny-segment-zones', imageData: { data: id.data, width: id.width, height: id.height }, seeds, lowThreshold: 50, highThreshold: 150, blurSize: 5, inflate, closingKernel: Number(q.get('closing') || 0) }); return }
+    if (e.data.type !== 'canny-segment-zones-result') return
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0)
+    const out = {}
+    for (const z of seedsDoc.zones) {
+      if (z.id === 'body') continue
+      const loops = e.data.zoneContours[z.id] || []; out[z.label] = loops.map(l => l.length)
+      loops.forEach((pts, k) => { ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (const p of pts) ctx.lineTo(p.x, p.y); ctx.closePath(); ctx.globalAlpha = 0.3; ctx.fillStyle = z.color; ctx.fill(); ctx.globalAlpha = 1; ctx.strokeStyle = z.color; ctx.lineWidth = 5; ctx.stroke(); ctx.fillStyle = '#000'; ctx.font = 'bold 40px sans-serif'; ctx.fillText(z.label + '#' + k, pts[0].x, pts[0].y) })
+      for (const s of (seedsDoc.seeds[z.id] || [])) { ctx.beginPath(); ctx.arc(s.x, s.y, 12, 0, 7); ctx.fillStyle = z.color; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.stroke() }
+    }
+    window.__result = { silhouette: (e.data.silhouette || []).length, loops: out }; window.__done = true
+  }
+}
+</script>

@@ -6,6 +6,9 @@
 	<array>
 		<string>applinks:coloriage-anime-play.vercel.app</string>
 		<string>applinks:picopop.app</string>
+		<!-- Tests depuis Xcode (appareil en mode développeur) : lecture directe du fichier AASA, sans le cache CDN d'Apple -->
+		<string>applinks:coloriage-anime-play.vercel.app?mode=developer</string>
+		<string>applinks:picopop.app?mode=developer</string>
 	</array>
 </dict>
 </plist>

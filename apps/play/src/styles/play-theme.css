@@ -3832,3 +3832,26 @@ body.play-app[data-install-landing] .shell-menu-btn {
 body.play-app[data-install-landing] .shell-content {
   padding-bottom: 0;
 }
+
+/* Livre partiellement chargé : coloriage figé + indicateur de chargement tant qu'il n'est pas prêt */
+body.play-app .colo-card--loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+body.play-app .colo-card--loading .colo-card-thumb img {
+  filter: grayscale(0.5);
+}
+body.play-app .colo-card-badge--loading {
+  background: #e6ddfa;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+body.play-app .colo-card-spin {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 3px solid #cfc0f1;
+  border-top-color: #8b7cf0;
+  animation: boot-spin 0.9s linear infinite;
+}

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import type { Book } from '@shared/types/project'
-import { isBookAdded, isBookPending, subscribeBookDownloads, getBookDownloadPercent, consumeBookJustCompleted, resumePendingBookDownloads } from '../utils/bookDownload'
+import { isBookAdded, isBookPending, isBookOpenable, subscribeBookDownloads, getBookDownloadPercent, consumeBookJustCompleted, resumePendingBookDownloads } from '../utils/bookDownload'
 import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 import Mascot from '@shared/components/mascot/Mascot'
@@ -219,6 +219,7 @@ export default function PlayHomePage() {
                     percent={getBookDownloadPercent(b.id) ?? (isBookPending(b) ? 0 : null)}
                     downloadingLabel={t('home.downloading')}
                     ready={readyIds.has(b.id)}
+                    openable={isBookOpenable(b)}
                     onClick={() => navigate(`/livre/${b.id}`)}
                   />
                 ))}
@@ -356,7 +357,7 @@ function ProgressRing({ percent, label }: { percent: number; label: string }) {
   )
 }
 
-function BookCard({ book, coverUrl, variant, shopLabel, percent, downloadingLabel, ready, onClick }: {
+function BookCard({ book, coverUrl, variant, shopLabel, percent, downloadingLabel, ready, openable = false, onClick }: {
   book: Book
   coverUrl: string | null
   variant: 'owned' | 'shop'
@@ -366,16 +367,19 @@ function BookCard({ book, coverUrl, variant, shopLabel, percent, downloadingLabe
   downloadingLabel?: string
   /** Vient de finir : animation « prêt ». */
   ready?: boolean
+  /** Ouvrable malgré un téléchargement en cours (premier coloriage prêt). */
+  openable?: boolean
   onClick: () => void
 }) {
   const downloading = variant === 'owned' && percent != null
-  const activate = () => { if (!downloading) onClick() }
+  const locked = downloading && !openable
+  const activate = () => { if (!locked) onClick() }
   return (
     <div
       onClick={activate}
       role="button"
-      tabIndex={downloading ? -1 : 0}
-      aria-disabled={downloading || undefined}
+      tabIndex={locked ? -1 : 0}
+      aria-disabled={locked || undefined}
       onKeyDown={e => e.key === 'Enter' && activate()}
       className={`book-card${downloading ? ' book-card--downloading' : ''}${ready ? ' book-card--ready' : ''}`}
     >

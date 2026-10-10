@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { useDeepLinks } from './utils/deepLinks'
 import InstallLandingPage from './pages/InstallLandingPage'
+import LinkLoadingOverlay from './components/LinkLoadingOverlay'
 import { hideNativeSplash } from './native'
 import { initAppEvents } from './utils/appEvents'
 import { I18nProvider } from './i18n'
@@ -33,6 +34,7 @@ export default function App() {
 
   return (
     <I18nProvider>
+      <LinkLoadingOverlay />
       <Routes>
         {/* Écrans avec shell : fond illustré + menu ☰ + barre d'onglets */}
         <Route element={<PlayShell />}>

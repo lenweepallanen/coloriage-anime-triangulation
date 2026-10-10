@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import jsQR from 'jsqr'
 import { getBook } from '@shared/db/booksStore'
-import { loadProjectForPlayEssential } from '@shared/db/projectsStore'
-import { getBookDownloadProgress, isBookDownloaded } from '../utils/bookDownload'
-import { parseQr, ensureBookAdded } from '../utils/qrLinks'
+import { isBookOpenable } from '../utils/bookDownload'
+import { parseQr, ensureBookAdded, resolveScannedLink } from '../utils/qrLinks'
 import { playUi } from '@shared/utils/uiSound'
 import { useI18n } from '../i18n'
 import Mascot from '@shared/components/mascot/Mascot'
@@ -89,7 +88,7 @@ export default function ScannerPage() {
         // Déjà ajouté : on ouvre le livre (s'il se télécharge encore, le menu montre la progression).
         // Encore en téléchargement (ou interrompu) → retour au menu, où l'anneau de progression est visible.
         const book = await getBook(id)
-        const openable = book != null && isBookDownloaded(book) && getBookDownloadProgress(id) == null
+        const openable = book != null && isBookOpenable(book)
         succeedThen(t('scanner.book.already'), () => navigate(openable ? `/livre/${id}` : '/'))
         return
       }
@@ -103,34 +102,18 @@ export default function ScannerPage() {
 
   const handleProjectQr = useCallback(async (id: string) => {
     try {
-      // Lecture Firestore seule (pas d'assets) : suffit pour connaître le livre du coloriage.
-      const project = await loadProjectForPlayEssential(id)
-      if (!project || project.published !== true) { flashMessage(t('scanner.project.notfound')); return }
-      if (project.bookId) {
-        // Le livre s'ajoute tout seul ; non bloquant si indisponible.
-        const result = await ensureBookAdded(project.bookId).catch(() => 'unavailable' as const)
-        // Livre pas encore téléchargé (vient d'être ajouté, ou encore en cours) :
-        // RETOUR AU MENU, où l'anneau de progression rend l'attente lisible. Le
-        // coloriage s'ouvrira ensuite depuis le cache, sans lenteur pendant le
-        // scan. Livre déjà complet → caméra directe (raccourci).
-        const book = result === 'unavailable' ? null : await getBook(project.bookId).catch(() => undefined)
-        const ready = book != null && isBookDownloaded(book) && getBookDownloadProgress(project.bookId) == null
-        if (result !== 'unavailable' && !ready) {
-          playUi('success')
-          succeedThen(t('scanner.book.added'), () => navigate('/'), 1400)
-          return
-        }
-      }
+      // Même résolution que les liens entrants (utils/qrLinks) : livre ajouté avec ce coloriage en tête, popup de
+      // chargement le temps de le pré-charger s'il ne l'est pas, puis caméra directe — plus de détour par le menu.
+      const to = await resolveScannedLink({ type: 'project', id })
+      if (!to) { flashMessage(t('scanner.project.notfound')); return }
       playUi('scanDing')
       stopCamera()
-      // autocam=1 : la caméra du pipeline scan démarre directement (elle était
-      // déjà ouverte pour lire le QR — pas de ré-écran « Prêt à scanner ? »).
-      navigate(`/p/${id}?autocam=1`)
+      navigate(to)
     } catch (err) {
       console.error('[scanner] lecture coloriage échouée', err)
       flashMessage(t('home.error1'))
     }
-  }, [flashMessage, navigate, stopCamera, succeedThen, t])
+  }, [flashMessage, navigate, stopCamera, t])
 
   const handleDecoded = useCallback((data: string) => {
     if (handlingRef.current) return

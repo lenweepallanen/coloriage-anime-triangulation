@@ -306,7 +306,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     const w = img.naturalWidth, h = img.naturalHeight
     const off = document.createElement('canvas')
     off.width = w; off.height = h
-    off.getContext('2d')!.drawImage(img, 0, 0)
+    // Page blanche sous l'image : un PNG transparent devient noir (RGBA→gris) et les traits touchant le bord
+    // « fuient » vers l'extérieur → silhouette en morceaux. Même rendu que le canvas d'édition.
+    const octx = off.getContext('2d')!; octx.fillStyle = '#fff'; octx.fillRect(0, 0, w, h); octx.drawImage(img, 0, 0)
     const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
     // État frais (anti-staleness des closures setTimeout 150ms)
     const curBeziers = zoneBeziersRef.current
@@ -631,7 +633,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
       const w = img.naturalWidth, h = img.naturalHeight
       const off = document.createElement('canvas')
       off.width = w; off.height = h
-      off.getContext('2d')!.drawImage(img, 0, 0)
+      // Page blanche sous l'image : un PNG transparent devient noir (RGBA→gris) et les traits touchant le bord
+      // « fuient » vers l'extérieur → silhouette en morceaux. Même rendu que le canvas d'édition.
+      const octx = off.getContext('2d')!; octx.fillStyle = '#fff'; octx.fillRect(0, 0, w, h); octx.drawImage(img, 0, 0)
       const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
       const result = await flowCannySegmentZones(
         imgData, [], cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize,
@@ -724,7 +728,9 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
         const w = img.naturalWidth, h = img.naturalHeight
         const off = document.createElement('canvas')
         off.width = w; off.height = h
-        off.getContext('2d')!.drawImage(img, 0, 0)
+        // Page blanche sous l'image : un PNG transparent devient noir (RGBA→gris) et les traits touchant le bord
+        // « fuient » vers l'extérieur → silhouette en morceaux. Même rendu que le canvas d'édition.
+        const octx = off.getContext('2d')!; octx.fillStyle = '#fff'; octx.fillRect(0, 0, w, h); octx.drawImage(img, 0, 0)
         const imgData = off.getContext('2d')!.getImageData(0, 0, w, h)
         const result = await flowCannySegmentZones(
           imgData, [],

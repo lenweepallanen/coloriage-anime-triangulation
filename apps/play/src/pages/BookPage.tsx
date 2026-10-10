@@ -4,7 +4,7 @@ import { getBook, getPublishedBooks, getBookCover } from '@shared/db/booksStore'
 import { getProjectsByBook, getProjectThumbnailBlob, getProjectThumbnail } from '@shared/db/projectsStore'
 import type { Book, Project } from '@shared/types/project'
 import { useI18n } from '../i18n'
-import { removeBook } from '../utils/bookDownload'
+import { removeBook, isBookDownloaded, isBookPending, isProjectDownloaded, isProjectDownloading, subscribeBookDownloads, resumePendingBookDownloads } from '../utils/bookDownload'
 import LoadingScreen from '../components/LoadingScreen'
 import Mascot from '@shared/components/mascot/Mascot'
 
@@ -27,6 +27,9 @@ export default function BookPage() {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [loading, setLoading] = useState(true)
   const [notAvailable, setNotAvailable] = useState(false)
+  // Livre partiellement chargé : re-rendu à chaque progression (un coloriage devient cliquable quand il est prêt)
+  const [, setDownloadTick] = useState(0)
+  useEffect(() => subscribeBookDownloads(() => setDownloadTick(v => v + 1)), [])
 
   useEffect(() => {
     if (!bookId) return
@@ -41,6 +44,8 @@ export default function BookPage() {
           return
         }
         setBook(b)
+        // Livre ouvert avant la fin de son pré-chargement (ou app relancée dessus) : on reprend le téléchargement ici aussi
+        resumePendingBookDownloads([b])
         if (b.coverImageBlob) {
           setCoverUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(b.coverImageBlob!) })
         }
@@ -101,14 +106,21 @@ export default function BookPage() {
         <p className="book-empty">{t('book.empty')}</p>
       ) : (
         <div className="colo-list">
-          {projects.map((p, i) => (
-            <ColoCard
-              key={p.id}
-              project={p}
-              index={i + 1}
-              onClick={() => navigate(`/p/${p.id}?book=${book.id}`)}
-            />
-          ))}
+          {projects.map((p, i) => {
+            // Prêt si le livre est entièrement téléchargé (anciens livres : pas de marqueur par coloriage) ou si CE
+            // coloriage l'est ; sinon figé avec son indicateur tant que le pré-chargement du livre n'est pas passé dessus.
+            const ready = isBookDownloaded(book) || isProjectDownloaded(p) || !isBookPending(book)
+            return (
+              <ColoCard
+                key={p.id}
+                project={p}
+                index={i + 1}
+                loading={!ready}
+                active={isProjectDownloading(p.id)}
+                onClick={() => navigate(`/p/${p.id}?book=${book.id}`)}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -257,7 +269,7 @@ function CollectionCard({ book }: { book: Book }) {
   )
 }
 
-function ColoCard({ project, index, onClick }: { project: Project; index: number; onClick: () => void }) {
+function ColoCard({ project, index, loading = false, active = false, onClick }: { project: Project; index: number; loading?: boolean; active?: boolean; onClick: () => void }) {
   const { t, lang } = useI18n()
   const [url, setUrl] = useState<string | null>(null)
   const [scanned, setScanned] = useState(false)
@@ -285,11 +297,12 @@ function ColoCard({ project, index, onClick }: { project: Project; index: number
 
   return (
     <div
-      onClick={onClick}
+      onClick={() => { if (!loading) onClick() }}
       role="button"
-      tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && onClick()}
-      className={`colo-card ${scanned ? 'colo-card--scanned' : ''}`}
+      tabIndex={loading ? -1 : 0}
+      aria-disabled={loading || undefined}
+      onKeyDown={e => e.key === 'Enter' && !loading && onClick()}
+      className={`colo-card ${scanned ? 'colo-card--scanned' : ''}${loading ? ' colo-card--loading' : ''}`}
     >
       <div className="colo-card-thumb">
         {url ? <img src={url} alt={project.name} /> : <span aria-hidden="true">🖍️</span>}
@@ -297,7 +310,7 @@ function ColoCard({ project, index, onClick }: { project: Project; index: number
       <div className="colo-card-texts">
         <strong className="colo-card-name">{index}. {project.name}</strong>
         <span className="colo-card-status">
-          {scanned ? t('book.scanned') : t('book.notScanned')}
+          {loading ? (active ? t('book.loadingColo') : t('book.waitingColo')) : scanned ? t('book.scanned') : t('book.notScanned')}
         </span>
         {scanned && scannedAt && (
           <span className="colo-card-date">
@@ -305,7 +318,11 @@ function ColoCard({ project, index, onClick }: { project: Project; index: number
           </span>
         )}
       </div>
-      {scanned ? (
+      {loading ? (
+        <span className="colo-card-badge colo-card-badge--loading" aria-hidden="true">
+          <span className="colo-card-spin" />
+        </span>
+      ) : scanned ? (
         <span className="colo-card-badge colo-card-badge--done" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
             <path d="m5 12.5 4.5 4.5L19 7.5" />

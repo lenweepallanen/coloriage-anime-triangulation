@@ -4,8 +4,9 @@
  * par les liens entrants (QR lu avec l'appareil photo, app installée → ouverture directe).
  */
 import { getBook } from '@shared/db/booksStore'
-import { loadProjectForPlayEssential } from '@shared/db/projectsStore'
-import { getBookDownloadProgress, isBookAdded, isBookDownloaded, startBackgroundBookDownload } from './bookDownload'
+import { getProject } from '@shared/db/projectsStore'
+import { ensureProjectReady, getBookDownloadProgress, isBookAdded, isBookOpenable, isProjectDownloaded, startBackgroundBookDownload } from './bookDownload'
+import { setLinkLoading } from './linkLoading'
 
 export type ScannedLink = { type: 'project' | 'book'; id: string }
 
@@ -18,36 +19,39 @@ export function parseQr(data: string): ScannedLink | null {
   return null
 }
 
-/** Ajoute le livre s'il n'est ni ajouté ni en cours d'ajout. */
-export async function ensureBookAdded(bookId: string): Promise<'added' | 'present' | 'unavailable'> {
+/** Ajoute le livre s'il n'est ni ajouté ni en cours d'ajout (`priorityProjectId` : coloriage à charger en premier). */
+export async function ensureBookAdded(bookId: string, priorityProjectId?: string): Promise<'added' | 'present' | 'unavailable'> {
   const book = await getBook(bookId)
   if (!book || book.published !== true) return 'unavailable'
   if (getBookDownloadProgress(book.id) || isBookAdded(book)) return 'present'
-  startBackgroundBookDownload(book)
+  startBackgroundBookDownload(book, priorityProjectId)
   return 'added'
 }
 
 /**
- * Destination dans l'app pour un lien lu HORS scanner (lien universel, Install Referrer) :
- * même logique que le scanner, sans les sons ni les messages. null = contenu indisponible.
- *  - livre : ajouté/complet → page du livre, sinon accueil (anneau de progression) ;
- *  - coloriage : son livre s'ajoute tout seul ; livre pas encore complet → accueil, sinon caméra directe.
+ * Destination dans l'app pour un lien lu hors scanner (lien universel, Install Referrer) ou dans le scanner :
+ *  - livre : ajouté → page du livre dès qu'il est ouvrable (premier coloriage prêt), sinon accueil (anneau) ;
+ *  - coloriage : son livre s'ajoute tout seul avec CE coloriage en tête de file ; s'il n'est pas encore prêt, la popup
+ *    de chargement s'affiche le temps de le pré-charger, puis caméra directe. Plus de détour par le menu.
+ * null = contenu indisponible.
  */
 export async function resolveScannedLink(link: ScannedLink): Promise<string | null> {
   if (link.type === 'book') {
     const result = await ensureBookAdded(link.id)
     if (result === 'unavailable') return null
     const book = await getBook(link.id)
-    const openable = book != null && isBookDownloaded(book) && getBookDownloadProgress(link.id) == null
-    return openable ? `/livre/${link.id}` : '/'
+    return book != null && isBookOpenable(book) ? `/livre/${link.id}` : '/'
   }
-  const project = await loadProjectForPlayEssential(link.id)
+  const project = await getProject(link.id)   // document seul : publié ? livre ? vignette ?
   if (!project || project.published !== true) return null
-  if (project.bookId) {
-    const result = await ensureBookAdded(project.bookId).catch(() => 'unavailable' as const)
-    const book = result === 'unavailable' ? null : await getBook(project.bookId).catch(() => undefined)
-    const ready = book != null && isBookDownloaded(book) && getBookDownloadProgress(project.bookId) == null
-    if (result !== 'unavailable' && !ready) return '/'
+  if (project.bookId) await ensureBookAdded(project.bookId, link.id).catch(() => 'unavailable' as const)
+  if (!isProjectDownloaded(project)) {
+    setLinkLoading({ done: 0, total: 3 })
+    try {
+      await ensureProjectReady(project, (done, total) => setLinkLoading({ done, total }))
+    } finally {
+      setLinkLoading(null)
+    }
   }
   return `/p/${link.id}?autocam=1`
 }

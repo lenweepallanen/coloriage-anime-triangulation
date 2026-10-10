@@ -1098,12 +1098,12 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
     cv.GaussianBlur(gray, blurred, new cv.Size(kSize, kSize), 0);
     cv.Canny(blurred, edges, lowThreshold, highThreshold);
 
-    // EXPERIMENT: no barrier at all — raw Canny edges, no dilation, no close.
-    // Most permissive setting; expect flood-fill leaks across zones wherever
-    // the Canny trace has micro-gaps.
+    // Barrière = contours Canny épaissis de 1 px (3×3) : un trait Canny brut d'1 px, 8-connexe, laisse les régions
+    // blanches se toucher en diagonale → findContours les fusionnait en UNE seule région (toute la silhouette).
+    // L'épaisseur ajoutée est rendue par l'offset `inflate` des polygones.
     dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     closeKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
-    edges.copyTo(barrier);
+    cv.dilate(edges, barrier, dilateKernel, new cv.Point(-1, -1), 1);
 
     // Light barrier (3×3 × 1 iter ≈ 1 px) — used for the silhouette outer
     // contour so it sits on the real black trace, not the inflated barrier.

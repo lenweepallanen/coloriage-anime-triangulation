@@ -27,6 +27,12 @@ const keyFor = (bookId: string) => `bookDownloadedAt:${bookId}`
  *  téléchargement reprend automatiquement au prochain passage sur l'accueil
  *  (l'app a pu être fermée entre-temps). */
 const addedKeyFor = (bookId: string) => `bookAddedAt:${bookId}`
+/** Coloriage entièrement pré-chargé (vignette, essentiel, différé) — permet d'ouvrir un livre partiellement chargé. */
+const projectKeyFor = (projectId: string) => `projectDownloadedAt:${projectId}`
+/** Livre OUVRABLE : au moins un de ses coloriages est prêt (le reste se charge en arrière-plan). */
+const openableKeyFor = (bookId: string) => `bookOpenableAt:${bookId}`
+/** Coloriages en cours de pré-chargement (file du livre ou chargement prioritaire). */
+const projectInFlight = new Set<string>()
 
 /* ---------------------------------------------------------------------
    Téléchargement EN ARRIÈRE-PLAN : le livre est marqué « ajouté »
@@ -73,11 +79,68 @@ export function getBookDownloadProgress(bookId: string): BookDownloadProgress | 
   return inFlight[bookId] ?? null
 }
 
+export function isProjectDownloaded(p: { id: string; publishedAt?: number | null }): boolean {
+  try {
+    const t = Number(localStorage.getItem(projectKeyFor(p.id)) ?? 0)
+    return t > 0 && t >= (p.publishedAt ?? 0)
+  } catch {
+    return false
+  }
+}
+export function isProjectDownloading(projectId: string): boolean {
+  return projectInFlight.has(projectId)
+}
+function markProjectDownloaded(projectId: string): void {
+  try { localStorage.setItem(projectKeyFor(projectId), String(Date.now())) } catch { /* stockage indisponible */ }
+}
+function markBookOpenable(bookId: string): void {
+  try { localStorage.setItem(openableKeyFor(bookId), String(Date.now())) } catch { /* idem */ }
+}
+/** Livre ouvrable : téléchargé, ou dont le premier coloriage est prêt (les autres affichent leur chargement). */
+export function isBookOpenable(book: Book): boolean {
+  if (isBookDownloaded(book)) return true
+  try { return Number(localStorage.getItem(openableKeyFor(book.id)) ?? 0) > 0 } catch { return false }
+}
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+/**
+ * Pré-charge UN coloriage tout de suite (vignette best-effort, essentiel, différé), hors file d'attente du livre et
+ * sans céder la bande passante : c'est l'utilisateur qui attend (QR lu avec l'appareil photo → scan direct).
+ * Idempotent : déjà prêt → retour immédiat ; déjà en cours (file du livre) → on attend sa fin.
+ */
+export async function ensureProjectReady(
+  p: { id: string; hasThumbnail?: boolean; publishedAt?: number | null },
+  onStep?: (done: number, total: number) => void,
+): Promise<void> {
+  if (isProjectDownloaded(p)) { onStep?.(3, 3); return }
+  if (projectInFlight.has(p.id)) {
+    while (projectInFlight.has(p.id)) await sleep(250)
+    onStep?.(3, 3)
+    return
+  }
+  projectInFlight.add(p.id)
+  notifyDownloadListeners()
+  try {
+    onStep?.(0, 3)
+    try { await (p.hasThumbnail ? getProjectThumbnailBlob(p.id) : getProjectThumbnail(p.id)) } catch { /* non bloquant */ }
+    onStep?.(1, 3)
+    const essential = await loadProjectForPlayEssential(p.id)
+    onStep?.(2, 3)
+    if (essential) await loadProjectForPlayDeferred(essential).catch(() => { /* non bloquant */ })
+    onStep?.(3, 3)
+    markProjectDownloaded(p.id)
+  } finally {
+    projectInFlight.delete(p.id)
+    notifyDownloadListeners()
+  }
+}
+
 /**
  * Ajoute le livre immédiatement (MES LIVRES) et lance le pré-chargement des
  * assets en arrière-plan. Idempotent si un téléchargement est déjà en cours.
  */
-export function startBackgroundBookDownload(book: Book): void {
+export function startBackgroundBookDownload(book: Book, priorityProjectId?: string): void {
   if (inFlight[book.id]) return
   try {
     localStorage.setItem(addedKeyFor(book.id), String(Date.now()))
@@ -88,7 +151,7 @@ export function startBackgroundBookDownload(book: Book): void {
   downloadBook(book, (done, total) => {
     inFlight[book.id] = { done, total }
     notifyDownloadListeners()
-  })
+  }, priorityProjectId)
     .catch(err => {
       // Non bloquant : les assets manquants se chargeront à la demande.
       console.warn('[bookDownload] pré-chargement arrière-plan incomplet', err)
@@ -105,6 +168,7 @@ export function removeBook(bookId: string): void {
   try {
     localStorage.removeItem(keyFor(bookId))
     localStorage.removeItem(addedKeyFor(bookId))
+    localStorage.removeItem(openableKeyFor(bookId))
   } catch { /* stockage indisponible */ }
 }
 
@@ -143,8 +207,11 @@ export function resumePendingBookDownloads(books: Book[]): void {
 export async function downloadBook(
   book: Book,
   onProgress: (done: number, total: number) => void,
+  priorityProjectId?: string,
 ): Promise<void> {
-  const projects = await getProjectsByBook(book.id, true)
+  let projects = await getProjectsByBook(book.id, true)
+  // Coloriage visé (QR lu avec l'appareil photo) en tête, puis l'ordre du livre.
+  if (priorityProjectId) projects = [...projects.filter(p => p.id === priorityProjectId), ...projects.filter(p => p.id !== priorityProjectId)]
   // 3 étapes par coloriage → progression lisible même pour un livre d'un seul coloriage.
   const total = projects.length * 3
   let done = 0
@@ -153,24 +220,38 @@ export async function downloadBook(
   // Séquentiel : limite la mémoire (les blobs chargés sont relâchés entre
   // deux coloriages) et donne une progression lisible.
   for (const p of projects) {
+    // Déjà prêt (chargement prioritaire, ou passage précédent interrompu) : on passe.
+    if (isProjectDownloaded(p)) { done += 3; onProgress(done, total); markBookOpenable(book.id); continue }
     // Un scan est en cours (étape caméra/preview/film) : on laisse toute la
     // bande passante et la mémoire au scan, le pré-chargement reprend après.
     await waitWhileScanning()
+    // Ce coloriage est en cours de chargement prioritaire : on attend sa fin plutôt que de le télécharger deux fois.
+    while (projectInFlight.has(p.id)) await sleep(250)
+    if (isProjectDownloaded(p)) { done += 3; onProgress(done, total); markBookOpenable(book.id); continue }
+    projectInFlight.add(p.id)
+    notifyDownloadListeners()
     try {
-      // Vignette du menu livre (petite, best-effort)
-      await runAsBackgroundDownloads(() => p.hasThumbnail ? getProjectThumbnailBlob(p.id) : getProjectThumbnail(p.id))
-    } catch { /* non bloquant */ }
-    done++
-    onProgress(done, total)
+      try {
+        // Vignette du menu livre (petite, best-effort)
+        await runAsBackgroundDownloads(() => p.hasThumbnail ? getProjectThumbnailBlob(p.id) : getProjectThumbnail(p.id))
+      } catch { /* non bloquant */ }
+      done++
+      onProgress(done, total)
 
-    const essential = await runAsBackgroundDownloads(() => loadProjectForPlayEssential(p.id))
-    done++
-    onProgress(done, total)
-    if (essential) {
-      await runAsBackgroundDownloads(() => loadProjectForPlayDeferred(essential)).catch(() => { /* non bloquant */ })
+      const essential = await runAsBackgroundDownloads(() => loadProjectForPlayEssential(p.id))
+      done++
+      onProgress(done, total)
+      if (essential) {
+        await runAsBackgroundDownloads(() => loadProjectForPlayDeferred(essential)).catch(() => { /* non bloquant */ })
+      }
+      done++
+      onProgress(done, total)
+      markProjectDownloaded(p.id)
+      markBookOpenable(book.id)   // dès le premier coloriage prêt, le livre s'ouvre (les autres affichent leur chargement)
+    } finally {
+      projectInFlight.delete(p.id)
+      notifyDownloadListeners()
     }
-    done++
-    onProgress(done, total)
   }
 
   try {

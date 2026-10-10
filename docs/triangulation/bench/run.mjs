@@ -1,6 +1,7 @@
+import { fileURLToPath } from 'node:url'
 import { chromium } from '/Users/nicolasrocher/.royalties-tools/node_modules/playwright-core/index.mjs'
 import { writeFileSync } from 'node:fs'
-const S = new URL('.', import.meta.url).pathname
+const S = fileURLToPath(new URL('.', import.meta.url))
 const names = process.argv.slice(2)
 const b = await chromium.launch({ executablePath: '/Users/nicolasrocher/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell' })
 for (const name of names) {
