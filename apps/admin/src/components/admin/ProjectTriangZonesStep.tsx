@@ -5,7 +5,7 @@ import { useCanvasInteraction } from '../triangulation/useCanvasInteraction'
 import { decodeRLEMinusRLEs } from '../../utils/rleMask'
 import { smoothPolygonGaussian, bridgeContourAtLegs } from '../../utils/sam2Contour'
 import { flowMaskToContour, flowCannySegmentZones, flowAutoZones } from '../../utils/perspectiveCorrection'
-import { buildAutoZones } from '../../utils/autoZones'
+import { buildAutoZones, buildBezierZonesFromLoops } from '../../utils/autoZones'
 import { rasterizePolygonToMaskRLE } from '../../utils/cannyZoneContours'
 import { polygonToBezierNodes, flattenClosedBezier, evaluateCubicBezier } from '../../utils/bezierUtils'
 import { fitBezierToClosedPolygon } from '../../utils/bezierFit'
@@ -1254,6 +1254,44 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
     }
   }
 
+  // ---------- Relier en Bézier (zones par graines) ----------
+  // Les zones flood-fill (gonflées) et le corps ponté par une corde n'ont AUCUN sommet commun → la triangulation auto ne trouve
+  // pas de jonction et le rendu montre des encoches. On refait ici ce que fait « Zones auto » : membres lissés en Bézier, corps =
+  // silhouette − membres, ponté membre par membre (Douglas-Peucker) → jonctions exactes. Opt-in, confirmation.
+  async function handleLinkZonesBezier() {
+    const img = imageRef.current
+    if (!img || !bodySilhouette) return
+    const bad = memberZoneIds.filter(id => !legLoops[id] || legLoops[id].length !== 1)
+    if (bad.length) { alert('Chaque membre doit avoir exactement UNE boucle avant de relier : ' + bad.map(id => zones.find(z => z.id === id)?.label ?? id).join(', ')); return }
+    if (!confirm('Convertir les zones en courbes Bézier reliées au corps (ponté membre par membre) ?\nLes zones restent éditables ; rien n\'est validé avant « Valider ».')) return
+    setAutoZonesBusy(true)
+    try {
+      const w = img.naturalWidth, h = img.naturalHeight
+      const off = document.createElement('canvas'); off.width = w; off.height = h
+      const octx = off.getContext('2d')!; octx.fillStyle = '#fff'; octx.fillRect(0, 0, w, h); octx.drawImage(img, 0, 0)
+      const sil = await flowCannySegmentZones(octx.getImageData(0, 0, w, h), [], cannyParams.lowThreshold, cannyParams.highThreshold, cannyParams.blurSize, undefined, closingKernel)
+      const silhouette = sil.silhouette && sil.silhouette.length >= 3 ? sil.silhouette : bodySilhouette
+      const loops: Record<string, Point2D[]> = {}
+      for (const id of memberZoneIds) loops[id] = legLoops[id][0]
+      const bodyRLE = rasterizePolygonToMaskRLE(silhouette, w, h)
+      const legRLEs = memberZoneIds.map(id => rasterizePolygonToMaskRLE(loops[id], w, h))
+      const rawBody = await flowMaskToContour(decodeRLEMinusRLEs(bodyRLE, legRLEs), w, h)
+      const built = buildBezierZonesFromLoops(zones, loops, rawBody, sigma, bridgeThreshold)
+      setZoneBeziers(built.zoneBeziers)
+      setZoneCannyRefs(built.zoneCannyRefs)
+      setBezierEditing({})
+      setBezierPreviewCount({})
+      setBezierFitParams({})
+      setBodySilhouette(flattenClosedBezier(built.zoneBeziers['body'], 30))
+      setAutoZonesReport(built.report.join('\n'))
+    } catch (err) {
+      console.error('[Relier Bézier]', err)
+      alert('Impossible de relier les zones : ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setAutoZonesBusy(false)
+    }
+  }
+
   // ---------- Save ----------
   async function handleSave() {
     const finalized = finalizeCannyZones()
@@ -1477,6 +1515,14 @@ export default function ProjectTriangZonesStep({ project, onSave }: Props) {
           title="Détecte automatiquement corps, pattes (devant / arrière-plan, nommées du point de vue de l'animal) et tête + cou + crinière, en zones Bézier éditables. Rien n'est validé tant que tu ne cliques pas « Valider »."
         >
           {autoZonesBusy ? 'Détection…' : '✨ Zones auto'}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={handleLinkZonesBezier}
+          disabled={autoZonesBusy || !imageReady || saving || memberZoneIds.length === 0 || !bodySilhouette || memberZoneIds.some(id => !legLoops[id] || legLoops[id].length !== 1)}
+          title="Zones posées par graines : les convertit en courbes Bézier reliées au corps (ponté membre par membre) pour des jonctions exactes dans la triangulation."
+        >
+          {autoZonesBusy ? '…' : '🔗 Relier en Bézier'}
         </button>
 
         <button

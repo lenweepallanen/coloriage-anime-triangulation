@@ -103,29 +103,55 @@ function toBezier(poly: Point2D[], tolerance: number, cornerDeg: number): Bezier
   return polygonToBezierNodes(poly, Math.max(12, Math.min(64, Math.round(poly.length / 40))))
 }
 
-export function buildAutoZones(raw: AutoZonesRaw, sigma: number, bridge: number): AutoZonesResult {
-  const zones: SAM2Zone[] = [{ ...BODY_ZONE }]
+/**
+ * Zones déjà existantes (graines / flood-fill) → courbes Bézier RELIÉES : membres lissés, corps = contour brut
+ * (silhouette − membres) lissé puis ponté MEMBRE PAR MEMBRE (Douglas-Peucker), pour que chaque jonction ait des
+ * sommets communs (la triangulation auto y force des ancres → pas d'encoche entre un membre et le corps).
+ * Les ids/labels/couleurs des zones sont conservés.
+ */
+export function buildBezierZonesFromLoops(
+  zones: SAM2Zone[],
+  loops: Record<string, Point2D[]>,
+  bodyRaw: Point2D[],
+  sigma: number,
+  bridge: number,
+): { zoneBeziers: Record<string, BezierNode[]>; zoneCannyRefs: Record<string, Point2D[]>; report: string[] } {
   const zoneBeziers: Record<string, BezierNode[]> = {}
   const zoneCannyRefs: Record<string, Point2D[]> = {}
   const smoothedMembers: Record<string, Point2D[]> = {}
   const report: string[] = []
+  for (const z of zones) {
+    if (z.id === 'body') continue
+    const poly = loops[z.id]
+    if (!poly || poly.length < 10) { report.push(`${z.label} : pas de contour`); continue }
+    const sm = smoothPolygonGaussian(poly, sigma)
+    smoothedMembers[z.id] = sm
+    zoneCannyRefs[z.id] = sm
+    zoneBeziers[z.id] = toBezier(sm, 2.5, 60)
+    report.push(`${z.label} : ${zoneBeziers[z.id].length} nœuds`)
+  }
+  const bodySmooth = smoothPolygonGaussian(bodyRaw, sigma)
+  const bodyBridged = bridgeBodyPerMember(bodySmooth, smoothedMembers, Math.max(bridge, 6))
+  zoneCannyRefs['body'] = bodyBridged
+  zoneBeziers['body'] = toBezier(bodyBridged, 2.5, 50)
+  report.unshift(`Corps : ${zoneBeziers['body'].length} nœuds, ponté membre par membre`)
+  return { zoneBeziers, zoneCannyRefs, report }
+}
 
+export function buildAutoZones(raw: AutoZonesRaw, sigma: number, bridge: number): AutoZonesResult {
+  const zones: SAM2Zone[] = [{ ...BODY_ZONE }]
+  const loops: Record<string, Point2D[]> = {}
+  const kinds: Record<string, string> = {}
   for (const m of raw.members) {
     if (!m.polygon || m.polygon.length < 10) continue
     const id = `member-${crypto.randomUUID().slice(0, 8)}`
     const color = m.kind === 'head' ? HEAD_COLOR : (MEMBER_COLORS[m.label.slice(0, 3)] ?? '#64748b')
     zones.push({ id, label: m.label, color, zOrder: m.zOrder })
-    const sm = smoothPolygonGaussian(m.polygon, sigma)
-    smoothedMembers[id] = sm
-    zoneCannyRefs[id] = sm
-    zoneBeziers[id] = toBezier(sm, 2.5, 60)
-    report.push(`${m.label} : ${m.kind === 'near' ? 'patte devant' : m.kind === 'far' ? 'patte arrière-plan' : 'tête + cou + crinière'}, ${zoneBeziers[id].length} nœuds`)
+    loops[id] = m.polygon
+    kinds[id] = m.kind === 'near' ? 'patte devant' : m.kind === 'far' ? 'patte arrière-plan' : 'tête + cou + crinière'
   }
-
-  const bodySmooth = smoothPolygonGaussian(raw.body, sigma)
-  const bodyBridged = bridgeBodyPerMember(bodySmooth, smoothedMembers, Math.max(bridge, 6))
-  zoneCannyRefs['body'] = bodyBridged
-  zoneBeziers['body'] = toBezier(bodyBridged, 2.5, 50)
-  report.unshift(`Corps : ${zoneBeziers['body'].length} nœuds · tête ${raw.facesLeft ? 'à gauche' : 'à droite'}${raw.info ? ` · silhouette ${raw.info.fromAlpha ? 'alpha' : 'Canny'}, ${raw.info.hooves} sabots` : ''}`)
-  return { zones, zoneBeziers, zoneCannyRefs, report }
+  const built = buildBezierZonesFromLoops(zones, loops, raw.body, sigma, bridge)
+  const report = built.report.map(line => { const z = zones.find(x => line.startsWith(x.label + ' :')); return z && kinds[z.id] ? line.replace(' :', ` : ${kinds[z.id]},`) : line })
+  report[0] = `${report[0]} · tête ${raw.facesLeft ? 'à gauche' : 'à droite'}${raw.info ? ` · silhouette ${raw.info.fromAlpha ? 'alpha' : 'Canny'}, ${raw.info.hooves} sabots` : ''}`
+  return { zones, zoneBeziers: built.zoneBeziers, zoneCannyRefs: built.zoneCannyRefs, report }
 }
