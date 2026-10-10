@@ -572,12 +572,14 @@ export default function ProjectTriangMeshStep({ project, onSave }: Props) {
           .filter(other => other.id !== z.id && zoneStage(other.id) >= 4 && (zoneZOrder[other.id] ?? 0) > currentZ)
           .map(other => buildClosedContour(other.id))
           .filter((c): c is Point2D[] => !!c && c.length >= 3)
+        // Un triangle est retiré s'il RECOUVRE vraiment la zone (son centre est dedans). Tester les sommets créait
+        // des trous : les sommets de jonction sont exactement SUR la frontière de la zone voisine, et tout triangle
+        // qui la touchait disparaissait — tous les points doivent définir des triangles, aucun vide.
         const filteredTris = higherContours.length > 0
           ? triResult.triangles.filter(([a, b, c]) => {
               const pa = triResult.points[a], pb = triResult.points[b], pc = triResult.points[c]
-              return !higherContours.some(hc =>
-                pointInPolygon(pa, hc) || pointInPolygon(pb, hc) || pointInPolygon(pc, hc)
-              )
+              const centroid = { x: (pa.x + pb.x + pc.x) / 3, y: (pa.y + pb.y + pc.y) / 3 }
+              return !higherContours.some(hc => pointInPolygon(centroid, hc))
             })
           : triResult.triangles
         // Validate manual triangles : drop any referencing out-of-range indices (stale after density change)
