@@ -61,3 +61,13 @@ puis animation `cotracker-bones` créée et calculée **dans l'admin en prod** (
   `tools/fix_marche_v4.py`. LBS alignés sur les réglages de Nicolas (weightPower 4, ARAP 5).
 - ⚠ Un onglet admin ouvert pendant mes écritures Firestore ÉCRASE tout le projet à sa prochaine sauvegarde : demander à
   Nicolas de recharger (Cmd+R) avant d'éditer, et ne pas écrire pendant qu'il édite.
+
+## Licorne V2 (10/10/2026) — zones fermées + CRINIERE séparée, tout automatisé
+- Projet créé dans l'admin par `tools/project-create.mjs` (nom + PNG → coloriage + image de référence).
+- Zones par GRAINES posées en Firestore (`zoneSeeds`, inflate 20 par zone pour une image 2048 px) : une graine = le point le plus
+  intérieur d'une région blanche (distance transform) — une graine sur un trait est ignorée, une graine dans l'œil = zone « œil ».
+  Deux bugs corrigés dans le worker (barrière Canny d'1 px laissant fusionner les régions ; encre absente des barrières) et dans
+  l'étape Zones (PNG transparent → noir pour le worker → silhouette en morceaux) ; banc `docs/triangulation/bench/harness-canny.html`.
+- Chaîne : `pipeline-check.mjs <clés> <pid> zones-body zones-valider mesh-auto mesh-valider faces-valider etat`.
+- Animations : `tools/run-all-licorne2.sh` = Idle (points v4 `licorne/points4.py`, TETE = crâne, CRINIERE chaîne racine→bout,
+  cou dans le corps) → Trot/Galop (`tools/setup_marche.py` : 4 pattes gait, TETE/CRINIERE os uniques, genou plié 18 %) → Cabré.
