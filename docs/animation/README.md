@@ -71,3 +71,7 @@ puis animation `cotracker-bones` créée et calculée **dans l'admin en prod** (
 - Chaîne : `pipeline-check.mjs <clés> <pid> zones-body zones-valider mesh-auto mesh-valider faces-valider etat`.
 - Animations : `tools/run-all-licorne2.sh` = Idle (points v4 `licorne/points4.py`, TETE = crâne, CRINIERE chaîne racine→bout,
   cou dans le corps) → Trot/Galop (`tools/setup_marche.py` : 4 pattes gait, TETE/CRINIERE os uniques, genou plié 18 %) → Cabré.
+- Finitions (retour Nicolas 10/10) : `tools/snap_contour.py <pid> <png> [T=12] --apply` recale P0/ancres/subdivisions sur le bord
+  externe du trait (alpha ≥ 128), marque `zonePixelAdjusted` → l'étape Maillage garde ces points et recalcule les internes ; puis
+  `pipeline-check … mesh-valider faces-valider` et `tools/run-recalc-licorne2.sh` (LBS + lissages des 4 animations).
+  Trouage du corps : règle passée au centre du triangle (49335c1) — tous les points définissent des triangles, aucun vide.
