@@ -160,7 +160,8 @@ async function appleDownloads(from, to) {
       for (const [c, u] of Object.entries(r.byCountry)) byCountry[c] = (byCountry[c] || 0) + u
     }
   }
-  return { total, byDay, byCountry }
+  const lastDay = Object.keys(byDay).sort().pop() || null   // dernier jour couvert par Apple (rapports J−1)
+  return { total, byDay, byCountry, lastDay }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -208,7 +209,8 @@ async function googleInstalls(from, to) {
     const m = await googleMonth(ym)
     for (const [d, n] of Object.entries(m)) if (d >= from && d <= to) { byDay[d] = n; total += n }
   }
-  return { total, byDay }
+  const lastDay = Object.keys(byDay).sort().pop() || null   // dernier jour présent dans le CSV Google (retard de plusieurs jours)
+  return { total, byDay, lastDay }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -221,9 +223,16 @@ async function siteClicks(token, from, to) {
   const r = await fetch(`${FIRESTORE}:runQuery`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   if (!r.ok) throw new Error(`Firestore ${r.status}`)
   const rows = (await r.json()).map(x => x.document && x.document.fields).filter(Boolean)
-  const byDay = {}, bySrc = {}, byPlatform = {}; let total = 0, pdf = 0
+  const byDay = {}, bySrc = {}, byPlatform = {}; let total = 0, pdf = 0, doubles = 0
+  // Dédoublonnage : un même visiteur (src + plateforme + pays) qui reclique dans la minute = 1 clic ; les tests (src test*) sont ignorés
+  const seen = new Map()
+  rows.sort((a, b) => Number(a.ts?.integerValue || 0) - Number(b.ts?.integerValue || 0))
   for (const f of rows) {
     const src = f.src?.stringValue || '?', platform = f.platform?.stringValue || '?', day = f.day?.stringValue || '?'
+    if (/^test/i.test(src)) continue
+    const ts = Number(f.ts?.integerValue || 0), key = `${src}|${platform}|${f.country?.stringValue || ''}`
+    if (seen.has(key) && ts - seen.get(key) < 60_000) { seen.set(key, ts); doubles++; continue }
+    seen.set(key, ts)
     if (platform === 'pdf') { pdf++; continue } // ouverture du PDF : pas un clic store
     total++
     byDay[day] = (byDay[day] || 0) + 1
@@ -231,7 +240,7 @@ async function siteClicks(token, from, to) {
     bySrc[src] = bySrc[src] || { ios: 0, android: 0, desktop: 0 }
     bySrc[src][platform] = (bySrc[src][platform] || 0) + 1
   }
-  return { total, pdfOpens: pdf, byDay, bySrc, byPlatform }
+  return { total, pdfOpens: pdf, doubles, byDay, bySrc, byPlatform }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -268,6 +277,7 @@ async function appEvents(token, from, to) {
   return {
     events: rows.length,
     installs: installs.size, byPlatform,
+    installsNative: (byPlatform.ios || 0) + (byPlatform.android || 0), installsWeb: byPlatform.web || 0,
     bookInstalls: bookInstalls.size, scanners: scanners.size, sharers: sharers.size, scans, shares, byDay,
     byBook: Object.fromEntries(Object.entries(byBook).map(([k, v]) => [k, v.size])),
     byProject: Object.fromEntries(Object.entries(byProject).map(([k, v]) => [k, { scans: v.scans, scanners: v.scanners.size, shares: v.shares, sharers: v.sharers.size }])),

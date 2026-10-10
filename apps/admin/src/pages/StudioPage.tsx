@@ -22,12 +22,12 @@ interface StudioData {
   leads: { total: number; inPeriod: number; today: number; byDay: Record<string, number>; bySource: Record<string, number> } | null
   emails: EmailStat[] | null
   downloads: {
-    apple: { total: number; byDay: Record<string, number>; byCountry: Record<string, number> } | null
-    google: { total: number; byDay: Record<string, number> } | null
+    apple: { total: number; byDay: Record<string, number>; byCountry: Record<string, number>; lastDay?: string | null } | null
+    google: { total: number; byDay: Record<string, number>; lastDay?: string | null } | null
   }
-  clicks: { total: number; pdfOpens: number; byDay: Record<string, number>; bySrc: Record<string, { ios: number; android: number; desktop: number }>; byPlatform: Record<string, number> } | null
+  clicks: { total: number; pdfOpens: number; doubles?: number; byDay: Record<string, number>; bySrc: Record<string, { ios: number; android: number; desktop: number }>; byPlatform: Record<string, number> } | null
   app: {
-    events: number; installs: number; byPlatform: Record<string, number>
+    events: number; installs: number; installsNative?: number; installsWeb?: number; byPlatform: Record<string, number>
     bookInstalls: number; scanners: number; sharers: number; scans: number; shares: number
     byDay: Record<string, { installs: number; scans: number; shares: number }>
     byBook: Record<string, number>
@@ -180,21 +180,21 @@ export default function StudioPage() {
           <div className="lbl">Clics vers les stores</div>
           <div className="val">{fmt(data?.clicks?.total)}</div>
           <div className="sub">
-            {data?.clicks ? `iOS ${fmt(data.clicks.byPlatform.ios ?? 0)} · Android ${fmt(data.clicks.byPlatform.android ?? 0)} · PC ${fmt(data.clicks.byPlatform.desktop ?? 0)} · PDF ouvert ${fmt(data.clicks.pdfOpens)}` : 'liens /go comptés depuis le 4 oct. 2026'}
+            {data?.clicks ? `iOS ${fmt(data.clicks.byPlatform.ios ?? 0)} · Android ${fmt(data.clicks.byPlatform.android ?? 0)} · PC ${fmt(data.clicks.byPlatform.desktop ?? 0)} · PDF ouvert ${fmt(data.clicks.pdfOpens)}${data.clicks.doubles ? ` · ${fmt(data.clicks.doubles)} doublons retirés` : ''}` : 'liens /go comptés depuis le 4 oct. 2026'}
           </div>
         </div>
         <div className="studio-card studio-kpi">
           <div className="lbl">Téléchargements app</div>
           <div className="val">{fmt(downloadsTotal)}</div>
           <div className="sub">
-            App Store {fmt(apple?.total ?? null)} · Google Play {google ? fmt(google.total) : 'en attente d’accès'}
+            App Store {fmt(apple?.total ?? null)}{apple?.lastDay ? ` (au ${apple.lastDay.slice(8)}/${apple.lastDay.slice(5, 7)})` : ''} · Google Play {google ? `${fmt(google.total)}${google.lastDay ? ` (au ${google.lastDay.slice(8)}/${google.lastDay.slice(5, 7)}, en retard)` : ''}` : 'en attente d’accès'}
             {apple && Object.keys(apple.byCountry).length > 0 && ` · ${Object.entries(apple.byCountry).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([c, n]) => `${c} ${n}`).join(', ')}`}
           </div>
         </div>
         <div className={`studio-card studio-kpi${app && app.events > 0 ? '' : ' dim'}`}>
           <div className="lbl">Scans de coloriages {!(app && app.events > 0) && <span className="soon">dès l’app 1.1</span>}</div>
           <div className="val">{fmt(app ? app.scans : null)}</div>
-          <div className="sub">{app && app.events > 0 ? `${fmt(app.scanners)} appareils · ${fmt(app.shares)} partages · ${fmt(app.installs)} appareils (iOS ${fmt(app.byPlatform.ios ?? 0)}, Android ${fmt(app.byPlatform.android ?? 0)})` : 'événements anonymes de l’app (livres ajoutés, scans, partages)'}</div>
+          <div className="sub">{app && app.events > 0 ? `${fmt(app.scanners)} appareils · ${fmt(app.shares)} partages · ${fmt(app.installsNative ?? app.installs)} appareils app (iOS ${fmt(app.byPlatform.ios ?? 0)}, Android ${fmt(app.byPlatform.android ?? 0)}) · ${fmt(app.installsWeb ?? app.byPlatform.web ?? 0)} visites web` : 'événements anonymes de l’app (livres ajoutés, scans, partages)'}</div>
         </div>
       </div>
 
