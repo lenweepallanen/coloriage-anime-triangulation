@@ -1104,11 +1104,19 @@ function segmentZonesCanny(imgData, lowThreshold, highThreshold, blurSize, seeds
     dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     closeKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     cv.dilate(edges, barrier, dilateKernel, new cv.Point(-1, -1), 1);
+    // + l'ENCRE elle-même (gris < 128) : les traits noirs sont des murs. Sans ça, une micro-coupure du contour Canny
+    // (anticrénelage, jonction en T) raccorde une région blanche au réseau des traits, qui touche TOUTES les régions →
+    // la zone cliquée devenait la silhouette entière (licorne V2 : visage, oreille).
+    var inkMat = new cv.Mat();
+    cv.threshold(gray, inkMat, 127, 255, cv.THRESH_BINARY_INV);
+    cv.bitwise_or(barrier, inkMat, barrier);
 
     // Light barrier (3×3 × 1 iter ≈ 1 px) — used for the silhouette outer
     // contour so it sits on the real black trace, not the inflated barrier.
     lightKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     cv.dilate(edges, lightBarrier, lightKernel, new cv.Point(-1, -1), 1);
+    cv.bitwise_or(lightBarrier, inkMat, lightBarrier);
+    inkMat.delete();
 
     // Optional morphological closing — fills micro-gaps in the Canny trace
     // before flood-fill so the silhouette doesn't leak through hair-thin breaks.
